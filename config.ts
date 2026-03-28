@@ -62,6 +62,10 @@ interface AssistantConfig {
   dmReportQuietHoursEnabled: boolean;
   /** Проактивный анализ памяти: бот сам напоминает о планах и событиях в нужный момент */
   memoryInsightEnabled: boolean;
+  /** Фоновые сообщения отправляются только в личный чат (DM), а не в групповые */
+  proactiveOnlyPrivateChat: boolean;
+  /** Режим публичных групп: бот отвечает другим пользователям (не владельцу) в групповых чатах */
+  groupPublicMode: boolean;
 }
 
 export interface Config extends AssistantConfig {
@@ -138,6 +142,8 @@ function assistants(activeAssistant: string): AssistantConfig {
       dmReportIntervalMs: toNumber(process.env.DM_REPORT_INTERVAL_MS, 30 * 60 * 1000),
       dmReportQuietHoursEnabled: toBoolean(process.env.DM_REPORT_QUIET_HOURS_ENABLED, true),
       memoryInsightEnabled: toBoolean(process.env.MEMORY_INSIGHT_ENABLED, true),
+      proactiveOnlyPrivateChat: toBoolean(process.env.PROACTIVE_ONLY_PRIVATE_CHAT, true),
+      groupPublicMode: toBoolean(process.env.GROUP_PUBLIC_MODE, false),
     },
     SergeyBrainBot: {
       botToken: envResult.parsed?.SERGEY_BOT_TOKEN || process.env.SERGEY_BOT_TOKEN || "",
@@ -187,6 +193,8 @@ function assistants(activeAssistant: string): AssistantConfig {
       dmReportIntervalMs: toNumber(process.env.DM_REPORT_INTERVAL_MS, 30 * 60 * 1000),
       dmReportQuietHoursEnabled: false,
       memoryInsightEnabled: toBoolean(process.env.MEMORY_INSIGHT_ENABLED, false),
+      proactiveOnlyPrivateChat: toBoolean(process.env.PROACTIVE_ONLY_PRIVATE_CHAT, true),
+      groupPublicMode: toBoolean(process.env.GROUP_PUBLIC_MODE, false),
     }
   }
 

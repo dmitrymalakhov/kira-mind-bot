@@ -290,7 +290,7 @@ async function generateFirstQuestion(ctx: BotContext): Promise<string> {
                 }
             ],
             temperature: 0.7,
-            max_tokens: 150,
+            max_completion_tokens: 1000,
         });
 
         const generatedResponse = response.choices[0]?.message?.content;
@@ -350,7 +350,7 @@ async function generateSecondQuestion(ctx: BotContext): Promise<string> {
                 }
             ],
             temperature: 0.7,
-            max_tokens: 150,
+            max_completion_tokens: 1000,
         });
 
         const generatedResponse = response.choices[0]?.message?.content;

@@ -2,6 +2,7 @@ import { BotContext } from '../types';
 import { getVectorService } from '../services/VectorServiceFactory';
 import openai from '../openai';
 import { devLog, parseLLMJson } from '../utils';
+import { config } from '../config';
 
 /** Минимальный интервал между проактивными подсказками (20 минут) */
 const HINT_COOLDOWN_MS = 20 * 60 * 1000;
@@ -30,6 +31,10 @@ export async function maybeProactiveHint(
 ): Promise<void> {
     const svc = getVectorService();
     if (!svc) return;
+
+    // Проактивные подсказки из личной памяти не отправляем в групповых чатах
+    const chatType = ctx.chat?.type;
+    if (config.proactiveOnlyPrivateChat && (chatType === 'group' || chatType === 'supergroup')) return;
 
     const userId = String(ctx.from?.id);
 

@@ -1,5 +1,6 @@
 import * as fs from "fs/promises";
 import * as path from "path";
+import { config } from "../config";
 
 interface AllowedUserChatData {
   chatId?: number;
@@ -41,4 +42,16 @@ export async function saveAllowedUserChatId(chatId: number): Promise<void> {
 export async function getAllowedUserChatId(): Promise<number | undefined> {
   const data = await loadStore();
   return data.chatId;
+}
+
+/**
+ * Возвращает chatId для отправки фоновых/проактивных сообщений.
+ * Если PROACTIVE_ONLY_PRIVATE_CHAT=true (по умолчанию), всегда возвращает
+ * личный чат с владельцем, игнорируя групповые чаты.
+ */
+export async function getProactiveChatId(): Promise<number> {
+  if (config.proactiveOnlyPrivateChat) {
+    return config.allowedUserId;
+  }
+  return (await getAllowedUserChatId()) ?? config.allowedUserId;
 }

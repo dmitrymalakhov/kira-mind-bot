@@ -9,7 +9,7 @@ import {
   getRecentKiraSelfEvents,
   KiraSelfEvent,
 } from "../utils/kiraSelfMemory";
-import { getAllowedUserChatId } from "../utils/allowedUserChatStore";
+import { getProactiveChatId } from "../utils/allowedUserChatStore";
 
 const PROACTIVE_MESSAGE_FORMATS = [
   "поделись чем-то что произошло или что сейчас чувствуешь — искренне, без пафоса",
@@ -195,7 +195,7 @@ async function runCycle(bot: Bot<BotContext>): Promise<void> {
     await maybeGenerateLifeEvent();
     const message = await buildProactiveMessage();
 
-    const chatId = (await getAllowedUserChatId()) ?? config.allowedUserId;
+    const chatId = await getProactiveChatId();
     await bot.api.sendMessage(chatId, message);
 
     lastSentAt = Date.now();

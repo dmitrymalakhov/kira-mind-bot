@@ -2,8 +2,53 @@ import { Bot, MemorySessionStorage, session } from "grammy";
 import { BotContext, SessionData } from "./types";
 import { registerCallback } from "./callbacks";
 import { handleUnauthorizedUserMessage } from "./agents/unauthorizedUserAgent";
+import { handleGroupPublicUserMessage } from "./agents/groupPublicAgent";
 import { devLog } from "./utils";
 import { saveAllowedUserChatId } from "./utils/allowedUserChatStore";
+import openai from "./openai";
+import { getBotPersona } from "./persona";
+import { config } from "./config";
+
+const DISMISSAL_VARIANTS = [
+  "занята важными делами",
+  "слушает только одного человека",
+  "не в настроении заводить новые знакомства",
+  "уже занята",
+  "работает в приватном режиме",
+];
+
+async function handleGroupPrivateDismissal(ctx: BotContext): Promise<void> {
+  const userName = ctx.from?.first_name || "незнакомец";
+  const hint = DISMISSAL_VARIANTS[Math.floor(Math.random() * DISMISSAL_VARIANTS.length)];
+
+  try {
+    const resp = await openai.chat.completions.create({
+      model: "gpt-5-nano",
+      messages: [
+        {
+          role: "system",
+          content:
+            `${getBotPersona()}\n` +
+            `Тебя упомянули в групповом чате незнакомый пользователь, но ты работаешь только с ${config.ownerName} и не общаешься с посторонними. ` +
+            `Придумай одну короткую (1 предложение), остроумную и немного дерзкую отшутку на русском. ` +
+            `Скажи, что ${hint}, и принимаешь команды только от своего владельца. Без объяснений, только реплика.`,
+        },
+        {
+          role: "user",
+          content: `Пользователь ${userName} написал мне в групповом чате.`,
+        },
+      ],
+      temperature: 1,
+    });
+
+    const reply = resp.choices[0]?.message?.content?.trim();
+    if (reply) {
+      await ctx.reply(reply);
+    }
+  } catch (error) {
+    console.error("[group-dismissal] error:", error);
+  }
+}
 
 // Функция для гарантированной загрузки конфигурации
 function ensureConfigLoaded() {
@@ -172,8 +217,17 @@ function setupBot(bot: Bot<BotContext>, config: any) {
       }
       await next();
     } else {
-      devLog(`Access by unauthorized user: ${ctx.from?.id}`);
-      await handleUnauthorizedUserMessage(ctx);
+      const isGroupChat = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+      if (isGroupChat && config.groupPublicMode) {
+        devLog(`Group public mode: handling message from user ${ctx.from?.id}`);
+        await handleGroupPublicUserMessage(ctx);
+      } else if (isGroupChat) {
+        devLog(`Group private mode: witty dismissal for user ${ctx.from?.id}`);
+        await handleGroupPrivateDismissal(ctx);
+      } else {
+        devLog(`Access by unauthorized user: ${ctx.from?.id}`);
+        await handleUnauthorizedUserMessage(ctx);
+      }
     }
   });
 

@@ -21,7 +21,7 @@ import { Bot } from 'grammy';
 import { BotContext } from '../types';
 import { config } from '../config';
 import { getVectorService } from './VectorServiceFactory';
-import { getAllowedUserChatId } from '../utils/allowedUserChatStore';
+import { getProactiveChatId } from '../utils/allowedUserChatStore';
 import openai from '../openai';
 import { parseLLMJson } from '../utils';
 import { getBotPersona, getCommunicationStyle } from '../persona';
@@ -247,7 +247,7 @@ async function runCycle(bot: Bot<BotContext>): Promise<void> {
             return;
         }
 
-        const chatId = (await getAllowedUserChatId()) ?? config.allowedUserId;
+        const chatId = await getProactiveChatId();
         await bot.api.sendMessage(chatId, decision.message);
         lastSentAt = Date.now();
         console.log('[memory-insight] Sent proactive insight:', decision.message.slice(0, 80));

@@ -2,7 +2,7 @@ import { Bot } from "grammy";
 import { config } from "../config";
 import { BotContext } from "../types";
 import { MessageStore, StoredMessage } from "../stores/MessageStore";
-import { getAllowedUserChatId } from "../utils/allowedUserChatStore";
+import { getProactiveChatId } from "../utils/allowedUserChatStore";
 
 const REPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -136,7 +136,7 @@ async function runCycle(bot: Bot<BotContext>): Promise<void> {
       return;
     }
 
-    const chatId = (await getAllowedUserChatId()) ?? config.allowedUserId;
+    const chatId = await getProactiveChatId();
     const reportText = formatDmReport(newMessages, now);
 
     await bot.api.sendMessage(chatId, reportText);
