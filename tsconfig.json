@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "es6",                 // Указывает версию ECMAScript для вывода.
+    "module": "commonjs",            // Указывает систему модулей.
+    "outDir": "./dist",              // Путь, куда будет помещен скомпилированный код.
+    "rootDir": "./",                 // Путь к исходному коду.
+    "strict": true,                  // Включает строгий режим.
+    "esModuleInterop": true,         // Включает совместимость с модулями ES6.
+    "skipLibCheck": true,            // Пропускает проверку типов файлов объявлений.
+    "forceConsistentCasingInFileNames": true, // Обеспечивает использование одинакового регистра в именах файлов.
+    "resolveJsonModule": true,        // Включает поддержку импорта JSON модулей.
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+  },
+  "include": ["**/*.ts", "*.d.ts", "*.json"],           // Указывает TypeScript включить в процесс компиляции все файлы в папке src.
+  "exclude": ["node_modules", "dist"]
+}

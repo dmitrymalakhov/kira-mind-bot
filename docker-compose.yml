@@ -1,0 +1,49 @@
+version: '3.8'
+# Переменные (в т.ч. BOT_TOKEN) берутся из env_file — так прод точно использует .env.production
+# Ротация логов контейнеров: макс. 10 МБ на файл, 3 файла (итого ~30 МБ на сервис)
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  kira-mind-bot:
+    build:
+      context: ./kira-mind-bot
+      args:
+        NODE_ENV: ${NODE_ENV:-production}
+    env_file:
+      - ./kira-mind-bot/.env.production
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - ASSISTANT_PROFILE=KiraMindBot
+    depends_on:
+      - qdrant
+    logging: *default-logging
+  sergey-brain-bot:
+    build:
+      context: ./kira-mind-bot
+      args:
+        NODE_ENV: ${NODE_ENV:-production}
+    env_file:
+      - ./kira-mind-bot/.env.production
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - ASSISTANT_PROFILE=SergeyBrainBot
+    depends_on:
+      - qdrant
+    logging: *default-logging
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    logging: *default-logging
+
+volumes:
+  qdrant_storage:
+    driver: local

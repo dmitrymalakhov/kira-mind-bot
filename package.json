@@ -1,0 +1,45 @@
+{
+  "name": "kira-mind-bot",
+  "version": "1.0.0",
+  "description": "Personal Telegram assistant bot for message analysis and reminders",
+  "main": "index.js",
+  "scripts": {
+    "start": "if [ \"$NODE_ENV\" = \"production\" ]; then npm run start:prod; else npm run start:dev; fi",
+    "start:dev": "NODE_ENV=development ts-node index.ts",
+    "start:prod": "NODE_ENV=production node ./index.js",
+    "build": "tsc",
+    "lint": "eslint . --ext .ts"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.8.4",
+    "dotenv": "^16.4.5",
+    "double-metaphone": "^2.0.1",
+    "fast-levenshtein": "^3.0.0",
+    "form-data": "^4.0.0",
+    "googleapis": "^148.0.0",
+    "grammy": "^1.24.1",
+    "jaro-winkler": "^0.2.8",
+    "natural": "^8.0.1",
+    "node-fetch": "^2.7.0",
+    "openai": "^4.95.1",
+    "talisman": "^1.1.4",
+    "telegram": "^2.26.22",
+    "transliteration": "^2.3.5",
+    "typeorm": "^0.3.22",
+    "uuid": "^11.1.0",
+    "@qdrant/js-client-rest": "^1.14.1",
+    "@pinecone-database/pinecone": "^6.1.1"
+  },
+  "devDependencies": {
+    "@types/fast-levenshtein": "^0.0.4",
+    "@types/jaro-winkler": "^0.2.4",
+    "@types/node": "^20.17.16",
+    "@types/node-fetch": "^2.6.11",
+    "i": "^0.3.7",
+    "npm": "^11.3.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}
