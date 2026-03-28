@@ -1,11 +1,23 @@
-node_modules/
 dist/
 _deploy/
-deployment-source.tar
+*.tar
 
-# Env files with secrets — never commit
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Docker
+*.log
+docker-compose.override.yml
+.dockerignore
+
+# Environment variables
 .env
 .env.*
+
+# VS Code
+.vscode/
 
 # OS
 .DS_Store
