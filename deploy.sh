@@ -106,6 +106,10 @@ fi
 echo ""
 echo "📁 --- Подготовка архива ---"
 cp docker-compose.yml _deploy
+
+# Генерируем .env для docker-compose из .env.production (нужен для postgres — DB_PASSWORD и т.д.)
+grep -E '^DB_' .env.production > _deploy/.env && echo "✅ Создан .env для docker-compose (DB_*)" || echo "⚠️  Не удалось создать .env из .env.production"
+
 echo "Содержимое _deploy: $(ls -la _deploy | tail -n +2)"
 echo ""
 

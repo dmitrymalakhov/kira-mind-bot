@@ -1,5 +1,5 @@
 import { Entity, Column, PrimaryColumn, CreateDateColumn } from 'typeorm';
-import { ReminderStatus, ReminderTargetChat } from '../reminder';
+import { ReminderStatus, ReminderTargetChat } from '../types/reminderTypes';
 
 @Entity('reminders')
 export class ReminderEntity {

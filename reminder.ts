@@ -5,11 +5,8 @@ import { REMINDER_EXPIRY_TIME } from "./constants";
 import { initTelegramClient, searchGroupByTitle, sendMessageToChat, sendMessage } from "./services/telegram";
 import { ContactsStore } from "./stores/ContactsStore";
 import { ReminderRepository } from "./services/ReminderRepository";
-
-/** Куда отправить напоминание: в группу по названию или в ЛС контакта (резолвится в момент срабатывания) */
-export type ReminderTargetChat =
-    | { type: "group"; groupName: string }
-    | { type: "contact"; contactQuery: string };
+import { ReminderStatus, ReminderTargetChat } from "./types/reminderTypes";
+export { ReminderStatus, ReminderTargetChat };
 
 // Расширенный интерфейс для напоминания с поддержкой статусов
 export interface Reminder {
@@ -26,15 +23,6 @@ export interface Reminder {
     targetChat?: ReminderTargetChat;
     /** Название чата, в котором создано напоминание (для пикера в приватном чате) */
     chatTitle?: string;
-}
-
-// Перечисление возможных статусов напоминания
-export enum ReminderStatus {
-    Pending = "pending",       // Ожидает отправки
-    Sent = "sent",             // Отправлено, ожидает действия пользователя
-    Completed = "completed",   // Выполнено
-    Postponed = "postponed",   // Отложено
-    Expired = "expired"        // Просрочено без реакции пользователя
 }
 
 // Хранилище таймеров для напоминаний
