@@ -1,17 +1,16 @@
 import 'reflect-metadata';
 import { DataSource } from 'typeorm';
-import * as path from 'path';
+import { ReminderEntity } from './entity/ReminderEntity';
 
 export const AppDataSource = new DataSource({
   type: 'postgres',
-  host: 'postgres',
-  port: 5432,
-  username: 'postgres',
-  password: 'F9u!vX2rT2a4er',
-  database: 'KiraMind',
-  synchronize: false,
+  host: process.env.DB_HOST ?? 'postgres',
+  port: Number(process.env.DB_PORT ?? 5432),
+  username: process.env.DB_USER ?? 'postgres',
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME ?? 'KiraMind',
+  synchronize: true,
   logging: process.env.NODE_ENV === 'development',
-  entities: [path.join(__dirname, './entity/**/*.ts')],
-  migrations: [path.join(__dirname, './migration/**/*.ts')],
-  subscribers: [path.join(__dirname, './subscriber/**/*.ts')],
+  entities: [ReminderEntity],
+  migrations: [],
 });

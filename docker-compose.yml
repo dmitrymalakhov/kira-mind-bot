@@ -8,6 +8,17 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-KiraMind}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    logging: *default-logging
+
   kira-mind-bot:
     build:
       context: ./kira-mind-bot
@@ -20,7 +31,9 @@ services:
       - ASSISTANT_PROFILE=KiraMindBot
     depends_on:
       - qdrant
+      - postgres
     logging: *default-logging
+
   sergey-brain-bot:
     build:
       context: ./kira-mind-bot
@@ -33,7 +46,9 @@ services:
       - ASSISTANT_PROFILE=SergeyBrainBot
     depends_on:
       - qdrant
+      - postgres
     logging: *default-logging
+
   qdrant:
     image: qdrant/qdrant:latest
     container_name: qdrant
@@ -45,5 +60,7 @@ services:
     logging: *default-logging
 
 volumes:
+  postgres_data:
+    driver: local
   qdrant_storage:
     driver: local

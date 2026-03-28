@@ -30,6 +30,8 @@ import { startKiraLifeScheduler } from "./services/kiraLifeScheduler";
 import { startDmReportScheduler } from "./services/dmReportScheduler";
 import { startMemoryInsightScheduler } from "./services/memoryInsightScheduler";
 import { maybeProactiveHint } from "./utils/proactiveMemory";
+import { AppDataSource } from "./data-source";
+import { ReminderRepository } from "./services/ReminderRepository";
 
 
 // Загрузка переменных окружения
@@ -114,7 +116,7 @@ async function replyAndStore(ctx: BotContext, text: string, options: any = {}) {
     return msg;
 }
 
-function saveRemindersFromResult(ctx: BotContext, result: ProcessingResult) {
+async function saveRemindersFromResult(ctx: BotContext, result: ProcessingResult) {
     if (!result.reminderCreated) return;
     const list = result.reminderDetailsList ?? (result.reminderDetails ? [result.reminderDetails] : []);
     // Название группового чата — для пикера в приватном
@@ -137,6 +139,7 @@ function saveRemindersFromResult(ctx: BotContext, result: ProcessingResult) {
         ctx.session.reminders.push(reminder);
         ReminderRegistry.getInstance().add(reminder);
         console.info(`[reminder] event=created id=${reminder.id} chatId=${reminder.chatId} due=${new Date(reminder.dueDate).toISOString()}` + (chatTitle ? ` chat="${chatTitle}"` : '') + (details.targetChat ? ` target=${details.targetChat.type}` : ""));
+        await ReminderRepository.save(reminder).catch(e => console.error('[reminder] DB save failed on create:', e));
         scheduleReminder(bot, reminder);
     }
 }
@@ -213,7 +216,7 @@ async function processMediaGroup(ctx: BotContext, mediaGroupId: string) {
         );
 
         // Обработка результата аналогично обработке одиночного изображения
-        saveRemindersFromResult(ctx, result);
+        await saveRemindersFromResult(ctx, result);
 
         // Добавляем ответ бота в историю
         if (result.detectedText) {
@@ -503,7 +506,7 @@ bot.on("message:text", async (ctx, next) => {
                 );
 
                 // Обрабатываем результат
-                saveRemindersFromResult(ctx, result);
+                await saveRemindersFromResult(ctx, result);
 
                 if (result.negotiationSummarySent) {
                     await addToHistory(ctx, 'bot', '[Переговоры запущены — см. сообщение выше]');
@@ -692,7 +695,7 @@ async function processForwardedGroup(ctx: BotContext, forwardKey: string) {
         );
 
         // Обрабатываем результат
-        saveRemindersFromResult(ctx, result);
+        await saveRemindersFromResult(ctx, result);
 
         // Добавляем ответ бота в историю
         await addToHistory(ctx, 'bot', result.responseText);
@@ -898,7 +901,7 @@ bot.on("message:photo", async (ctx) => {
                 );
 
                 // Если было создано напоминание, сохраняем его
-                saveRemindersFromResult(ctx, result);
+                await saveRemindersFromResult(ctx, result);
 
                 // Добавляем ответ бота в историю
                 if (result.detectedText) {
@@ -998,7 +1001,7 @@ bot.on("message:document", async (ctx) => {
             );
 
             // Если было создано напоминание, сохраняем его
-            saveRemindersFromResult(ctx, result);
+            await saveRemindersFromResult(ctx, result);
 
             // Если было сгенерировано изображение
             if (result.imageGenerated && result.generatedImageUrl) {
@@ -1057,7 +1060,7 @@ bot.on("message:audio", async (ctx) => {
             );
 
             // Если было создано напоминание, сохраняем его
-            saveRemindersFromResult(ctx, result);
+            await saveRemindersFromResult(ctx, result);
 
             // Если было сгенерировано изображение
             if (result.imageGenerated && result.generatedImageUrl) {
@@ -1211,7 +1214,7 @@ bot.on("message:voice", async (ctx) => {
                         );
 
                         // Обрабатываем результат, аналогично обработке текстовых сообщений
-                        saveRemindersFromResult(ctx, result);
+                        await saveRemindersFromResult(ctx, result);
 
                         // Добавляем ответ бота в историю
                         await addToHistory(ctx, 'bot', result.responseText);
@@ -1414,6 +1417,18 @@ async function startBot() {
     try {
         console.log("🚀 Инициализация бота...");
         devLog("Starting the assistant bot...");
+
+        console.log("🗄️  Инициализация базы данных...");
+        await AppDataSource.initialize();
+        console.log("✅ База данных подключена");
+
+        console.log("📅 Загрузка активных напоминаний из БД...");
+        const pendingReminders = await ReminderRepository.loadPending();
+        for (const reminder of pendingReminders) {
+            ReminderRegistry.getInstance().add(reminder);
+            scheduleReminder(bot, reminder);
+        }
+        console.log(`✅ Загружено и запланировано ${pendingReminders.length} напоминаний`);
 
         console.log("🔗 Инициализация векторного сервиса...");
         await initializeVectorService();

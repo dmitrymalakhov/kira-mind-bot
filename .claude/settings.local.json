@@ -5,7 +5,12 @@
       "Bash(git rm:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Bash(find /Users/dmitrii.malakhov/git/kira-mind-bot/entity -type f -name *.ts)",
+      "Bash(grep -E \"^pg$|^pg-\")",
+      "Bash(npx tsc:*)",
+      "Bash(npm install:*)",
+      "Bash(node_modules/.bin/tsc --noEmit)"
     ]
   }
 }

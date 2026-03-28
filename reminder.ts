@@ -4,6 +4,7 @@ import { devLog } from "./utils";
 import { REMINDER_EXPIRY_TIME } from "./constants";
 import { initTelegramClient, searchGroupByTitle, sendMessageToChat, sendMessage } from "./services/telegram";
 import { ContactsStore } from "./stores/ContactsStore";
+import { ReminderRepository } from "./services/ReminderRepository";
 
 /** Куда отправить напоминание: в группу по названию или в ЛС контакта (резолвится в момент срабатывания) */
 export type ReminderTargetChat =
@@ -200,6 +201,9 @@ async function sendReminder(bot: Bot<BotContext>, reminder: Reminder): Promise<v
         reminder.messageId = sentMessage.message_id;
         reminder.status = ReminderStatus.Sent;
 
+        // Сохраняем обновлённый статус в БД
+        ReminderRepository.update(reminder).catch(e => console.error('[reminder] DB update failed on send:', e));
+
         // Устанавливаем таймер для проверки истечения срока напоминания
         scheduleExpiryCheck(bot, reminder);
 
@@ -246,6 +250,7 @@ async function handleExpiredReminder(bot: Bot<BotContext>, reminder: Reminder): 
     try {
         // Обновляем статус напоминания
         reminder.status = ReminderStatus.Expired;
+        ReminderRepository.update(reminder).catch(e => console.error('[reminder] DB update failed on expiry:', e));
 
         // Проверяем, что сообщение с напоминанием было отправлено
         if (!reminder.messageId) {
@@ -316,6 +321,7 @@ export async function markReminderAsCompleted(bot: Bot<BotContext>, reminder: Re
             }
         }
 
+        await ReminderRepository.update(reminder).catch(e => console.error('[reminder] DB update failed on complete:', e));
         devLog(`Reminder ${reminder.id} marked as completed`);
         logReminderEvent("completed", reminder);
         return true;
@@ -388,6 +394,8 @@ export async function postponeReminder(
             }
         }
 
+        await ReminderRepository.update(reminder).catch(e => console.error('[reminder] DB update failed on postpone:', e));
+
         // Планируем отправку отложенного напоминания
         scheduleReminder(bot, reminder);
 
@@ -405,7 +413,7 @@ export async function postponeReminder(
  * @param reminderId ID напоминания
  * @returns Успешность отмены
  */
-export function cancelReminder(reminderId: string): boolean {
+export async function cancelReminder(reminderId: string): Promise<boolean> {
     try {
         // Отменяем таймер напоминания, если он существует
         const timer = remindersTimers.get(reminderId);
@@ -420,6 +428,8 @@ export function cancelReminder(reminderId: string): boolean {
             clearTimeout(expiryTimer);
             expiryTimers.delete(reminderId);
         }
+
+        await ReminderRepository.delete(reminderId).catch(e => console.error('[reminder] DB delete failed on cancel:', e));
 
         console.info(`[reminder] event=cancelled id=${reminderId}`);
         devLog(`Reminder ${reminderId} cancelled`);

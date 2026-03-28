@@ -247,7 +247,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     return;
                 }
 
-                cancelReminder(reminderId);
+                await cancelReminder(reminderId);
                 ReminderRegistry.getInstance().remove(reminderId);
                 ctx.session.reminders = ctx.session.reminders.filter(r => r.id !== reminderId);
                 await ctx.answerCallbackQuery({ text: "Напоминание отменено" });
