@@ -26,8 +26,8 @@ import openai from '../openai';
 import { parseLLMJson } from '../utils';
 import { getBotPersona, getCommunicationStyle } from '../persona';
 
-/** Интервал проверки: каждые 3 часа */
-const INTERVAL_MS = 3 * 60 * 60 * 1000;
+/** Интервал проверки — берётся из конфига, дефолт 3 часа */
+const INTERVAL_MS = config.memoryInsightIntervalMs ?? 3 * 60 * 60 * 1000;
 
 /** Минимальный интервал между insight-сообщениями: 20 часов (не более раза в день) */
 const MIN_BETWEEN_MS = 20 * 60 * 60 * 1000;

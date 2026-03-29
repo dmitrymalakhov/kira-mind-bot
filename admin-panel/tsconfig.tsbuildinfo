@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/schema.ts","./src/theme.ts","./src/types.ts","./src/components/configsection.tsx","./src/components/dashboard.tsx","./src/components/durationinput.tsx","./src/components/fieldinput.tsx","./src/components/personalitysection.tsx","./src/components/statusbar.tsx","./src/pages/loginpage.tsx"],"version":"5.9.3"}

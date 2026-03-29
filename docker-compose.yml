@@ -1,22 +1,41 @@
 version: '3.8'
-# Переменные (в т.ч. BOT_TOKEN) берутся из env_file — так прод точно использует .env.production
-# Ротация логов контейнеров: макс. 10 МБ на файл, 3 файла (итого ~30 МБ на сервис)
+# Ротация логов: макс. 10 МБ на файл, 3 файла (~30 МБ на сервис)
 x-logging: &default-logging
   driver: json-file
   options:
     max-size: "10m"
     max-file: "3"
 
+x-restart: &default-restart
+  restart: unless-stopped
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: postgres
+    <<: *default-restart
     environment:
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME:-KiraMind}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    <<: *default-restart
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
     logging: *default-logging
 
   kira-mind-bot:
@@ -24,14 +43,21 @@ services:
       context: ./kira-mind-bot
       args:
         NODE_ENV: ${NODE_ENV:-production}
+    container_name: kira-mind-bot
+    <<: *default-restart
     env_file:
       - ./kira-mind-bot/.env.production
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - ASSISTANT_PROFILE=KiraMindBot
+      - PERSONALITY_FILE=/app/personality/personality.json
+    volumes:
+      - ./personality.json:/app/personality/personality.json:ro
     depends_on:
-      - qdrant
-      - postgres
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
     logging: *default-logging
 
   sergey-brain-bot:
@@ -39,24 +65,39 @@ services:
       context: ./kira-mind-bot
       args:
         NODE_ENV: ${NODE_ENV:-production}
+    container_name: sergey-brain-bot
+    <<: *default-restart
     env_file:
       - ./kira-mind-bot/.env.production
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - ASSISTANT_PROFILE=SergeyBrainBot
+      - PERSONALITY_FILE=/app/personality/personality.json
+    volumes:
+      - ./personality.json:/app/personality/personality.json:ro
     depends_on:
-      - qdrant
-      - postgres
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
     logging: *default-logging
 
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: qdrant
+  admin-panel:
+    build:
+      context: ./admin-panel
+    container_name: admin-panel
+    <<: *default-restart
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "${ADMIN_PORT:-8080}:3000"
     volumes:
-      - qdrant_storage:/qdrant/storage
+      - ./kira-mind-bot/.env.production:/app/env/bot.env
+      - ./personality.json:/app/personality/personality.json
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme}
+      - BOT_ENV_FILE=/app/env/bot.env
+      - PERSONALITY_FILE=/app/personality/personality.json
     logging: *default-logging
 
 volumes:

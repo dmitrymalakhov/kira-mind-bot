@@ -1,6 +1,7 @@
 #!/bin/bash
+# TypeScript компилируется локально — на сервер уходит уже готовый JS.
+# Требования на локальной машине: Node.js, npm, ssh, scp.
 
-# Функция для отображения помощи
 show_help() {
     echo "Usage: $0 [--kira-mind-bot] [--sergey-brain-bot] [--server-ip <ip>]"
     echo
@@ -13,30 +14,17 @@ show_help() {
 
 DEPLOY_KIRA_MIND_BOT=false
 DEPLOY_SERGEY_BRAIN_BOT=false
-
 SERVER_IP="165.232.120.123"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --kira-mind-bot)
-            DEPLOY_KIRA_MIND_BOT=true
-            shift
-            ;;
-        --sergey-brain-bot)
-            DEPLOY_SERGEY_BRAIN_BOT=true
-            shift
-            ;;
-        --server-ip)
-            SERVER_IP="$2"
-            shift 2
-            ;;
-        *)
-            show_help
-            ;;
+        --kira-mind-bot)    DEPLOY_KIRA_MIND_BOT=true; shift ;;
+        --sergey-brain-bot) DEPLOY_SERGEY_BRAIN_BOT=true; shift ;;
+        --server-ip)        SERVER_IP="$2"; shift 2 ;;
+        *)                  show_help ;;
     esac
 done
 
-# Проверка, что хотя бы один проект выбран для деплоя
 if [ "$DEPLOY_KIRA_MIND_BOT" = false ] && [ "$DEPLOY_SERGEY_BRAIN_BOT" = false ]; then
     show_help
 fi
@@ -44,90 +32,89 @@ fi
 cd "$(dirname "$0")"
 DEPLOY_STARTED_AT=$(date '+%Y-%m-%d %H:%M:%S')
 
-# --- Статус: старт деплоя ---
 echo ""
 echo "=============================================="
 echo "  🚀 ДЕПЛОЙ — ${DEPLOY_STARTED_AT}"
 echo "=============================================="
 echo "📍 Сервер: ${SERVER_IP}"
-echo "📦 Проекты для деплоя:"
-[ "$DEPLOY_KIRA_MIND_BOT" = true ]       && echo "  • kira-mind-bot"
-[ "$DEPLOY_SERGEY_BRAIN_BOT" = true ]    && echo "  • sergey-brain-bot"
+echo "📦 Проекты:"
+[ "$DEPLOY_KIRA_MIND_BOT" = true ]    && echo "  • kira-mind-bot"
+[ "$DEPLOY_SERGEY_BRAIN_BOT" = true ] && echo "  • sergey-brain-bot"
+echo "  • admin-panel"
 echo "=============================================="
 echo ""
 
-# _deploy используется как staging-папка (не конфликтует с dist/ от TypeScript)
 rm -rf _deploy
 mkdir -p _deploy
 
-# Сборка и копирование файлов для kira-mind-bot
+# ── Сборка kira-mind-bot ──────────────────────────────────────────────────────
 if [ "$DEPLOY_KIRA_MIND_BOT" = true ]; then
-    echo "🔨 [1/2] Сборка kira-mind-bot (ASSISTANT_PROFILE=KiraMindBot)..."
+    echo "🔨 Сборка kira-mind-bot (ASSISTANT_PROFILE=KiraMindBot)..."
     ASSISTANT_PROFILE=KiraMindBot npm run build
 
     mkdir -p _deploy/kira-mind-bot
     cp -r dist/* _deploy/kira-mind-bot
-    cp Dockerfile _deploy/kira-mind-bot
-    cp package.json _deploy/kira-mind-bot
-    cp package-lock.json _deploy/kira-mind-bot
+    cp Dockerfile package.json package-lock.json _deploy/kira-mind-bot/
 
     if [ -f ".env.production" ]; then
-        cp .env.production _deploy/kira-mind-bot
+        cp .env.production _deploy/kira-mind-bot/
         echo "✅ Скопирован .env.production для kira-mind-bot"
     else
-        echo "⚠️  Файл .env.production не найден для kira-mind-bot"
+        echo "⚠️  .env.production не найден"
     fi
-
     rm -rf dist
 fi
 
-# Сборка и копирование файлов для sergey-brain-bot (из той же кодовой базы)
+# ── Сборка sergey-brain-bot ───────────────────────────────────────────────────
 if [ "$DEPLOY_SERGEY_BRAIN_BOT" = true ]; then
-    echo "🔨 [2/2] Сборка sergey-brain-bot (ASSISTANT_PROFILE=SergeyBrainBot)..."
+    echo "🔨 Сборка sergey-brain-bot (ASSISTANT_PROFILE=SergeyBrainBot)..."
     ASSISTANT_PROFILE=SergeyBrainBot npm run build
 
+    # sergey использует ту же директорию kira-mind-bot (один Dockerfile)
     mkdir -p _deploy/kira-mind-bot
-    cp -r dist/* _deploy/kira-mind-bot
-    cp Dockerfile _deploy/kira-mind-bot
-    cp package.json _deploy/kira-mind-bot
-    cp package-lock.json _deploy/kira-mind-bot
+    cp -r dist/* _deploy/kira-mind-bot/
+    cp Dockerfile package.json package-lock.json _deploy/kira-mind-bot/
 
     if [ -f ".env.production" ]; then
-        cp .env.production _deploy/kira-mind-bot
+        cp .env.production _deploy/kira-mind-bot/
         echo "✅ Скопирован .env.production для sergey-brain-bot"
     else
-        echo "⚠️  Файл .env.production не найден для sergey-brain-bot"
+        echo "⚠️  .env.production не найден"
     fi
-
     rm -rf dist
 fi
 
-# Копирование общего docker-compose.yml в staging
+# ── Общие файлы ───────────────────────────────────────────────────────────────
 echo ""
 echo "📁 --- Подготовка архива ---"
-cp docker-compose.yml _deploy
+cp docker-compose.yml _deploy/
 
-# Генерируем .env для docker-compose из .env.production (нужен для postgres — DB_PASSWORD и т.д.)
-grep -E '^DB_' .env.production > _deploy/.env && echo "✅ Создан .env для docker-compose (DB_*)" || echo "⚠️  Не удалось создать .env из .env.production"
+if [ -d "admin-panel" ]; then
+    rsync -a --exclude='node_modules' --exclude='dist' admin-panel/ _deploy/admin-panel/
+    echo "✅ Скопирована admin-panel"
+fi
 
-echo "Содержимое _deploy: $(ls -la _deploy | tail -n +2)"
+# .env для docker-compose (DB_* переменные из .env.production)
+if [ -f ".env.production" ]; then
+    grep -E '^(DB_|NODE_ENV)' .env.production > _deploy/.env && echo "✅ Создан .env для docker-compose"
+fi
+
+echo "Содержимое _deploy: $(ls _deploy)"
 echo ""
 
-# Создание архива
+# ── Архив и отправка ──────────────────────────────────────────────────────────
 echo "📦 Создание deployment-source.tar..."
-tar -czvf deployment-source.tar -C ./_deploy .
+tar -czf deployment-source.tar -C ./_deploy .
 ARCHIVE_SIZE=$(du -h deployment-source.tar | cut -f1)
 echo "📏 Размер архива: ${ARCHIVE_SIZE}"
 echo ""
 
-# Копирование архива на удалённый сервер
 echo "⬆️  --- Загрузка на сервер ${SERVER_IP} ---"
 scp deployment-source.tar root@${SERVER_IP}:/root/source
 echo "✅ Загрузка завершена."
 echo ""
 
-# Вход на удалённый сервер, очистка Docker, разархивирование и деплой сервисов
-# Переменные DEPLOY_* подставляются на клиенте; \$ — выполняются на сервере
+# ── Выполнение на сервере ─────────────────────────────────────────────────────
 echo "🖥️  --- Выполнение на сервере ---"
 ssh root@${SERVER_IP} << EOF
   set -e
@@ -137,43 +124,63 @@ ssh root@${SERVER_IP} << EOF
   echo "🖥️  === [Сервер] \$(date -u '+%Y-%m-%d %H:%M:%S UTC') ==="
   echo ""
 
-  echo "💾 --- Диск и Docker до очистки ---"
+  echo "💾 Диск и Docker до очистки:"
   df -h / | tail -1
-  echo "Использование Docker (docker system df):"
   docker system df 2>/dev/null || true
-  echo "Контейнеры (все):"
-  docker ps -a --format "  {{.Names}}: {{.Status}}" 2>/dev/null || docker ps -a
   echo ""
 
-  echo "🛑 --- Остановка и удаление контейнеров деплоируемых сервисов ---"
+  echo "🛑 Остановка деплоируемых сервисов..."
   stop_and_remove() {
     local name="\$1"
     docker-compose -f docker-compose.yml stop "\$name" 2>/dev/null && echo "  stop \$name: ok" || true
     docker-compose -f docker-compose.yml rm -f "\$name" 2>/dev/null && echo "  rm \$name: ok" || true
   }
-  if [ "$DEPLOY_KIRA_MIND_BOT" = true ]; then stop_and_remove kira-mind-bot; fi
+  if [ "$DEPLOY_KIRA_MIND_BOT" = true ];    then stop_and_remove kira-mind-bot; fi
   if [ "$DEPLOY_SERGEY_BRAIN_BOT" = true ]; then stop_and_remove sergey-brain-bot; fi
+  stop_and_remove admin-panel
   echo ""
 
-  echo "🗑️  --- Очистка Docker на сервере ---"
-  BEFORE_PRUNE=\$(df / | tail -1 | awk '{print \$4}')
-  echo "  🧹 Удаление остановленных контейнеров (container prune)..."
-  docker container prune -f 2>/dev/null && echo "    ok" || echo "    skip"
-  echo "  🧹 Удаление неиспользуемых образов (image prune)..."
-  docker image prune -af 2>/dev/null && echo "    ok" || echo "    skip"
-  echo "  🗑️  Удаление кэша билдов (builder prune) — освобождает место для npm install..."
-  docker builder prune -af 2>/dev/null && echo "    ok" || echo "    skip"
-  AFTER_PRUNE=\$(df / | tail -1 | awk '{print \$4}')
-  echo "  Свободно до/после (блоки 1K): \${BEFORE_PRUNE} -> \${AFTER_PRUNE}"
-  echo "💾 Диск после очистки:"
+  echo "🗑️  Очистка Docker..."
+  docker container prune -f 2>/dev/null || true
+  docker image prune -af 2>/dev/null || true
+  docker builder prune -af 2>/dev/null || true
   df -h / | tail -1
   echo ""
 
-  echo "📂 --- Распаковка архива ---"
-  tar -xzvf deployment-source.tar
+  echo "📂 Распаковка архива..."
+  tar -xzf deployment-source.tar
   rm deployment-source.tar
-  echo "Файлы в /root/source:"
   ls -la
+  echo ""
+
+  # personality.json
+  if [ ! -f "/root/source/personality.json" ]; then
+    echo '{"KiraMindBot":{},"SergeyBrainBot":{}}' > /root/source/personality.json
+    echo "✅ Создан пустой personality.json"
+  fi
+
+  # Учётные данные admin-panel
+  ADMIN_STATE_FILE="/root/.kira-admin-state"
+  if [ -f "\$ADMIN_STATE_FILE" ]; then
+    set -a; source "\$ADMIN_STATE_FILE"; set +a
+  fi
+  if [ -z "\$ADMIN_PORT" ]; then
+    ADMIN_PORT=\$(( (RANDOM % 2000) + 7000 ))
+    echo "ADMIN_PORT=\$ADMIN_PORT" >> "\$ADMIN_STATE_FILE"
+    echo "🔒 Сгенерирован порт admin-panel: \$ADMIN_PORT"
+  fi
+  if [ -z "\$ADMIN_PASSWORD" ]; then
+    ADMIN_PASSWORD=\$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 20 2>/dev/null || openssl rand -hex 10)
+    echo "ADMIN_PASSWORD=\$ADMIN_PASSWORD" >> "\$ADMIN_STATE_FILE"
+    echo "🔒 Сгенерирован пароль admin-panel"
+  fi
+  if [ -z "\$ADMIN_USERNAME" ]; then
+    ADMIN_USERNAME="admin"
+    echo "ADMIN_USERNAME=\$ADMIN_USERNAME" >> "\$ADMIN_STATE_FILE"
+  fi
+  echo "ADMIN_PORT=\$ADMIN_PORT"         >> .env
+  echo "ADMIN_USERNAME=\$ADMIN_USERNAME" >> .env
+  echo "ADMIN_PASSWORD=\$ADMIN_PASSWORD" >> .env
   echo ""
 
   export NODE_ENV=production
@@ -181,59 +188,53 @@ ssh root@${SERVER_IP} << EOF
 
   deploy_service() {
     local name="\$1"
-    echo ""
-    echo "🚀 >>> Деплой сервиса: \$name <<<"
-    echo "  ⏹️  Остановка старого контейнера..."
+    echo "🚀 Деплой: \$name"
     docker-compose -f docker-compose.yml stop "\$name" 2>/dev/null || true
-    echo "  🔨 Сборка и запуск (docker-compose up --build)..."
     docker-compose -f docker-compose.yml up "\$name" -d --build
-    echo "  ✅ Сервис \$name запущен."
+    echo "✅ \$name запущен."
     DEPLOYED_SERVICES="\$DEPLOYED_SERVICES \$name"
   }
 
-  if [ "$DEPLOY_KIRA_MIND_BOT" = true ]; then
-    export ASSISTANT_PROFILE=KiraMindBot
-    deploy_service kira-mind-bot
-  fi
-
-  if [ "$DEPLOY_SERGEY_BRAIN_BOT" = true ]; then
-    export ASSISTANT_PROFILE=SergeyBrainBot
-    deploy_service sergey-brain-bot
-  fi
+  if [ "$DEPLOY_KIRA_MIND_BOT" = true ];    then deploy_service kira-mind-bot; fi
+  if [ "$DEPLOY_SERGEY_BRAIN_BOT" = true ]; then deploy_service sergey-brain-bot; fi
+  deploy_service admin-panel
 
   echo ""
-  echo "✔️  === Проверка задеплоенных сервисов ==="
+  echo "✔️  === Проверка сервисов ==="
   for svc in \$DEPLOYED_SERVICES; do
     [ -z "\$svc" ] && continue
     if docker-compose -f docker-compose.yml ps "\$svc" 2>/dev/null | grep -q "Up"; then
       echo "  ✅ \$svc — запущен"
     else
-      echo "  ❌ ОШИБКА: \$svc не запущен после деплоя"
-      docker-compose -f docker-compose.yml ps -a
+      echo "  ❌ \$svc не запущен"
+      docker-compose -f docker-compose.yml logs --tail 20 "\$svc" 2>/dev/null || true
       exit 1
     fi
   done
+
   echo ""
-  echo "📋 Состояние задеплоенных контейнеров (docker ps):"
-  docker ps --filter "name=\$(echo \$DEPLOYED_SERVICES | tr ' ' '|')" --format "  {{.Names}}: {{.Status}} ({{.Image}})"
+  echo "╔══════════════════════════════════════════╗"
+  echo "║        🌐 ПАНЕЛЬ УПРАВЛЕНИЯ              ║"
+  echo "╠══════════════════════════════════════════╣"
+  echo "║  URL:     http://${SERVER_IP}:\$ADMIN_PORT"
+  echo "║  Логин:   \$ADMIN_USERNAME"
+  echo "║  Пароль:  \$ADMIN_PASSWORD"
+  echo "╚══════════════════════════════════════════╝"
   echo ""
-  echo "🖥️  === [Сервер] Деплой завершён: \$(date -u '+%Y-%m-%d %H:%M:%S UTC') ==="
+  echo "🖥️  Деплой завершён: \$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 EOF
 
-if [ $? -eq 0 ]; then
+STATUS=$?
+rm -f deployment-source.tar
+rm -rf _deploy
+
+if [ $STATUS -eq 0 ]; then
   echo ""
   echo "=============================================="
-  echo "  ✅ Деплой на ${SERVER_IP} завершён успешно."
-  echo "  📅 Начало: ${DEPLOY_STARTED_AT}"
-  echo "  📅 Конец:  $(date '+%Y-%m-%d %H:%M:%S')"
+  echo "  ✅ Деплой завершён успешно."
+  echo "  📅 ${DEPLOY_STARTED_AT} → $(date '+%Y-%m-%d %H:%M:%S')"
   echo "=============================================="
-  rm -f deployment-source.tar
-  rm -rf _deploy
 else
-  echo ""
-  echo "=============================================="
   echo "  ❌ Деплой завершился с ошибкой."
-  echo "  📅 Время: ${DEPLOY_STARTED_AT} — $(date '+%Y-%m-%d %H:%M:%S')"
-  echo "=============================================="
   exit 1
 fi

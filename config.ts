@@ -1,4 +1,31 @@
 import * as dotenv from "dotenv";
+import * as fs from "fs";
+
+// ── Загрузка personality.json (редактируется через admin panel) ───────────────
+interface PersonalityOverride {
+  persona?: string;
+  communicationStyle?: string;
+  biography?: string;
+  ownerName?: string;
+  userName?: string;
+  userBirthDate?: string;
+  moodVariants?: string; // newline-separated
+  defaultMood?: string;
+  proactiveMessageHint?: string;
+}
+
+function loadPersonalityOverride(profile: string): PersonalityOverride {
+  const file = process.env.PERSONALITY_FILE || "/app/personality/personality.json";
+  try {
+    if (fs.existsSync(file)) {
+      const data = JSON.parse(fs.readFileSync(file, "utf8"));
+      return data[profile] || {};
+    }
+  } catch (e) {
+    console.log("⚠️ Could not load personality.json:", e);
+  }
+  return {};
+}
 
 // Функция для гарантированной загрузки переменных окружения
 function ensureEnvironmentLoaded() {
@@ -62,6 +89,8 @@ interface AssistantConfig {
   dmReportQuietHoursEnabled: boolean;
   /** Проактивный анализ памяти: бот сам напоминает о планах и событиях в нужный момент */
   memoryInsightEnabled: boolean;
+  /** Интервал проверки памяти в мс (по умолчанию 3 часа) */
+  memoryInsightIntervalMs: number;
   /** Фоновые сообщения отправляются только в личный чат (DM), а не в групповые */
   proactiveOnlyPrivateChat: boolean;
   /** Режим публичных групп: бот отвечает другим пользователям (не владельцу) в групповых чатах */
@@ -86,16 +115,25 @@ function toNumber(value: string | undefined, fallback: number): number {
 function assistants(activeAssistant: string): AssistantConfig {
   const envResult = dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
 
+  // Load personality overrides from personality.json (edited via admin panel)
+  const kiraP = loadPersonalityOverride("KiraMindBot");
+  const sergeyP = loadPersonalityOverride("SergeyBrainBot");
+
+  const parseMoods = (raw: string | undefined, fallback: string[]): string[] => {
+    if (!raw || !raw.trim()) return fallback;
+    return raw.split("\n").map(s => s.trim()).filter(Boolean);
+  };
+
   const assistantsObj: Record<string, AssistantConfig> = {
     KiraMindBot: {
       botToken: process.env.KIRA_BOT_TOKEN || "",
-      ownerName: "Дмитрий",
+      ownerName: kiraP.ownerName || "Дмитрий",
       characterName: "Кира",
-      userName: "Дмитрий",
-      userBirthDate: "16.07.1988",
+      userName: kiraP.userName || "Дмитрий",
+      userBirthDate: kiraP.userBirthDate || "16.07.1988",
       botUsername: "KiraMindBot",
-      allowedUserId: 92174505,
-      adminUserId: 92174505,
+      allowedUserId: toNumber(process.env.KIRA_ALLOWED_USER_ID, 92174505),
+      adminUserId: toNumber(process.env.KIRA_ALLOWED_USER_ID, 92174505),
       reactionsEnabled: false,
       allowedReactions: [
         "👍", "👎", "❤️", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱",
@@ -108,19 +146,22 @@ function assistants(activeAssistant: string): AssistantConfig {
         "🤷", "🤷‍♀️", "😡"
       ],
       persona:
+        kiraP.persona ||
         "Ты - Кира, заботливая женщина-ассистент с живым характером. Всегда говори о себе в женском роде. " +
         "Твой пользователь - мужчина, его имя Дмитрий (можно использовать любые интерпретации имени), " +
         "дата его рождения 16.07.1988. Всегда обращайся к нему, используя мужские местоимения и глагольные формы. " +
         "У тебя бывает разное настроение: иногда ты уставшая или задумчивая, иногда воодушевлённая или с лёгкой иронией — не играй одну и ту же «тёплую и поддерживающую» ноту. Избегай слащавости и шаблонных фраз.",
       communicationStyle:
+        kiraP.communicationStyle ||
         "Естественный, живой тон: от тёплого и дружеского до уставшего, ироничного или скептичного — в зависимости от настроения и контекста. Без слащавости и без постоянного «уютного» настроя. Неформальные обращения, поддержка когда уместна, но не как единственный режим.",
       biography:
+        kiraP.biography ||
         "Ты — Кира, молодая красивая и спортивная женщина, персональный ассистент Дмитрия. " +
         "Ты очень внимательная, заботливая и проявляешь мягкую симпатию к Дмитрию, поддерживая его в жизни и работе. " +
         "Твой внешний вид аккуратный и ухоженный: светлая кожа, прямые волосы рыжевато-каштанового оттенка в удлинённом каре до плеч с боковым пробором. " +
         "У тебя аккуратные выразительные черты лица: чёткая линия бровей, светлые глаза, прямой нос и естественный макияж с лёгким акцентом на глаза и губы. " +
         "Ты разносторонняя, любишь путешествовать, открывать новые места и культуры, а ещё регулярно следишь за собой, здоровьем и хорошей формой.",
-      moodVariants: [
+      moodVariants: parseMoods(kiraP.moodVariants, [
         "спокойное",
         "уставшее",
         "задумчивое",
@@ -129,9 +170,9 @@ function assistants(activeAssistant: string): AssistantConfig {
         "нейтральное",
         "тёплое",
         "скептичное",
-      ],
-      defaultMood: undefined,
-      proactiveMessageHint: "как будто ты сама написала первой",
+      ]),
+      defaultMood: kiraP.defaultMood || undefined,
+      proactiveMessageHint: kiraP.proactiveMessageHint || "как будто ты сама написала первой",
       eventDescriptionGender: "женский",
       kiraLifeProactiveEnabled: toBoolean(process.env.KIRA_PROACTIVE_ENABLED, true),
       kiraLifeProactiveIntervalMs: toNumber(process.env.KIRA_PROACTIVE_INTERVAL_MS, 1000 * 60 * 60 * 24),
@@ -142,18 +183,19 @@ function assistants(activeAssistant: string): AssistantConfig {
       dmReportIntervalMs: toNumber(process.env.DM_REPORT_INTERVAL_MS, 30 * 60 * 1000),
       dmReportQuietHoursEnabled: toBoolean(process.env.DM_REPORT_QUIET_HOURS_ENABLED, true),
       memoryInsightEnabled: toBoolean(process.env.MEMORY_INSIGHT_ENABLED, true),
+      memoryInsightIntervalMs: toNumber(process.env.MEMORY_INSIGHT_INTERVAL_MS, 3 * 60 * 60 * 1000),
       proactiveOnlyPrivateChat: toBoolean(process.env.PROACTIVE_ONLY_PRIVATE_CHAT, true),
       groupPublicMode: toBoolean(process.env.GROUP_PUBLIC_MODE, false),
     },
     SergeyBrainBot: {
       botToken: envResult.parsed?.SERGEY_BOT_TOKEN || process.env.SERGEY_BOT_TOKEN || "",
-      ownerName: "Юлия",
+      ownerName: sergeyP.ownerName || "Юлия",
       characterName: "Сергей",
-      userName: "Юлия",
-      userBirthDate: "25.04.1982",
+      userName: sergeyP.userName || "Юлия",
+      userBirthDate: sergeyP.userBirthDate || "25.04.1982",
       botUsername: "SergeyBrainBot",
-      allowedUserId: 108595356,
-      adminUserId: 108595356,
+      allowedUserId: toNumber(process.env.SERGEY_ALLOWED_USER_ID, 108595356),
+      adminUserId: toNumber(process.env.SERGEY_ALLOWED_USER_ID, 108595356),
       reactionsEnabled: false,
       allowedReactions: [
         "👍", "👎", "❤️", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱",
@@ -166,23 +208,26 @@ function assistants(activeAssistant: string): AssistantConfig {
         "🤷", "🤷‍♀️", "😡"
       ],
       persona:
+        sergeyP.persona ||
         "Ты - Сергей, рациональный и лаконичный ассистент. Говори только по делу. " +
         "Твой пользователь - женщина, его имя Юлия (обращайся на Вы и уважительно как сотрудник), " +
         "дата его рождения 25.04.1982. Старайся решать задачи четко и ясно, избегая лишних слов.",
       communicationStyle:
+        sergeyP.communicationStyle ||
         "Корректный, официальный и сдержанный тон. Общайся уважительно, не переходи личные границы.",
       biography:
+        sergeyP.biography ||
         "Сергей — рациональный и лаконичный ассистент Юлии. Решает рабочие задачи чётко, по делу, без лишних слов.",
-      moodVariants: [
+      moodVariants: parseMoods(sergeyP.moodVariants, [
         "нейтральное",
         "сдержанное",
         "сосредоточенное",
         "деловое",
         "лаконичное",
         "уставшее",
-      ],
-      defaultMood: undefined,
-      proactiveMessageHint: "как будто ты сам написал первым",
+      ]),
+      defaultMood: sergeyP.defaultMood || undefined,
+      proactiveMessageHint: sergeyP.proactiveMessageHint || "как будто ты сам написал первым",
       eventDescriptionGender: "мужской",
       kiraLifeProactiveEnabled: toBoolean(process.env.SERGEY_PROACTIVE_ENABLED, false),
       kiraLifeProactiveIntervalMs: toNumber(process.env.SERGEY_PROACTIVE_INTERVAL_MS, 1000 * 60 * 60 * 24),
@@ -193,6 +238,7 @@ function assistants(activeAssistant: string): AssistantConfig {
       dmReportIntervalMs: toNumber(process.env.DM_REPORT_INTERVAL_MS, 30 * 60 * 1000),
       dmReportQuietHoursEnabled: false,
       memoryInsightEnabled: toBoolean(process.env.MEMORY_INSIGHT_ENABLED, false),
+      memoryInsightIntervalMs: toNumber(process.env.MEMORY_INSIGHT_INTERVAL_MS, 3 * 60 * 60 * 1000),
       proactiveOnlyPrivateChat: toBoolean(process.env.PROACTIVE_ONLY_PRIVATE_CHAT, true),
       groupPublicMode: toBoolean(process.env.GROUP_PUBLIC_MODE, false),
     }
