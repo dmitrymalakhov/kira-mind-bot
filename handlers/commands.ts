@@ -10,6 +10,7 @@ import { addToHistory } from "../utils/history";
 import { registerMemoryCommands } from "./memoryCommands";
 import { USER_TIMEZONE } from "../constants";
 import { getCapabilitiesMessage } from "../capabilities";
+import { getAllChats, isChatPublicMode, setChatPublicMode } from "../services/chatRegistry";
 import { factAnalysisManager } from "../utils/factAnalysisTimer";
 import { extractAndSaveFactsFromConversation } from "../utils/enhancedFactExtraction";
 
@@ -256,6 +257,60 @@ bot.command("history", async (ctx) => {
         const errorMessage = "Произошла ошибка при получении истории сообщений. Пожалуйста, попробуйте позже.";
 
         await ctx.reply(errorMessage);
+    }
+});
+
+// Команда /chats - показать все чаты, в которых присутствует бот
+bot.command("chats", async (ctx) => {
+    try {
+        const chats = await getAllChats();
+        if (chats.length === 0) {
+            await ctx.reply("Список чатов пока пуст.");
+            return;
+        }
+
+        const typeLabel: Record<string, string> = {
+            private: '👤 Личный',
+            group: '👥 Группа',
+            supergroup: '👥 Супергруппа',
+            channel: '📢 Канал',
+        };
+
+        let msg = `📋 Чаты, где меня видят (${chats.length}):\n\n`;
+        for (const chat of chats) {
+            const type = typeLabel[chat.chatType] ?? chat.chatType;
+            const usernameStr = chat.username ? ` @${chat.username}` : '';
+            const lastSeen = new Date(chat.lastSeenAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' });
+            msg += `${type}: *${chat.title}*${usernameStr}\n`;
+            msg += `  ID: \`${chat.chatId}\` · последний раз: ${lastSeen}\n\n`;
+        }
+
+        await ctx.reply(msg, { parse_mode: "Markdown" });
+    } catch (error) {
+        console.error("Ошибка при получении списка чатов:", error);
+        await ctx.reply("Не удалось загрузить список чатов.");
+    }
+});
+
+// Команда /public_mode — включить/выключить публичный режим в текущем групповом чате
+bot.command("public_mode", async (ctx) => {
+    const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
+    if (!isGroup) {
+        await ctx.reply("Эта команда работает только в групповых чатах.");
+        return;
+    }
+    try {
+        const current = await isChatPublicMode(ctx.chat!.id);
+        const next = !current;
+        await setChatPublicMode(ctx.chat!.id, next);
+        await ctx.reply(
+            next
+                ? "✅ Публичный режим включён — теперь отвечаю всем участникам этого чата."
+                : "🔒 Публичный режим выключен — отвечаю только владельцу."
+        );
+    } catch (error) {
+        console.error("Ошибка при переключении публичного режима:", error);
+        await ctx.reply("Не удалось изменить режим.");
     }
 });
 

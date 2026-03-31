@@ -5,6 +5,7 @@ import { handleUnauthorizedUserMessage } from "./agents/unauthorizedUserAgent";
 import { handleGroupPublicUserMessage } from "./agents/groupPublicAgent";
 import { devLog } from "./utils";
 import { saveAllowedUserChatId } from "./utils/allowedUserChatStore";
+import { upsertChat, isChatPublicMode } from "./services/chatRegistry";
 import openai from "./openai";
 import { getBotPersona } from "./persona";
 import { config } from "./config";
@@ -16,6 +17,10 @@ const DISMISSAL_VARIANTS = [
   "уже занята",
   "работает в приватном режиме",
 ];
+
+// Rate limiting: userId → timestamp последнего dismissal (3 минуты cooldown)
+const dismissalCooldown = new Map<number, number>();
+const DISMISSAL_COOLDOWN_MS = 3 * 60 * 1000;
 
 async function handleGroupPrivateDismissal(ctx: BotContext): Promise<void> {
   const userName = ctx.from?.first_name || "незнакомец";
@@ -215,15 +220,38 @@ function setupBot(bot: Bot<BotContext>, config: any) {
       if (ctx.chat?.type === "private") {
         await saveAllowedUserChatId(ctx.chat.id);
       }
+      if (ctx.chat) {
+        const chat = ctx.chat;
+        const title = chat.type === 'private'
+          ? [('first_name' in chat ? chat.first_name : ''), ('last_name' in chat ? chat.last_name : '')].filter(Boolean).join(' ') || 'Личный чат'
+          : ('title' in chat ? chat.title : '') || 'Группа';
+        upsertChat({
+          chatId: chat.id,
+          title,
+          chatType: chat.type,
+          username: 'username' in chat ? chat.username : undefined,
+        });
+      }
       await next();
     } else {
       const isGroupChat = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
-      if (isGroupChat && config.groupPublicMode) {
+      if (isGroupChat && ctx.callbackQuery) {
+        // Не-владелец нажал кнопку в группе — тихо отвечаем toast'ом, не спамим в чат
+        await ctx.answerCallbackQuery({ text: "Кнопки только для владельца бота" }).catch(() => {});
+      } else if (isGroupChat && (config.groupPublicMode || await isChatPublicMode(ctx.chat!.id))) {
         devLog(`Group public mode: handling message from user ${ctx.from?.id}`);
         await handleGroupPublicUserMessage(ctx);
       } else if (isGroupChat) {
-        devLog(`Group private mode: witty dismissal for user ${ctx.from?.id}`);
-        await handleGroupPrivateDismissal(ctx);
+        // Rate limiting: не чаще одного dismissal в 3 минуты на пользователя
+        const userId = ctx.from?.id ?? 0;
+        const lastSent = dismissalCooldown.get(userId) ?? 0;
+        if (Date.now() - lastSent < DISMISSAL_COOLDOWN_MS) {
+          devLog(`Group dismissal skipped (cooldown) for user ${userId}`);
+        } else {
+          devLog(`Group private mode: witty dismissal for user ${userId}`);
+          dismissalCooldown.set(userId, Date.now());
+          await handleGroupPrivateDismissal(ctx);
+        }
       } else {
         devLog(`Access by unauthorized user: ${ctx.from?.id}`);
         await handleUnauthorizedUserMessage(ctx);

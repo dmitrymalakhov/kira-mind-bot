@@ -21,6 +21,7 @@ const EMPTY_PROFILE: PersonalityProfile = {
   communicationStyle: '',
   biography: '',
   ownerName: '',
+  ownerUsername: '',
   userName: '',
   userBirthDate: '',
   moodVariants: '',
@@ -64,7 +65,7 @@ function ProfileEditor({ icon, title, values, onChange, onSave, saving }: Profil
       />
       <CardContent>
         <Grid container spacing={2}>
-          <Grid item xs={12} sm={4}>
+          <Grid item xs={12} sm={3}>
             <TextField
               label="Имя владельца"
               value={values.ownerName}
@@ -75,7 +76,18 @@ function ProfileEditor({ icon, title, values, onChange, onSave, saving }: Profil
               FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px' } }}
             />
           </Grid>
-          <Grid item xs={12} sm={4}>
+          <Grid item xs={12} sm={3}>
+            <TextField
+              label="Никнейм владельца (Telegram)"
+              value={values.ownerUsername}
+              onChange={(e) => onChange('ownerUsername', e.target.value)}
+              fullWidth
+              placeholder="dmitrii"
+              helperText="Без @. Для распознавания тегов в публичных группах."
+              FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px' } }}
+            />
+          </Grid>
+          <Grid item xs={12} sm={3}>
             <TextField
               label="Имя пользователя (для обращения)"
               value={values.userName}
@@ -84,7 +96,7 @@ function ProfileEditor({ icon, title, values, onChange, onSave, saving }: Profil
               placeholder="Дмитрий"
             />
           </Grid>
-          <Grid item xs={12} sm={4}>
+          <Grid item xs={12} sm={3}>
             <TextField
               label="Дата рождения пользователя"
               value={values.userBirthDate}

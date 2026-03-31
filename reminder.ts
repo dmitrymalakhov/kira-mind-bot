@@ -168,20 +168,22 @@ async function sendReminder(bot: Bot<BotContext>, reminder: Reminder): Promise<v
             }
         }
 
-        // Создаем инлайн-клавиатуру с кнопками для управления напоминанием
-        const keyboard = new InlineKeyboard()
+        // В групповых чатах (chatId < 0) не добавляем кнопки —
+        // посторонние могут нажимать их и вызывать спам-ответы бота
+        const isGroupReminder = reminder.chatId < 0;
+
+        const keyboard = isGroupReminder ? undefined : new InlineKeyboard()
             .text("✅ Выполнено", `reminder_complete_${reminder.id}`)
             .text("⏰ Напомнить позже", `reminder_postpone_${reminder.id}`)
             .row()
             .text("❌ Отменить", `reminder_cancel_${reminder.id}`);
 
-        // Отправляем сообщение пользователю (в его чат с ботом) с клавиатурой
         const sentMessage = await bot.api.sendMessage(
             reminder.chatId,
             userNotificationText,
             {
                 parse_mode: "Markdown",
-                reply_markup: keyboard
+                ...(keyboard ? { reply_markup: keyboard } : {}),
             }
         );
 

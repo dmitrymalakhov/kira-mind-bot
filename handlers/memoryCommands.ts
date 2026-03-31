@@ -35,6 +35,8 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
                 '/memory_search <запрос> — ручная проверка векторного поиска',
                 '/memory_cleanup — очистка старых фактов',
                 '/debug_facts — диагностика извлечения фактов',
+                '/chats — список чатов, в которых присутствует бот',
+                '/public_mode — вкл/выкл публичный режим в текущей группе',
             ].join('\n'),
             { reply_markup: getMemoryAdminKeyboard() },
         );

@@ -35,6 +35,7 @@ export interface PersonalityProfile {
   communicationStyle: string;
   biography: string;
   ownerName: string;
+  ownerUsername: string;
   userName: string;
   userBirthDate: string;
   moodVariants: string; // one per line
@@ -45,4 +46,17 @@ export interface PersonalityProfile {
 export interface PersonalityConfig {
   KiraMindBot: PersonalityProfile;
   SergeyBrainBot: PersonalityProfile;
+}
+
+export interface ChatInfo {
+  chatId: string;
+  title: string;
+  chatType: string;
+  username?: string;
+  profile: string;
+  publicMode: boolean;
+  allowedDomains: string[];
+  forbiddenTopics?: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
 }

@@ -22,10 +22,12 @@ import SaveAllIcon from '@mui/icons-material/LibraryAddCheck';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import PersonIcon from '@mui/icons-material/Person';
 import TuneIcon from '@mui/icons-material/Tune';
+import ForumIcon from '@mui/icons-material/Forum';
 import { StatusBar } from './StatusBar';
 import { CONFIG_SCHEMA } from '../schema';
 import { ConfigSection, type ConfigSectionHandle } from './ConfigSection';
 import { PersonalitySection } from './PersonalitySection';
+import { ChatsSection } from './ChatsSection';
 import { saveConfig, fetchConfig, logout, restartService } from '../api';
 import type { ConfigResponse, Toast } from '../types';
 
@@ -117,15 +119,18 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
       <Tabs
         value={activeTab}
         onChange={(_, v) => setActiveTab(v)}
+        variant="scrollable"
+        scrollButtons="auto"
         sx={{
           borderBottom: '1px solid',
           borderColor: 'divider',
           minHeight: 40,
-          '& .MuiTab-root': { minHeight: 40, fontSize: '12px', textTransform: 'none' },
+          '& .MuiTab-root': { minHeight: 40, fontSize: '11px', textTransform: 'none', minWidth: 0, px: 1.5 },
         }}
       >
         <Tab icon={<TuneIcon fontSize="small" />} iconPosition="start" label="Настройки" />
         <Tab icon={<PersonIcon fontSize="small" />} iconPosition="start" label="Личность" />
+        <Tab icon={<ForumIcon fontSize="small" />} iconPosition="start" label="Чаты" />
       </Tabs>
 
       {/* Settings navigation (only shown on tab 0) */}
@@ -173,6 +178,14 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
               </ListItemButton>
             ))}
           </List>
+        </Box>
+      )}
+
+      {activeTab === 2 && (
+        <Box sx={{ flexGrow: 1, overflow: 'auto', py: 1, px: 1.5 }}>
+          <Typography variant="caption" color="text.disabled">
+            Список чатов бота
+          </Typography>
         </Box>
       )}
 
@@ -296,7 +309,7 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
         >
           <Box>
             <Typography variant="h6" fontWeight={700}>
-              {activeTab === 0 ? 'Настройки бота' : 'Управление личностью'}
+              {activeTab === 0 ? 'Настройки бота' : activeTab === 1 ? 'Управление личностью' : 'Чаты бота'}
             </Typography>
             <Typography variant="caption" color="text.secondary">
               Изменения применяются после перезапуска контейнера
@@ -332,6 +345,9 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
 
         {/* Personality tab */}
         {activeTab === 1 && <PersonalitySection onToast={showToast} />}
+
+        {/* Chats tab */}
+        {activeTab === 2 && <ChatsSection />}
       </Box>
 
       {/* Toast */}

@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const { Pool } = require('pg');
 
 const app = express();
 const PORT = 3000;
@@ -221,6 +222,103 @@ app.post('/api/restart/:service', requireAuth, async (req, res) => {
     }
   } catch (err) {
     res.status(500).json({ error: `Ошибка: ${err.message}` });
+  }
+});
+
+// ── Chats ─────────────────────────────────────────────────────────────────────
+
+function createDbPool() {
+  const vars = readEnvFile();
+  return new Pool({
+    host: vars.DB_HOST || 'postgres',
+    port: Number(vars.DB_PORT || 5432),
+    user: vars.DB_USER || 'postgres',
+    password: vars.DB_PASSWORD,
+    database: vars.DB_NAME || 'KiraMind',
+    connectionTimeoutMillis: 5000,
+  });
+}
+
+app.get('/api/chats', requireAuth, async (_req, res) => {
+  const pool = createDbPool();
+  try {
+    const result = await pool.query(
+      'SELECT "chatId", title, "chatType", username, profile, "publicMode", "allowedDomains", "forbiddenTopics", "firstSeenAt", "lastSeenAt" FROM chats ORDER BY "lastSeenAt" DESC'
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: `Ошибка БД: ${err.message}` });
+  } finally {
+    await pool.end();
+  }
+});
+
+app.patch('/api/chats/:chatId/forbidden-topics', requireAuth, async (req, res) => {
+  const { chatId } = req.params;
+  const { topics } = req.body;
+  if (typeof topics !== 'string') {
+    return res.status(400).json({ error: 'Поле topics должно быть строкой' });
+  }
+  const pool = createDbPool();
+  try {
+    const result = await pool.query(
+      'UPDATE chats SET "forbiddenTopics" = $1 WHERE "chatId" = $2',
+      [topics, chatId]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Чат не найден' });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: `Ошибка БД: ${err.message}` });
+  } finally {
+    await pool.end();
+  }
+});
+
+app.patch('/api/chats/:chatId/allowed-domains', requireAuth, async (req, res) => {
+  const { chatId } = req.params;
+  const { domains } = req.body;
+  if (!Array.isArray(domains)) {
+    return res.status(400).json({ error: 'Поле domains должно быть массивом строк' });
+  }
+  const pool = createDbPool();
+  try {
+    const result = await pool.query(
+      'UPDATE chats SET "allowedDomains" = $1 WHERE "chatId" = $2',
+      [JSON.stringify(domains), chatId]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Чат не найден' });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: `Ошибка БД: ${err.message}` });
+  } finally {
+    await pool.end();
+  }
+});
+
+app.patch('/api/chats/:chatId/public-mode', requireAuth, async (req, res) => {
+  const { chatId } = req.params;
+  const { enabled } = req.body;
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'Поле enabled должно быть boolean' });
+  }
+  const pool = createDbPool();
+  try {
+    const result = await pool.query(
+      'UPDATE chats SET "publicMode" = $1 WHERE "chatId" = $2',
+      [enabled, chatId]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Чат не найден' });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: `Ошибка БД: ${err.message}` });
+  } finally {
+    await pool.end();
   }
 });
 

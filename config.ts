@@ -7,6 +7,7 @@ interface PersonalityOverride {
   communicationStyle?: string;
   biography?: string;
   ownerName?: string;
+  ownerUsername?: string;
   userName?: string;
   userBirthDate?: string;
   moodVariants?: string; // newline-separated
@@ -57,6 +58,8 @@ ensureEnvironmentLoaded();
 interface AssistantConfig {
   botToken: string;
   ownerName: string;
+  /** Telegram-никнейм владельца без @ (например: "dmitrii"). Используется в публичном режиме групп для распознавания упоминаний. */
+  ownerUsername?: string;
   characterName: string;
   userName: string;
   userBirthDate: string;
@@ -128,6 +131,7 @@ function assistants(activeAssistant: string): AssistantConfig {
     KiraMindBot: {
       botToken: process.env.KIRA_BOT_TOKEN || "",
       ownerName: kiraP.ownerName || "Дмитрий",
+      ownerUsername: kiraP.ownerUsername || undefined,
       characterName: "Кира",
       userName: kiraP.userName || "Дмитрий",
       userBirthDate: kiraP.userBirthDate || "16.07.1988",
@@ -190,6 +194,7 @@ function assistants(activeAssistant: string): AssistantConfig {
     SergeyBrainBot: {
       botToken: envResult.parsed?.SERGEY_BOT_TOKEN || process.env.SERGEY_BOT_TOKEN || "",
       ownerName: sergeyP.ownerName || "Юлия",
+      ownerUsername: sergeyP.ownerUsername || undefined,
       characterName: "Сергей",
       userName: sergeyP.userName || "Юлия",
       userBirthDate: sergeyP.userBirthDate || "25.04.1982",

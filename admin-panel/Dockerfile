@@ -9,7 +9,7 @@ RUN npm run build
 # Stage 2: Production server
 FROM node:23-alpine
 WORKDIR /app
-RUN npm install --no-save express express-session
+RUN npm install --no-save express express-session pg
 COPY --from=builder /app/dist ./dist
 COPY server.js ./
 EXPOSE 3000
