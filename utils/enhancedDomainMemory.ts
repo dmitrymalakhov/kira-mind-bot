@@ -383,12 +383,13 @@ async function buildMemoryRelationships(
     }
 }
 
-export async function searchMemories(ctx: BotContext, query: string, options?: SearchOptions) {
+export async function searchMemories(ctx: BotContext, query: string, options?: SearchOptions, userIdOverride?: string) {
     const svc = vectorService();
     if (!svc) return [];
     try {
         devLog('Searching memories:', query, options);
-        const res = await svc.searchMemories(query, String(ctx.from?.id), options);
+        const userId = userIdOverride ?? String(ctx.from?.id);
+        const res = await svc.searchMemories(query, userId, options);
         devLog('Search result count:', res.length);
         if (res.length === 0) {
             console.warn(`⚠️ Память не найдена по запросу: "${query.slice(0, 120)}"`);

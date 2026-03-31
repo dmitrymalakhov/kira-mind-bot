@@ -73,9 +73,19 @@ async function classifyPublicMessage(message: string): Promise<PublicIntent> {
 async function buildMemoryContext(ctx: BotContext, message: string, allowedDomains: string[]): Promise<string> {
     if (allowedDomains.length === 0) return '';
 
+    // Заменяем никнейм владельца его именем для точного семантического поиска
+    let searchQuery = message;
+    if (config.ownerUsername) {
+        const usernameRegex = new RegExp(`@${config.ownerUsername}`, 'gi');
+        searchQuery = searchQuery.replace(usernameRegex, config.ownerName);
+    }
+
+    // Ищем память от имени владельца (все воспоминания хранятся под его userId)
+    const ownerUserId = String(config.allowedUserId);
+
     const results: string[] = [];
     for (const domain of allowedDomains) {
-        const found = await searchMemories(ctx, message, { domain, limit: 3 });
+        const found = await searchMemories(ctx, searchQuery, { domain, limit: 3 }, ownerUserId);
         for (const r of found) {
             results.push(`[${domain}] ${r.content}`);
         }
@@ -162,14 +172,19 @@ async function handlePublicConversation(
         ? `\n\nЗАПРЕЩЁННЫЕ ТЕМЫ: Следующие темы полностью запрещены к обсуждению. Если пользователь поднимает любую из них — вежливо откажи и не продолжай тему:\n${forbiddenTopics.trim()}`
         : '';
 
+    const ownerRef = config.ownerUsername
+        ? `${config.ownerName} (никнейм @${config.ownerUsername})`
+        : config.ownerName;
+
     const systemContent =
-        `${getBotPersona()}\nБиография: ${getBotBiography()}\nСтиль: ${getCommunicationStyle()}\n\n` +
-        `ВАЖНО: Ты сейчас отвечаешь в публичном групповом чате. ` +
-        `С тобой сейчас общается пользователь по имени ${userName} — это НЕ твой владелец (${config.ownerName}). ` +
-        `Обращайся к нему строго по имени ${userName}. Никогда не называй его "${config.ownerName}" или любыми производными от этого имени. ` +
-        `Не раскрывай личную информацию о владельце (${config.ownerName}${config.ownerUsername ? `, @${config.ownerUsername}` : ''}), кроме той, что явно указана в контексте памяти ниже. ` +
-        `Если тебя спрашивают о владельце по имени (${config.ownerName}${config.ownerUsername ? ` или @${config.ownerUsername}` : ''}) — отвечай только на основе информации из памяти. ` +
-        `Отвечай на общие вопросы, будь дружелюбным и полезным.` +
+        // Персонаж без owner-specific части (getBotPersona содержит "Твой пользователь — Дмитрий" и ломает контекст)
+        `Ты — ${config.characterName}. ${getBotBiography()}\nСтиль общения: ${getCommunicationStyle()}\n\n` +
+        // Контекст публичного чата
+        `Ты отвечаешь в публичном групповом чате.\n` +
+        `Сейчас с тобой общается пользователь по имени ${userName}. Обращайся к нему ТОЛЬКО как "${userName}".\n` +
+        `Владелец бота — ${ownerRef} — сейчас НЕ пишет. Не путай собеседника с владельцем.\n` +
+        `Если спрашивают о владельце (${ownerRef}) — отвечай строго по данным из памяти ниже. Нет данных — скажи что не знаешь.\n` +
+        `Отвечай дружелюбно и по делу.` +
         forbiddenBlock +
         memoryContext;
 
