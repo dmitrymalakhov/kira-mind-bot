@@ -30,6 +30,7 @@ import { startKiraLifeScheduler } from "./services/kiraLifeScheduler";
 import { startDmReportScheduler } from "./services/dmReportScheduler";
 import { startMemoryInsightScheduler } from "./services/memoryInsightScheduler";
 import { maybeProactiveHint } from "./utils/proactiveMemory";
+import { maybeAskMemoryGap } from "./utils/memoryGapDetector";
 import { AppDataSource } from "./data-source";
 import { ReminderRepository } from "./services/ReminderRepository";
 
@@ -591,6 +592,8 @@ bot.on("message:text", async (ctx, next) => {
 
                 // Проактивная память: бот может вспомнить что-то уместное из долговременной памяти
                 maybeProactiveHint(ctx, message, result.responseText).catch(() => {});
+                // Детекция пробелов: если упомянут незнакомый человек — задать уточняющий вопрос
+                maybeAskMemoryGap(ctx, message).catch(() => {});
             }
         }, 2000); // Ждем 2 секунды перед обработкой одиночного сообщения
     } catch (error) {

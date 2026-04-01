@@ -70,6 +70,8 @@ export interface SessionData {
     lastFactSaveError?: string;
     /** Unix-timestamp последней проактивной подсказки из памяти (для cooldown) */
     lastProactiveHintAt?: number;
+    /** Unix-timestamp последнего вопроса о пробеле в памяти (для cooldown) */
+    lastMemoryGapAt?: number;
     /** chatId группового чата, напоминания которого просматриваются из приватного чата */
     viewingRemindersInChat?: number;
     /** Состояние сценария «изучить переписку и сохранить факты обо мне»: выбор периода */

@@ -5,25 +5,64 @@ import openai from '../openai';
 import { getVectorService } from '../services/VectorServiceFactory';
 import { llmCache, LLM_CACHE_TTL } from './llmCache';
 
-const MAX_QUERIES = 6;
-const RESULTS_PER_QUERY = 4;
+const ANSWER_RESULTS_PER_QUERY = 5;
+const CONTEXT_RESULTS_PER_QUERY = 2;
 const MAX_TOTAL_FACTS = 25;
+/** Дисконт для контекстных запросов при ранжировании */
+const CONTEXT_QUERY_SCORE_DISCOUNT = 0.8;
+
+interface GeneratedQueries {
+    /** Запросы для поиска фактов, НАПРЯМУЮ отвечающих на вопрос */
+    answerQueries: string[];
+    /** Запросы для фонового контекста (люди, места, отношения) */
+    contextQueries: string[];
+}
+
+interface RecentMessage {
+    role: string;
+    content: string;
+}
 
 /**
- * Разбирает запрос пользователя на интенты/аспекты и для каждого генерирует поисковую фразу к долговременной памяти.
+ * Разбивает запрос пользователя на два уровня поисковых фраз:
+ * - answerQueries: что нужно найти чтобы прямо ответить на вопрос
+ * - contextQueries: фоновый контекст для понимания запроса
+ *
+ * @param recentHistory последние 2-3 сообщения разговора для резолвинга местоимений и контекстных отсылок
  */
-export async function generateMemoryQueries(userMessage: string): Promise<string[]> {
-    const cacheKey = `queries:${userMessage.slice(0, 200)}`;
-    const cached = llmCache.get<string[]>(cacheKey);
+export async function generateMemoryQueries(userMessage: string, recentHistory?: RecentMessage[]): Promise<GeneratedQueries> {
+    const historySnippet = recentHistory?.map((m) => `${m.role}: ${m.content.slice(0, 80)}`).join('|') ?? '';
+    const cacheKey = `queries_v2:${historySnippet.slice(0, 100)}|${userMessage.slice(0, 200)}`;
+    const cached = llmCache.get<GeneratedQueries>(cacheKey);
     if (cached) {
         devLog('generateMemoryQueries: cache hit');
         return cached;
     }
 
-    const prompt = `Запрос пользователя: "${userMessage}"
+    const historyBlock =
+        recentHistory && recentHistory.length > 0
+            ? `Контекст разговора (предыдущие сообщения):\n${recentHistory
+                  .map((m) => `${m.role === 'user' ? 'Пользователь' : 'Ассистент'}: ${m.content.slice(0, 120)}`)
+                  .join('\n')}\n\n`
+            : '';
 
-Разбей запрос на интенты и аспекты (о чём пользователь говорит или что ему может понадобиться: семья, работа, предпочтения, здоровье, хобби, даты, места, люди и т.п.). Для каждого интента/аспекта сформулируй одну короткую поисковую фразу на русском для поиска в долговременной памяти пользователя.
-От 3 до ${MAX_QUERIES} фраз, 1–4 слова каждая. Только фразы, по одной на строку, без нумерации и пояснений.`;
+    const prompt = `${historyBlock}Текущий запрос пользователя: "${userMessage}"
+
+Тебе нужно найти факты в долговременной памяти пользователя чтобы ответить на этот запрос.
+${recentHistory && recentHistory.length > 0 ? 'Учти контекст разговора: местоимения («он», «она», «это», «там» и т.п.) относятся к предыдущим сообщениям — раскрой их в конкретные имена/объекты.\n' : ''}
+Сформулируй поисковые фразы в 2 группах:
+
+ANSWER: 2-3 короткие фразы (1-4 слова), которые НАПРЯМУЮ находят факты для ответа на вопрос
+CONTEXT: 1-2 короткие фразы для фонового контекста (люди, отношения, места)
+
+Формат ответа (строго):
+ANSWER:
+<фраза 1>
+<фраза 2>
+CONTEXT:
+<фраза 1>
+
+Только фразы на русском, без нумерации и пояснений.`;
 
     try {
         const resp = await openai.chat.completions.create({
@@ -31,40 +70,47 @@ export async function generateMemoryQueries(userMessage: string): Promise<string
             messages: [
                 {
                     role: 'system',
-                    content: 'Ты извлекаешь интенты из запроса и генерируешь только короткие поисковые фразы для памяти, по одной на строку, без пояснений и нумерации.',
+                    content: 'Ты генерируешь поисковые фразы для RAG-поиска по долговременной памяти. Только фразы, без пояснений.',
                 },
                 { role: 'user', content: prompt },
             ],
             temperature: 1, // модель поддерживает только default (1)
         });
         const text = resp.choices[0]?.message?.content?.trim() || '';
-        const queries = text
-            .split(/\n+/)
-            .map((q) => q.replace(/^[\d.)\-\s]+/, '').trim())
-            .filter((q) => q.length > 1 && q.length < 80)
-            .slice(0, MAX_QUERIES);
-        if (queries.length === 0) {
-            return [
-                'семья и близкие',
-                'работа и карьера',
-                'предпочтения и привычки',
-                'хобби и интересы',
-                'личная информация',
-            ];
+
+        const parseLines = (block: string): string[] =>
+            block
+                .split(/\n+/)
+                .map((q) => q.replace(/^[\d.)\-\s]+/, '').trim())
+                .filter((q) => q.length > 1 && q.length < 80)
+                .slice(0, 3);
+
+        const answerMatch = text.match(/ANSWER:\n([\s\S]*?)(?=CONTEXT:|$)/);
+        const contextMatch = text.match(/CONTEXT:\n([\s\S]*?)$/);
+
+        const answerQueries = answerMatch ? parseLines(answerMatch[1]) : [];
+        const contextQueries = contextMatch ? parseLines(contextMatch[1]) : [];
+
+        if (answerQueries.length === 0) {
+            devLog('generateMemoryQueries: empty parse, using fallback');
+            return getFallbackQueries(userMessage);
         }
-        devLog('Generated memory queries:', queries);
-        llmCache.set(cacheKey, queries, LLM_CACHE_TTL.MEMORY_QUERIES);
-        return queries;
+
+        const result: GeneratedQueries = { answerQueries, contextQueries };
+        devLog('Generated memory queries:', result);
+        llmCache.set(cacheKey, result, LLM_CACHE_TTL.MEMORY_QUERIES);
+        return result;
     } catch (e) {
         console.error('generateMemoryQueries error:', e);
-        return [
-            'семья и близкие',
-            'работа',
-            'предпочтения',
-            'хобби',
-            'личное',
-        ];
+        return getFallbackQueries(userMessage);
     }
+}
+
+function getFallbackQueries(userMessage: string): GeneratedQueries {
+    return {
+        answerQueries: [userMessage.slice(0, 60), 'даты события', 'планы поездка'],
+        contextQueries: ['семья и близкие', 'личная информация'],
+    };
 }
 
 export interface SearchResultLike {
@@ -90,31 +136,76 @@ function formatFactWithHistory(r: SearchResultLike): string {
 }
 
 /**
- * По запросу «что знаешь обо мне» генерирует несколько поисковых запросов, тянет факты по каждому из памяти и возвращает объединённый контекст для ответа.
+ * Двухуровневый поиск по долговременной памяти:
+ * 1. Answer-запросы — ищут факты, прямо отвечающие на вопрос (больше результатов, выше вес)
+ * 2. Context-запросы — ищут фоновый контекст (меньше результатов, score дисконтируется)
+ * 3. 1-hop graph expansion для топовых результатов
+ * 4. Объединение, дедупликация, ранжирование с учётом importance и confidence
  */
+/** Количество предыдущих сообщений для резолвинга местоимений */
+const HISTORY_CONTEXT_MESSAGES = 3;
+
 export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: string): Promise<string> {
-    const queries = await generateMemoryQueries(userMessage);
+    // Берём последние N сообщений из истории (не считая текущего)
+    // messageHistory хранится newest-first, поэтому срезаем с индекса 1
+    const recentHistory = (ctx.session?.messageHistory ?? [])
+        .slice(1, 1 + HISTORY_CONTEXT_MESSAGES)
+        .reverse() // хронологический порядок для промпта
+        .map((m) => ({ role: m.role, content: m.content }));
+
+    const { answerQueries, contextQueries } = await generateMemoryQueries(userMessage, recentHistory.length > 0 ? recentHistory : undefined);
+
     const seen = new Map<string, SearchResultLike>();
+
+    // Якорные факты — всегда в контексте
     const anchorResults = await getAnchorMemories(ctx, 5);
     for (const r of anchorResults) {
-        if (!seen.has(r.id)) seen.set(r.id, { ...r, importance: r.importance ?? 0.5, confidence: r.confidence ?? 0.6, domain: r.domain });
-    }
-    for (const query of queries) {
-        const results = await searchAllDomainsMemories(ctx, query, RESULTS_PER_QUERY);
-        for (const r of results) {
-            if (seen.has(r.id)) {
-                const existing = seen.get(r.id)!;
-                if (r.score > existing.score) seen.set(r.id, { ...r, importance: r.importance ?? 0.5, confidence: r.confidence ?? 0.6, domain: r.domain });
-            } else {
-                seen.set(r.id, { ...r, importance: r.importance ?? 0.5, confidence: r.confidence ?? 0.6, domain: r.domain });
-            }
+        if (!seen.has(r.id)) {
+            seen.set(r.id, { ...r, importance: r.importance ?? 0.5, confidence: r.confidence ?? 0.6, domain: r.domain });
         }
     }
+
+    // Answer-запросы: приоритетный поиск, полный score
+    await Promise.all(
+        answerQueries.map(async (query) => {
+            const results = await searchAllDomainsMemories(ctx, query, ANSWER_RESULTS_PER_QUERY);
+            for (const r of results) {
+                if (seen.has(r.id)) {
+                    const existing = seen.get(r.id)!;
+                    if (r.score > existing.score) {
+                        seen.set(r.id, { ...r, importance: r.importance ?? 0.5, confidence: r.confidence ?? 0.6, domain: r.domain });
+                    }
+                } else {
+                    seen.set(r.id, { ...r, importance: r.importance ?? 0.5, confidence: r.confidence ?? 0.6, domain: r.domain });
+                }
+            }
+        })
+    );
+
+    // Context-запросы: фоновый контекст, score дисконтируется
+    await Promise.all(
+        contextQueries.map(async (query) => {
+            const results = await searchAllDomainsMemories(ctx, query, CONTEXT_RESULTS_PER_QUERY);
+            for (const r of results) {
+                if (seen.has(r.id)) {
+                    // уже найден answer-запросом — не перезаписываем более высокий score
+                } else {
+                    seen.set(r.id, {
+                        ...r,
+                        score: r.score * CONTEXT_QUERY_SCORE_DISCOUNT,
+                        importance: r.importance ?? 0.5,
+                        confidence: r.confidence ?? 0.6,
+                        domain: r.domain,
+                    });
+                }
+            }
+        })
+    );
+
     // 1-hop graph expansion: для топовых результатов подгружаем связанные факты
     const svcForGraph = getVectorService();
     if (svcForGraph) {
         const primaryResults = Array.from(seen.values()).sort((a, b) => b.score - a.score).slice(0, 8);
-        const graphExpansions: SearchResultLike[] = [];
         await Promise.all(
             primaryResults.map(async (fact) => {
                 if (!fact.domain) return;
@@ -125,7 +216,7 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
                             if (seen.has(id)) return;
                             const fetched = await svcForGraph.fetchMemoryById(id, domain);
                             if (fetched) {
-                                graphExpansions.push({
+                                seen.set(fetched.id ?? id, {
                                     ...fetched,
                                     score: fetched.score * 0.8, // дисконт за косвенность
                                     importance: fetched.importance ?? 0.5,
@@ -140,15 +231,11 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
                 }
             })
         );
-        for (const exp of graphExpansions) {
-            if (!seen.has(exp.id)) seen.set(exp.id, exp);
-        }
     }
 
     const sorted = Array.from(seen.values()).sort((a, b) => {
-        // Учитываем confidence в ранжировании мульти-запросного контекста
-        const confA = (a as any).confidence ?? 0.6;
-        const confB = (b as any).confidence ?? 0.6;
+        const confA = a.confidence ?? 0.6;
+        const confB = b.confidence ?? 0.6;
         const scoreA = a.score * (0.6 + 0.2 * (a.importance ?? 0.5) + 0.1 * confA);
         const scoreB = b.score * (0.6 + 0.2 * (b.importance ?? 0.5) + 0.1 * confB);
         return scoreB - scoreA;
@@ -163,7 +250,6 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
             if (boosted > (fact.importance ?? 0.5)) {
                 svc.updateImportance(fact.id, boosted).catch(() => {});
             }
-            // Сбрасываем кривую забывания: факт снова "вспомнили"
             if (fact.domain) {
                 svc.updateMemoryAccess(fact.id, fact.domain).catch(() => {});
             }
@@ -172,8 +258,12 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
 
     const factsBlock = top.join('\n');
     const preamble =
-        'Ниже — факты из долговременной памяти о пользователе. Ответь на его вопрос только на основе этих фактов. Если спрашивает конкретное (кто жена, как зовут, имя) — дай краткий прямой ответ из фактов. Если «что знаешь обо мне» — перечисли в формате «Вот что я знаю о тебе:». Если подходящих фактов нет — честно скажи, что в памяти этого нет.\n\nФакты из памяти:\n';
+        'Ниже — факты из долговременной памяти о пользователе. Используй их при ответе. Если спрашивает конкретное (кто жена, как зовут, имя) — дай краткий прямой ответ из фактов. Если «что знаешь обо мне» — перечисли в формате «Вот что я знаю о тебе:». Если подходящих фактов нет — честно скажи, что в памяти этого нет.\n\nФакты из памяти:\n';
     const context = preamble + (factsBlock || '(пока нет сохранённых фактов)');
-    devLog('Multi-query memory context:', { queries: queries.length, uniqueFacts: top.length });
+    devLog('Multi-query memory context:', {
+        answerQueries: answerQueries.length,
+        contextQueries: contextQueries.length,
+        uniqueFacts: top.length,
+    });
     return context;
 }
