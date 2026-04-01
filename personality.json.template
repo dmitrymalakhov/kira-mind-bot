@@ -1,0 +1,26 @@
+{
+  "KiraMindBot": {
+    "persona": "",
+    "communicationStyle": "",
+    "biography": "",
+    "ownerName": "",
+    "ownerUsername": "",
+    "userName": "",
+    "userBirthDate": "",
+    "moodVariants": "",
+    "defaultMood": "",
+    "proactiveMessageHint": ""
+  },
+  "SergeyBrainBot": {
+    "persona": "",
+    "communicationStyle": "",
+    "biography": "",
+    "ownerName": "",
+    "ownerUsername": "",
+    "userName": "",
+    "userBirthDate": "",
+    "moodVariants": "",
+    "defaultMood": "",
+    "proactiveMessageHint": ""
+  }
+}

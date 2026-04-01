@@ -249,7 +249,9 @@ function assistants(activeAssistant: string): AssistantConfig {
     }
   }
 
-  console.log("🔍 Assistant configuration loaded for:", activeAssistant, assistantsObj[activeAssistant])
+  console.log("🔍 Assistant configuration loaded for:", activeAssistant)
+  console.log("👤 ownerName:", assistantsObj[activeAssistant]?.ownerName)
+  console.log("🔖 ownerUsername:", assistantsObj[activeAssistant]?.ownerUsername ?? "(не задан)")
 
   if (!assistantsObj[activeAssistant]) {
     console.error("❌ Unknown assistant profile:", activeAssistant);

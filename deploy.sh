@@ -88,6 +88,7 @@ fi
 echo ""
 echo "📁 --- Подготовка архива ---"
 cp docker-compose.yml _deploy/
+cp personality.json.template _deploy/
 
 if [ -d "admin-panel" ]; then
     rsync -a --exclude='node_modules' --exclude='dist' admin-panel/ _deploy/admin-panel/
@@ -153,10 +154,17 @@ ssh root@${SERVER_IP} << EOF
   ls -la
   echo ""
 
-  # personality.json
+  # personality.json — создаём из шаблона только при первом деплое, никогда не перезаписываем
   if [ ! -f "/root/source/personality.json" ]; then
-    echo '{"KiraMindBot":{},"SergeyBrainBot":{}}' > /root/source/personality.json
-    echo "✅ Создан пустой personality.json"
+    if [ -f "/root/source/personality.json.template" ]; then
+      cp /root/source/personality.json.template /root/source/personality.json
+      echo "✅ Создан personality.json из шаблона"
+    else
+      echo '{"KiraMindBot":{},"SergeyBrainBot":{}}' > /root/source/personality.json
+      echo "✅ Создан пустой personality.json"
+    fi
+  else
+    echo "✅ personality.json уже существует — настройки сохранены"
   fi
 
   # Учётные данные admin-panel

@@ -73,19 +73,13 @@ async function classifyPublicMessage(message: string): Promise<PublicIntent> {
 async function buildMemoryContext(ctx: BotContext, message: string, allowedDomains: string[]): Promise<string> {
     if (allowedDomains.length === 0) return '';
 
-    // Заменяем никнейм владельца его именем для точного семантического поиска
-    let searchQuery = message;
-    if (config.ownerUsername) {
-        const usernameRegex = new RegExp(`@${config.ownerUsername}`, 'gi');
-        searchQuery = searchQuery.replace(usernameRegex, config.ownerName);
-    }
-
-    // Ищем память от имени владельца (все воспоминания хранятся под его userId)
+    // Сообщение уже нормализовано (@никнейм → имя владельца) до вызова этой функции.
+    // Ищем память от имени владельца (все воспоминания хранятся под его userId).
     const ownerUserId = String(config.allowedUserId);
 
     const results: string[] = [];
     for (const domain of allowedDomains) {
-        const found = await searchMemories(ctx, searchQuery, { domain, limit: 3 }, ownerUserId);
+        const found = await searchMemories(ctx, message, { domain, limit: 3 }, ownerUserId);
         for (const r of found) {
             results.push(`[${domain}] ${r.content}`);
         }
@@ -95,9 +89,19 @@ async function buildMemoryContext(ctx: BotContext, message: string, allowedDomai
     return '\n\nКонтекст из памяти (только публично доступные домены):\n' + results.join('\n');
 }
 
+/** Заменяет @ownerUsername на имя владельца во всём тексте — до классификации и поиска */
+function normalizeOwnerMention(text: string): string {
+    if (!config.ownerUsername) return text;
+    const re = new RegExp(`@${config.ownerUsername}`, 'gi');
+    return text.replace(re, config.ownerName);
+}
+
 export async function handleGroupPublicUserMessage(ctx: BotContext): Promise<void> {
-    const message = ctx.message?.text || ctx.message?.caption || "";
-    if (!message) return;
+    const raw = ctx.message?.text || ctx.message?.caption || "";
+    if (!raw) return;
+
+    // Нормализуем @никнейм владельца до любой обработки
+    const message = normalizeOwnerMention(raw);
 
     const chatId = ctx.chat!.id;
     const userName = ctx.from?.first_name || "Пользователь";

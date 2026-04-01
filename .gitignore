@@ -24,3 +24,6 @@ docker-compose.override.yml
 
 # Claude
 .claude
+
+# Personality settings — edited via admin panel, must not be overwritten by git
+personality.json
