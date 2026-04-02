@@ -55,10 +55,28 @@ export async function studyChatAndSaveFacts(
     const savedCount = await runUpdateLongTermMemoryAgent(ctx, facts);
 
     const periodLabel = PERIOD_LABELS[period];
-    const responseText =
-        savedCount > 0
-            ? `Изучила переписку с ${displayName} за ${periodLabel}. Из ${fetchResult.messageCount} сообщений извлекла факты о тебе и сохранила в долговременную память ${savedCount} факт(ов).`
-            : `Переписку с ${displayName} за ${periodLabel} прочитала (${fetchResult.messageCount} сообщений), но не нашла новых однозначных фактов о тебе для сохранения.`;
+
+    let responseText: string;
+    if (savedCount > 0) {
+        const userFacts = facts.filter(f => f.subject === 'user');
+        const contactFacts = facts.filter(f => f.subject === 'contact');
+
+        const formatList = (items: typeof facts) =>
+            items.map(f => `• ${f.content}`).join('\n');
+
+        const parts: string[] = [
+            `Изучила переписку с ${displayName} за ${periodLabel} (${fetchResult.messageCount} сообщений). Запомнила ${savedCount} факт(ов).`,
+        ];
+        if (userFacts.length > 0) {
+            parts.push(`\nО тебе:\n${formatList(userFacts)}`);
+        }
+        if (contactFacts.length > 0) {
+            parts.push(`\nО ${displayName}:\n${formatList(contactFacts)}`);
+        }
+        responseText = parts.join('\n');
+    } else {
+        responseText = `Переписку с ${displayName} за ${periodLabel} прочитала (${fetchResult.messageCount} сообщений), но не нашла новых однозначных фактов для сохранения.`;
+    }
 
     return { responseText, savedCount };
 }

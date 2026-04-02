@@ -23,44 +23,7 @@ import { Plan } from "./orchestration/types";
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
 
-/** Приводит имя в творительном падеже к форме для поиска в контактах (жена/Юля и т.д.). */
-function normalizeContactNameForSearch(word: string): string {
-    const w = word.trim().toLowerCase();
-    if (w === "женой") return "жена";
-    if (w === "мужем") return "муж";
-    if (w === "мамой" || w === "мамочкой") return "мама";
-    if (w === "папой" || w === "папочкой") return "папа";
-    if (w.endsWith("ей")) return w.slice(0, -2) + "я"; // Юлей -> Юля
-    if (w.endsWith("ой") || w.endsWith("ою")) return w.slice(0, -2) + "а"; // женой -> жена (упрощённо)
-    return word.trim();
-}
 
-/**
- * Если сообщение — явная просьба «изучить переписку с X и узнать/сохранить факты обо мне»,
- * возвращает классификацию для маршрутизации в readMessagesAgent (сценарий выбора периода и сохранения фактов).
- */
-function detectStudyChatLearnAboutMe(message: string): MessageClassification | null {
-    const t = message.trim();
-    if (t.length < 10) return null;
-    // Проверяем, что есть и «переписку/чат с X», и «узнай/сохрани/запомни» + «про меня/обо мне»
-    const hasLearnAboutMe = /(?:узнай|сохрани|запомни|изучи|прочитай)\s*(?:больше\s*)?(?:обо?\s*мне|про\s*меня)|(?:факты\s+)?обо?\s*мне|узнать\s*(?:больше\s*)?про\s*меня/i.test(t);
-    if (!hasLearnAboutMe) return null;
-    const match = t.match(/(?:переписку|чат)\s+с\s+([а-яёa-z]+)/i) || t.match(/(?:с\s+)([а-яёa-z]+)(?:\s+и\s+|\s*,\s*)/i);
-    const contactWord = match ? match[1] : null;
-    if (!contactWord) return null;
-    const contactQuery = normalizeContactNameForSearch(contactWord);
-    devLog("Study-chat detected, contactQuery:", contactQuery);
-    return {
-        intent: "ПРОВЕРКА_СООБЩЕНИЙ",
-        confidenceLevel: "ВЫСОКИЙ",
-        details: {
-            messagesCheckType: "ANALYZE_CONVERSATION",
-            contactQuery,
-            analysisQuery: "узнай больше про меня и сохрани факты в память",
-            saveFactsAboutUser: true,
-        },
-    };
-}
 
 // Расширенный интерфейс для результата классификации сообщения
 export interface MessageClassification {
@@ -139,7 +102,7 @@ interface IntentDedupCheckResult {
 
 const INTENT_DEDUP_WINDOW_MS = 3 * 60 * 1000;
 const INTENT_DEDUP_MIN_CONFIDENCE = 0.8;
-const NON_DEDUP_INTENTS = new Set(["ОТПРАВКА_СООБЩЕНИЯ", "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ", "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ"]);
+const NON_DEDUP_INTENTS = new Set(["ОТПРАВКА_СООБЩЕНИЯ", "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ", "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ", "ПРОВЕРКА_СООБЩЕНИЙ"]);
 
 function normalizeForDedup(text: string): string {
     return text
@@ -339,10 +302,14 @@ export async function classifyMessage(
            "где находится", "проложи маршрут", "покажи на карте" и т.п.
            
         5. ПРОВЕРКА_СООБЩЕНИЙ - пользователь запрашивает информацию о сообщениях в Telegram,
-            просит проверить, кто писал, проанализировать переписку с конкретным человеком и т.п. 
+            просит проверить, кто писал, проанализировать переписку с конкретным человеком и т.п.
             Используются фразы "проверь телеграм", "кто писал в телеграм", "есть сообщения в телеграме",
             "анализ переписки с", "проанализируй переписку", "проанализируй чат с", "узнай из переписки",
             "составь портрет по переписке" и т.п.
+            ВАЖНО: просьба «изучи чат/переписку с X и узнай/запомни факты про меня/о нас» — это ВСЕГДА ПРОВЕРКА_СООБЩЕНИЙ,
+            а НЕ РАЗГОВОР. Такой запрос требует чтения реальной переписки из Telegram.
+            Примеры: "изучи чат с моей женой и запомни факты про меня", "прочитай переписку с мамой и узнай что-нибудь обо мне",
+            "изучи чат с Юлей и узнай и запомни факты про меня и мою жену".
             
         6. ВЕБ_ПОИСК - пользователь просит найти информацию в интернете, 
            узнать последние новости или данные, которые требуют обращения к сети.
@@ -382,6 +349,7 @@ export async function classifyMessage(
         - Упоминание "анализ переписки", "анализируй сообщения" и подобных фраз = ПРОВЕРКА_СООБЩЕНИЙ
         - Просьба почитать/изучить групповой чат по названию ("посмотри чат Leads", "изучи в чате Каркас", "почитай группу X") = ПРОВЕРКА_СООБЩЕНИЙ (groupChatQuery = название чата)
         - Ключевое различие: "переписку с Юлей" / "чат с мамой" → contactQuery; "чат Leads" / "группу Каркас" / "в чате Старт" → groupChatQuery
+        - «Изучи чат с X и запомни/узнай факты про меня» = ПРОВЕРКА_СООБЩЕНИЙ, messagesCheckType: ANALYZE_CONVERSATION, saveFactsAboutUser: true, contactQuery = X
 
         Ответ предоставь в формате JSON:
         {
@@ -397,10 +365,10 @@ export async function classifyMessage(
             "locationQuery": "запрос к картам или о местоположении (только для намерения КАРТЫ_ЛОКАЦИИ)",
             "searchQuery": "запрос для поиска в интернете (только для намерения ВЕБ_ПОИСК)",
             "messagesCheckType": "ALL_MESSAGES | ANALYZE_CONVERSATION (только для намерения ПРОВЕРКА_СООБЩЕНИЙ)",
-            "contactQuery": "имя человека при анализе личной переписки с ним (только при фразах 'переписка с X', 'чат с X', 'диалог с X' — личный контакт)",
+            "contactQuery": "имя или роль человека при анализе личной переписки с ним (только при фразах 'переписка с X', 'чат с X', 'диалог с X' — личный контакт). ВСЕГДА используй именительный падеж: 'жена' (не 'женой'), 'муж' (не 'мужем'), 'мама' (не 'мамой'). Пример: 'чат с моей женой' → contactQuery: 'жена'",
             "groupChatQuery": "название группового чата если запрос о групповом чате (при фразах 'чат Leads', 'в чате Каркас', 'группа X', 'посмотри чат X' без предлога 'с' перед именем человека)",
             "analysisQuery": "что нужно проанализировать в переписке (только для намерения ПРОВЕРКА_СООБЩЕНИЙ и messagesCheckType: ANALYZE_CONVERSATION)",
-            "saveFactsAboutUser": "true если пользователь просит изучить переписку с кем-то и сохранить/узнать факты о себе (обо мне, про меня, запомни что узнаешь) — только для ПРОВЕРКА_СООБЩЕНИЙ",
+            "saveFactsAboutUser": "true если пользователь просит изучить переписку с кем-то и сохранить/узнать факты о себе (обо мне, про меня, запомни что узнаешь, запомни факты про меня, узнай и запомни факты) — только для ПРОВЕРКА_СООБЩЕНИЙ. Пример: 'изучи чат с женой и узнай и запомни факты про меня' → saveFactsAboutUser: true",
             "botReaction": "эмодзи, которым стоит отреагировать на сообщение пользователя, или NONE, если реакция не нужна"
           }
         }
@@ -508,15 +476,20 @@ export async function processMessage(
         // Шаг 2: Оркестратор определяет, куда направить запрос (классификация + план)
         let classification = await classifyMessage(message, isForwarded, forwardFrom, messageHistory);
 
-        const studyChatOverride = detectStudyChatLearnAboutMe(message);
-        if (studyChatOverride) {
-            classification = studyChatOverride;
-            devLog("Study-chat learn-about-me detected, routing to readMessagesAgent");
-        }
-
         if (extractExplicitRememberFact(message) && classification.intent !== "ПРОВЕРКА_СООБЩЕНИЙ") {
             classification = { ...classification, intent: "РАЗГОВОР", confidenceLevel: "ВЫСОКИЙ" };
             devLog("Explicit remember detected, routing to conversation");
+        }
+
+        // ПРОВЕРКА_СООБЩЕНИЙ с низкой уверенностью (СРЕДНИЙ/НИЗКИЙ) без явного contactQuery — скорее всего ложное срабатывание, переключаем на РАЗГОВОР
+        if (
+            classification.intent === "ПРОВЕРКА_СООБЩЕНИЙ" &&
+            classification.confidenceLevel !== "ВЫСОКИЙ" &&
+            !classification.details.contactQuery &&
+            !classification.details.groupChatQuery
+        ) {
+            devLog("ПРОВЕРКА_СООБЩЕНИЙ with low confidence and no contact, downgrading to РАЗГОВОР");
+            classification = { ...classification, intent: "РАЗГОВОР", confidenceLevel: "СРЕДНИЙ" };
         }
 
         devLog("Message classified as:", classification.intent, "with confidence:", classification.confidenceLevel);

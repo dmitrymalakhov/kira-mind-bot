@@ -246,7 +246,7 @@ async function extractRawFactsFromChunk(
                 { role: 'system', content: EXTRACTION_SYSTEM },
                 { role: 'user', content: buildUserFactsPrompt(chunk, contactName, periodLabel) },
             ],
-            temperature: 0.2,
+            temperature: 1,
         }),
         openai.chat.completions.create({
             model: 'gpt-5-nano',
@@ -254,7 +254,7 @@ async function extractRawFactsFromChunk(
                 { role: 'system', content: EXTRACTION_SYSTEM },
                 { role: 'user', content: buildContactFactsPrompt(chunk, contactName, periodLabel) },
             ],
-            temperature: 0.2,
+            temperature: 1,
         }),
     ]);
 
@@ -342,7 +342,7 @@ async function synthesizeGroup(
                 { role: 'system', content: SYNTHESIS_SYSTEM },
                 { role: 'user', content: buildSynthesisPrompt(facts, personName) },
             ],
-            temperature: 0.2,
+            temperature: 1,
         });
 
         const text = resp.choices[0]?.message?.content?.trim() || '';

@@ -87,6 +87,13 @@ ${AVAILABLE_STEPS}
             console.log("[ORCH] planner: intent ОТПРАВКА_СООБЩЕНИЯ but LLM plan had no sendMessage, using fallback");
             return fallbackPlan(intent, message);
         }
+        // Для проверки сообщений всегда используем fallback — readMessages сам возвращает ответ,
+        // добавление conversation после него ломает клавиатуру выбора периода.
+        if (intent === 'ПРОВЕРКА_СООБЩЕНИЙ') {
+            devLog('Planner: intent ПРОВЕРКА_СООБЩЕНИЙ, using fallback plan');
+            console.log("[ORCH] planner: intent ПРОВЕРКА_СООБЩЕНИЙ, using fallback");
+            return fallbackPlan(intent, message);
+        }
         // Шаги, которые дают ответ пользователю. Если план содержит только memory/resolveContact — ответа не будет.
         const respondingAgentIds = new Set(['conversation', 'reminder', 'readMessages', 'sendMessage', 'negotiateOnBehalf', 'imageGeneration', 'maps', 'unclearIntent', 'capabilities']);
         const hasRespondingStep = steps.some((s) => respondingAgentIds.has(s.agentId));
