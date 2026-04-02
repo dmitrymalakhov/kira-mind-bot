@@ -161,6 +161,20 @@ export interface ImageGenerationRequest {
     };
 }
 
+/**
+ * Эмоциональная маркировка факта.
+ * Определяется LLM fire-and-forget после сохранения.
+ * Flashbulb-факты (arousal > 0.7 + |valence| > 0.5) автоматически становятся anchor.
+ */
+export interface EmotionalTag {
+    /** Валентность: -1 (негативное) .. +1 (позитивное). 0 = нейтральный факт. */
+    valence: number;
+    /** Интенсивность: 0 (обыденное) .. 1 (очень эмоционально значимое). */
+    arousal: number;
+    /** Флэшбалб: высокая интенсивность + выраженная валентность = помнить всегда. */
+    isFlashbulb: boolean;
+}
+
 export interface MemoryEntry {
     id: string;
     content: string;
@@ -173,6 +187,8 @@ export interface MemoryEntry {
     /** Якорный факт (явное «Запомни») — всегда подмешивается в контекст */
     isAnchor?: boolean;
     expiresAt?: Date;
+    /** Эмоциональная маркировка — влияет на ранжирование и flashbulb → anchor */
+    emotionalTag?: EmotionalTag;
     /**
      * Достоверность факта [0..1].
      * 0.6 при первом сохранении, +0.1 при каждом подтверждении, -0.2 при частичном противоречии.
@@ -224,6 +240,7 @@ export interface SearchResult {
         timestamp: Date;
         confidence: number;
     }>;
+    emotionalTag?: EmotionalTag;
 }
 
 export interface MemoryStats {

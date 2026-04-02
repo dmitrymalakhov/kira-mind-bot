@@ -1,3 +1,9 @@
+export interface EmotionalTag {
+    valence: number;
+    arousal: number;
+    isFlashbulb: boolean;
+}
+
 export interface MemoryEntry {
     id: string;
     content: string;
@@ -17,6 +23,7 @@ export interface MemoryEntry {
         confidence: number;
     }>;
     relatedIds?: Array<{ id: string; domain: string }>;
+    emotionalTag?: EmotionalTag;
 }
 
 export interface SearchOptions {
@@ -42,6 +49,7 @@ export interface SearchResult {
         confidence: number;
     }>;
     relatedIds?: Array<{ id: string; domain: string }>;
+    emotionalTag?: EmotionalTag;
 }
 
 export interface MemoryStats {

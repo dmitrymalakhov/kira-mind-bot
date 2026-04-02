@@ -19,39 +19,56 @@ export class QdrantVectorService implements IDomainVectorService {
     }
 
     private mapSearchPoint(point: any, scoreOverride?: number): SearchResult {
+        const payload = point.payload;
+        const emotionalTagRaw = payload.emotionalTag;
+        const emotionalTag = emotionalTagRaw && typeof emotionalTagRaw === 'object'
+            ? {
+                valence: typeof emotionalTagRaw.valence === 'number' ? emotionalTagRaw.valence : 0,
+                arousal: typeof emotionalTagRaw.arousal === 'number' ? emotionalTagRaw.arousal : 0,
+                isFlashbulb: Boolean(emotionalTagRaw.isFlashbulb),
+            }
+            : undefined;
+
         return {
             id: String(point.id),
-            content: point.payload.content,
+            content: payload.content,
             score: scoreOverride ?? point.score,
-            timestamp: new Date(point.payload.timestamp),
-            importance: point.payload.importance ?? 0.5,
-            tags: point.payload.tags ?? [],
-            domain: point.payload.domain,
-            confidence: point.payload.confidence ?? 0.6,
-            lastAccessedAt: point.payload.lastAccessedAt
-                ? new Date(point.payload.lastAccessedAt)
+            timestamp: new Date(payload.timestamp),
+            importance: payload.importance ?? 0.5,
+            tags: payload.tags ?? [],
+            domain: payload.domain,
+            confidence: payload.confidence ?? 0.6,
+            lastAccessedAt: payload.lastAccessedAt
+                ? new Date(payload.lastAccessedAt)
                 : undefined,
-            previousVersions: Array.isArray(point.payload.previousVersions)
-                ? (point.payload.previousVersions as any[]).map((v: any) => ({
+            previousVersions: Array.isArray(payload.previousVersions)
+                ? (payload.previousVersions as any[]).map((v: any) => ({
                     content: String(v.content ?? ''),
                     timestamp: new Date(v.timestamp),
                     confidence: typeof v.confidence === 'number' ? v.confidence : 0.6,
                 }))
                 : undefined,
+            emotionalTag,
         };
     }
 
     /**
-     * Ранжирование с учётом важности, давности, достоверности и кривой забывания.
+     * Ранжирование с учётом важности, давности, достоверности, кривой забывания
+     * и эмоциональной интенсивности (arousal).
      *
      * Кривая забывания (Эббингауз): факты, к которым давно не обращались,
      * получают штраф к эффективной важности. Сброс происходит при каждом retrieval
      * через updateMemoryAccess (fire & forget).
      *
-     * Формула: score * importanceBoost * recencyFactor
+     * Эмоциональный буст: нейробиология подтверждает — эмоционально окрашенные
+     * воспоминания воспроизводятся точнее и с меньшими затратами.
+     * arousal 0..1 даёт +0..10% к итоговому score (не ломает существующее ранжирование).
+     *
+     * Формула: score * importanceBoost * recencyFactor * emotionalBoost
      *   importanceBoost = 0.6 + 0.2 * effectiveImportance + 0.1 * confidence
      *   effectiveImportance = importance * forgettingDecay  (floor 0.5)
      *   forgettingDecay = max(0.5, 0.99 ^ daysSinceAccess)
+     *   emotionalBoost = 1 + 0.1 * arousal  (1.0 для нейтральных, 1.1 для максимально эмоциональных)
      */
     private applyImportanceRecencyRanking(results: SearchResult[]): SearchResult[] {
         const now = Date.now();
@@ -72,7 +89,12 @@ export class QdrantVectorService implements IDomainVectorService {
                 const effectiveImportance = importance * forgettingDecay;
 
                 const importanceBoost = 0.6 + 0.2 * effectiveImportance + 0.1 * confidence;
-                const combinedScore = r.score * importanceBoost * recencyFactor;
+
+                // Эмоциональный буст: чем ярче воспоминание, тем легче всплывает
+                const arousal = r.emotionalTag?.arousal ?? 0;
+                const emotionalBoost = 1 + 0.1 * arousal;
+
+                const combinedScore = r.score * importanceBoost * recencyFactor * emotionalBoost;
                 return { ...r, score: combinedScore };
             })
             .sort((a, b) => b.score - a.score);

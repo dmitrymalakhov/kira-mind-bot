@@ -4,6 +4,7 @@ import { BotContext } from '../types';
 import { devLog, parseLLMJson } from '../utils';
 import openai from '../openai';
 import { llmCache, LLM_CACHE_TTL } from './llmCache';
+import { detectEmotionalTag } from './emotionalTagger';
 
 function vectorService() {
     return getVectorService();
@@ -332,25 +333,46 @@ export async function saveMemory(
             // 'complements' — продолжаем, сохраним оба
         }
 
-        // ── Шаг 3: Сохраняем как новый факт ──────────────────────────────────
+        // ── Шаг 3: Эмоциональная маркировка (только для значимых фактов) ────
+        // Flashbulb-факты (смерть, свадьба, рождение, расставание, кризис) —
+        // автоматически становятся anchor и получают буст importance.
+        // Аналогично человеческой памяти: эмоционально заряженные события запоминаются навсегда.
+        let finalImportance = importance;
+        let finalIsAnchor = isAnchor;
+        let emotionalTag = undefined;
+        if (importance >= 0.5) {
+            const tag = await detectEmotionalTag(content).catch(() => null);
+            if (tag) {
+                emotionalTag = tag;
+                if (tag.isFlashbulb) {
+                    finalIsAnchor = true;
+                    // Буст к важности, но не более 1.0
+                    finalImportance = Math.min(1.0, importance + 0.15);
+                    devLog('🔥 Flashbulb-факт (эмоциональная память):', content.slice(0, 60), `arousal=${tag.arousal.toFixed(2)}`);
+                }
+            }
+        }
+
+        // ── Шаг 4: Сохраняем как новый факт ──────────────────────────────────
         const expiresAt = await detectTemporalExpiry(content);
         const now = new Date();
         const result = await svc.saveMemory({
             content,
             domain,
             timestamp: now,
-            importance,
+            importance: finalImportance,
             tags,
             userId: String(userId),
             botId,
-            isAnchor: isAnchor || undefined,
+            isAnchor: finalIsAnchor || undefined,
             expiresAt,
             confidence: 0.6,
             lastAccessedAt: now,
+            emotionalTag,
         });
         devLog('✅ Факт успешно сохранён с ID:', result);
 
-        // ── Шаг 4: Строим граф связей (fire & forget) ────────────────────────
+        // ── Шаг 5: Строим граф связей (fire & forget) ────────────────────────
         buildMemoryRelationships(result, content, String(userId), domain, svc).catch(() => {});
 
         lastSaveError = null;
