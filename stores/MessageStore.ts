@@ -10,6 +10,7 @@ export interface StoredMessage {
     date: Date;
     isRead: boolean;
     isBot: boolean; // Флаг для ботов
+    isOwn?: boolean; // Исходящее сообщение от владельца бота
 }
 
 // Хранилище для сообщений
@@ -30,10 +31,10 @@ export class MessageStore {
 
     // Добавление нового сообщения
     addMessage(chatId: string, message: StoredMessage): void {
-        // Проверяем, не является ли отправитель ботом
-        if (message.isBot) {
+        // Пропускаем сообщения от ботов (но не исходящие сообщения владельца)
+        if (message.isBot && !message.isOwn) {
             devLog(`Игнорируем сообщение от бота: ${message.senderName}`);
-            return; // Пропускаем сообщения от ботов
+            return;
         }
 
         if (!this.messages.has(chatId)) {

@@ -102,7 +102,7 @@ interface IntentDedupCheckResult {
 
 const INTENT_DEDUP_WINDOW_MS = 3 * 60 * 1000;
 const INTENT_DEDUP_MIN_CONFIDENCE = 0.8;
-const NON_DEDUP_INTENTS = new Set(["ОТПРАВКА_СООБЩЕНИЯ", "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ", "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ", "ПРОВЕРКА_СООБЩЕНИЙ"]);
+const NON_DEDUP_INTENTS = new Set(["ОТПРАВКА_СООБЩЕНИЯ", "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ", "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ", "ПРОВЕРКА_СООБЩЕНИЙ", "НАПОМИНАНИЕ"]);
 
 function normalizeForDedup(text: string): string {
     return text
@@ -350,6 +350,7 @@ export async function classifyMessage(
         - Просьба почитать/изучить групповой чат по названию ("посмотри чат Leads", "изучи в чате Каркас", "почитай группу X") = ПРОВЕРКА_СООБЩЕНИЙ (groupChatQuery = название чата)
         - Ключевое различие: "переписку с Юлей" / "чат с мамой" → contactQuery; "чат Leads" / "группу Каркас" / "в чате Старт" → groupChatQuery
         - «Изучи чат с X и запомни/узнай факты про меня» = ПРОВЕРКА_СООБЩЕНИЙ, messagesCheckType: ANALYZE_CONVERSATION, saveFactsAboutUser: true, contactQuery = X
+        - «Изучи чат [GroupName] и запомни/сохрани факты» ("изучи чат Важный вопрос и запомни", "прочитай группу Leads и сохрани факты") = ПРОВЕРКА_СООБЩЕНИЙ, messagesCheckType: ANALYZE_CONVERSATION, saveFactsAboutUser: true, groupChatQuery = GroupName
 
         Ответ предоставь в формате JSON:
         {
@@ -490,6 +491,18 @@ export async function processMessage(
         ) {
             devLog("ПРОВЕРКА_СООБЩЕНИЙ with low confidence and no contact, downgrading to РАЗГОВОР");
             classification = { ...classification, intent: "РАЗГОВОР", confidenceLevel: "СРЕДНИЙ" };
+        }
+
+        // Если сообщение явно содержит "напомни" + временной маркер — форсируем НАПОМИНАНИЕ.
+        // Защита от случаев, когда расширенное описание ПРОВЕРКА_СООБЩЕНИЙ поглощает фразы типа
+        // "напомни написать в чат с X", или когда РАЗГОВОР выдаётся с низкой уверенностью.
+        const REMINDER_FORCE_RE = /\bнапомни\b.*\b(в\s+\d{1,2}[:.h]\d{2}|завтра|послезавтра|через\s+\d+|утром|вечером|ночью|днём|сегодня|понедельник|вторник|сред[ау]|четверг|пятниц[ую]|суббот[ую]|воскресенье|на\s+неделе|на\s+следующей)\b|\b(создай|поставь|добавь)\s+напоминание\b/iu;
+        if (
+            classification.intent !== "НАПОМИНАНИЕ" &&
+            REMINDER_FORCE_RE.test(message)
+        ) {
+            devLog("Reminder keyword+time override: forcing НАПОМИНАНИЕ");
+            classification = { ...classification, intent: "НАПОМИНАНИЕ", confidenceLevel: "ВЫСОКИЙ" };
         }
 
         devLog("Message classified as:", classification.intent, "with confidence:", classification.confidenceLevel);

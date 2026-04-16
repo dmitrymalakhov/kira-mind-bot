@@ -11,6 +11,7 @@ import { registerMemoryCommands } from "./memoryCommands";
 import { USER_TIMEZONE } from "../constants";
 import { getCapabilitiesMessage } from "../capabilities";
 import { getAllChats, isChatPublicMode, setChatPublicMode } from "../services/chatRegistry";
+import { isReflectionModeEnabled, setReflectionModeEnabled, getReflectionStats } from "../services/reflectionModeService";
 import { factAnalysisManager } from "../utils/factAnalysisTimer";
 import { extractAndSaveFactsFromConversation } from "../utils/enhancedFactExtraction";
 
@@ -318,4 +319,92 @@ bot.command("public_mode", async (ctx) => {
 bot.command("help", async (ctx) => {
     await ctx.reply(getCapabilitiesMessage(), { parse_mode: "Markdown" });
 });
+
+// ── Команда /reflection — режим рефлексии и накопления знаний ────────────────
+bot.command("reflection", async (ctx) => {
+    const enabled = isReflectionModeEnabled();
+    const stats = getReflectionStats();
+    await ctx.reply(buildReflectionStatusMessage(enabled, stats), {
+        parse_mode: "Markdown",
+        reply_markup: buildReflectionKeyboard(enabled),
+    });
+});
+
+// Callback: переключить режим рефлексии
+bot.callbackQuery("reflection_toggle", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const current = isReflectionModeEnabled();
+    const next = !current;
+    await setReflectionModeEnabled(next);
+    const stats = getReflectionStats();
+    await ctx.editMessageText(buildReflectionStatusMessage(next, stats), {
+        parse_mode: "Markdown",
+        reply_markup: buildReflectionKeyboard(next),
+    });
+});
+
+// Callback: обновить статистику без смены режима
+bot.callbackQuery("reflection_refresh", async (ctx) => {
+    await ctx.answerCallbackQuery("Обновлено");
+    const enabled = isReflectionModeEnabled();
+    const stats = getReflectionStats();
+    await ctx.editMessageText(buildReflectionStatusMessage(enabled, stats), {
+        parse_mode: "Markdown",
+        reply_markup: buildReflectionKeyboard(enabled),
+    });
+});
+
+function buildReflectionStatusMessage(
+    enabled: boolean,
+    stats: ReturnType<typeof getReflectionStats>
+): string {
+    const statusIcon = enabled ? "🟢" : "⚫";
+    const statusText = enabled ? "включён" : "выключен";
+
+    const prescreenRate = stats.prescreenTotal > 0
+        ? Math.round((stats.prescreenPassed / stats.prescreenTotal) * 100)
+        : 0;
+
+    const lastActivity = stats.lastActivityAt
+        ? stats.lastActivityAt.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+        : 'нет данных';
+
+    return (
+        `${statusIcon} *Режим рефлексии* — ${statusText}\n\n` +
+        `Я автоматически анализирую входящие сообщения в личных чатах и сохраняю важные факты в долговременную память.\n\n` +
+        `*Как работает:*\n` +
+        `• Сообщения накапливаются в буфере (от 5 штук или за 30 мин)\n` +
+        `• Дешёвый pre-screen отсеивает «мусор» — только содержательные переписки идут на анализ\n` +
+        `• Чаты классифицируются по домену (работа/личное/семья…) для точного сохранения\n` +
+        `• Лимит: до 6 полных анализов в час\n\n` +
+        `*Сейчас:*\n` +
+        `• Чатов в буфере: ${stats.totalChats}\n` +
+        `• Сообщений в очереди: ${stats.totalMessages}\n` +
+        `• Анализов за этот час: ${stats.analysesThisHour}/6\n\n` +
+        `*Сессия:*\n` +
+        `• Pre-screen: ${stats.prescreenPassed}/${stats.prescreenTotal} полезных (${prescreenRate}%)\n` +
+        `• Сохранено фактов за сессию: ${stats.savedThisSession}\n\n` +
+        `*Всего за всё время:*\n` +
+        `• Анализов: ${stats.totalAnalyses}\n` +
+        `• Фактов сохранено: ${stats.totalFactsSaved}\n` +
+        `• Последняя активность: ${lastActivity}`
+    );
+}
+
+function buildReflectionKeyboard(enabled: boolean): { inline_keyboard: any[][] } {
+    return {
+        inline_keyboard: [
+            [
+                {
+                    text: enabled ? "⏸ Выключить" : "▶️ Включить",
+                    callback_data: "reflection_toggle",
+                },
+                {
+                    text: "🔄 Обновить",
+                    callback_data: "reflection_refresh",
+                },
+            ],
+        ],
+    };
+}
 }

@@ -20,8 +20,10 @@ import openai from "../openai";
 import { sendMessage as sendTelegramMessage } from "../services/telegram";
 import { InlineKeyboard } from "grammy";
 import { studyChatAndSaveFacts } from "../utils/studyChatPipeline";
-import { StudyChatPeriod } from "../utils/studyChatFlow";
+import { StudyChatPeriod, extractFactsAboutUserFromConversation } from "../utils/studyChatFlow";
 import { resolveRelationshipFromMemory } from "../utils/resolveRelationshipFromMemory";
+import { runUpdateLongTermMemoryAgent } from "./updateLongTermMemoryAgent";
+import { queueMessage as queueForReflection, markChatAsBot } from "../services/reflectionModeService";
 
 
 // Глобальное хранилище сообщений
@@ -168,6 +170,7 @@ async function handleNewMessage(event: any): Promise<void> {
             // Пропускаем сообщения от ботов
             if (isBot) {
                 devLog(`Пропускаем сообщение от бота: ${senderName}`);
+                markChatAsBot(String(chatId));
                 return;
             }
 
@@ -189,6 +192,11 @@ async function handleNewMessage(event: any): Promise<void> {
             }
 
             messageStore.addMessage(chatId, storedMessage);
+
+            // Добавляем в буфер режима рефлексии (синхронно, не блокирует обработку)
+            if (storedMessage.text) {
+                queueForReflection(String(chatId), senderName, storedMessage.text, storedMessage.date);
+            }
 
             devLog(`Новое сообщение от ${senderName}: ${storedMessage.text}`);
 
@@ -328,6 +336,45 @@ async function forwardReplyToOwner(
     }
 }
 
+/**
+ * Обрабатывает исходящие сообщения владельца бота в личных чатах.
+ * Сохраняет их в MessageStore (isOwn=true) и добавляет в очередь рефлексии
+ * как "Я: text" — чтобы LLM видел обе стороны диалога.
+ */
+async function handleOutgoingMessage(event: any): Promise<void> {
+    try {
+        const message = event.message;
+        if (!message.isPrivate) return;
+
+        const text: string = message.message?.trim();
+        if (!text) return;
+
+        const chatId = message.chatId;
+        const date = new Date(message.date * 1000);
+        const ownerName = config.ownerName || 'Я';
+
+        const storedMessage: StoredMessage = {
+            id: message.id,
+            senderId: config.allowedUserId,
+            senderName: ownerName,
+            text,
+            date,
+            isRead: true,
+            isBot: false,
+            isOwn: true,
+        };
+
+        messageStore.addMessage(String(chatId), storedMessage);
+
+        // Добавляем в буфер рефлексии — isOwn=true сигнализирует что это наш текст
+        queueForReflection(String(chatId), ownerName, text, date, true);
+
+        devLog(`[outgoing] Сохранено исходящее сообщение в чат ${chatId}: ${text.slice(0, 60)}`);
+    } catch (e) {
+        devLog('[outgoing] Ошибка обработки исходящего сообщения:', e);
+    }
+}
+
 async function subscribeToNewMessages(): Promise<void> {
     const telegramClient = await initTelegramClient();
 
@@ -346,6 +393,17 @@ async function subscribeToNewMessages(): Promise<void> {
             }
         },
         new NewMessage({ incoming: true })
+    );
+
+    // Исходящие сообщения — нужны для полного контекста в режиме рефлексии.
+    // Сохраняем в MessageStore (isOwn=true) и очередь рефлексии как "Я: text".
+    telegramClient.addEventHandler(
+        async (event) => {
+            if (event.isPrivate) {
+                await handleOutgoingMessage(event);
+            }
+        },
+        new NewMessage({ outgoing: true })
     );
 
     isListening = true;
@@ -709,6 +767,67 @@ function formatGroupMessages(messages: Api.Message[]): string {
 /**
  * Загружает сообщения из группового чата и анализирует их по запросу пользователя.
  */
+/**
+ * Анализирует групповой чат, возвращает текстовый ответ И сохраняет факты в долговременную память.
+ */
+async function studyGroupChatAndSaveFacts(
+    ctx: BotContext,
+    groupName: string,
+    analysisQuery: string,
+    memoryContext: string = ""
+): Promise<string> {
+    const client = await initTelegramClient();
+    if (!client) return "Не удалось подключиться к Telegram. Проверь статус подключения.";
+
+    const group = await searchGroupByTitle(client, groupName);
+    if (!group) {
+        return `Не нашла групповой чат с названием «${groupName}». Проверь название — оно должно совпадать с тем, что в списке диалогов.`;
+    }
+
+    const messages = await client.getMessages(group.id, { limit: 200 });
+    if (!messages || messages.length === 0) return `В чате «${group.title}» не найдено сообщений.`;
+
+    const conversationText = formatGroupMessages(messages as Api.Message[]);
+    if (!conversationText.trim()) return `В чате «${group.title}» нет текстовых сообщений для анализа.`;
+
+    const persona = getBotPersona();
+    const style = getCommunicationStyle();
+    const systemPrompt = `${persona}\n\n${style}\n\n${memoryContext}`.trim();
+    const userPrompt = `Ниже — сообщения из группового чата «${group.title}» (последние ${messages.length} сообщений).\n\nЗадача: ${analysisQuery}\n\nСообщения чата:\n${conversationText}`;
+
+    // Параллельно: текстовый анализ + извлечение структурированных фактов
+    const [analysisResult, factsResult] = await Promise.allSettled([
+        openai.chat.completions.create({
+            model: "gpt-4.1",
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userPrompt },
+            ],
+            temperature: 0.4,
+        }),
+        extractFactsAboutUserFromConversation(conversationText, group.title as string),
+    ]);
+
+    const analysisText = analysisResult.status === 'fulfilled'
+        ? (analysisResult.value.choices[0]?.message?.content?.trim() || 'Не удалось проанализировать.')
+        : 'Не удалось проанализировать сообщения чата.';
+
+    if (factsResult.status === 'fulfilled' && factsResult.value.length > 0) {
+        try {
+            const savedCount = await runUpdateLongTermMemoryAgent(ctx, factsResult.value);
+            if (savedCount > 0) {
+                return `${analysisText}\n\n💾 Сохранила ${savedCount} факт(ов) в долговременную память.`;
+            }
+        } catch (e) {
+            console.error('[studyGroupChatAndSaveFacts] save facts error:', e);
+        }
+    } else if (factsResult.status === 'rejected') {
+        console.error('[studyGroupChatAndSaveFacts] fact extraction failed:', factsResult.reason);
+    }
+
+    return analysisText;
+}
+
 async function analyzeGroupChatMessages(
     groupName: string,
     analysisQuery: string,
@@ -795,6 +914,10 @@ export async function readMessagesAgent(
             if (classification.details.groupChatQuery) {
                 const groupQuery = classification.details.groupChatQuery.trim();
                 const analysisQuery = classification.details.analysisQuery || message;
+                if (classification.details.saveFactsAboutUser) {
+                    const answer = await studyGroupChatAndSaveFacts(ctx, groupQuery, analysisQuery, memoryContext);
+                    return { responseText: answer };
+                }
                 const answer = await analyzeGroupChatMessages(groupQuery, analysisQuery, memoryContext);
                 return { responseText: answer };
             }

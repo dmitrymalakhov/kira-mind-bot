@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { DataSource } from 'typeorm';
 import { ReminderEntity } from './entity/ReminderEntity';
 import { ChatEntity } from './entity/ChatEntity';
+import { BotSettingEntity } from './entity/BotSettingEntity';
 
 export const AppDataSource = new DataSource({
   type: 'postgres',
@@ -12,6 +13,6 @@ export const AppDataSource = new DataSource({
   database: process.env.DB_NAME ?? 'KiraMind',
   synchronize: true,
   logging: process.env.NODE_ENV === 'development',
-  entities: [ReminderEntity, ChatEntity],
+  entities: [ReminderEntity, ChatEntity, BotSettingEntity],
   migrations: [],
 });

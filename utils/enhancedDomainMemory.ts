@@ -23,6 +23,68 @@ const DEDUP_SIMILARITY_THRESHOLD = 0.92;
 // Факты в диапазоне [CONTRADICTION_THRESHOLD, DEDUP_SIMILARITY_THRESHOLD) — похожие, но не идентичные.
 // Именно здесь живут противоречия: "работаю в X" vs "перешёл в Y".
 const CONTRADICTION_THRESHOLD = 0.72;
+// Нижний порог для поиска устаревших планировочных фактов при смене состояния
+const PLANNING_SWEEP_THRESHOLD = 0.55;
+
+/**
+ * Определяет через LLM, является ли факт сменой состояния.
+ * Примеры: "приехал", "переехал", "уволился", "купил квартиру".
+ * Результат кешируется — повторные вызовы бесплатны.
+ */
+async function isStateChangeFact(content: string): Promise<boolean> {
+    const cacheKey = `state_change:${content.slice(0, 120)}`;
+    const cached = llmCache.get<boolean>(cacheKey);
+    if (cached !== undefined) return cached;
+
+    const prompt = `Факт: "${content}"\nЭто факт смены состояния? (человек что-то сделал/изменил: приехал, переехал, уволился, купил, вернулся, начал/закончил работу, получил диагноз и т.п.)\nJSON: {"state_change": true/false}`;
+    try {
+        const resp = await openai.chat.completions.create({
+            model: 'gpt-5-nano',
+            messages: [
+                { role: 'system', content: 'Отвечай только валидным JSON.' },
+                { role: 'user', content: prompt },
+            ],
+            temperature: 0,
+            max_tokens: 15,
+        });
+        const data = parseLLMJson<{ state_change?: boolean }>(resp.choices[0]?.message?.content?.trim() || '');
+        const result = data?.state_change === true;
+        llmCache.set(cacheKey, result, LLM_CACHE_TTL.CLASSIFY);
+        return result;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Определяет через LLM, является ли факт планировочным/будущим.
+ * Примеры: "планирует поехать", "собирается уволиться", "хочет купить квартиру".
+ * Результат кешируется — повторные вызовы бесплатны.
+ */
+async function isPlanningFact(content: string): Promise<boolean> {
+    const cacheKey = `planning_fact:${content.slice(0, 120)}`;
+    const cached = llmCache.get<boolean>(cacheKey);
+    if (cached !== undefined) return cached;
+
+    const prompt = `Факт: "${content}"\nЭто планировочный/будущий факт? (человек планирует, собирается, хочет, намерен что-то сделать — но ещё не сделал)\nJSON: {"planning": true/false}`;
+    try {
+        const resp = await openai.chat.completions.create({
+            model: 'gpt-5-nano',
+            messages: [
+                { role: 'system', content: 'Отвечай только валидным JSON.' },
+                { role: 'user', content: prompt },
+            ],
+            temperature: 0,
+            max_tokens: 15,
+        });
+        const data = parseLLMJson<{ planning?: boolean }>(resp.choices[0]?.message?.content?.trim() || '');
+        const result = data?.planning === true;
+        llmCache.set(cacheKey, result, LLM_CACHE_TTL.CLASSIFY);
+        return result;
+    } catch {
+        return false;
+    }
+}
 
 type ContradictionVerdict = 'contradicts' | 'updates' | 'complements';
 
@@ -214,6 +276,62 @@ JSON: {"temporal": true/false, "days": число_или_null}`,
     }
 }
 
+/**
+ * Fire-and-forget: ищет устаревшие планировочные факты при смене состояния.
+ * Обрабатывает случаи, когда similarity ниже порога contradiction-check (0.55–0.72),
+ * но факт явно содержит планировочные паттерны ("планирую поехать", "собираюсь в...").
+ * Запускается только если новый факт содержит признаки смены состояния.
+ */
+async function invalidatePlanningFacts(
+    newContent: string,
+    userId: string,
+    newFactId: string,
+    svc: ReturnType<typeof vectorService>
+): Promise<void> {
+    if (!svc) return;
+    if (!await isStateChangeFact(newContent)) return;
+
+    try {
+        const candidates = await svc.searchAllDomains(newContent, userId, 12);
+        for (const candidate of candidates) {
+            if (candidate.id === newFactId) continue;
+            // Обрабатываем только зону ниже обычного contradiction-check
+            if (candidate.score >= CONTRADICTION_THRESHOLD) continue;
+            if (candidate.score < PLANNING_SWEEP_THRESHOLD) continue;
+            if (!await isPlanningFact(candidate.content)) continue;
+
+            const check = await checkContradiction(candidate.content, newContent);
+            devLog(`🔍 [sweep] Проверка устаревшего плана [${check.verdict}]:`, {
+                old: candidate.content.slice(0, 60),
+                new: newContent.slice(0, 60),
+            });
+
+            if ((check.verdict === 'updates' || check.verdict === 'contradicts') && check.mergedContent) {
+                const existingConfidence = candidate.confidence ?? 0.6;
+                const newVersion = {
+                    content: candidate.content,
+                    timestamp: candidate.timestamp,
+                    confidence: existingConfidence,
+                };
+                await svc.updateMemory(candidate.id, candidate.domain, {
+                    content: check.mergedContent,
+                    domain: candidate.domain,
+                    timestamp: new Date(),
+                    importance: candidate.importance,
+                    tags: [...new Set([...(candidate.tags || []), 'planning-invalidated'])],
+                    userId,
+                    botId,
+                    confidence: Math.max(0.3, existingConfidence - 0.1),
+                    previousVersions: [newVersion, ...((candidate as any).previousVersions ?? [])].slice(0, 10),
+                });
+                devLog(`🔄 [sweep] Устаревший план обновлён:`, check.mergedContent.slice(0, 60));
+            }
+        }
+    } catch (e) {
+        devLog('invalidatePlanningFacts error (ignored):', e);
+    }
+}
+
 /** Сохраняет факт в векторную БД (Qdrant) с обнаружением противоречий и дедупликацией. */
 export async function saveMemory(
     ctx: BotContext,
@@ -275,12 +393,26 @@ export async function saveMemory(
         }
 
         // ── Шаг 2: Поиск похожих фактов для проверки противоречий ────────────
-        const related = await svc.searchMemories(content, String(userId), {
+        // Ищем в том же домене + кросс-доменно: домен старого факта может не совпадать с новым
+        // (например, "планирую поездку" в general, а "прилетел" — в travel).
+        const relatedInDomain = await svc.searchMemories(content, String(userId), {
             domain,
-            limit: 3,
+            limit: 7,
             minScore: CONTRADICTION_THRESHOLD,
         });
+        const relatedAllDomains = await svc.searchAllDomains(content, String(userId), 7);
 
+        // Объединяем результаты, дедуплицируем по id, фильтруем по порогу
+        const seenIds = new Set(relatedInDomain.map(r => r.id));
+        const related = [...relatedInDomain];
+        for (const r of relatedAllDomains) {
+            if (!seenIds.has(r.id) && r.score >= CONTRADICTION_THRESHOLD && r.score < DEDUP_SIMILARITY_THRESHOLD) {
+                seenIds.add(r.id);
+                related.push(r);
+            }
+        }
+
+        let mergedCount = 0;
         for (const candidate of related) {
             // Пропускаем то, что уже обработано порогом дедупликации
             if (candidate.score >= DEDUP_SIMILARITY_THRESHOLD) continue;
@@ -292,17 +424,7 @@ export async function saveMemory(
             });
 
             if ((check.verdict === 'contradicts' || check.verdict === 'updates') && check.mergedContent) {
-                // В обоих случаях заменяем старый факт объединённой формулировкой:
-                // - contradicts: "работал в Сбере, затем уволился" (история сохранена)
-                // - updates:     "переехал из Москвы в Питер" (актуальное состояние)
-                const mergeTag = check.verdict === 'contradicts' ? 'contradicts-merged' : 'updated';
-                // При противоречии достоверность снижается (-0.2), при обновлении остаётся
                 const existingConfidence = candidate.confidence ?? 0.6;
-                const mergedConfidence = check.verdict === 'contradicts'
-                    ? Math.max(0.3, existingConfidence - 0.2)
-                    : existingConfidence;
-
-                // Сохраняем старую версию в historya перед перезаписью
                 const newVersion = {
                     content: candidate.content,
                     timestamp: candidate.timestamp,
@@ -311,26 +433,56 @@ export async function saveMemory(
                 const previousVersions = [
                     newVersion,
                     ...((candidate as any).previousVersions ?? []),
-                ].slice(0, 10); // храним не более 10 версий
+                ].slice(0, 10);
 
-                await svc.updateMemory(candidate.id, domain, {
-                    content: check.mergedContent,
-                    domain,
-                    timestamp: new Date(),
-                    importance: Math.max(importance, candidate.importance),
-                    tags: [...new Set([...(tags || []), ...(candidate.tags || []), mergeTag])],
-                    userId: String(userId),
-                    botId,
-                    isAnchor: isAnchor || candidate.tags?.includes('anchor') || undefined,
-                    confidence: mergedConfidence,
-                    previousVersions,
-                });
-                devLog(`🔄 Факт объединён [${check.verdict}]:`, check.mergedContent.slice(0, 60));
-                lastSaveError = null;
-                if (ctx.session) delete ctx.session.lastFactSaveError;
-                return;
+                if (mergedCount === 0) {
+                    // Первый конфликт: полное слияние — становится каноническим текущим состоянием
+                    // - contradicts: "работал в Сбере, затем уволился" (история сохранена)
+                    // - updates:     "переехал из Москвы в Питер" (актуальное состояние)
+                    const mergeTag = check.verdict === 'contradicts' ? 'contradicts-merged' : 'updated';
+                    const mergedConfidence = check.verdict === 'contradicts'
+                        ? Math.max(0.3, existingConfidence - 0.2)
+                        : existingConfidence;
+
+                    await svc.updateMemory(candidate.id, candidate.domain, {
+                        content: check.mergedContent,
+                        domain: candidate.domain,
+                        timestamp: new Date(),
+                        importance: Math.max(importance, candidate.importance),
+                        tags: [...new Set([...(tags || []), ...(candidate.tags || []), mergeTag])],
+                        userId: String(userId),
+                        botId,
+                        isAnchor: isAnchor || candidate.tags?.includes('anchor') || undefined,
+                        confidence: mergedConfidence,
+                        previousVersions,
+                    });
+                    devLog(`🔄 Факт объединён [${check.verdict}]:`, check.mergedContent.slice(0, 60));
+                } else {
+                    // Последующие конфликты: устаревший планировочный факт — истекает немедленно,
+                    // чтобы не дублировать merged-контент в нескольких записях.
+                    await svc.updateMemory(candidate.id, candidate.domain, {
+                        content: candidate.content,
+                        domain: candidate.domain,
+                        timestamp: candidate.timestamp,
+                        importance: candidate.importance,
+                        tags: [...new Set([...(candidate.tags || []), 'planning-superseded'])],
+                        userId: String(userId),
+                        botId,
+                        expiresAt: new Date(),
+                        confidence: Math.max(0.3, existingConfidence - 0.1),
+                        previousVersions,
+                    });
+                    devLog(`⏰ Дополнительный планировочный факт истёк:`, candidate.content.slice(0, 60));
+                }
+                mergedCount++;
             }
             // 'complements' — продолжаем, сохраним оба
+        }
+
+        if (mergedCount > 0) {
+            lastSaveError = null;
+            if (ctx.session) delete ctx.session.lastFactSaveError;
+            return; // Новый факт поглощён существующими записями
         }
 
         // ── Шаг 3: Эмоциональная маркировка (только для значимых фактов) ────
@@ -374,6 +526,11 @@ export async function saveMemory(
 
         // ── Шаг 5: Строим граф связей (fire & forget) ────────────────────────
         buildMemoryRelationships(result, content, String(userId), domain, svc).catch(() => {});
+
+        // ── Шаг 5.5: Аннулируем устаревшие планировочные факты (fire & forget) ─
+        // Обрабатывает зону similarity 0.55–0.72 — ниже порога contradiction-check,
+        // но достаточно близко чтобы "планирую поездку" нашлось по "прилетел".
+        invalidatePlanningFacts(content, String(userId), result, svc).catch(() => {});
 
         lastSaveError = null;
         if (ctx.session) delete ctx.session.lastFactSaveError;

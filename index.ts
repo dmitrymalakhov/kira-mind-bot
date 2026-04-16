@@ -29,6 +29,8 @@ import { config } from "./config";
 import { startKiraLifeScheduler } from "./services/kiraLifeScheduler";
 import { startDmReportScheduler } from "./services/dmReportScheduler";
 import { startMemoryInsightScheduler } from "./services/memoryInsightScheduler";
+import { startReflectionModeScheduler } from "./services/reflectionModeScheduler";
+import { initReflectionMode } from "./services/reflectionModeService";
 import { maybeProactiveHint } from "./utils/proactiveMemory";
 import { maybeAskMemoryGap } from "./utils/memoryGapDetector";
 import { AppDataSource } from "./data-source";
@@ -1440,6 +1442,18 @@ async function startBot() {
         startKiraLifeScheduler(bot);
         startDmReportScheduler(bot);
         startMemoryInsightScheduler(bot);
+        await initReflectionMode();
+        startReflectionModeScheduler(bot);
+        await bot.api.setMyCommands([
+            { command: "reflection", description: "Режим рефлексии и накопления знаний" },
+            { command: "reminders", description: "Мои напоминания" },
+            { command: "chats", description: "Список чатов" },
+            { command: "contacts", description: "Список контактов" },
+            { command: "telegram_unread", description: "Непрочитанные сообщения" },
+            { command: "summary", description: "Сводка диалога" },
+            { command: "clear", description: "Очистить историю и сохранить факты" },
+            { command: "help", description: "Мои возможности" },
+        ]);
         await bot.start();
 
         console.log("✅ Бот успешно запущен и готов к работе!");

@@ -385,18 +385,19 @@ export function registerCallback(bot: Bot<BotContext>): void {
 
                 let minutes: number;
                 let notificationText: string;
+                let newDueDate: Date;
 
                 if (postponeTime === "tomorrow") {
-                    const tomorrow = new Date();
-                    tomorrow.setDate(tomorrow.getDate() + 1);
-                    tomorrow.setHours(9, 0, 0, 0);
-                    minutes = Math.floor((tomorrow.getTime() - new Date().getTime()) / 60000);
+                    newDueDate = new Date();
+                    newDueDate.setDate(newDueDate.getDate() + 1);
+                    newDueDate.setHours(9, 0, 0, 0);
+                    minutes = Math.floor((newDueDate.getTime() - new Date().getTime()) / 60000);
                     notificationText = "Напоминание отложено на завтра (9:00)";
                 } else if (postponeTime === "week") {
-                    const nextWeek = new Date();
-                    nextWeek.setDate(nextWeek.getDate() + 7);
-                    nextWeek.setHours(9, 0, 0, 0);
-                    minutes = Math.floor((nextWeek.getTime() - new Date().getTime()) / 60000);
+                    newDueDate = new Date();
+                    newDueDate.setDate(newDueDate.getDate() + 7);
+                    newDueDate.setHours(9, 0, 0, 0);
+                    minutes = Math.floor((newDueDate.getTime() - new Date().getTime()) / 60000);
                     notificationText = "Напоминание отложено на неделю (9:00)";
                 } else {
                     minutes = parseInt(postponeTime);
@@ -405,6 +406,8 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         await ctx.answerCallbackQuery({ text: "Произошла ошибка при обработке запроса" });
                         return;
                     }
+                    newDueDate = new Date();
+                    newDueDate.setMinutes(newDueDate.getMinutes() + minutes);
                     if (minutes === 60) {
                         notificationText = "Напоминание отложено на 1 час";
                     } else if (minutes === 180) {
@@ -423,20 +426,17 @@ export function registerCallback(bot: Bot<BotContext>): void {
 
                     await ctx.answerCallbackQuery({ text: notificationText });
 
-                    const showBackAfterPostpone = !!ctx.session.viewingRemindersInChat;
                     if (ctx.callbackQuery.message?.message_id) {
                         const chatId = ctx.callbackQuery.message.chat.id;
                         const messageId = ctx.callbackQuery.message.message_id;
-                        const active = getActiveReminders(ctx);
-                        if (active.length === 0) {
-                            await ctx.api.editMessageText(chatId, messageId, '✅ Все напоминания выполнены!',
-                                { reply_markup: showBackAfterPostpone ? new InlineKeyboard().text('↩️ К чатам', 'reminder_chat_back') : new InlineKeyboard() }
-                            );
-                        } else {
-                            const idx = Math.max(0, active.findIndex(r => r.id === reminderId));
-                            const { text, keyboard } = buildReminderCard(active, idx, showBackAfterPostpone);
-                            await ctx.api.editMessageText(chatId, messageId, text, { reply_markup: keyboard });
-                        }
+                        const showBackAfterPostpone = !!ctx.session.viewingRemindersInChat;
+                        const formattedTime = newDueDate.toLocaleString('ru-RU', {
+                            day: 'numeric', month: 'long', hour: 'numeric', minute: 'numeric'
+                        });
+                        const confirmText = `⏰ Напоминание перенесено\n\nСледующий сигнал: ${formattedTime}`;
+                        const backKeyboard = new InlineKeyboard().text('📋 К списку напоминаний', 'reminders_nav_0');
+                        if (showBackAfterPostpone) backKeyboard.row().text('↩️ К чатам', 'reminder_chat_back');
+                        await ctx.api.editMessageText(chatId, messageId, confirmText, { reply_markup: backKeyboard });
                     }
                 } else {
                     await ctx.answerCallbackQuery({ text: "Произошла ошибка при откладывании напоминания" });
