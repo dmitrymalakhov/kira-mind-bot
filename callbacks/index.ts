@@ -247,23 +247,34 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     return;
                 }
 
+                const reminderDisplayText = reminder.displayText || reminder.text;
                 await cancelReminder(reminderId);
                 ReminderRegistry.getInstance().remove(reminderId);
                 ctx.session.reminders = ctx.session.reminders.filter(r => r.id !== reminderId);
                 await ctx.answerCallbackQuery({ text: "Напоминание отменено" });
 
                 const showBack = !!ctx.session.viewingRemindersInChat;
-                const remaining = getActiveReminders(ctx);
+                const callbackMidCancel = ctx.callbackQuery.message?.message_id;
+                const isReminderCardCancel = callbackMidCancel !== undefined && callbackMidCancel !== reminder.messageId;
                 if (ctx.callbackQuery.message?.message_id) {
                     const cid = ctx.callbackQuery.message.chat.id;
                     const mid = ctx.callbackQuery.message.message_id;
-                    if (remaining.length === 0) {
-                        await ctx.api.editMessageText(cid, mid, '✅ Все напоминания выполнены!',
-                            { reply_markup: showBack ? new InlineKeyboard().text('↩️ К чатам', 'reminder_chat_back') : new InlineKeyboard() }
-                        );
+                    if (isReminderCardCancel) {
+                        // Кнопка нажата на карточке из /reminders — обновляем карточку
+                        const remaining = getActiveReminders(ctx);
+                        if (remaining.length === 0) {
+                            await ctx.api.editMessageText(cid, mid, '✅ Все напоминания выполнены!',
+                                { reply_markup: showBack ? new InlineKeyboard().text('↩️ К чатам', 'reminder_chat_back') : new InlineKeyboard() }
+                            );
+                        } else {
+                            const { text, keyboard } = buildReminderCard(remaining, 0, showBack);
+                            await ctx.api.editMessageText(cid, mid, text, { reply_markup: keyboard });
+                        }
                     } else {
-                        const { text, keyboard } = buildReminderCard(remaining, 0, showBack);
-                        await ctx.api.editMessageText(cid, mid, text, { reply_markup: keyboard });
+                        // Кнопка нажата на самом уведомлении — заменяем его текстом об отмене
+                        await ctx.api.editMessageText(cid, mid, `❌ Отменено: ${reminderDisplayText}`,
+                            { reply_markup: new InlineKeyboard() }
+                        );
                     }
                 }
             } else if (callbackData.startsWith("study_chat:")) {
@@ -313,17 +324,20 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     ctx.session.reminders = ctx.session.reminders.filter(r => r.id !== reminderId);
                     await ctx.answerCallbackQuery({ text: "Выполнено! ✅" });
 
-                    const remaining = getActiveReminders(ctx);
-                    if (ctx.callbackQuery.message?.message_id) {
-                        const cid = ctx.callbackQuery.message.chat.id;
-                        const mid = ctx.callbackQuery.message.message_id;
+                    // Если кнопка нажата на самом уведомлении — markReminderAsCompleted уже обновил его,
+                    // перезаписывать не нужно. Если кнопка нажата на карточке из /reminders — обновляем карточку.
+                    const callbackMid = ctx.callbackQuery.message?.message_id;
+                    const isReminderCard = callbackMid !== undefined && callbackMid !== reminder.messageId;
+                    if (isReminderCard) {
+                        const remaining = getActiveReminders(ctx);
+                        const cid = ctx.callbackQuery.message!.chat.id;
                         if (remaining.length === 0) {
-                            await ctx.api.editMessageText(cid, mid, '✅ Все напоминания выполнены!',
+                            await ctx.api.editMessageText(cid, callbackMid, '✅ Все напоминания выполнены!',
                                 { reply_markup: showBack ? new InlineKeyboard().text('↩️ К чатам', 'reminder_chat_back') : new InlineKeyboard() }
                             );
                         } else {
                             const { text, keyboard } = buildReminderCard(remaining, 0, showBack);
-                            await ctx.api.editMessageText(cid, mid, text, { reply_markup: keyboard });
+                            await ctx.api.editMessageText(cid, callbackMid, text, { reply_markup: keyboard });
                         }
                     }
                 } else if (action === "postpone") {

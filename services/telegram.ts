@@ -4,6 +4,17 @@ import { ContactsStore } from "../stores/ContactsStore";
 import { MessageTracker } from "../MessageTracker";
 import { devLog } from "../utils";
 import { config } from "../config";
+import { Api as GrammyApi } from "grammy";
+
+let botApi: GrammyApi | null = null;
+
+/**
+ * Сохраняет ссылку на Bot API (grammy) для отправки сообщений от имени бота в группы,
+ * где бот является участником.
+ */
+export function setBotApi(api: GrammyApi): void {
+    botApi = api;
+}
 
 // Хранилище таймеров для запланированных сообщений
 const messageTimers = new Map<number, NodeJS.Timeout>();
@@ -156,9 +167,11 @@ export async function searchGroupByTitle(
 }
 
 /**
- * Отправляет сообщение в группу/чат (без логики контактов и уведомлений об ответах).
+ * Отправляет сообщение в группу/чат.
+ * Если бот является участником группы — отправляет через Bot API (от имени бота).
+ * Иначе — через личный аккаунт пользователя (MTProto).
  * @param client Клиент Telegram
- * @param chatId ID чата (группы/супергруппы/канала)
+ * @param chatId ID чата (группы/супергруппы/канала) в формате MTProto
  * @param message Текст сообщения
  * @returns Результат отправки
  */
@@ -173,9 +186,21 @@ export async function sendMessageToChat(
         const signature = `\n\n──────────\n✉️ ${botName} | @${botUsername}`;
         const messageWithSignature = message + signature;
 
+        // Пробуем отправить через Bot API, если бот является участником этой группы
+        if (botApi) {
+            try {
+                const sent = await botApi.sendMessage(chatId, messageWithSignature);
+                devLog(`Сообщение отправлено в чат ${chatId} через Bot API, ID сообщения: ${sent.message_id}`);
+                return { success: true, messageId: sent.message_id };
+            } catch (botApiError: any) {
+                devLog(`Bot API не смог отправить в чат ${chatId} (бот не в группе?): ${botApiError?.message}. Отправляю через личный аккаунт...`);
+            }
+        }
+
+        // Fallback: отправляем через личный аккаунт пользователя (MTProto)
         const sentMessage = await client.sendMessage(chatId, { message: messageWithSignature });
         const messageId = sentMessage.id;
-        devLog(`Сообщение отправлено в чат ${chatId}, ID сообщения: ${messageId}`);
+        devLog(`Сообщение отправлено в чат ${chatId} через MTProto, ID сообщения: ${messageId}`);
         return { success: true, messageId };
     } catch (error) {
         console.error(`Ошибка при отправке сообщения в чат ${chatId}:`, error);

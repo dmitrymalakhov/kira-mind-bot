@@ -17,7 +17,7 @@ import {
     buildNegotiationSummaryText,
     buildNegotiationStopKeyboard,
 } from "./stores/NegotiationStore";
-import { initTelegramClient, sendMessage as sendTelegramMessage } from "./services/telegram";
+import { initTelegramClient, sendMessage as sendTelegramMessage, setBotApi } from "./services/telegram";
 import { devLog, sendMessage } from "./utils";
 import { ReminderRegistry } from "./stores/ReminderRegistry";
 import { addToHistory } from "./utils/history";
@@ -55,6 +55,7 @@ if (!fs.existsSync(TEMP_DIR)) {
 }
 
 const bot = createBot();
+setBotApi(bot.api);
 console.log('🤖 Бот создан успешно');
 
 registerCommandHandlers(bot);
