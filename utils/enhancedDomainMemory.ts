@@ -162,7 +162,7 @@ async function checkContradiction(
         if (!data) return { verdict: 'complements' };
         const verdict: ContradictionVerdict =
             data.verdict === 'contradicts' ? 'contradicts' :
-            data.verdict === 'updates' ? 'updates' : 'complements';
+                data.verdict === 'updates' ? 'updates' : 'complements';
         const result: ContradictionResult = {
             verdict,
             mergedContent: verdict !== 'complements' && data.mergedContent
@@ -532,12 +532,12 @@ export async function saveMemory(
         devLog('✅ Факт успешно сохранён с ID:', result);
 
         // ── Шаг 5: Строим граф связей (fire & forget) ────────────────────────
-        buildMemoryRelationships(result, content, String(userId), domain, svc).catch(() => {});
+        buildMemoryRelationships(result, content, String(userId), domain, svc).catch(() => { });
 
         // ── Шаг 5.5: Аннулируем устаревшие планировочные факты (fire & forget) ─
         // Обрабатывает зону similarity 0.55–0.72 — ниже порога contradiction-check,
         // но достаточно близко чтобы "планирую поездку" нашлось по "прилетел".
-        invalidatePlanningFacts(content, String(userId), result, svc).catch(() => {});
+        invalidatePlanningFacts(content, String(userId), result, svc).catch(() => { });
 
         lastSaveError = null;
         if (ctx.session) delete ctx.session.lastFactSaveError;

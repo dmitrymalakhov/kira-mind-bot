@@ -103,8 +103,8 @@ export async function generateMemoryQueries(userMessage: string, recentHistory?:
     const historyBlock =
         recentHistory && recentHistory.length > 0
             ? `Контекст разговора (предыдущие сообщения):\n${recentHistory
-                  .map((m) => `${m.role === 'user' ? 'Пользователь' : 'Ассистент'}: ${m.content.slice(0, 120)}`)
-                  .join('\n')}\n\n`
+                .map((m) => `${m.role === 'user' ? 'Пользователь' : 'Ассистент'}: ${m.content.slice(0, 120)}`)
+                .join('\n')}\n\n`
             : '';
 
     const prompt = `${historyBlock}Текущий запрос пользователя: "${userMessage}"
@@ -461,10 +461,10 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
         for (const fact of reranked) {
             const boosted = Math.min(1.0, (fact.importance ?? 0.5) + 0.03);
             if (boosted > (fact.importance ?? 0.5)) {
-                svc.updateImportance(fact.id, boosted).catch(() => {});
+                svc.updateImportance(fact.id, boosted).catch(() => { });
             }
             if (fact.domain) {
-                svc.updateMemoryAccess(fact.id, fact.domain).catch(() => {});
+                svc.updateMemoryAccess(fact.id, fact.domain).catch(() => { });
             }
         }
     }
