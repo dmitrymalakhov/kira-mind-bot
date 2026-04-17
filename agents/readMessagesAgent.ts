@@ -5,7 +5,7 @@ import { BotContext } from "../types";
 import { MessageClassification, ProcessingResult } from "../orchestrator";
 import { initTelegramClient, preloadContactsList, searchGroupByTitle } from "../services/telegram";
 import { MessageStore, StoredMessage } from "../stores/MessageStore";
-import { devLog, isLikelyBot } from "../utils";
+import { devLog, isLikelyBot, notifyUser } from "../utils";
 import { MessageTracker } from "../MessageTracker";
 import { ContactsStore } from "../stores/ContactsStore";
 import {
@@ -61,7 +61,7 @@ ${historyLines}
 
     try {
         const resp = await openai.chat.completions.create({
-            model: "gpt-4.1",
+            model: "gpt-5.4",
             messages: [
                 {
                     role: "system",
@@ -551,7 +551,7 @@ export async function getAnswerFromMessages(
             ${conversationContext}
             
             Запрос пользователя: "${analysisQuery}"
-            ${memoryContext}
+            ${memoryContext ? `Контекст из долговременной памяти (факты о пользователе и его контактах):\n${memoryContext}` : ''}
 
             Проанализируй эту переписку и дай точный, информативный ответ на запрос пользователя.
             Основывай свой ответ только на информации из представленной переписки.
@@ -559,7 +559,7 @@ export async function getAnswerFromMessages(
             `;
 
             const response = await openai.chat.completions.create({
-                model: "gpt-4.1",
+                model: "gpt-5.4",
                 messages: [
                     {
                         role: "system",
@@ -677,7 +677,7 @@ export async function getMessagesSummary(hours: number = 24, memoryContext: stri
         Ниже представлены недавние сообщения от пользователей в мессенджере Telegram:
         
         ${messagesContext}
-        ${memoryContext}
+        ${memoryContext ? `Контекст из долговременной памяти (факты о пользователе и его контактах):\n${memoryContext}` : ''}
 
         Пожалуйста, суммаризируй эти сообщения в естественной форме.
         Опиши кто и о чем писал, какие темы обсуждались, есть ли важные вопросы или просьбы.
@@ -688,7 +688,7 @@ export async function getMessagesSummary(hours: number = 24, memoryContext: stri
         `;
 
         const response = await openai.chat.completions.create({
-            model: "gpt-4.1",
+            model: "gpt-5.4",
             messages: [
                 {
                     role: "system",
@@ -726,12 +726,10 @@ export async function getMessagesSummary(hours: number = 24, memoryContext: stri
 // Автоматически инициализируем клиент при загрузке модуля
 initTelegramClient();
 
-/** Проверяет, просит ли пользователь изучить переписку и сохранить факты о себе. */
+/** Проверяет, просит ли пользователь изучить переписку и сохранить факты (решение принимает LLM-классификатор). */
 function isStudyChatSaveFactsRequest(classification?: MessageClassification): boolean {
     if (!classification || classification.details.messagesCheckType !== "ANALYZE_CONVERSATION") return false;
-    if (classification.details.saveFactsAboutUser === true) return true;
-    const q = (classification.details.analysisQuery || "").toLowerCase();
-    return /узнай\s*(больше\s*)?(обо?\s*мне|про\s*меня)|сохрани\s*(в\s*память|факты)|запомни\s*(что\s*узнаешь|факты)|изучи\s*и\s*запомни|прочитай\s*и\s*запомни/i.test(q);
+    return classification.details.saveFactsAboutUser === true;
 }
 
 /**
@@ -792,13 +790,14 @@ async function studyGroupChatAndSaveFacts(
 
     const persona = getBotPersona();
     const style = getCommunicationStyle();
-    const systemPrompt = `${persona}\n\n${style}\n\n${memoryContext}`.trim();
+    const memoryBlock = memoryContext ? `\nКонтекст из долговременной памяти (факты о пользователе и его контактах):\n${memoryContext}` : '';
+    const systemPrompt = `${persona}\n\n${style}${memoryBlock}`.trim();
     const userPrompt = `Ниже — сообщения из группового чата «${group.title}» (последние ${messages.length} сообщений).\n\nЗадача: ${analysisQuery}\n\nСообщения чата:\n${conversationText}`;
 
     // Параллельно: текстовый анализ + извлечение структурированных фактов
     const [analysisResult, factsResult] = await Promise.allSettled([
         openai.chat.completions.create({
-            model: "gpt-4.1",
+            model: "gpt-5.4",
             messages: [
                 { role: "system", content: systemPrompt },
                 { role: "user", content: userPrompt },
@@ -855,8 +854,9 @@ async function analyzeGroupChatMessages(
 
     const persona = getBotPersona();
     const style = getCommunicationStyle();
+    const memoryBlock2 = memoryContext ? `\nКонтекст из долговременной памяти (факты о пользователе и его контактах):\n${memoryContext}` : '';
 
-    const systemPrompt = `${persona}\n\n${style}\n\n${memoryContext}`.trim();
+    const systemPrompt = `${persona}\n\n${style}${memoryBlock2}`.trim();
 
     const userPrompt = `Ниже — сообщения из группового чата «${group.title}» (последние ${messages.length} сообщений).
 
@@ -866,7 +866,7 @@ async function analyzeGroupChatMessages(
 ${conversationText}`;
 
     const response = await openai.chat.completions.create({
-        model: "gpt-4.1",
+        model: "gpt-5.4",
         messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
@@ -915,9 +915,11 @@ export async function readMessagesAgent(
                 const groupQuery = classification.details.groupChatQuery.trim();
                 const analysisQuery = classification.details.analysisQuery || message;
                 if (classification.details.saveFactsAboutUser) {
+                    await notifyUser(ctx, '📨 Загружаю сообщения из группы «' + groupQuery + '»…');
                     const answer = await studyGroupChatAndSaveFacts(ctx, groupQuery, analysisQuery, memoryContext);
                     return { responseText: answer };
                 }
+                await notifyUser(ctx, '📨 Анализирую чат «' + groupQuery + '»…');
                 const answer = await analyzeGroupChatMessages(groupQuery, analysisQuery, memoryContext);
                 return { responseText: answer };
             }
@@ -987,6 +989,7 @@ export async function readMessagesAgent(
                 };
             }
 
+            await notifyUser(ctx, '🔍 Анализирую переписку с ' + displayName + '…');
             const answer = await getAnswerFromMessages(
                 nameToSearch,
                 classification.details.analysisQuery,

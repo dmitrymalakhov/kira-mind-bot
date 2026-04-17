@@ -66,6 +66,11 @@ export interface SessionData {
     sentMessages?: Record<number, string>;
     domains: Record<string, DomainMemory>;
     lastFactAnalysisIndex?: number; // Индекс последнего анализа фактов
+    /** Контент фактов, уже сохранённых quickFactCheck — delayed analysis пропускает похожие */
+    quickFactContents?: string[];
+    /** Буфер недавно сохранённых фактов — гарантирует что только что сохранённые факты
+     *  попадут в контекст без задержки (обход latency vector search) */
+    recentlySavedFacts?: Array<{ content: string; savedAt: number }>;
     /** Ошибка сохранения факта в векторную БД — показываем пользователю после ответа */
     lastFactSaveError?: string;
     /** Unix-timestamp последней проактивной подсказки из памяти (для cooldown) */

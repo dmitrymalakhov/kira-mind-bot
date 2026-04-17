@@ -8,6 +8,21 @@ export const devLog = (...args: any[]) => {
 };
 
 /**
+ * Отправляет пользователю короткое уведомление о прогрессе (typing + текст).
+ * Ошибки при отправке глушатся, чтобы не ломать основной поток.
+ */
+export async function notifyUser(ctx: BotContext | any, text: string): Promise<void> {
+    try {
+        const chatId = ctx?.chat?.id;
+        if (!chatId) return;
+        await ctx.api.sendChatAction(chatId, 'typing');
+        await ctx.reply(text);
+    } catch (e) {
+        devLog('notifyUser: failed to send progress', e);
+    }
+}
+
+/**
  * Надёжный парсинг JSON из ответа LLM.
  *
  * Стратегия (от быстрой к медленной):

@@ -8,7 +8,7 @@ import {
     buildNegotiationStopKeyboard,
     buildNegotiationStartKeyboard,
 } from "../stores/NegotiationStore";
-import { devLog } from "../utils";
+import { devLog, notifyUser } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { config } from "../config";
 import openai from "../openai";
@@ -48,7 +48,7 @@ async function parseNegotiationRequest(
 
     try {
         const response = await openai.chat.completions.create({
-            model: "gpt-4.1",
+            model: "gpt-5.4",
             messages: [
                 {
                     role: "system",
@@ -86,6 +86,7 @@ export async function negotiateOnBehalfAgent(
 ): Promise<ProcessingResult> {
     try {
         const contactsStore = ContactsStore.getInstance();
+        await notifyUser(ctx, '🤝 Готовлю переговоры…');
         const parsed = await parseNegotiationRequest(message, enrichedContextFromMemory);
 
         if (parsed.errorMessage && !parsed.firstMessageText) {

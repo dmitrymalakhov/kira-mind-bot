@@ -94,7 +94,7 @@ async function maybeGenerateLifeEvent(): Promise<KiraSelfEvent> {
     .join(" | ");
 
   const response = await openai.chat.completions.create({
-    model: "gpt-4.1",
+    model: "gpt-5.4",
     messages: [
       {
         role: "system",
@@ -150,7 +150,7 @@ async function buildProactiveMessage(): Promise<string> {
   const formatHint = PROACTIVE_MESSAGE_FORMATS[Math.floor(Math.random() * PROACTIVE_MESSAGE_FORMATS.length)];
 
   const response = await openai.chat.completions.create({
-    model: "gpt-4.1",
+    model: "gpt-5.4",
     messages: [
       {
         role: "system",

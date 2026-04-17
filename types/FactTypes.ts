@@ -8,4 +8,8 @@ export interface ExtractedFact {
   extractedAt: Date;
   importance: number;
   tags: string[];
+  /** 'user' — факт о владельце бота, 'contact' — факт о стороннем человеке */
+  subject?: 'user' | 'contact';
+  /** Имя контакта (только при subject === 'contact') */
+  contactName?: string;
 }

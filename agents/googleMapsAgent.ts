@@ -61,7 +61,7 @@ async function analyzeMapsQuery(
 
         "${message}"
         ${historyContext}
-        ${memoryContext}
+        ${memoryContext ? `Контекст из долговременной памяти (адреса, места, предпочтения пользователя):\n${memoryContext}` : ''}
         ${locationContext}
         
         Определи, что именно пользователь хочет узнать:
@@ -96,7 +96,7 @@ async function analyzeMapsQuery(
 
         // Отправка запроса к API OpenAI
         const response = await openai.chat.completions.create({
-            model: "gpt-4.1",
+            model: "gpt-5.4",
             messages: [
                 {
                     role: "system",

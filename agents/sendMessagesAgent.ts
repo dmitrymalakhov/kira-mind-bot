@@ -3,10 +3,11 @@ import { ProcessingResult } from "../orchestrator";
 import { InlineKeyboard } from "grammy";
 import { initTelegramClient, scheduleMessageSend, sendMessage, sendMessageToChat, searchGroupByTitle } from "../services/telegram";
 import { Contact, ContactsStore } from "../stores/ContactsStore";
-import { devLog } from "../utils";
+import { devLog, notifyUser } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { config } from "../config";
 import openai from "../openai";
+import { getContactPortrait } from "../services/PsychologicalPortraitService";
 
 
 // Интерфейс для временного хранения информации о подготовленном сообщении
@@ -37,7 +38,8 @@ async function analyzeAndGenerateMessage(
     message: string,
     contactsStore: ContactsStore,
     messageHistory: MessageHistory[] = [],
-    memoryContext: string = ""
+    memoryContext: string = "",
+    contactPortrait: string = ""
 ): Promise<{
     contactIdentified: boolean;
     contactQuery?: string;
@@ -66,13 +68,18 @@ async function analyzeAndGenerateMessage(
 
 
 
+        const portraitBlock = contactPortrait
+            ? `\nПсихологический портрет получателя (используй для персонализации тона и содержания сообщения):\n${contactPortrait}\n`
+            : '';
+
         const prompt = `
         Текущая дата и время: ${currentDate.toLocaleString('ru-RU')}
-        
+
         Запрос пользователя: "${message}"
         ${historyContext}
         Контекст из долговременной памяти (используй для определения контакта и персонализации; там могут быть имена, роли, предпочтения и др.):
         ${memoryContext}
+        ${portraitBlock}
 
         Требуется:
         1. Определить, куда отправлять: в личку контакту (targetType: "contact") или в группу/чат (targetType: "group").
@@ -107,7 +114,7 @@ async function analyzeAndGenerateMessage(
         `;
 
         const response = await openai.chat.completions.create({
-            model: "gpt-4.1",
+            model: "gpt-5.4",
             messages: [
                 {
                     role: "system",
@@ -294,7 +301,22 @@ export async function sendMessagesAgent(
     try {
         const contactsStore = ContactsStore.getInstance();
 
-        const result = await analyzeAndGenerateMessage(message, contactsStore, messageHistory, enrichedContextFromMemory);
+        await notifyUser(ctx, '✍️ Составляю сообщение…');
+
+        // Предварительно пробуем найти портрет контакта по имени из запроса
+        // (быстрая эвристика: ищем первое совпадение в тексте)
+        let contactPortrait = '';
+        try {
+            // Извлекаем имя контакта через простую LLM-классификацию аналогично другим агентам
+            // Для скорости — ищем портрет по наиболее вероятному имени из enrichedContextFromMemory
+            const nameHint = enrichedContextFromMemory.match(/под «[^»]+» имеется в виду: ([^\s(]+(?:\s+[^\s(]+)?)/)?.[1];
+            if (nameHint) {
+                const portrait = await getContactPortrait(ctx, nameHint);
+                if (portrait) contactPortrait = portrait;
+            }
+        } catch { /* ignore */ }
+
+        const result = await analyzeAndGenerateMessage(message, contactsStore, messageHistory, enrichedContextFromMemory, contactPortrait);
 
         devLog("sendMessagesAgent", "Анализ запроса:", result);
 

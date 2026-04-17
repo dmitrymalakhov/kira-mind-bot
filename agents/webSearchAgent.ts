@@ -27,7 +27,8 @@ export async function webSearchAgent(
             });
         }
 
-        const searchResponse = await performWebSearch(`${historyContext}${memoryContext}\n\nЗапрос пользователя: ${message}`);
+        const memoryBlock = memoryContext ? `\nКонтекст из долговременной памяти (используй для уточнения поискового запроса):\n${memoryContext}\n` : '';
+        const searchResponse = await performWebSearch(`${historyContext}${memoryBlock}\n\nЗапрос пользователя: ${message}`);
 
         if (searchResponse.success && searchResponse.results) {
             devLog("Web search successful. Returning results.");
@@ -62,7 +63,7 @@ export async function webSearchAgent(
 async function performWebSearch(query: string): Promise<WebSearchResult> {
     try {
         const response = await openai.responses.create({
-            model: "gpt-4.1",
+            model: "gpt-5.4",
             input: [
                 {
                     role: "system",

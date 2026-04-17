@@ -19,11 +19,12 @@ export const DOMAIN_SEARCH_THRESHOLDS: Record<string, number> = {
     hobbies:       0.55,
     entertainment: 0.55,
     general:       0.55,
+    contacts:      0.60,
 };
 
 export const PREDEFINED_DOMAINS = {
   WORK: 'work',
-  HEALTH: 'health', 
+  HEALTH: 'health',
   FAMILY: 'family',
   FINANCE: 'finance',
   EDUCATION: 'education',
@@ -33,7 +34,8 @@ export const PREDEFINED_DOMAINS = {
   HOME: 'home',
   PERSONAL: 'personal',
   ENTERTAINMENT: 'entertainment',
-  GENERAL: 'general'
+  GENERAL: 'general',
+  CONTACTS: 'contacts',
 } as const;
 
 export const DOMAIN_DESCRIPTIONS = {
@@ -96,5 +98,10 @@ export const DOMAIN_DESCRIPTIONS = {
     name: 'Общее',
     description: 'Разные темы, не относящиеся к другим категориям',
     keywords: ['общее', 'разное', 'прочее']
+  },
+  [PREDEFINED_DOMAINS.CONTACTS]: {
+    name: 'Контакты',
+    description: 'Психологические портреты людей, с которыми общается пользователь',
+    keywords: ['контакт', 'портрет', 'характер', 'личность', 'общение', 'стиль', 'человек']
   }
 };

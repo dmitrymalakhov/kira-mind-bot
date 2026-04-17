@@ -501,9 +501,11 @@ bot.on("message:text", async (ctx, next) => {
                 await ctx.api.sendChatAction(ctx.chat.id, "typing");
 
                 // Используем оркестратор для обработки сообщения
+                // Передаём userMessage (содержит reply-контекст если сообщение — ответ),
+                // чтобы классификация, поиск по памяти и агенты видели полный контекст
                 const result = await processMessage(
                     ctx,
-                    message,
+                    userMessage,
                     false,
                     "",
                     ctx.session.messageHistory.slice().reverse() // Передаем историю в хронологическом порядке

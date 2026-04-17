@@ -43,10 +43,47 @@ const EXPLICIT_REMEMBER_PATTERNS: RegExp[] = [
 const EXPLICIT_REMEMBER_IMPORTANCE = 0.95;
 const EXPLICIT_REMEMBER_DOMAIN = 'personal';
 
+export interface ExplicitRememberFact {
+    content: string;
+    domain: string;
+    importance: number;
+    /** Имя контакта, если факт о третьем лице, а не о самом пользователе */
+    contactName?: string;
+}
+
+/**
+ * Слово имени/фамилии: начинается с буквы (рус/лат, любой регистр), только буквы.
+ * Захватываем от 1 до 3 слов (имя + фамилия + отчество).
+ */
+const NAME_WORD = '[А-ЯЁA-Zа-яёa-z][А-ЯЁA-Zа-яёa-z-]*';
+const NAME_PATTERN = `(${NAME_WORD}(?:\\s+${NAME_WORD}){0,2})`;
+
+/** Паттерны вида «о/об/про [Имя Фамилия]» в начале извлечённого содержимого */
+const THIRD_PARTY_PATTERNS: RegExp[] = [
+    // «эти факты об Юрии Никишенко», «информацию про Сашу Клименко»
+    new RegExp(`^(?:эти\\s+)?(?:факты?|данные|сведения|информацию?|инфу)\\s+(?:об?\\s+|про\\s+)${NAME_PATTERN}`, 'i'),
+    // «об Юрии Никишенко», «о Юре», «про Сашу Никонова»
+    new RegExp(`^(?:об?\\s+|про\\s+)${NAME_PATTERN}`, 'i'),
+];
+
+/**
+ * Нормализует имя контакта.
+ * Если захвачено несколько слов — используем все (полное имя с фамилией).
+ */
+function normalizeContactName(name: string): string {
+    // Приводим каждое слово к Title Case для консистентного ключа
+    return name.trim().split(/\s+/).map(w => {
+        if (!w) return w;
+        // Для кириллицы: первая буква upper, остальные lower
+        return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+    }).join(' ');
+}
+
 /**
  * Проверяет, просит ли пользователь явно что-то запомнить. Если да — возвращает факт для сохранения в векторную БД (долговременная память).
+ * Если факт о третьем лице — возвращает contactName.
  */
-export function extractExplicitRememberFact(message: string): { content: string; domain: string; importance: number } | null {
+export function extractExplicitRememberFact(message: string): ExplicitRememberFact | null {
     const trimmed = message.trim();
     if (!trimmed || trimmed.length < 3) return null;
 
@@ -55,6 +92,20 @@ export function extractExplicitRememberFact(message: string): { content: string;
         if (match && match[1]) {
             const content = match[1].trim();
             if (content.length < 2) return null;
+
+            // Проверяем, о третьем ли лице этот факт
+            for (const tpRe of THIRD_PARTY_PATTERNS) {
+                const tpMatch = content.match(tpRe);
+                if (tpMatch && tpMatch[1]) {
+                    return {
+                        content,
+                        domain: EXPLICIT_REMEMBER_DOMAIN,
+                        importance: EXPLICIT_REMEMBER_IMPORTANCE,
+                        contactName: normalizeContactName(tpMatch[1]),
+                    };
+                }
+            }
+
             return {
                 content,
                 domain: EXPLICIT_REMEMBER_DOMAIN,
@@ -118,12 +169,38 @@ export async function extractAndSaveFactsFromConversation(
         }
 
         let savedCount = 0;
+        // Список фактов, уже сохранённых quickFactCheck — пропускаем похожие
+        const alreadySaved = ctx.session.quickFactContents ?? [];
         for (const fact of facts) {
             if (fact.confidence > 0.5 && fact.importance > 0.3) {
-                await saveMemory(ctx, fact.domain, fact.content, fact.importance, fact.tags);
-                rememberFact(ctx, fact.domain, fact.content);
+                const factContent = (fact.subject === 'contact' && fact.contactName)
+                    ? `[${fact.contactName}] ${fact.content}`
+                    : fact.content;
+
+                // Пропускаем факты, уже сохранённые quickFactCheck (нечёткое сравнение)
+                const isDuplicate = alreadySaved.some(saved => {
+                    const a = saved.toLowerCase();
+                    const b = factContent.toLowerCase();
+                    // Один содержит другой или совпадают по ключевым словам
+                    return a.includes(b) || b.includes(a) ||
+                        (a.length > 10 && b.length > 10 && a.slice(0, 30) === b.slice(0, 30));
+                });
+                if (isDuplicate) {
+                    devLog(`⏩ Факт пропущен (уже сохранён quickFactCheck): ${factContent.slice(0, 60)}`);
+                    continue;
+                }
+
+                if (fact.subject === 'contact' && fact.contactName) {
+                    const contactTags = [...fact.tags, `contact:${fact.contactName}`];
+                    await saveMemory(ctx, fact.domain, factContent, fact.importance, contactTags);
+                    rememberFact(ctx, fact.domain, factContent);
+                    devLog(`Сохранен факт о контакте [${fact.contactName}]: ${fact.content}`);
+                } else {
+                    await saveMemory(ctx, fact.domain, fact.content, fact.importance, fact.tags);
+                    rememberFact(ctx, fact.domain, fact.content);
+                    devLog(`Сохранен факт о пользователе: ${fact.content}`);
+                }
                 savedCount++;
-                devLog(`Сохранен факт: ${fact.content}`);
             } else {
                 devLog(`Факт отклонен (низкие показатели): ${fact.content} (conf: ${fact.confidence}, imp: ${fact.importance})`);
             }
@@ -134,6 +211,8 @@ export async function extractAndSaveFactsFromConversation(
         devLog(`📊 Статистика анализа:\n  - Всего сообщений в истории: ${ctx.session.messageHistory.length}\n  - Анализируется сообщений: ${conversation.length}\n  - Последний анализ был на индексе: ${ctx.session.lastFactAnalysisIndex}\n  - Создано диалоговых пар: ${dialoguePairs.length}`);
 
         ctx.session.lastFactAnalysisIndex = ctx.session.messageHistory.length;
+        // Очищаем quickFactContents — delayed analysis обработал все накопленные сообщения
+        ctx.session.quickFactContents = [];
         return savedCount;
 
     } catch (error) {
@@ -148,12 +227,17 @@ export async function quickFactCheck(message: string): Promise<QuickFact[]> {
 
     const today = new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
     const prompt = `
-Определи, содержит ли сообщение пользователя ЯВНЫЕ личные факты о нем (имя, возраст, отношения, семья, личные данные, устойчивые предпочтения, работа, место жительства, текущее местонахождение, поездки и путешествия).
+Определи, содержит ли сообщение пользователя ЯВНЫЕ личные факты о НЁМ САМОМ (имя, возраст, отношения, семья, личные данные, устойчивые предпочтения, работа, место жительства, текущее местонахождение, поездки и путешествия).
 
 Сегодняшняя дата: ${today}
 
 Сообщение:
 "${trimmed}"
+
+КРИТИЧЕСКИ ВАЖНО:
+- Если сообщение содержит инструкцию запомнить или сохранить факты О КОНКРЕТНОМ ЧЕЛОВЕКЕ (например: "запомни об Иване", "сохрани эти факты о Юрии Никишенко", "запомни про Юру") — это НЕ факты о пользователе. Верни {"facts": []}.
+- Если в сообщении есть реплай или цитата чужого сообщения (например "[В ответ на ...]") — не извлекай факты из цитируемого текста, только из слов самого пользователя.
+- Извлекай ТОЛЬКО факты о самом пользователе, пишущем сообщение.
 
 ВАЖНО: Если пользователь сообщает о своём ТЕКУЩЕМ местонахождении или состоянии события (поездка, путешествие, конференция и т.д.) — это факт, включай его с датой.
 Примеры:

@@ -4,12 +4,13 @@ import openai from '../openai';
 import { llmCache, LLM_CACHE_TTL } from '../utils/llmCache';
 
 const AVAILABLE_STEPS = `
-- memory — подтянуть контекст из долговременной памяти (что бот знает о пользователе). Использовать первым, если ответ должен учитывать личные данные.
-- resolveContact — узнать из памяти имя человека по роли (жена, муж, мама, коллега и т.д.). Параметр relationship: слово из запроса (жена, муж, мама). Ставить перед readMessages, если пользователь просит переписку "с женой", "с мамой" и т.п.
-- webSearch — поиск в интернете. Использовать, если нужны актуальные данные, новости, факты из сети. Параметр asContext: true — если результат нужен для следующего шага (conversation или sendMessage), иначе ответ сразу из поиска.
+ВАЖНО: контекст из долговременной памяти (факты о пользователе) подтягивается АВТОМАТИЧЕСКИ ко всем шагам. НЕ нужно добавлять отдельный шаг memory — все агенты уже получают память.
+
+- resolveContact — узнать из памяти имя человека по роли (жена, муж, мама, коллега и т.д.). Параметр relationship: слово из запроса в именительном падеже (жена, муж, мама). Ставить перед readMessages/sendMessage/negotiateOnBehalf, если пользователь упоминает роль вместо имени.
+- webSearch — поиск в интернете. Использовать, если нужны актуальные данные, новости, факты из сети. Если после webSearch есть ещё шаги — результат автоматически передаётся следующему шагу по конвейеру.
 - conversation — ответить пользователю с учётом накопленного контекста (память, поиск). Обычно последний шаг в цепочке.
 - reminder — создать напоминание.
-- readMessages — работа с перепиской в Telegram: показать сообщения или изучить переписку с контактом и сохранить факты. После resolveContact не указывать relationship повторно. Параметр asContext: true — если результат анализа нужен для следующего шага (conversation или sendMessage).
+- readMessages — работа с перепиской в Telegram: показать сообщения или изучить переписку с контактом и сохранить факты. Если после readMessages есть ещё шаги — результат анализа автоматически передаётся следующему шагу.
 - sendMessage — отправить сообщение контакту.
 - imageGeneration — сгенерировать изображение.
 - maps — карты, маршруты, места.
@@ -39,16 +40,17 @@ export async function createPlan(input: PlanningInput): Promise<Plan> {
 Доступные шаги (выполняются строго по порядку):
 ${AVAILABLE_STEPS}
 
-Цепочка шагов выполняется последовательно: каждый агент получает накопленный контекст от предыдущих (память, результат поиска и т.д.) и может дополнять его для следующих. Определи все шаги, нужные для запроса, в правильном порядке. Верни JSON:
+Цепочка шагов выполняется последовательно: каждый агент получает накопленный контекст от предыдущих (память, результат поиска и т.д.) и может дополнять его для следующих. Контекст из долговременной памяти подтягивается АВТОМАТИЧЕСКИ — НЕ добавляй шаг memory. Определи все шаги, нужные для запроса, в правильном порядке. Верни JSON:
 { "steps": [ { "agentId": "ид_шага", "params": { ... } }, ... ] }
 
 Правила (обязательно):
-- Если в запросе несколько действий (например, «найди в интернете X и отправь жене», «поищи рецепт и напиши Маше») — включи в цепочку все нужные шаги по порядку: сначала memory (и при необходимости webSearch с asContext: true), затем sendMessage. Результат webSearch с asContext: true передаётся следующему шагу (conversation или sendMessage) по конвейеру.
-- Если пользователь просит проанализировать чат/переписку и затем отправить сообщение в этот же чат (или куда-то ещё) на основе анализа — у readMessages указывай asContext: true, следующим шагом ставь sendMessage.
-- Если пользователь просит написать или отправить сообщение кому-то — в плане ОБЯЗАТЕЛЬНО шаг sendMessage (один или после memory/webSearch/readMessages), НЕ подменяй на conversation.
-- Если пользователь просит договориться с кем-то, провести переговоры, решить вопрос с контактом (переписка с уточнениями) — шаг negotiateOnBehalf (один или после memory/resolveContact).
+- НЕ включай шаг memory — память подтягивается автоматически ко ВСЕМ агентам.
+- Если в запросе несколько действий (например, «найди в интернете X и отправь жене», «поищи рецепт и напиши Маше») — включи в цепочку все нужные шаги по порядку: при необходимости resolveContact, затем webSearch, затем sendMessage. Результат каждого шага автоматически передаётся следующему по конвейеру.
+- Если пользователь просит проанализировать чат/переписку и затем отправить сообщение в этот же чат (или куда-то ещё) на основе анализа — readMessages, затем sendMessage.
+- Если пользователь просит написать или отправить сообщение кому-то — в плане ОБЯЗАТЕЛЬНО шаг sendMessage (один или после resolveContact/webSearch/readMessages), НЕ подменяй на conversation.
+- Если пользователь просит договориться с кем-то, провести переговоры, решить вопрос с контактом (переписка с уточнениями) — шаг negotiateOnBehalf (один или после resolveContact).
 - Переписка "с женой", "с мамой" и т.п. — СНАЧАЛА resolveContact с params: { "relationship": "жена" }, ПОТОМ readMessages.
-- Поиск в интернете — memory и webSearch. Если результат поиска нужен следующему шагу (ответ в чат или отправка сообщения) — у webSearch укажи params: { "asContext": true }.
+- Поиск в интернете — webSearch. Если после поиска нужен ещё шаг — результат автоматически передаётся дальше.
 - Для напоминания — reminder. Для картинки — imageGeneration. Для карт — maps.
 - Для запроса о возможностях бота («что умеешь», «расскажи о себе», «твои функции») — один шаг capabilities.
 - Минимум один шаг. params можно опустить или передать пустой объект.`;
@@ -59,7 +61,7 @@ ${AVAILABLE_STEPS}
             messages: [
                 {
                     role: 'system',
-                    content: 'Ты планировщик. Строишь цепочку агентов по смыслу запроса: шаги выполняются по порядку, контекст (память, результат поиска и т.д.) передаётся по конвейеру следующему агенту. Отвечай только валидным JSON с полем steps (массив объектов с agentId и опционально params). agentId только из списка: memory, resolveContact, webSearch, conversation, reminder, readMessages, sendMessage, negotiateOnBehalf, imageGeneration, maps, unclearIntent, capabilities.',
+                    content: 'Ты планировщик. Строишь цепочку агентов по смыслу запроса: шаги выполняются по порядку, контекст (память, результат поиска и т.д.) передаётся по конвейеру следующему агенту. Память подтягивается автоматически — НЕ включай шаг memory. Отвечай только валидным JSON с полем steps (массив объектов с agentId и опционально params). agentId только из списка: resolveContact, webSearch, conversation, reminder, readMessages, sendMessage, negotiateOnBehalf, imageGeneration, maps, unclearIntent, capabilities.',
                 },
                 { role: 'user', content: prompt },
             ],
@@ -119,6 +121,8 @@ const VALID_IDS = new Set<string>([
 
 function normalizeAgentId(id: string): PlanStep['agentId'] {
     const n = String(id).trim();
+    // memory — no-op, подтягивается автоматически; отфильтровываем если LLM всё равно сгенерировал
+    if (n === 'memory') return '' as PlanStep['agentId'];
     if (VALID_IDS.has(n)) return n as PlanStep['agentId'];
     if (n === 'resolve_contact') return 'resolveContact';
     return 'conversation';
@@ -150,7 +154,7 @@ function fallbackPlan(intent: string, message: string): Plan {
             return { steps: [{ agentId: 'readMessages' }] };
         }
         case 'ВЕБ_ПОИСК':
-            return { steps: [{ agentId: 'memory' }, { agentId: 'webSearch' }] };
+            return { steps: [{ agentId: 'webSearch' }] };
         case 'ОТПРАВКА_СООБЩЕНИЯ':
             return { steps: [{ agentId: 'sendMessage' }] };
         case 'ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ':
@@ -160,7 +164,7 @@ function fallbackPlan(intent: string, message: string): Plan {
         case 'ВОЗМОЖНОСТИ_БОТА':
             return { steps: [{ agentId: 'capabilities' }] };
         case 'РАЗГОВОР':
-            return { steps: [{ agentId: 'memory' }, { agentId: 'conversation' }] };
+            return { steps: [{ agentId: 'conversation' }] };
         default:
             return { steps: [{ agentId: 'conversation' }] };
     }

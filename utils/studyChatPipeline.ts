@@ -3,6 +3,8 @@ import { ContactsStore } from '../stores/ContactsStore';
 import { runFetchChatMessagesAgent } from '../agents/fetchChatMessagesAgent';
 import { runAnalyzeConversationAgent } from '../agents/analyzeConversationAgent';
 import { runUpdateLongTermMemoryAgent } from '../agents/updateLongTermMemoryAgent';
+import { saveOrUpdatePortrait } from '../services/PsychologicalPortraitService';
+import { notifyUser } from '../utils';
 import type { StudyChatPeriod } from './studyChatFlow';
 
 const PERIOD_LABELS: Record<StudyChatPeriod, string> = {
@@ -33,12 +35,14 @@ export async function studyChatAndSaveFacts(
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
 
+    await notifyUser(ctx, `📨 Загружаю переписку с ${displayName} за ${PERIOD_LABELS[period]}…`);
     const fetchResult = await runFetchChatMessagesAgent(contactId, period, displayName);
     if ('error' in fetchResult) {
         return { responseText: fetchResult.error, savedCount: 0 };
     }
 
     // Шаг 2: агент анализа переписки
+    await notifyUser(ctx, `🔍 Анализирую ${fetchResult.messageCount} сообщений…`);
     let facts;
     try {
         facts = await runAnalyzeConversationAgent(fetchResult.formattedText, displayName, startDate, endDate);
@@ -52,7 +56,16 @@ export async function studyChatAndSaveFacts(
     }
 
     // Шаг 3: агент обновления долговременной памяти
+    await notifyUser(ctx, `💾 Сохраняю ${facts.length} факт(ов) в память…`);
     const savedCount = await runUpdateLongTermMemoryAgent(ctx, facts);
+
+    // Шаг 4: строим / обновляем психологический портрет контакта (fire-and-forget с ожиданием)
+    let portraitUpdated = false;
+    try {
+        portraitUpdated = await saveOrUpdatePortrait(ctx, displayName, fetchResult.formattedText);
+    } catch (e) {
+        console.error('[studyChatPipeline] portrait build error:', e);
+    }
 
     const periodLabel = PERIOD_LABELS[period];
 
@@ -73,9 +86,13 @@ export async function studyChatAndSaveFacts(
         if (contactFacts.length > 0) {
             parts.push(`\nО ${displayName}:\n${formatList(contactFacts)}`);
         }
+        if (portraitUpdated) {
+            parts.push(`\n🧠 Психологический портрет ${displayName} обновлён.`);
+        }
         responseText = parts.join('\n');
     } else {
-        responseText = `Переписку с ${displayName} за ${periodLabel} прочитала (${fetchResult.messageCount} сообщений), но не нашла новых однозначных фактов для сохранения.`;
+        const portraitNote = portraitUpdated ? `\n🧠 Психологический портрет ${displayName} обновлён.` : '';
+        responseText = `Переписку с ${displayName} за ${periodLabel} прочитала (${fetchResult.messageCount} сообщений), но не нашла новых однозначных фактов для сохранения.${portraitNote}`;
     }
 
     return { responseText, savedCount };

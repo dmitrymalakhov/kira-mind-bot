@@ -362,22 +362,29 @@ export async function saveMemory(
 
     try {
         // ── Шаг 1: Дедупликация (почти идентичные факты) ─────────────────────
-        const nearIdentical = await svc.searchMemories(content, String(userId), {
+        // Ищем кросс-доменно: факт мог быть сохранён с другим доменом ранее
+        const nearIdenticalInDomain = await svc.searchMemories(content, String(userId), {
             domain,
             limit: 1,
             minScore: DEDUP_SIMILARITY_THRESHOLD,
         });
-        if (nearIdentical.length > 0) {
-            const existing = nearIdentical[0];
+        const nearIdenticalAllDomains = nearIdenticalInDomain.length > 0
+            ? nearIdenticalInDomain
+            : (await svc.searchAllDomains(content, String(userId), 3))
+                .filter(r => r.score >= DEDUP_SIMILARITY_THRESHOLD)
+                .slice(0, 1);
+
+        if (nearIdenticalAllDomains.length > 0) {
+            const existing = nearIdenticalAllDomains[0];
             // Каждое подтверждение того же факта повышает достоверность (+0.1, cap 1.0)
             const boostedConfidence = Math.min(1.0, (existing.confidence ?? 0.6) + 0.1);
             const mergedImportance = Math.max(importance, existing.importance);
             // Авто-продвижение в anchors: высокая достоверность + высокая важность = ключевой факт о пользователе
             const shouldAutoAnchor = boostedConfidence >= 0.9 && mergedImportance >= 0.8;
             if (shouldAutoAnchor) devLog('⚓ Авто-продвижение в anchor:', content.slice(0, 60));
-            await svc.updateMemory(existing.id, domain, {
+            await svc.updateMemory(existing.id, existing.domain, {
                 content,
-                domain,
+                domain: existing.domain,
                 timestamp: new Date(),
                 importance: mergedImportance,
                 tags: [...new Set([...(tags || []), ...(existing.tags || [])])],
@@ -733,6 +740,7 @@ const DOMAIN_LABELS: Record<string, string> = {
     personal: '🙋 Личное',
     entertainment: '🎬 Развлечения',
     general: '📝 Общее',
+    contacts: '🧠 Психологические портреты',
 };
 
 /**
@@ -743,8 +751,16 @@ export async function generateMemoryBiography(ctx: BotContext): Promise<string> 
     const all = await getRecentMemories(ctx, 500);
     if (all.length === 0) return 'В памяти пока нет сохранённых фактов о тебе.';
 
-    const userFacts = all.filter(f => !f.tags?.some(t => String(t).startsWith('contact:')));
-    const contactFacts = all.filter(f => f.tags?.some(t => String(t).startsWith('contact:')));
+    // Психологические портреты хранятся в домене 'contacts' с тегом portrait:*
+    const portraitFacts = all.filter(f =>
+        f.domain === 'contacts' && f.tags?.some(t => String(t).startsWith('portrait:'))
+    );
+    const userFacts = all.filter(f =>
+        !f.tags?.some(t => String(t).startsWith('contact:')) && f.domain !== 'contacts'
+    );
+    const contactFacts = all.filter(f =>
+        f.domain !== 'contacts' && f.tags?.some(t => String(t).startsWith('contact:'))
+    );
 
     const byDomain: Record<string, MemoryEntry[]> = {};
     for (const fact of userFacts) {
@@ -768,6 +784,19 @@ export async function generateMemoryBiography(ctx: BotContext): Promise<string> 
         lines.push('👥 О твоих контактах');
         for (const f of contactFacts.slice(0, 20)) {
             lines.push(`• ${f.content}`);
+        }
+        lines.push('');
+    }
+
+    if (portraitFacts.length > 0) {
+        lines.push('🧠 Психологические портреты');
+        for (const f of portraitFacts) {
+            const nameTag = f.tags?.find(t => String(t).startsWith('portrait:'));
+            const name = nameTag ? String(nameTag).replace('portrait:', '') : 'Контакт';
+            // Показываем только краткое резюме, не весь портрет
+            const summaryMatch = f.content.match(/Краткое резюме: (.+)/);
+            const summary = summaryMatch ? summaryMatch[1] : f.content.slice(0, 120);
+            lines.push(`• ${name}: ${summary}`);
         }
         lines.push('');
     }

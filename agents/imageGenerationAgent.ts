@@ -135,7 +135,7 @@ export async function imageGenerationAgent(
 
         "${message}"
         ${historyContext}
-        ${memoryContext}
+        ${memoryContext ? `Контекст из долговременной памяти (используй для персонализации изображения):\n${memoryContext}` : ''}
 
         Создай оптимальный промпт для генерации изображения с помощью Ideogram AI на основе запроса пользователя.
         Промпт должен:
@@ -149,7 +149,7 @@ export async function imageGenerationAgent(
         `;
 
         const response = await openai.chat.completions.create({
-            model: "gpt-4.1",
+            model: "gpt-5.4",
             messages: [
                 {
                     role: "system",

@@ -337,7 +337,7 @@ async function synthesizeGroup(
 
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-4.1',
+            model: 'gpt-5.4',
             messages: [
                 { role: 'system', content: SYNTHESIS_SYSTEM },
                 { role: 'user', content: buildSynthesisPrompt(facts, personName) },

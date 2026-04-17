@@ -16,6 +16,23 @@ import { resolveRelationshipFromMemory, detectRelationshipInMessage } from '../u
 import { getCapabilitiesMessage } from '../capabilities';
 import { devLog } from '../utils';
 
+/** Человекочитаемые описания шагов для уведомлений пользователя */
+const STEP_LABELS: Record<string, string> = {
+    webSearch: '🔍 Ищу в интернете…',
+    conversation: '💬 Формирую ответ…',
+    reminder: '⏰ Создаю напоминание…',
+    readMessages: '📨 Анализирую переписку…',
+    sendMessage: '✉️ Готовлю сообщение…',
+    negotiateOnBehalf: '🤝 Начинаю переговоры…',
+    imageGeneration: '🎨 Генерирую изображение…',
+    maps: '🗺️ Ищу на карте…',
+    unclearIntent: '🤔 Уточняю запрос…',
+    capabilities: '📋 Готовлю информацию…',
+};
+
+/** Шаги, которые не видны пользователю (нет полезного действия для отображения) */
+const SILENT_STEPS = new Set(['memory', 'resolveContact']);
+
 export interface ExecutePlanParams {
     ctx: BotContext;
     plan: Plan;
@@ -72,16 +89,47 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
         }
     }
 
+    /** Проверяет, есть ли после текущего шага ещё шаги (т.е. текущий — не последний). */
+    const hasMoreSteps = (index: number) => index < steps.length - 1;
+
+    /** Видимые (не-silent) шаги плана — только по ним показываем прогресс */
+    const visibleSteps = steps.filter((s) => !SILENT_STEPS.has(s.agentId));
+    const isMultiStepPlan = visibleSteps.length > 1;
+
+    /** Отправить пользователю уведомление о прогрессе (только для многошаговых планов) */
+    const notifyProgress = async (stepAgentId: string) => {
+        if (!isMultiStepPlan) return;
+        const label = STEP_LABELS[stepAgentId];
+        if (!label) return;
+        try {
+            await ctx.api.sendChatAction(ctx.chat!.id, 'typing');
+            await ctx.reply(label);
+        } catch (e) {
+            devLog('Executor: failed to send progress notification', e);
+        }
+    };
+
     for (let i = 0; i < steps.length; i++) {
         const step = steps[i];
         const nextStep = steps[i + 1];
+        const isLastStep = !hasMoreSteps(i);
 
         devLog('Executor: step', i + 1, step.agentId, step.params);
         console.log("[ORCH] executor step", i + 1, "/", steps.length, "→", step.agentId);
 
         switch (step.agentId) {
             case 'resolveContact': {
-                // Роль→имя уже добавлено в enrichedContextFromMemory в фазе донасыщения; шаг оставлен для совместимости с планом.
+                // Роль→имя уже добавлено в enrichedContextFromMemory в фазе донасыщения.
+                // Но если detectRelationshipInMessage не нашёл роль, а планировщик указал relationship в params — резолвим здесь.
+                const planRelationship = step.params?.relationship as string | undefined;
+                if (planRelationship && !enrichedContextFromMemory.includes('имеется в виду:')) {
+                    const resolvedName = await resolveRelationshipFromMemory(ctx, planRelationship, message);
+                    if (resolvedName) {
+                        enrichedContextFromMemory += `В запросе пользователя под «${planRelationship}» имеется в виду: ${resolvedName} (из долговременной памяти).\n\n`;
+                        devLog('Executor: resolveContact step resolved', planRelationship, '->', resolvedName);
+                        console.log("[ORCH] resolveContact step: role", planRelationship, "-> name", resolvedName);
+                    }
+                }
                 break;
             }
 
@@ -91,6 +139,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
             }
 
             case 'webSearch': {
+                await notifyProgress('webSearch');
                 const webRes = await webSearchAgent(
                     message,
                     isForwarded,
@@ -98,9 +147,9 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
                     messageHistory,
                     enrichedContextFromMemory || ''
                 );
-                // asContext: true — передаём результат поиска следующему шагу (conversation или sendMessage)
-                const passToNext = step.params?.asContext === true && nextStep &&
-                    (nextStep.agentId === 'conversation' || nextStep.agentId === 'sendMessage');
+                // Если есть следующий шаг — передаём результат поиска по конвейеру (asContext автоматически, когда есть nextStep).
+                // Если это последний шаг или asContext явно не указан при отсутствии nextStep — возвращаем результат.
+                const passToNext = nextStep && (step.params?.asContext === true || hasMoreSteps(i));
                 if (passToNext) {
                     enrichedContextFromMemory += '\nДополнительный контекст из поиска в интернете:\n' + webRes.responseText + '\n\n';
                 } else {
@@ -112,6 +161,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
 
             case 'conversation': {
                 console.log("[ORCH] invoking conversationAgent");
+                await notifyProgress('conversation');
                 const sharedMemoryContext = enrichedContextFromMemory.trim()
                     ? { domain: 'personal' as const, context: enrichedContextFromMemory.trim() }
                     : await fetchAgentMemoryContext(ctx, message).then((m) => ({ domain: m.domain as 'personal', context: m.context }));
@@ -129,6 +179,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
             }
 
             case 'reminder': {
+                await notifyProgress('reminder');
                 const reminderRes = await reminderAgent(
                     message,
                     isForwarded,
@@ -146,6 +197,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
             }
 
             case 'readMessages': {
+                await notifyProgress('readMessages');
                 const readRes = await readMessagesAgent(
                     ctx,
                     message,
@@ -155,9 +207,8 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
                     classification,
                     enrichedContextFromMemory || ''
                 );
-                // asContext: true — передаём результат анализа следующему шагу (conversation или sendMessage)
-                const passReadToNext = step.params?.asContext === true && nextStep &&
-                    (nextStep.agentId === 'conversation' || nextStep.agentId === 'sendMessage');
+                // Если есть следующий шаг — передаём результат анализа по конвейеру.
+                const passReadToNext = nextStep && (step.params?.asContext === true || hasMoreSteps(i));
                 if (passReadToNext) {
                     enrichedContextFromMemory += '\nРезультат анализа переписки/чата:\n' + readRes.responseText + '\n\n';
                 } else {
@@ -169,6 +220,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
 
             case 'sendMessage': {
                 console.log("[ORCH] invoking sendMessagesAgent");
+                await notifyProgress('sendMessage');
                 const sendRes = await sendMessagesAgent(
                     ctx,
                     message,
@@ -183,6 +235,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
 
             case 'negotiateOnBehalf': {
                 console.log("[ORCH] invoking negotiateOnBehalfAgent");
+                await notifyProgress('negotiateOnBehalf');
                 const negRes = await negotiateOnBehalfAgent(
                     ctx,
                     message,
@@ -196,6 +249,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
             }
 
             case 'imageGeneration': {
+                await notifyProgress('imageGeneration');
                 const imgRes = await imageGenerationAgent(
                     message,
                     isForwarded,
@@ -208,6 +262,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
             }
 
             case 'maps': {
+                await notifyProgress('maps');
                 const mapsRes = await mapsAgent(
                     message,
                     isForwarded,
@@ -221,6 +276,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
             }
 
             case 'unclearIntent': {
+                await notifyProgress('unclearIntent');
                 const unclearRes = await unclearIntentAgent(
                     message,
                     isForwarded,

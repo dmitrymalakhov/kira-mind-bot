@@ -74,7 +74,7 @@ export async function imageAgent(
               "${caption}"
 
               ${historyContext}
-              ${memoryContext}
+              ${memoryContext ? `Контекст из долговременной памяти (используй для персонализации ответа):\n${memoryContext}` : ''}
               
               Определи:
               1. Что изображено на ${isGroupOfImages ? "изображениях" : "фото"}
@@ -105,7 +105,7 @@ export async function imageAgent(
               Проанализируй ${isGroupOfImages ? `группу из ${additionalImages.length + 1} изображений` : "это изображение"}. Пользователь не добавил ${isGroupOfImages ? "к ним" : "к нему"} комментария.
 
               ${historyContext}
-              ${memoryContext}
+              ${memoryContext ? `Контекст из долговременной памяти (используй для персонализации ответа):\n${memoryContext}` : ''}
               
               Определи:
               1. Что изображено на ${isGroupOfImages ? "изображениях" : "фото"}
@@ -164,7 +164,7 @@ export async function imageAgent(
 
         // Отправляем запрос к OpenAI API
         const response = await openai.chat.completions.create({
-            model: "gpt-4.1",
+            model: "gpt-5.4",
             messages: [
                 {
                     role: "system",

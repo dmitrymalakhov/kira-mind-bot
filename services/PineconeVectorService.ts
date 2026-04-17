@@ -97,4 +97,7 @@ export class PineconeVectorService implements IDomainVectorService {
     async cleanupInactiveDomains(userId: string): Promise<string[]> {
         return [];
     }
+    async getMemoriesByTag(_userId: string, _tag: string): Promise<import('./interfaces/IVectorService').SearchResult[]> {
+        return [];
+    }
 }

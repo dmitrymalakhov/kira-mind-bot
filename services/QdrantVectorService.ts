@@ -67,7 +67,7 @@ export class QdrantVectorService implements IDomainVectorService {
      * Формула: score * importanceBoost * recencyFactor * emotionalBoost
      *   importanceBoost = 0.6 + 0.2 * effectiveImportance + 0.1 * confidence
      *   effectiveImportance = importance * forgettingDecay  (floor 0.5)
-     *   forgettingDecay = max(0.5, 0.99 ^ daysSinceAccess)
+     *   forgettingDecay = max(0.3, 0.97 ^ daysSinceAccess)
      *   emotionalBoost = 1 + 0.1 * arousal  (1.0 для нейтральных, 1.1 для максимально эмоциональных)
      */
     private applyImportanceRecencyRanking(results: SearchResult[]): SearchResult[] {
@@ -82,7 +82,7 @@ export class QdrantVectorService implements IDomainVectorService {
                 // Forgetting curve: штраф за давность последнего обращения
                 const accessedAt = r.lastAccessedAt ?? r.timestamp;
                 const daysSinceAccess = (now - new Date(accessedAt).getTime()) / day;
-                const forgettingDecay = Math.max(0.5, Math.pow(0.99, daysSinceAccess));
+                const forgettingDecay = Math.max(0.3, Math.pow(0.97, daysSinceAccess));
 
                 const importance = r.importance ?? 0.5;
                 const confidence = r.confidence ?? 0.6;
@@ -678,5 +678,38 @@ export class QdrantVectorService implements IDomainVectorService {
     }
     async cleanupInactiveDomains(userId: string): Promise<string[]> {
         return [];
+    }
+
+    /**
+     * Возвращает все записи пользователя во всех доменах, содержащие указанный тег.
+     * Используется для поиска психологических портретов по тегу `portrait:<Name>`.
+     */
+    async getMemoriesByTag(userId: string, tag: string): Promise<SearchResult[]> {
+        const results: SearchResult[] = [];
+
+        for (const domainKey of Object.values(PREDEFINED_DOMAINS)) {
+            const collection = this.collectionFor(domainKey);
+            try {
+                const scroll = await this.client.scroll(collection, {
+                    filter: {
+                        must: [
+                            { key: 'botId', match: { value: this.botId } },
+                            { key: 'userId', match: { value: userId } },
+                            { key: 'tags', match: { any: [tag] } },
+                        ],
+                    },
+                    limit: 50,
+                    with_payload: true,
+                    with_vector: false,
+                });
+                for (const point of scroll.points || []) {
+                    results.push(this.mapSearchPoint(point, 1));
+                }
+            } catch {
+                // Коллекция может не существовать — пропускаем
+            }
+        }
+
+        return results;
     }
 }

@@ -210,7 +210,7 @@ ${doneText}
 {"shouldSend": true/false, "message": "текст сообщения для пользователя или пустая строка"}`;
 
     const resp = await openai.chat.completions.create({
-        model: 'gpt-4.1',
+        model: 'gpt-5.4',
         messages: [
             { role: 'system', content: `${getBotPersona()}\nСтиль: ${getCommunicationStyle()}\nОтвечай только валидным JSON.` },
             { role: 'user', content: prompt },

@@ -21,4 +21,10 @@ export abstract class IDomainVectorService extends IVectorService {
     abstract getDomainStats(userId: string): Promise<DomainStats[]>;
     abstract getDomainTrends(userId: string, days: number): Promise<DomainTrend[]>;
     abstract cleanupInactiveDomains(userId: string): Promise<string[]>;
+
+    /**
+     * Возвращает все записи пользователя с указанным тегом (во всех доменах).
+     * Используется для получения психологических портретов по тегу `portrait:<Name>`.
+     */
+    abstract getMemoriesByTag(userId: string, tag: string): Promise<SearchResult[]>;
 }
