@@ -2,10 +2,14 @@ import { BotContext } from '../types';
 import { saveMemory } from '../utils/enhancedDomainMemory';
 import { devLog } from '../utils';
 import type { ExtractedFactAboutUser } from '../utils/studyChatFlow';
+import { saveContactMemoryFactOrAsk } from '../utils/contactMemory';
 
 const MIN_IMPORTANCE_TO_SAVE = 0.3;
-/** Максимум параллельных сохранений — ограничиваем нагрузку на Qdrant и OpenAI */
-const SAVE_CONCURRENCY = 3;
+/**
+ * Сохранение памяти должно идти последовательно: дедупликация и проверка
+ * противоречий зависят от того, что предыдущий факт уже виден в векторной базе.
+ */
+const SAVE_CONCURRENCY = 1;
 
 /**
  * Агент 3: сохраняет переданные факты в долговременную память (векторная БД).
@@ -14,7 +18,7 @@ const SAVE_CONCURRENCY = 3;
  * Факты о собеседнике (subject='contact') сохраняются с префиксом "[Имя] ..."
  * и тегом "contact:<имя>", чтобы при поиске было понятно, о ком речь.
  *
- * Сохранение идёт пачками по SAVE_CONCURRENCY для скорости без перегрузки API.
+ * Сохранение идёт последовательно, чтобы не создавать дубли гонкой vector search/upsert.
  */
 export async function runUpdateLongTermMemoryAgent(
     ctx: BotContext,
@@ -33,16 +37,22 @@ export async function runUpdateLongTermMemoryAgent(
                 const isContactFact = fact.subject === 'contact';
                 const contactName = fact.contactName ?? 'Собеседник';
 
-                const content = isContactFact
-                    ? `[${contactName}] ${fact.content}`
-                    : fact.content;
+                if (isContactFact) {
+                    const result = await saveContactMemoryFactOrAsk(ctx, {
+                        contactName,
+                        content: fact.content,
+                        domain: fact.domain,
+                        importance: fact.importance,
+                        tags: fact.tags,
+                    });
+                    if (result.status !== 'saved') return 0;
+                    devLog(`UpdateLongTermMemoryAgent: saved [contact]`, result.content?.slice(0, 60));
+                    return 1;
+                }
 
-                const tags = isContactFact
-                    ? [...fact.tags, `contact:${contactName}`]
-                    : fact.tags;
-
-                await saveMemory(ctx, fact.domain, content, fact.importance, tags);
-                devLog(`UpdateLongTermMemoryAgent: saved [${fact.subject}]`, content.slice(0, 60));
+                const saved = await saveMemory(ctx, fact.domain, fact.content, fact.importance, fact.tags);
+                if (!saved) return 0;
+                devLog(`UpdateLongTermMemoryAgent: saved [${fact.subject}]`, fact.content.slice(0, 60));
                 return 1;
             })
         );

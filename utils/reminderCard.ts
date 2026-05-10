@@ -1,5 +1,5 @@
 import { InlineKeyboard } from 'grammy';
-import { Reminder, ReminderStatus } from '../reminder';
+import { Reminder, ReminderStatus, RecurrenceRule } from '../reminder';
 import { BotContext } from '../types';
 import { USER_TIMEZONE } from '../constants';
 import { ReminderRegistry } from '../stores/ReminderRegistry';
@@ -30,10 +30,32 @@ export function buildChatPicker(
     return { text, keyboard };
 }
 
+const DAY_NAMES = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+
+function recurrenceLabel(rule: RecurrenceRule): string {
+    switch (rule.type) {
+        case 'hourly':
+            return rule.interval === 1 ? '🔄 Каждый час' : `🔄 Каждые ${rule.interval} ч`;
+        case 'daily':
+            return rule.interval === 1 ? '🔄 Каждый день' : `🔄 Каждые ${rule.interval} дн`;
+        case 'weekly':
+            if (rule.daysOfWeek && rule.daysOfWeek.length > 0) {
+                const days = rule.daysOfWeek.map(d => DAY_NAMES[d]).join(', ');
+                return `🔄 Каждую неделю (${days})`;
+            }
+            return rule.interval === 1 ? '🔄 Каждую неделю' : `🔄 Каждые ${rule.interval} нед`;
+        case 'monthly':
+            return rule.interval === 1 ? '🔄 Каждый месяц' : `🔄 Каждые ${rule.interval} мес`;
+        case 'yearly':
+            return '🔄 Каждый год';
+    }
+}
+
 function statusLabel(status?: ReminderStatus): string {
     switch (status) {
         case ReminderStatus.Postponed: return '⏰ Отложено';
         case ReminderStatus.Sent:      return '🔔 Ожидает ответа';
+        case ReminderStatus.Expired:   return '⚠️ Просрочено';
         default:                       return '⏳ Запланировано';
     }
 }
@@ -60,11 +82,12 @@ export function buildReminderCard(
     });
 
     const body = r.displayText || r.text;
+    const recLine = r.recurrence ? `\n${recurrenceLabel(r.recurrence)}` : '';
     const text =
         `📋 Напоминание ${num} из ${total}\n\n` +
         `${body}\n\n` +
         `🗓 ${dueTime}\n` +
-        `📌 ${statusLabel(r.status)}`;
+        `📌 ${statusLabel(r.status)}${recLine}`;
 
     const prevCb = index > 0       ? `reminders_nav_${index - 1}` : 'reminders_nav_noop';
     const nextCb = index < total-1 ? `reminders_nav_${index + 1}` : 'reminders_nav_noop';
@@ -104,6 +127,8 @@ export function buildPostponeKeyboard(reminderId: string): InlineKeyboard {
         .text('Завтра',   `postpone_${reminderId}_tomorrow`)
         .text('Неделю',   `postpone_${reminderId}_week`)
         .row()
+        .text('✏️ Своё время', `postpone_${reminderId}_custom`)
+        .row()
         .text('↩️ Назад', `postpone_${reminderId}_back`);
 }
 
@@ -122,7 +147,8 @@ export function buildRemindersList(
             minute: 'numeric',
         });
         const body = r.displayText || r.text;
-        return `${i + 1}. ${body}\n   🗓 ${dueTime} · 📌 ${statusLabel(r.status)}`;
+        const recPart = r.recurrence ? ` · ${recurrenceLabel(r.recurrence)}` : '';
+        return `${i + 1}. ${body}\n   🗓 ${dueTime} · 📌 ${statusLabel(r.status)}${recPart}`;
     });
     const text = `📋 Все напоминания (${reminders.length}):\n\n${lines.join('\n\n')}`;
     const keyboard = new InlineKeyboard().text('◀️ К карточкам', 'reminders_nav_0');

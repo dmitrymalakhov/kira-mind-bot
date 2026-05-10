@@ -13,6 +13,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@pinecone-database/pinecone": "^6.1.1",
+    "@qdrant/js-client-rest": "^1.14.1",
     "axios": "^1.8.4",
     "dotenv": "^16.4.5",
     "double-metaphone": "^2.0.1",
@@ -24,13 +26,12 @@
     "natural": "^8.0.1",
     "node-fetch": "^2.7.0",
     "openai": "^4.95.1",
+    "playwright": "^1.59.1",
     "talisman": "^1.1.4",
     "telegram": "^2.26.22",
     "transliteration": "^2.3.5",
     "typeorm": "^0.3.22",
-    "uuid": "^11.1.0",
-    "@qdrant/js-client-rest": "^1.14.1",
-    "@pinecone-database/pinecone": "^6.1.1"
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "@types/fast-levenshtein": "^0.0.4",

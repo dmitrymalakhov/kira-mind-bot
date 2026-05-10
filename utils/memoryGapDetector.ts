@@ -7,12 +7,21 @@ import { addToHistory } from './history';
 /** Минимальный интервал между вопросами о пробелах в памяти (10 минут) */
 const GAP_COOLDOWN_MS = 10 * 60 * 1000;
 
+/** Максимальное время на обнаружение пробела (LLM + vector search) */
+const GAP_COMPUTE_TIMEOUT_MS = 3000;
+
+function withTimeout<T>(fn: () => Promise<T>, ms: number): Promise<T> {
+    return Promise.race([
+        fn(),
+        new Promise<T>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
+    ]);
+}
+
 /**
  * Если найден результат с таким score ИЛИ выше — считаем, что человек известен.
- * Намеренно ниже стандартного порога поиска: даже слабое совпадение означает
- * что что-то о человеке уже есть в памяти.
+ * 0.65 — безопаснее чем 0.5: исключает случайные совпадения по распространённым именам.
  */
-const KNOWN_SCORE_THRESHOLD = 0.5;
+const KNOWN_SCORE_THRESHOLD = 0.65;
 
 const GAP_QUESTION_TEMPLATES = [
     (name: string) => `Кстати, ты упомянул ${name} — кто это для тебя?`,
@@ -46,6 +55,7 @@ export async function maybeAskMemoryGap(
     if (!/[А-ЯЁA-Z]/.test(trimmed)) return;
 
     try {
+        await withTimeout(async () => {
         const names = await extractPersonNames(trimmed);
         if (names.length === 0) return;
 
@@ -66,8 +76,13 @@ export async function maybeAskMemoryGap(
                 return;
             }
         }
-    } catch (e) {
-        devLog('maybeAskMemoryGap error (ignored):', e);
+        }, GAP_COMPUTE_TIMEOUT_MS);
+    } catch (e: any) {
+        if (e?.message === 'timeout') {
+            devLog('maybeAskMemoryGap: timed out, skipping');
+        } else {
+            devLog('maybeAskMemoryGap error (ignored):', e);
+        }
     }
 }
 
@@ -77,7 +92,7 @@ export async function maybeAskMemoryGap(
  */
 async function extractPersonNames(message: string): Promise<string[]> {
     const resp = await openai.chat.completions.create({
-        model: 'gpt-5-nano',
+        model: 'gpt-5.4-nano',
         messages: [
             {
                 role: 'system',
@@ -88,7 +103,7 @@ async function extractPersonNames(message: string): Promise<string[]> {
             },
             { role: 'user', content: `Сообщение: "${message.slice(0, 300)}"` },
         ],
-        temperature: 1,
+        temperature: 0,
     });
 
     const text = resp.choices[0]?.message?.content?.trim() || '';

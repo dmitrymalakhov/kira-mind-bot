@@ -10,7 +10,7 @@ export class SmartDomainDetector {
         Определи наиболее подходящий домен для сообщения: "${message}"
         
         Доступные домены:
-        ${Object.entries(DOMAIN_DESCRIPTIONS).map(([key, desc]) => 
+        ${Object.entries(DOMAIN_DESCRIPTIONS).map(([key, desc]) =>
             `- ${key}: ${desc.name} (${desc.keywords.join(', ')})`
         ).join('\n')}
         
@@ -21,7 +21,7 @@ export class SmartDomainDetector {
         try {
             devLog('Domain detection prompt:', prompt);
             const resp = await openai.chat.completions.create({
-                model: 'gpt-5-nano',
+                model: 'gpt-5.4-nano',
                 messages: [
                     { role: 'system', content: 'Ты определяешь домен для сообщения по ключевым словам' },
                     { role: 'user', content: prompt }
@@ -31,11 +31,11 @@ export class SmartDomainDetector {
 
             const detectedDomain = resp.choices[0]?.message?.content?.trim().toLowerCase() || PREDEFINED_DOMAINS.GENERAL;
             devLog('Domain detection response:', detectedDomain);
-            
+
             if (Object.values(PREDEFINED_DOMAINS).includes(detectedDomain as any)) {
                 return detectedDomain;
             }
-            
+
             return PREDEFINED_DOMAINS.GENERAL;
         } catch (e) {
             console.error('Domain detection error', e);

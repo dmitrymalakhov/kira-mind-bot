@@ -1,23 +1,37 @@
 import { BotContext } from '../types';
-import { searchAllDomainsMemories, getAnchorMemories } from './enhancedDomainMemory';
+import { searchAllDomainsMemories, getAnchorMemories, getRecentMemories } from './enhancedDomainMemory';
 import { devLog } from '../utils';
 import openai from '../openai';
 import { getVectorService } from '../services/VectorServiceFactory';
 import { llmCache, LLM_CACHE_TTL } from './llmCache';
+import { Contact } from '../stores/ContactsStore';
+import { contactDisplayName, contactIdentityTags, normalizeContactLookupValue, resolveContactIdentity } from './contactMemory';
 
 const ANSWER_RESULTS_PER_QUERY = 5;
 const CONTEXT_RESULTS_PER_QUERY = 2;
 const MAX_TOTAL_FACTS = 25;
-/** Факты с итоговым score ниже этого порога отсекаются — убирает нерелевантный шум при росте базы */
-const MIN_FINAL_SCORE_THRESHOLD = 0.45;
+/**
+ * Факты с итоговым score ниже этого порога отсекаются.
+ * Qdrant возвращает наружу чистый cosine score, а итоговый score дополнительно
+ * умножается на importance/confidence, поэтому валидные результаты 0.55-0.60
+ * оказываются около 0.40-0.45.
+ */
+const MIN_FINAL_SCORE_THRESHOLD = 0.4;
 /** Дисконт для контекстных запросов при ранжировании */
 const CONTEXT_QUERY_SCORE_DISCOUNT = 0.8;
 /** Количество топовых результатов для graph expansion (было 8 — слишком много шума) */
 const GRAPH_EXPANSION_TOP_N = 3;
 /** Дисконт для фактов из graph expansion (было 0.8 — слишком щедро) */
 const GRAPH_EXPANSION_DISCOUNT = 0.6;
+/** Максимум новых фактов из 2-hop expansion */
+const GRAPH_EXPANSION_HOP2_MAX = 5;
 /** Бонус для anchor-фактов при ранжировании (вместо отдельной загрузки) */
 const ANCHOR_SCORE_BOOST = 1.15;
+/** Базовый score для явно закреплённых фактов, когда они не нашлись embedding-поиском */
+const ANCHOR_DIRECT_SCORE = 0.95;
+/** Базовый score для broad inventory режима ("что ты обо мне знаешь") */
+const MEMORY_INVENTORY_SCORE = 0.82;
+const MEMORY_INVENTORY_LIMIT = 80;
 /** Максимальный бюджет токенов для блока памяти (~4 символа = 1 токен для русского) */
 const MAX_MEMORY_TOKENS = 1500;
 const APPROX_CHARS_PER_TOKEN = 3.5;
@@ -44,7 +58,7 @@ export async function classifyMemoryNeed(message: string): Promise<MemoryNeed> {
 
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только одним словом: none, light или full.' },
                 {
@@ -82,6 +96,141 @@ interface GeneratedQueries {
 interface RecentMessage {
     role: string;
     content: string;
+}
+
+interface ContactRetrievalScope {
+    status: 'resolved' | 'ambiguous';
+    queryName: string;
+    displayName?: string;
+    contact?: Contact;
+    candidateNames?: string[];
+}
+
+function isMemoryInventoryRequest(message: string): boolean {
+    return /^(?:что\s+(?:ты\s+)?(?:знаешь|помнишь|помнила)\s+обо?\s+мне|расскажи\s+что\s+(?:ты\s+)?(?:знаешь|помнишь)(?:\s+обо?\s+мне)?|покажи\s+(?:мою\s+)?память|что\s+ты\s+обо\s+мне(?:\s+знаешь)?|что\s+помнишь\s+обо?\s+мне)\??$/i
+        .test(message);
+}
+
+function extractDeterministicQueries(message: string): string[] {
+    const queries = [message.slice(0, 120)];
+    const stopWords = new Set([
+        'Что', 'Кто', 'Как', 'Когда', 'Где', 'Куда', 'Почему', 'Зачем',
+        'Расскажи', 'Покажи', 'Напомни', 'Помнишь', 'Помнишь ли',
+    ]);
+    const names = message.match(/[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+){0,2}/g) ?? [];
+    queries.push(...names.filter(name => !stopWords.has(name.trim())));
+
+    const relationshipWords = message.match(/\b(жена|муж|мама|папа|сын|дочь|брат|сестра|коллега|друг|подруга|партн[её]р)\b/gi) ?? [];
+    for (const rel of relationshipWords) {
+        queries.push(`${rel} имя`, `${rel} кто это`, `${rel} отношения`);
+    }
+
+    return queries
+        .map(q => q.trim())
+        .filter(q => q.length > 1);
+}
+
+function extractContactReferenceForRetrieval(message: string): string | null {
+    const username = message.match(/@[a-zA-Z0-9_]{3,32}/)?.[0];
+    if (username) return username;
+
+    const patterns = [
+        /(?:о|об|про|для|к|ко|с|со|у|от|по)\s+([А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+){0,2})/u,
+        /(?:написать|позвонить|подарить|купить|встретиться)\s+([А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+)/u,
+    ];
+
+    for (const pattern of patterns) {
+        const match = message.match(pattern);
+        if (match?.[1]) return match[1].trim();
+    }
+
+    return null;
+}
+
+function resolveContactRetrievalScope(message: string): ContactRetrievalScope | null {
+    const contactName = extractContactReferenceForRetrieval(message);
+    if (!contactName) return null;
+
+    const resolution = resolveContactIdentity(contactName);
+    if (resolution.status === 'resolved') {
+        return {
+            status: 'resolved',
+            queryName: contactName,
+            displayName: resolution.displayName,
+            contact: resolution.contact,
+        };
+    }
+
+    if (resolution.status === 'ambiguous') {
+        return {
+            status: 'ambiguous',
+            queryName: contactName,
+            candidateNames: resolution.candidates.map(contactDisplayName),
+        };
+    }
+
+    return null;
+}
+
+function contactIdFromTags(tags: string[] | undefined): string | null {
+    const tag = (tags ?? []).find(t => String(t).startsWith('contact_id:'));
+    return tag ? String(tag).replace('contact_id:', '').trim() : null;
+}
+
+function contactNamesFromTags(tags: string[] | undefined): Set<string> {
+    const names = new Set<string>();
+    for (const tag of tags ?? []) {
+        const value = String(tag);
+        if (value.startsWith('contact:') || value.startsWith('contact_name:') || value.startsWith('contact_alias:')) {
+            names.add(normalizeContactLookupValue(value.replace(/^contact(_name|_alias)?:/, '')));
+        }
+    }
+    return names;
+}
+
+function hasContactTags(tags: string[] | undefined): boolean {
+    return (tags ?? []).some(tag => String(tag).startsWith('contact'));
+}
+
+function isCandidateAllowedByContactScope(candidate: SearchResultLike, scope: ContactRetrievalScope | null): boolean {
+    if (!scope || !hasContactTags(candidate.tags)) return true;
+
+    const names = contactNamesFromTags(candidate.tags);
+
+    if (scope.status === 'ambiguous') {
+        return false;
+    }
+
+    const candidateContactId = contactIdFromTags(candidate.tags);
+    if (candidateContactId) {
+        return scope.contact ? candidateContactId === String(scope.contact.id) : false;
+    }
+
+    const allowedNames = new Set(
+        contactIdentityTags(scope.queryName, scope.contact)
+            .filter(tag => tag.startsWith('contact:') || tag.startsWith('contact_name:') || tag.startsWith('contact_alias:'))
+            .map(tag => normalizeContactLookupValue(tag.replace(/^contact(_name|_alias)?:/, '')))
+    );
+    if (scope.displayName) allowedNames.add(normalizeContactLookupValue(scope.displayName));
+
+    for (const name of names) {
+        if (allowedNames.has(name)) return true;
+    }
+
+    return false;
+}
+
+function mergeQueries(primary: string[], generated: string[], limit: number): string[] {
+    const seen = new Set<string>();
+    const merged: string[] = [];
+    for (const query of [...primary, ...generated]) {
+        const normalized = query.toLowerCase().replace(/\s+/g, ' ').trim();
+        if (!normalized || seen.has(normalized)) continue;
+        seen.add(normalized);
+        merged.push(query.trim());
+        if (merged.length >= limit) break;
+    }
+    return merged;
 }
 
 /**
@@ -127,7 +276,7 @@ CONTEXT:
 
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 {
                     role: 'system',
@@ -182,7 +331,29 @@ export interface SearchResultLike {
     timestamp?: Date;
     confidence?: number;
     domain?: string;
+    tags?: string[];
     previousVersions?: Array<{ content: string; timestamp: Date; confidence: number }>;
+    isAnchor?: boolean;
+}
+
+function addCandidate(
+    seen: Map<string, SearchResultLike>,
+    candidate: SearchResultLike,
+    scoreOverride?: number
+): void {
+    const normalized: SearchResultLike = {
+        ...candidate,
+        score: scoreOverride ?? candidate.score,
+        importance: candidate.importance ?? 0.5,
+        confidence: candidate.confidence ?? 0.6,
+        domain: candidate.domain,
+        tags: candidate.tags,
+    };
+
+    const existing = seen.get(candidate.id);
+    if (!existing || normalized.score > existing.score) {
+        seen.set(candidate.id, normalized);
+    }
 }
 
 /**
@@ -206,7 +377,15 @@ function formatFactWithHistory(r: SearchResultLike): string {
         confidenceMarker = '[возможно] ';
     }
 
-    return `${confidenceMarker}${r.content}`;
+    const previous = (r.previousVersions ?? [])
+        .slice(0, 2)
+        .map(v => v.content.trim())
+        .filter(Boolean);
+    const history = previous.length > 0
+        ? ` (история изменений, не текущее состояние: ${previous.join(' -> ')})`
+        : '';
+
+    return `${confidenceMarker}${r.content}${history}`;
 }
 
 /**
@@ -240,7 +419,7 @@ async function rerankFacts(
 
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 {
                     role: 'system',
@@ -342,8 +521,9 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
         return '[Только что запомнила]:\n' + recentSessionFacts.join('\n');
     }
 
-    const maxFacts = need === 'light' ? 5 : MAX_TOTAL_FACTS;
-    const tokenBudget = need === 'light' ? 500 : MAX_MEMORY_TOKENS;
+    const inventoryRequest = isMemoryInventoryRequest(userMessage);
+    const maxFacts = need === 'light' ? 5 : inventoryRequest ? 40 : MAX_TOTAL_FACTS;
+    const tokenBudget = need === 'light' ? 500 : inventoryRequest ? 2200 : MAX_MEMORY_TOKENS;
 
     // Берём последние N сообщений из истории (не считая текущего)
     // messageHistory хранится newest-first, поэтому срезаем с индекса 1
@@ -352,29 +532,74 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
         .reverse() // хронологический порядок для промпта
         .map((m) => ({ role: m.role, content: m.content }));
 
-    const { answerQueries, contextQueries } = await generateMemoryQueries(userMessage, recentHistory.length > 0 ? recentHistory : undefined);
+    const generatedQueries = await generateMemoryQueries(userMessage, recentHistory.length > 0 ? recentHistory : undefined);
+    const deterministicQueries = extractDeterministicQueries(userMessage);
+    const answerQueries = mergeQueries(deterministicQueries, generatedQueries.answerQueries, 6);
+    const contextQueries = mergeQueries([], generatedQueries.contextQueries, 3);
+    const contactScope = resolveContactRetrievalScope(userMessage);
 
     const seen = new Map<string, SearchResultLike>();
+    const addScopedCandidate = (candidate: SearchResultLike, scoreOverride?: number) => {
+        if (!isCandidateAllowedByContactScope(candidate, contactScope)) return;
+        addCandidate(seen, candidate, scoreOverride);
+    };
     /** Set of anchor IDs for score boosting (instead of unconditional inclusion) */
     const anchorIds = new Set<string>();
     try {
         const anchorResults = await getAnchorMemories(ctx, 10);
-        for (const r of anchorResults) anchorIds.add(r.id);
+        for (const r of anchorResults) {
+            anchorIds.add(r.id);
+            if (need === 'full' || inventoryRequest) {
+                addScopedCandidate({ ...r, isAnchor: true }, ANCHOR_DIRECT_SCORE);
+            }
+        }
     } catch { /* ignore */ }
+
+    if (contactScope?.status === 'resolved') {
+        const svcForTags = getVectorService();
+        if (svcForTags) {
+            const tags = contactIdentityTags(contactScope.queryName, contactScope.contact);
+            const tagResults = await Promise.all(
+                [...new Set(tags)].map(tag =>
+                    svcForTags.getMemoriesByTag(String(ctx.from?.id), tag).catch(() => [])
+                )
+            );
+            for (const results of tagResults) {
+                for (const result of results) {
+                    addScopedCandidate(result, Math.max(result.score ?? 0, ANCHOR_DIRECT_SCORE));
+                }
+            }
+        }
+    }
+
+    if (inventoryRequest) {
+        try {
+            const recentMemories = await getRecentMemories(ctx, MEMORY_INVENTORY_LIMIT);
+            for (const memory of recentMemories) {
+                addScopedCandidate({
+                    id: memory.id,
+                    content: memory.content,
+                    score: MEMORY_INVENTORY_SCORE,
+                    importance: memory.importance,
+                    timestamp: memory.timestamp,
+                    confidence: memory.confidence,
+                    domain: memory.domain,
+                    tags: memory.tags,
+                    previousVersions: memory.previousVersions,
+                    isAnchor: memory.isAnchor,
+                }, memory.isAnchor ? ANCHOR_DIRECT_SCORE : MEMORY_INVENTORY_SCORE);
+            }
+        } catch {
+            // broad inventory fallback is best-effort
+        }
+    }
 
     // Answer-запросы: приоритетный поиск, полный score
     await Promise.all(
         answerQueries.map(async (query) => {
             const results = await searchAllDomainsMemories(ctx, query, ANSWER_RESULTS_PER_QUERY);
             for (const r of results) {
-                if (seen.has(r.id)) {
-                    const existing = seen.get(r.id)!;
-                    if (r.score > existing.score) {
-                        seen.set(r.id, { ...r, importance: r.importance ?? 0.5, confidence: r.confidence ?? 0.6, domain: r.domain });
-                    }
-                } else {
-                    seen.set(r.id, { ...r, importance: r.importance ?? 0.5, confidence: r.confidence ?? 0.6, domain: r.domain });
-                }
+                addScopedCandidate(r);
             }
         })
     );
@@ -384,17 +609,7 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
         contextQueries.map(async (query) => {
             const results = await searchAllDomainsMemories(ctx, query, CONTEXT_RESULTS_PER_QUERY);
             for (const r of results) {
-                if (seen.has(r.id)) {
-                    // уже найден answer-запросом — не перезаписываем более высокий score
-                } else {
-                    seen.set(r.id, {
-                        ...r,
-                        score: r.score * CONTEXT_QUERY_SCORE_DISCOUNT,
-                        importance: r.importance ?? 0.5,
-                        confidence: r.confidence ?? 0.6,
-                        domain: r.domain,
-                    });
-                }
+                addScopedCandidate(r, r.score * CONTEXT_QUERY_SCORE_DISCOUNT);
             }
         })
     );
@@ -403,6 +618,7 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
     if (need === 'full') {
         const svcForGraph = getVectorService();
         if (svcForGraph) {
+            const beforeHopOne = new Set(seen.keys());
             const primaryResults = Array.from(seen.values()).sort((a, b) => b.score - a.score).slice(0, GRAPH_EXPANSION_TOP_N);
             await Promise.all(
                 primaryResults.map(async (fact) => {
@@ -414,9 +630,9 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
                                 if (seen.has(id)) return;
                                 const fetched = await svcForGraph.fetchMemoryById(id, domain);
                                 if (fetched) {
-                                    seen.set(fetched.id ?? id, {
+                                    addScopedCandidate({
                                         ...fetched,
-                                        score: fetched.score * GRAPH_EXPANSION_DISCOUNT,
+                                        score: fact.score * GRAPH_EXPANSION_DISCOUNT,
                                         importance: fetched.importance ?? 0.5,
                                         confidence: fetched.confidence ?? 0.6,
                                         domain: fetched.domain,
@@ -429,6 +645,37 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
                     }
                 })
             );
+
+            // 2-hop expansion: берём топ-2 из результатов 1-hop и расширяем дальше
+            const hopOneAdded = Array.from(seen.entries())
+                .filter(([id]) => !beforeHopOne.has(id))
+                .map(([, v]) => v)
+                .sort((a, b) => b.score - a.score)
+                .slice(0, 2);
+
+            let hopTwoCount = 0;
+            for (const fact of hopOneAdded) {
+                if (!fact.domain) continue;
+                try {
+                    const related = await svcForGraph.getRelatedFacts(fact.id, fact.domain);
+                    for (const { id, domain } of related) {
+                        if (hopTwoCount >= GRAPH_EXPANSION_HOP2_MAX || seen.has(id)) continue;
+                        const fetched = await svcForGraph.fetchMemoryById(id, domain);
+                        if (fetched) {
+                            addScopedCandidate({
+                                ...fetched,
+                                score: fact.score * GRAPH_EXPANSION_DISCOUNT,
+                                importance: fetched.importance ?? 0.5,
+                                confidence: fetched.confidence ?? 0.6,
+                                domain: fetched.domain,
+                            });
+                            hopTwoCount++;
+                        }
+                    }
+                } catch {
+                    // игнорируем ошибки 2-hop expansion
+                }
+            }
         }
     }
 
@@ -446,7 +693,7 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
 
     // LLM reranker: убирает нерелевантные факты, переупорядочивает по смыслу
     const preRerank = sorted.slice(0, maxFacts + 10); // даём reranker'у чуть больше кандидатов
-    const reranked = need === 'full'
+    const reranked = need === 'full' && !inventoryRequest
         ? await rerankFacts(userMessage, preRerank, maxFacts)
         : preRerank.slice(0, maxFacts); // для light — не тратим LLM-вызов
 
@@ -489,6 +736,11 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
     const recentBlock = newRecentFacts.length > 0
         ? '\n\n[Только что запомнила]:\n' + newRecentFacts.join('\n')
         : '';
+    const contactScopeNote = contactScope?.status === 'ambiguous'
+        ? `\nВнимание: имя «${contactScope.queryName}» неоднозначно (${contactScope.candidateNames?.join(', ')}). Контактные факты по этому имени не подмешаны; попроси пользователя уточнить конкретного человека.\n`
+        : contactScope?.status === 'resolved' && contactScope.displayName
+            ? `\nКонтактный scope запроса: ${contactScope.displayName}. Не используй факты о других контактах с похожим именем.\n`
+            : '';
 
     const preamble =
         'Ниже — факты из долговременной памяти о пользователе. Используй их при ответе.\n' +
@@ -497,10 +749,13 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
         '  [не уверена] — слабое воспоминание; скажи что помнишь смутно и предложи уточнить\n' +
         '  Без маркера — факт надёжен, говори уверенно\n' +
         'Если спрашивает конкретное (кто жена, как зовут) — дай прямой ответ из фактов. ' +
-        'Если «что знаешь обо мне» — перечисли. Если фактов нет — честно скажи.\n\nФакты из памяти:\n';
+        'Если «что знаешь обо мне» — перечисли. Если фактов нет — честно скажи.\n' +
+        contactScopeNote +
+        '\nФакты из памяти:\n';
     const context = preamble + (factsBlock || '(пока нет сохранённых фактов)') + recentBlock;
     devLog('Multi-query memory context:', {
         memoryNeed: need,
+        contactScope: contactScope?.status,
         answerQueries: answerQueries.length,
         contextQueries: contextQueries.length,
         candidateFacts: sorted.length,

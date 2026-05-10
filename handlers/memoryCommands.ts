@@ -4,6 +4,8 @@ import { getMemoryStats, cleanupOldMemories, searchAllDomainsMemories, getRecent
 import { getVectorService } from '../services/VectorServiceFactory';
 import { factAnalysisManager } from '../utils/factAnalysisTimer';
 import { config } from '../config';
+import { repairLegacyContactIdentities } from '../utils/contactMemoryRepair';
+import { contactOptionLabel, resolveContactIdentity } from '../utils/contactMemory';
 
 function isAdmin(ctx: BotContext): boolean {
     return ctx.from?.id === config.adminUserId;
@@ -17,6 +19,28 @@ function getMemoryAdminKeyboard() {
         .text('/debug_facts')
         .text('/admin_menu')
         .resized();
+}
+
+function isBareContactQuery(query: string): boolean {
+    const trimmed = query.trim();
+    return /^@[a-zA-Z0-9_]{3,32}$/.test(trimmed) ||
+        /^[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+){0,2}$/u.test(trimmed);
+}
+
+function ambiguousContactGuard(query: string): string | null {
+    const target = isBareContactQuery(query)
+        ? query.trim()
+        : query.match(/^(@[a-zA-Z0-9_]{3,32}|[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+){0,2})(?=\s|$|[:,.-])/u)?.[1]?.trim();
+    if (!target) return null;
+
+    const resolution = resolveContactIdentity(target);
+    if (resolution.status !== 'ambiguous') return null;
+
+    const variants = resolution.candidates
+        .slice(0, 6)
+        .map(contactOptionLabel)
+        .join(', ');
+    return `Имя «${target}» неоднозначно (${variants}). Уточни фамилию или username, чтобы я не выбрала не тот факт.`;
 }
 
 export function registerMemoryCommands(bot: Bot<BotContext>) {
@@ -35,6 +59,7 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
                 '/memory_search <запрос> — ручная проверка векторного поиска',
                 '/memory_cleanup — очистка старых фактов',
                 '/debug_facts — диагностика извлечения фактов',
+                '/memory_repair_contacts — проставить contact_id старым контактным фактам',
                 '/chats — список чатов, в которых присутствует бот',
                 '/public_mode — вкл/выкл публичный режим в текущей группе',
             ].join('\n'),
@@ -93,7 +118,20 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
         }
 
         const response = found
-            .map((item, idx) => `${idx + 1}. [${item.domain}] score=${item.score.toFixed(3)}\n${item.content}`)
+            .map((item, idx) => {
+                const tags = item.tags?.length ? `\ntags: ${item.tags.slice(0, 8).join(', ')}` : '';
+                const history = item.previousVersions?.length
+                    ? `\nраньше: ${item.previousVersions.slice(0, 2).map(v => v.content).join(' -> ')}`
+                    : '';
+                return [
+                    `${idx + 1}. [${item.domain}] score=${item.score.toFixed(3)} importance=${item.importance.toFixed(2)} confidence=${(item.confidence ?? 0.6).toFixed(2)}`,
+                    item.isAnchor ? 'anchor: yes' : undefined,
+                    item.expiresAt ? `expiresAt: ${item.expiresAt.toISOString()}` : undefined,
+                    item.content,
+                    tags.trim() || undefined,
+                    history.trim() || undefined,
+                ].filter(Boolean).join('\n');
+            })
             .join('\n\n');
 
         await ctx.reply(`🔎 Результаты поиска для: "${query}"\n\n${response}`);
@@ -125,7 +163,7 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
 
     // "Что ты знаешь обо мне?" — любой пользователь может спросить
     bot.hears(
-        /что ты знаешь обо мне|что помнишь обо мне|расскажи что знаешь|покажи мою память|что ты обо мне знаешь/i,
+        /^(?:что\s+(?:ты\s+)?(?:знаешь|помнишь|помнила)\s+обо?\s+мне|расскажи\s+что\s+(?:ты\s+)?(?:знаешь|помнишь)(?:\s+обо?\s+мне)?|покажи\s+(?:мою\s+)?память|что\s+ты\s+обо\s+мне(?:\s+знаешь)?)\??$/i,
         async (ctx) => {
             await ctx.reply('Собираю всё, что помню о тебе...');
             const biography = await generateMemoryBiography(ctx);
@@ -142,6 +180,12 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
 
         if (!query) {
             await ctx.reply('Уточни, что именно забыть. Например: "Забудь, что я работаю в Сбере"');
+            return;
+        }
+
+        const guard = ambiguousContactGuard(query);
+        if (guard) {
+            await ctx.reply(guard);
             return;
         }
 
@@ -189,6 +233,26 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
         await ctx.reply(report);
     });
 
+    // /memory_repair_contacts — миграция старых contact:* фактов на contact_id/contact_key
+    bot.command('memory_repair_contacts', async (ctx) => {
+        if (!isAdmin(ctx)) {
+            await ctx.reply('⛔️ Доступ только для администратора.');
+            return;
+        }
+
+        await ctx.reply('Проверяю старые контактные факты и проставляю стабильные идентификаторы...');
+        const result = await repairLegacyContactIdentities(ctx);
+        await ctx.reply(
+            [
+                '✅ Проверка контактных фактов завершена.',
+                `Просмотрено: ${result.scanned}`,
+                `Исправлено: ${result.repaired}`,
+                `Неоднозначных: ${result.ambiguous}`,
+                `Пропущено: ${result.skipped}`,
+            ].join('\n')
+        );
+    });
+
     // /memory_compress <домен> — эпизодическая компрессия старых фактов домена
     bot.command('memory_compress', async (ctx) => {
         if (!isAdmin(ctx)) {
@@ -228,6 +292,12 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
 
         if (!query) {
             await ctx.reply('Использование: /memory_history <запрос>\nПример: /memory_history работа');
+            return;
+        }
+
+        const guard = ambiguousContactGuard(query);
+        if (guard) {
+            await ctx.reply(guard);
             return;
         }
 

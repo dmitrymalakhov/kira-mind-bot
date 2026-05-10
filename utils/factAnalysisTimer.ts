@@ -65,7 +65,8 @@ class FactAnalysisManager {
     }
 
     private findConversationStart(ctx: BotContext): number {
-        return ctx.session.lastFactAnalysisIndex || 0;
+        const index = ctx.session.lastFactAnalysisIndex || 0;
+        return index >= ctx.session.messageHistory.length ? 0 : index;
     }
 
     private async executeAnalysis(userId: number, reason: 'debounce' | 'max-wait' | 'message-threshold'): Promise<void> {

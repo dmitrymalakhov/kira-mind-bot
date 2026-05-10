@@ -82,7 +82,7 @@ export interface ExtractedFactAboutUser {
 
 // ─── Константы ────────────────────────────────────────────────────────────────
 
-const CHUNK_MAX_CHARS = 12000;  // ~150–200 сообщений на чанк, чтобы не превышать контекст gpt-5-nano
+const CHUNK_MAX_CHARS = 12000;  // ~150–200 сообщений на чанк, чтобы не превышать контекст gpt-5.4-nano
 const CHUNK_OVERLAP_LINES = 30; // строки-перекрытие между чанками для контекстности
 
 const VALID_DOMAINS = new Set(['work', 'health', 'family', 'finance', 'education', 'hobbies', 'travel', 'social', 'home', 'personal', 'entertainment', 'general']);
@@ -241,7 +241,7 @@ async function extractRawFactsFromChunk(
     // Два параллельных запроса — каждый про одного человека
     const [userResp, contactResp] = await Promise.allSettled([
         openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: EXTRACTION_SYSTEM },
                 { role: 'user', content: buildUserFactsPrompt(chunk, contactName, periodLabel) },
@@ -249,7 +249,7 @@ async function extractRawFactsFromChunk(
             temperature: 1,
         }),
         openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: EXTRACTION_SYSTEM },
                 { role: 'user', content: buildContactFactsPrompt(chunk, contactName, periodLabel) },

@@ -17,6 +17,7 @@ const AVAILABLE_STEPS = `
 - negotiateOnBehalf — договориться с контактом от имени пользователя: начать переписку, при необходимости спрашивать пользователя что ответить.
 - unclearIntent — уточнить намерение, если непонятно.
 - capabilities — ответить текстом о возможностях бота (что умеет, чем может помочь). Использовать, когда пользователь спрашивает «что ты умеешь», «расскажи о себе», «твои возможности» и т.п.
+- browserTask — выполнить задачу в браузере через Playwright: записаться, заполнить форму, забронировать, нажать кнопку на сайте. Использовать, когда нужно ДЕЙСТВИЕ в браузере (не просто поиск информации).
 `.trim();
 
 /**
@@ -27,6 +28,10 @@ export async function createPlan(input: PlanningInput): Promise<Plan> {
     const { message, classification } = input;
     const intent = classification.intent || 'РАЗГОВОР';
 
+    if (/^Продолжи задачу в браузере через Playwright\.|browserSessionId:/i.test(message)) {
+        return { steps: [{ agentId: 'browserTask' }] };
+    }
+
     const cacheKey = `plan:${intent}:${message.slice(0, 200)}`;
     const cached = llmCache.get<Plan>(cacheKey);
     if (cached) {
@@ -34,9 +39,13 @@ export async function createPlan(input: PlanningInput): Promise<Plan> {
         return cached;
     }
 
-    const prompt = `Запрос пользователя: "${message}"
-Предварительно определённый интент: ${intent}
+    const subIntentsBlock = input.classification.subIntents?.length
+        ? `\nДополнительные намерения (запрос составной, включи шаги для ВСЕХ намерений):
+${input.classification.subIntents.map((s, i) => `  ${i + 1}. ${s.intent}${s.details ? ' — детали: ' + JSON.stringify(s.details) : ''}`).join('\n')}\n`
+        : '';
 
+    const prompt = `Запрос пользователя: "${message}"
+Предварительно определённый интент: ${intent}${subIntentsBlock}
 Доступные шаги (выполняются строго по порядку):
 ${AVAILABLE_STEPS}
 
@@ -45,6 +54,7 @@ ${AVAILABLE_STEPS}
 
 Правила (обязательно):
 - НЕ включай шаг memory — память подтягивается автоматически ко ВСЕМ агентам.
+- Если есть дополнительные намерения (subIntents выше) — включи шаги для ВСЕХ намерений в один план. Например, при intent=НАПОМИНАНИЕ + subIntent=ОТПРАВКА_СООБЩЕНИЯ → план: [resolveContact (если нужно), sendMessage, reminder].
 - Если в запросе несколько действий (например, «найди в интернете X и отправь жене», «поищи рецепт и напиши Маше») — включи в цепочку все нужные шаги по порядку: при необходимости resolveContact, затем webSearch, затем sendMessage. Результат каждого шага автоматически передаётся следующему по конвейеру.
 - Если пользователь просит проанализировать чат/переписку и затем отправить сообщение в этот же чат (или куда-то ещё) на основе анализа — readMessages, затем sendMessage.
 - Если пользователь просит написать или отправить сообщение кому-то — в плане ОБЯЗАТЕЛЬНО шаг sendMessage (один или после resolveContact/webSearch/readMessages), НЕ подменяй на conversation.
@@ -53,15 +63,16 @@ ${AVAILABLE_STEPS}
 - Поиск в интернете — webSearch. Если после поиска нужен ещё шаг — результат автоматически передаётся дальше.
 - Для напоминания — reminder. Для картинки — imageGeneration. Для карт — maps.
 - Для запроса о возможностях бота («что умеешь», «расскажи о себе», «твои функции») — один шаг capabilities.
+- Для задачи в браузере (записаться, заполнить форму, забронировать, нажать кнопку на сайте) — один шаг browserTask.
 - Минимум один шаг. params можно опустить или передать пустой объект.`;
 
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 {
                     role: 'system',
-                    content: 'Ты планировщик. Строишь цепочку агентов по смыслу запроса: шаги выполняются по порядку, контекст (память, результат поиска и т.д.) передаётся по конвейеру следующему агенту. Память подтягивается автоматически — НЕ включай шаг memory. Отвечай только валидным JSON с полем steps (массив объектов с agentId и опционально params). agentId только из списка: resolveContact, webSearch, conversation, reminder, readMessages, sendMessage, negotiateOnBehalf, imageGeneration, maps, unclearIntent, capabilities.',
+                    content: 'Ты планировщик. Строишь цепочку агентов по смыслу запроса: шаги выполняются по порядку, контекст (память, результат поиска и т.д.) передаётся по конвейеру следующему агенту. Память подтягивается автоматически — НЕ включай шаг memory. Отвечай только валидным JSON с полем steps (массив объектов с agentId и опционально params). agentId только из списка: resolveContact, webSearch, conversation, reminder, readMessages, sendMessage, negotiateOnBehalf, imageGeneration, maps, unclearIntent, capabilities, browserTask.',
                 },
                 { role: 'user', content: prompt },
             ],
@@ -97,7 +108,7 @@ ${AVAILABLE_STEPS}
             return fallbackPlan(intent, message);
         }
         // Шаги, которые дают ответ пользователю. Если план содержит только memory/resolveContact — ответа не будет.
-        const respondingAgentIds = new Set(['conversation', 'reminder', 'readMessages', 'sendMessage', 'negotiateOnBehalf', 'imageGeneration', 'maps', 'unclearIntent', 'capabilities']);
+        const respondingAgentIds = new Set(['conversation', 'reminder', 'readMessages', 'sendMessage', 'negotiateOnBehalf', 'imageGeneration', 'maps', 'unclearIntent', 'capabilities', 'browserTask']);
         const hasRespondingStep = steps.some((s) => respondingAgentIds.has(s.agentId));
         if (intent === 'РАЗГОВОР' && !hasRespondingStep) {
             devLog('Planner: intent РАЗГОВОР but no responding step in plan, appending conversation');
@@ -116,7 +127,7 @@ ${AVAILABLE_STEPS}
 
 const VALID_IDS = new Set<string>([
     'memory', 'resolveContact', 'webSearch', 'conversation', 'reminder',
-    'readMessages', 'sendMessage', 'negotiateOnBehalf', 'imageGeneration', 'maps', 'unclearIntent', 'capabilities',
+    'readMessages', 'sendMessage', 'negotiateOnBehalf', 'imageGeneration', 'maps', 'unclearIntent', 'capabilities', 'browserTask',
 ]);
 
 function normalizeAgentId(id: string): PlanStep['agentId'] {
@@ -163,6 +174,8 @@ function fallbackPlan(intent: string, message: string): Plan {
             return { steps: [{ agentId: 'unclearIntent' }] };
         case 'ВОЗМОЖНОСТИ_БОТА':
             return { steps: [{ agentId: 'capabilities' }] };
+        case 'БРАУЗЕР_ЗАДАЧА':
+            return { steps: [{ agentId: 'browserTask' }] };
         case 'РАЗГОВОР':
             return { steps: [{ agentId: 'conversation' }] };
         default:

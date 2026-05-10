@@ -82,7 +82,7 @@ async function summarizeDomain(ctx: BotContext, domain: string) {
     try {
         devLog('Domain summarization prompt:', prompt);
         const resp = await openai.chat.completions.create({
-            model: "gpt-5-nano",
+            model: "gpt-5.4-nano",
             messages: [{ role: "user", content: prompt }],
             temperature: 0.3,
         });

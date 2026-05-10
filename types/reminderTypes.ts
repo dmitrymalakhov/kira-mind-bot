@@ -11,3 +11,12 @@ export enum ReminderStatus {
     Postponed = "postponed",
     Expired = "expired",
 }
+
+/** Правило повторения напоминания */
+export interface RecurrenceRule {
+    type: "hourly" | "daily" | "weekly" | "monthly" | "yearly";
+    /** Шаг повторения (каждые N единиц) */
+    interval: number;
+    /** Для weekly: дни недели (0=вс, 1=пн, ..., 6=сб) */
+    daysOfWeek?: number[];
+}

@@ -48,6 +48,8 @@ export interface SearchResult {
         timestamp: Date;
         confidence: number;
     }>;
+    isAnchor?: boolean;
+    expiresAt?: Date;
     relatedIds?: Array<{ id: string; domain: string }>;
     emotionalTag?: EmotionalTag;
 }

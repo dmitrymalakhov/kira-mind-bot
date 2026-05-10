@@ -1,6 +1,9 @@
 import { Bot, InlineKeyboard } from "grammy";
 import { BotContext } from "../types";
-import { Reminder, cancelReminder, markReminderAsCompleted, postponeReminder } from "../reminder";
+import { Reminder, ReminderStatus, cancelReminder, markReminderAsCompleted, postponeReminder, scheduleReminder } from "../reminder";
+import { reminderAgent } from "../agents/reminderAgent";
+import { ReminderRepository } from "../services/ReminderRepository";
+import { hasFreshPendingReminder } from "../utils/implicitReminderDetector";
 import { getActiveReminders, buildReminderCard, buildPostponeKeyboard, buildRemindersList, buildChatPicker } from "../utils/reminderCard";
 import { ReminderRegistry } from "../stores/ReminderRegistry";
 import { sendMessageFromDraft, deleteMessageDraft, saveMessageDraft, getMessageDraft } from "../agents/sendMessagesAgent";
@@ -9,11 +12,15 @@ import {
     NegotiationStore,
     buildNegotiationSummaryText,
     buildNegotiationStopKeyboard,
+    type NegotiationSession,
 } from "../stores/NegotiationStore";
+import { scheduleNegotiationAgreementReminders } from "../agents/negotiationAgreementReminders";
 import { initTelegramClient, sendMessage as sendTelegramMessage } from "../services/telegram";
 import { getMessagesSummary, handleStudyChatPeriodCallback } from "../agents/readMessagesAgent";
 import { sendMessage } from "../utils";
 import type { StudyChatPeriod } from "../utils/studyChatFlow";
+import { handleContactMemoryCallback } from "../utils/contactMemory";
+import { handleContactMemoryLookupCallback } from "../utils/contactMemoryLookup";
 
 /**
  * Регистрирует обработчики колбэков для бота
@@ -23,6 +30,32 @@ export function registerCallback(bot: Bot<BotContext>): void {
     bot.on("callback_query:data", async (ctx, next) => {
         try {
             const callbackData = ctx.callbackQuery.data;
+
+            if (await handleContactMemoryCallback(ctx, callbackData)) {
+                return;
+            }
+            if (await handleContactMemoryLookupCallback(ctx, callbackData)) {
+                return;
+            }
+
+            if (callbackData.startsWith("browser_cancel:")) {
+                const sessionId = callbackData.replace("browser_cancel:", "").trim();
+                if (sessionId) {
+                    await import("../agents/browserAgent")
+                        .then((m) => m.cancelPausedBrowserSession(sessionId))
+                        .catch(() => {});
+                }
+                ctx.session.pendingBrowserTask = undefined;
+                await ctx.answerCallbackQuery({ text: "Браузерная задача отменена" });
+                if (ctx.callbackQuery.message?.message_id && ctx.callbackQuery.message?.chat?.id) {
+                    await ctx.api.editMessageReplyMarkup(
+                        ctx.callbackQuery.message.chat.id,
+                        ctx.callbackQuery.message.message_id,
+                        { reply_markup: new InlineKeyboard() }
+                    ).catch(() => {});
+                }
+                return;
+            }
 
             if (callbackData === "negotiation_start") {
                 const chatId = ctx.chat?.id;
@@ -88,6 +121,10 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     return;
                 }
                 const { originalChatId, contactId, contactName, summaryChatId, summaryMessageId } = session;
+                const sessionSnapshot: NegotiationSession = {
+                    ...session,
+                    history: session.history.map((h) => ({ ...h })),
+                };
                 NegotiationStore.delete(originalChatId, contactId);
                 await ctx.answerCallbackQuery({ text: "Переговоры завершены" });
                 if (summaryChatId != null && summaryMessageId != null) {
@@ -102,6 +139,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         });
                     } catch (_) {}
                 }
+                await scheduleNegotiationAgreementReminders(ctx, bot, sessionSnapshot);
                 return;
             }
 
@@ -359,6 +397,20 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 if (!reminderId) {
                     console.error(`Invalid reminder ID: ${reminderId}`);
                     await ctx.answerCallbackQuery({ text: "Произошла ошибка при обработке запроса" });
+                    return;
+                }
+
+                // Нажата кнопка «Своё время» — просим ввести время текстом
+                if (postponeTime === "custom") {
+                    const msgId = ctx.callbackQuery.message?.message_id;
+                    const cid = ctx.callbackQuery.message?.chat.id ?? ctx.chat!.id;
+                    ctx.session.pendingPostpone = {
+                        reminderId,
+                        messageId: msgId ?? 0,
+                        chatId: cid,
+                    };
+                    await ctx.answerCallbackQuery();
+                    await ctx.reply('⏰ Напиши, на какое время перенести:\nНапример: «в пятницу в 10», «через 2 часа», «завтра в 9:30»');
                     return;
                 }
 
@@ -681,6 +733,51 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         reply_markup: confirmKeyboard
                     });
                 }
+            } else if (callbackData === 'implicit_reminder_yes') {
+                const pending = ctx.session.pendingImplicitReminder;
+                if (!pending || !hasFreshPendingReminder(ctx)) {
+                    await ctx.answerCallbackQuery({ text: 'Время вышло — напиши "напомни мне [событие] [время]"' });
+                    ctx.session.pendingImplicitReminder = undefined;
+                    return;
+                }
+                await ctx.answerCallbackQuery({ text: '⏰ Создаю напоминание…' });
+                ctx.session.pendingImplicitReminder = undefined;
+
+                const reminderResult = await reminderAgent(
+                    pending.originalMessage, false, '', ctx.session.messageHistory, ''
+                );
+                await ctx.reply(reminderResult.responseText);
+
+                if (reminderResult.reminderCreated) {
+                    const list = reminderResult.reminderDetailsList
+                        ?? (reminderResult.reminderDetails ? [reminderResult.reminderDetails] : []);
+                    for (const details of list) {
+                        const reminder: Reminder = {
+                            id: details.id,
+                            text: details.text,
+                            displayText: details.reminderMessage,
+                            dueDate: details.dueDate,
+                            chatId: ctx.chat!.id,
+                            status: ReminderStatus.Pending,
+                            createdAt: new Date(),
+                            targetChat: details.targetChat,
+                            recurrence: details.recurrence,
+                        };
+                        ctx.session.reminders.push(reminder);
+                        ReminderRegistry.getInstance().add(reminder);
+                        await ReminderRepository.save(reminder).catch((e) =>
+                            console.error('[implicit_reminder] DB save failed:', e)
+                        );
+                        scheduleReminder(bot, reminder);
+                        console.info(`[implicit_reminder] created id=${reminder.id} due=${new Date(reminder.dueDate).toISOString()}`);
+                    }
+                }
+                return;
+
+            } else if (callbackData === 'implicit_reminder_no') {
+                ctx.session.pendingImplicitReminder = undefined;
+                await ctx.answerCallbackQuery({ text: 'Хорошо!' });
+                return;
             }
 
             // Пропустить необработанные callback-и (например, mem_del из memoryCommands)

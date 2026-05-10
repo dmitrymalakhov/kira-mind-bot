@@ -10,6 +10,16 @@ const HINT_COOLDOWN_MS = 20 * 60 * 1000;
 /** Горизонт срочности для временных фактов (в днях) */
 const TEMPORAL_URGENCY_DAYS = 3;
 
+/** Максимальное время на вычисление подсказки (исключая искусственную задержку) */
+const HINT_COMPUTE_TIMEOUT_MS = 4000;
+
+function withTimeout<T>(fn: () => Promise<T>, ms: number): Promise<T> {
+    return Promise.race([
+        fn(),
+        new Promise<T>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
+    ]);
+}
+
 /** In-process Set для дедупликации: один и тот же факт не всплывает дважды подряд */
 const recentlyHintedIds = new Set<string>();
 
@@ -43,6 +53,7 @@ export async function maybeProactiveHint(
     if (Date.now() - lastHintAt < HINT_COOLDOWN_MS) return;
 
     try {
+        await withTimeout(async () => {
         // 1. Ищем срочные временные факты
         const recentMemories = await svc.getRecentMemories(userId, 30);
         const now = new Date();
@@ -95,12 +106,12 @@ ${factsText}
 {"shouldHint": true/false, "hint": "текст реплики на русском", "factIndex": число}`;
 
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
             ],
-            temperature: 1,
+            temperature: 0.2,
         });
 
         const text = resp.choices[0]?.message?.content?.trim() || '';
@@ -127,7 +138,12 @@ ${factsText}
         await new Promise((res) => setTimeout(res, 1500));
         await ctx.reply(hint);
         devLog('🔔 Proactive hint sent:', hint.slice(0, 80));
-    } catch (e) {
-        devLog('maybeProactiveHint error (ignored):', e);
+        }, HINT_COMPUTE_TIMEOUT_MS);
+    } catch (e: any) {
+        if (e?.message === 'timeout') {
+            devLog('maybeProactiveHint: timed out, skipping');
+        } else {
+            devLog('maybeProactiveHint error (ignored):', e);
+        }
     }
 }

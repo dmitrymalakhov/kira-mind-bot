@@ -5,8 +5,9 @@ import { REMINDER_EXPIRY_TIME } from "./constants";
 import { initTelegramClient, searchGroupByTitle, sendMessageToChat, sendMessage } from "./services/telegram";
 import { ContactsStore } from "./stores/ContactsStore";
 import { ReminderRepository } from "./services/ReminderRepository";
-import { ReminderStatus, ReminderTargetChat } from "./types/reminderTypes";
-export { ReminderStatus, ReminderTargetChat };
+import { ReminderStatus, ReminderTargetChat, RecurrenceRule } from "./types/reminderTypes";
+import { ReminderRegistry } from "./stores/ReminderRegistry";
+export { ReminderStatus, ReminderTargetChat, RecurrenceRule };
 
 // Расширенный интерфейс для напоминания с поддержкой статусов
 export interface Reminder {
@@ -23,10 +24,74 @@ export interface Reminder {
     targetChat?: ReminderTargetChat;
     /** Название чата, в котором создано напоминание (для пикера в приватном чате) */
     chatTitle?: string;
+    /** Правило повторения: если задано, после срабатывания автоматически создаётся следующее */
+    recurrence?: RecurrenceRule;
+    /** Сколько раз напоминание было отложено — для эскалации */
+    postponeCount?: number;
+}
+
+/**
+ * Вычисляет дату следующего повторения на основе правила
+ */
+function getNextOccurrence(fromDate: Date, rule: RecurrenceRule): Date {
+    const next = new Date(fromDate);
+    switch (rule.type) {
+        case 'hourly':
+            next.setHours(next.getHours() + rule.interval);
+            break;
+        case 'daily':
+            next.setDate(next.getDate() + rule.interval);
+            break;
+        case 'weekly':
+            if (rule.daysOfWeek && rule.daysOfWeek.length > 0) {
+                const sorted = [...rule.daysOfWeek].sort((a, b) => a - b);
+                const cur = fromDate.getDay();
+                const nextDay = sorted.find(d => d > cur);
+                if (nextDay !== undefined) {
+                    next.setDate(next.getDate() + (nextDay - cur));
+                } else {
+                    next.setDate(next.getDate() + 7 - cur + sorted[0]);
+                }
+            } else {
+                next.setDate(next.getDate() + 7 * rule.interval);
+            }
+            break;
+        case 'monthly':
+            next.setMonth(next.getMonth() + rule.interval);
+            break;
+        case 'yearly':
+            next.setFullYear(next.getFullYear() + rule.interval);
+            break;
+    }
+    return next;
 }
 
 // Хранилище таймеров для напоминаний
 const remindersTimers = new Map<string, NodeJS.Timeout>();
+
+// Глобальная ссылка на бот — для reschedule из executor без передачи bot через все слои
+let _botRef: Bot<BotContext> | null = null;
+
+export function setBotRef(bot: Bot<BotContext>): void {
+    _botRef = bot;
+}
+
+/**
+ * Перепланирует существующее напоминание: отменяет старый таймер и ставит новый.
+ * Используется при изменении времени/текста через текстовую команду.
+ */
+export function rescheduleReminder(reminder: Reminder): void {
+    const existing = remindersTimers.get(reminder.id);
+    if (existing) {
+        clearTimeout(existing);
+        remindersTimers.delete(reminder.id);
+    }
+    if (_botRef) {
+        scheduleReminder(_botRef, reminder);
+    } else {
+        console.error('[reminder] rescheduleReminder: _botRef not set');
+    }
+}
 
 // Хранилище таймеров для проверки истечения срока напоминаний
 const expiryTimers = new Map<string, NodeJS.Timeout>();
@@ -87,7 +152,7 @@ export function scheduleReminder(bot: Bot<BotContext>, reminder: Reminder): void
  * Резолвит targetChat в числовой chatId (для группы или контакта).
  * Возвращает { chatId, label } или null при ошибке.
  */
-async function resolveTargetChat(target: ReminderTargetChat): Promise<{ chatId: number; label: string } | null> {
+export async function resolveTargetChat(target: ReminderTargetChat): Promise<{ chatId: number; label: string } | null> {
     const client = await initTelegramClient();
     if (!client) return null;
 
@@ -196,6 +261,24 @@ async function sendReminder(bot: Bot<BotContext>, reminder: Reminder): Promise<v
 
         // Устанавливаем таймер для проверки истечения срока напоминания
         scheduleExpiryCheck(bot, reminder);
+
+        // Если задано повторение — сразу создаём и планируем следующее
+        if (reminder.recurrence) {
+            const nextDue = getNextOccurrence(new Date(reminder.dueDate), reminder.recurrence);
+            const nextReminder: Reminder = {
+                ...reminder,
+                id: `${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`,
+                dueDate: nextDue,
+                status: ReminderStatus.Pending,
+                messageId: undefined,
+                remindAgainAt: undefined,
+                createdAt: new Date(),
+            };
+            ReminderRegistry.getInstance().add(nextReminder);
+            ReminderRepository.save(nextReminder).catch(e => console.error('[reminder] DB save failed on recurrence:', e));
+            scheduleReminder(bot, nextReminder);
+            logReminderEvent("scheduled_next_recurrence", nextReminder);
+        }
 
         devLog(`Reminder sent: "${reminder.text}" with message ID ${reminder.messageId}` + (targetLabel ? ` (also in "${targetLabel}")` : ""));
         logReminderEvent("sent", reminder);
@@ -341,8 +424,9 @@ export async function postponeReminder(
             expiryTimers.delete(reminder.id);
         }
 
-        // Обновляем статус напоминания
+        // Обновляем статус и счётчик откладываний
         reminder.status = ReminderStatus.Postponed;
+        reminder.postponeCount = (reminder.postponeCount ?? 0) + 1;
 
         // Рассчитываем новое время напоминания
         const newDueDate = new Date();
@@ -385,6 +469,18 @@ export async function postponeReminder(
         }
 
         await ReminderRepository.update(reminder).catch(e => console.error('[reminder] DB update failed on postpone:', e));
+
+        // Эскалация: после 3+ откладываний предлагаем разбить задачу
+        if (reminder.postponeCount === 3) {
+            const escalationMessages = [
+                `Ты уже ${reminder.postponeCount} раза откладывала это 🤔\n\n"${reminder.displayText || reminder.text}"\n\nМожет, разобьём на маленькие шаги? Или просто отменим, если оно больше не актуально?`,
+                `Кажется, это задание никак не хочет выполняться 😅 Ты откладывала его уже ${reminder.postponeCount} раза.\n\n"${reminder.displayText || reminder.text}"\n\nХочешь — помогу переформулировать или разбить на части?`,
+                `Это напоминание уже ${reminder.postponeCount} раза просит о внимании 💭\n\n"${reminder.displayText || reminder.text}"\n\nМожет, оно стало неактуальным? Или нужна помощь с тем, как к нему подступиться?`,
+            ];
+            const msg = escalationMessages[Math.floor(Math.random() * escalationMessages.length)];
+            bot.api.sendMessage(reminder.chatId, msg).catch(e => console.error('[reminder] escalation message failed:', e));
+            logReminderEvent("escalation", reminder);
+        }
 
         // Планируем отправку отложенного напоминания
         scheduleReminder(bot, reminder);

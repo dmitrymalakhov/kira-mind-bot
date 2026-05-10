@@ -77,6 +77,48 @@ export interface SessionData {
     lastProactiveHintAt?: number;
     /** Unix-timestamp последнего вопроса о пробеле в памяти (для cooldown) */
     lastMemoryGapAt?: number;
+    /** Unix-timestamp последнего предложения создать implicit reminder (для cooldown) */
+    lastImplicitReminderAt?: number;
+    /** Ожидание ввода кастомного времени для переноса напоминания */
+    pendingPostpone?: {
+        reminderId: string;
+        messageId: number;
+        chatId: number;
+    };
+    /** Ожидающее подтверждения предложение создать напоминание (TTL 5 минут) */
+    pendingImplicitReminder?: {
+        originalMessage: string;
+        eventSummary: string;
+        createdAt: number;
+    };
+    /** Ожидает уточнения, к какому контакту относится извлечённый факт */
+    pendingContactMemory?: {
+        contactName: string;
+        content: string;
+        domain: string;
+        importance: number;
+        tags: string[];
+        isAnchor?: boolean;
+        candidateIds: number[];
+        createdAt: number;
+    };
+    /** Ожидает уточнения, о каком контакте спрашивает пользователь при чтении памяти */
+    pendingContactLookup?: {
+        contactName: string;
+        originalMessage: string;
+        candidateIds: number[];
+        createdAt: number;
+    };
+    /** Ожидает уточнения пользователя для продолжения браузерной Playwright-задачи */
+    pendingBrowserTask?: {
+        originalTask: string;
+        question: string;
+        sessionId?: string;
+        userAnswer?: string;
+        risk?: 'high_impact';
+        createdAt: number;
+        expiresAt: number;
+    };
     /** chatId группового чата, напоминания которого просматриваются из приватного чата */
     viewingRemindersInChat?: number;
     /** Состояние сценария «изучить переписку и сохранить факты обо мне»: выбор периода */
@@ -84,6 +126,15 @@ export interface SessionData {
         contactName: string;
         contactId: number;
         step: 'period';
+    };
+    /** Состояние мастера создания/редактирования группы чатов через /chatgroups */
+    chatGroupState?: {
+        step: 'awaiting_name' | 'awaiting_chats' | 'awaiting_remove_chat';
+        groupName?: string;
+        editGroupId?: number;
+        editGroupName?: string;
+        /** Чаты ожидающие сохранения в группу (quick-save после inline анализа) */
+        pendingChatNames?: string[];
     };
     /** Снимок последней оркестрации для LLM-дедупликации повторных запросов */
     lastIntentDedup?: {
@@ -245,6 +296,9 @@ export interface SearchResult {
         timestamp: Date;
         confidence: number;
     }>;
+    isAnchor?: boolean;
+    expiresAt?: Date;
+    relatedIds?: Array<{ id: string; domain: string }>;
     emotionalTag?: EmotionalTag;
 }
 
@@ -304,4 +358,3 @@ export interface DomainDetectionResult {
     shouldSplitDomain?: string;
     shouldMergeDomains?: string[];
 }
-

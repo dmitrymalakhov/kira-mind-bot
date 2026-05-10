@@ -1,5 +1,5 @@
 import { Bot, InlineKeyboard } from "grammy";
-import { markReminderAsCompleted, postponeReminder, Reminder, ReminderStatus, scheduleReminder } from "./reminder";
+import { markReminderAsCompleted, postponeReminder, Reminder, ReminderStatus, scheduleReminder, setBotRef, resolveTargetChat, rescheduleReminder } from "./reminder";
 import { Chat, InputFile, User } from "grammy/types";
 import { BotContext } from "./types";
 import * as fs from 'fs';
@@ -30,9 +30,12 @@ import { startKiraLifeScheduler } from "./services/kiraLifeScheduler";
 import { startDmReportScheduler } from "./services/dmReportScheduler";
 import { startMemoryInsightScheduler } from "./services/memoryInsightScheduler";
 import { startReflectionModeScheduler } from "./services/reflectionModeScheduler";
+import { startMorningDigestScheduler } from "./services/morningDigestScheduler";
+import { startChatGroupTracker } from "./services/chatGroupTracker";
 import { initReflectionMode } from "./services/reflectionModeService";
 import { maybeProactiveHint } from "./utils/proactiveMemory";
 import { maybeAskMemoryGap } from "./utils/memoryGapDetector";
+import { maybeDetectImplicitReminder } from "./utils/implicitReminderDetector";
 import { AppDataSource } from "./data-source";
 import { ReminderRepository } from "./services/ReminderRepository";
 
@@ -55,6 +58,7 @@ if (!fs.existsSync(TEMP_DIR)) {
 }
 
 const bot = createBot();
+setBotRef(bot);
 setBotApi(bot.api);
 console.log('🤖 Бот создан успешно');
 
@@ -114,7 +118,7 @@ function maybeReactToUser(ctx: BotContext, emoji?: string) {
 }
 
 async function replyAndStore(ctx: BotContext, text: string, options: any = {}) {
-    const msg = await ctx.reply(text, options);
+    const msg = await sendMessage(ctx, text, options);
     if (!ctx.session.sentMessages) ctx.session.sentMessages = {};
     ctx.session.sentMessages[msg.message_id] = text;
     return msg;
@@ -139,12 +143,27 @@ async function saveRemindersFromResult(ctx: BotContext, result: ProcessingResult
             createdAt: new Date(),
             targetChat: details.targetChat,
             chatTitle,
+            recurrence: details.recurrence,
         };
         ctx.session.reminders.push(reminder);
         ReminderRegistry.getInstance().add(reminder);
         console.info(`[reminder] event=created id=${reminder.id} chatId=${reminder.chatId} due=${new Date(reminder.dueDate).toISOString()}` + (chatTitle ? ` chat="${chatTitle}"` : '') + (details.targetChat ? ` target=${details.targetChat.type}` : ""));
         await ReminderRepository.save(reminder).catch(e => console.error('[reminder] DB save failed on create:', e));
         scheduleReminder(bot, reminder);
+
+        // Валидация targetChat — предупреждаем сразу если группа/контакт не найдены
+        if (details.targetChat) {
+            resolveTargetChat(details.targetChat).then((resolved) => {
+                if (!resolved) {
+                    const what = details.targetChat!.type === 'group'
+                        ? `группу «${(details.targetChat as any).groupName}»`
+                        : `контакт «${(details.targetChat as any).contactQuery}»`;
+                    ctx.reply(
+                        `⚠️ Не нашла ${what}. Напоминание сохранено, но проверь правильность названия — иначе оно не дойдёт до адресата.`
+                    ).catch(() => {});
+                }
+            }).catch(() => {});
+        }
     }
 }
 // Расширяем тип Message для поддержки пересланных сообщений
@@ -272,6 +291,10 @@ async function processMediaGroup(ctx: BotContext, mediaGroupId: string) {
 }
 
 // Обработка текстовых сообщений
+// Phrases handled exclusively by bot.hears in memoryCommands — skip in the main handler
+const MEMORY_HEARS_RE = /^(?:что\s+(?:ты\s+)?(?:знаешь|помнишь|помнила)\s+обо?\s+мне|расскажи\s+что\s+(?:ты\s+)?(?:знаешь|помнишь)(?:\s+обо?\s+мне)?|покажи\s+(?:мою\s+)?память|что\s+ты\s+обо\s+мне(?:\s+знаешь)?|что\s+помнишь\s+обо?\s+мне)\??$/i;
+const MEMORY_DELETE_RE = /^(?:забудь[,\s]|удали из памяти|убери из памяти)/i;
+
 bot.on("message:text", async (ctx, next) => {
     try {
         devLog('📨 Получено текстовое сообщение от пользователя:', ctx.from?.id);
@@ -279,6 +302,11 @@ bot.on("message:text", async (ctx, next) => {
 
         if (message.startsWith('/')) {
             await next();
+            return;
+        }
+
+        // These messages are handled by dedicated bot.hears handlers in memoryCommands
+        if (MEMORY_HEARS_RE.test(message) || MEMORY_DELETE_RE.test(message)) {
             return;
         }
 
@@ -491,11 +519,95 @@ bot.on("message:text", async (ctx, next) => {
         // Устанавливаем таймер для обработки одиночного сообщения
         // (если в течение 2 секунд не придет пересланное сообщение)
         setTimeout(async () => {
+            try {
             if (ctx.session.lastUserMessage &&
                 ctx.session.lastUserMessage.text === message &&
                 !ctx.session.lastUserMessage.processed) {
 
                 ctx.session.lastUserMessage.processed = true;
+
+                // Кастомное время для переноса напоминания
+                if (ctx.session.pendingPostpone) {
+                    const { reminderId, messageId, chatId } = ctx.session.pendingPostpone;
+                    ctx.session.pendingPostpone = undefined;
+                    const reminder = ReminderRegistry.getInstance().get(reminderId);
+                    if (reminder) {
+                        const now = new Date();
+                        let newDueDate: Date | null = null;
+                        try {
+                            const { default: openaiClient } = await import('./openai');
+                            const { parseLLMJson: parse } = await import('./utils');
+                            const resp = await openaiClient.chat.completions.create({
+                                model: 'gpt-5.4-nano',
+                                messages: [
+                                    {
+                                        role: 'system',
+                                        content: `Текущая дата и время: ${now.toLocaleString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: 'numeric', weekday: 'long' })}. Рассчитай абсолютную дату и время из запроса пользователя. Верни только JSON: {"newDueDate": "ISO 8601 или null"}`,
+                                    },
+                                    { role: 'user', content: message.slice(0, 300) },
+                                ],
+                                temperature: 1,
+                            });
+                            const parsed = parse<{ newDueDate?: string | null }>(resp.choices[0]?.message?.content || '');
+                            if (parsed?.newDueDate) {
+                                const d = new Date(parsed.newDueDate);
+                                if (!isNaN(d.getTime())) newDueDate = d;
+                            }
+                        } catch (e) {
+                            console.error('[pendingPostpone] LLM parse failed', e);
+                        }
+
+                        if (newDueDate) {
+                            const updated = { ...reminder, dueDate: newDueDate };
+                            rescheduleReminder(updated);
+                            ReminderRegistry.getInstance().add(updated);
+                            const sessIdx = ctx.session.reminders.findIndex(r => r.id === reminderId);
+                            if (sessIdx >= 0) ctx.session.reminders[sessIdx] = updated;
+                            await ReminderRepository.save(updated).catch(() => {});
+                            const dateStr = newDueDate.toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: 'numeric', minute: 'numeric' });
+                            await ctx.reply(`✅ Напоминание перенесено на ${dateStr}`);
+                        } else {
+                            await ctx.reply('Не смогла распознать дату и время. Попробуй ещё раз, например: «завтра в 10» или «в пятницу в 15:30».');
+                            ctx.session.pendingPostpone = { reminderId, messageId, chatId };
+                        }
+                    }
+                    return;
+                }
+
+                let messageForProcessing = userMessage;
+                const pendingBrowserTask = ctx.session.pendingBrowserTask;
+                if (pendingBrowserTask) {
+                    if (Date.now() > pendingBrowserTask.expiresAt) {
+                        if (pendingBrowserTask.sessionId) {
+                            import('./agents/browserAgent')
+                                .then((m) => m.cancelPausedBrowserSession(pendingBrowserTask.sessionId))
+                                .catch(() => {});
+                        }
+                        ctx.session.pendingBrowserTask = undefined;
+                    } else {
+                        const normalized = message.trim().toLowerCase();
+                        if (['отмена', 'отмени', 'cancel', 'стоп', 'stop'].includes(normalized)) {
+                            if (pendingBrowserTask.sessionId) {
+                                import('./agents/browserAgent')
+                                    .then((m) => m.cancelPausedBrowserSession(pendingBrowserTask.sessionId))
+                                    .catch(() => {});
+                            }
+                            ctx.session.pendingBrowserTask = undefined;
+                            await replyAndStore(ctx, 'Браузерная задача отменена.');
+                            return;
+                        }
+
+                        pendingBrowserTask.userAnswer = message;
+                        messageForProcessing = [
+                            'Продолжи задачу в браузере через Playwright.',
+                            `browserSessionId: ${pendingBrowserTask.sessionId ?? 'none'}`,
+                            `Исходная задача пользователя: ${pendingBrowserTask.originalTask}`,
+                            `Вопрос агента пользователю: ${pendingBrowserTask.question}`,
+                            `Ответ пользователя: ${message}`,
+                            'Используй ответ как недостающий параметр, подтяни долговременную память как обычно и продолжи выполнение.',
+                        ].join('\n');
+                    }
+                }
 
                 // Отправляем индикатор набора текста
                 await ctx.api.sendChatAction(ctx.chat.id, "typing");
@@ -505,7 +617,7 @@ bot.on("message:text", async (ctx, next) => {
                 // чтобы классификация, поиск по памяти и агенты видели полный контекст
                 const result = await processMessage(
                     ctx,
-                    userMessage,
+                    messageForProcessing,
                     false,
                     "",
                     ctx.session.messageHistory.slice().reverse() // Передаем историю в хронологическом порядке
@@ -599,6 +711,13 @@ bot.on("message:text", async (ctx, next) => {
                 maybeProactiveHint(ctx, message, result.responseText).catch(() => {});
                 // Детекция пробелов: если упомянут незнакомый человек — задать уточняющий вопрос
                 maybeAskMemoryGap(ctx, message).catch(() => {});
+                // Детекция неявных напоминаний: предложить создать напоминание если упомянуто событие со временем
+                const wasConversation = !result.reminderCreated && !result.imageGenerated && !result.messageDraft;
+                maybeDetectImplicitReminder(ctx, message, wasConversation).catch(() => {});
+            }
+            } catch (timerError) {
+                console.error("Ошибка при обработке сообщения в setTimeout:", timerError);
+                try { await ctx.reply("Что-то пошло не так при обработке... Попробуй ещё раз? 💫"); } catch {}
             }
         }, 2000); // Ждем 2 секунды перед обработкой одиночного сообщения
     } catch (error) {
@@ -1447,6 +1566,8 @@ async function startBot() {
         startMemoryInsightScheduler(bot);
         await initReflectionMode();
         startReflectionModeScheduler(bot);
+        startMorningDigestScheduler(bot);
+        startChatGroupTracker(bot);
         await bot.api.setMyCommands([
             { command: "reflection", description: "Режим рефлексии и накопления знаний" },
             { command: "reminders", description: "Мои напоминания" },

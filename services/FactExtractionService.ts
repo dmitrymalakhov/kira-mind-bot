@@ -2,8 +2,21 @@ import { v4 as uuidv4 } from 'uuid';
 import { MessageHistory } from '../types';
 import { ExtractedFact } from '../types/FactTypes';
 import { FACT_EXTRACTION_PROMPT } from '../utils/factExtraction';
-import { devLog } from '../utils';
+import { devLog, parseLLMJson } from '../utils';
 import openai from '../openai';
+import { PREDEFINED_DOMAINS } from '../constants/domains';
+
+function normalizeDomain(domain: unknown): string {
+  const normalized = String(domain || '').trim().toLowerCase();
+  return Object.values(PREDEFINED_DOMAINS).includes(normalized as any)
+    ? normalized
+    : PREDEFINED_DOMAINS.GENERAL;
+}
+
+function normalizeFactType(type: unknown): string {
+  const value = String(type || '').trim();
+  return value || 'personal_info';
+}
 
 export class FactExtractionService {
 
@@ -16,28 +29,39 @@ export class FactExtractionService {
     try {
       devLog('Fact extraction prompt:', prompt);
       const resp = await openai.chat.completions.create({
-        model: 'gpt-5-nano',
+        model: 'gpt-5.4-nano',
         messages: [
           { role: 'system', content: 'Ты извлекаешь факты из диалога и возвращаешь JSON.' },
           { role: 'user', content: prompt }
         ],
-        temperature: 1,
+        temperature: 0.3,
       });
 
       const content = resp.choices[0]?.message?.content || '';
       devLog('Fact extraction response:', content);
-      const data = JSON.parse(content).facts as any[];
-      return data.map(f => ({
-        id: uuidv4(),
-        content: f.content,
-        domain: f.domain,
-        factType: f.factType,
-        confidence: f.confidence,
-        sourceContext: dialogText.slice(0, 200),
-        extractedAt: new Date(),
-        importance: f.importance,
-        tags: Array.isArray(f.tags) ? f.tags : [],
-      })) as ExtractedFact[];
+
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        devLog('No JSON found in fact extraction response');
+        return [];
+      }
+      const parsed = parseLLMJson<{ facts?: any[] }>(jsonMatch[0]);
+      if (!parsed) return [];
+      const data: any[] = Array.isArray(parsed.facts) ? parsed.facts : [];
+      return data
+        .filter(f => f?.content && String(f.content).trim().length > 0)
+        .filter(f => (f.confidence ?? 0.5) >= 0.4)
+        .map(f => ({
+          id: uuidv4(),
+          content: String(f.content).trim(),
+          domain: normalizeDomain(f.domain),
+          factType: normalizeFactType(f.factType),
+          confidence: f.confidence ?? 0.5,
+          sourceContext: dialogText.slice(0, 200),
+          extractedAt: new Date(),
+          importance: f.importance ?? 0.5,
+          tags: Array.isArray(f.tags) ? f.tags : [],
+        })) as ExtractedFact[];
     } catch (e) {
       console.error('Fact extraction error', e);
       return [];
@@ -138,7 +162,7 @@ ${dialogueText}
           },
           { role: 'user', content: prompt }
         ],
-        temperature: 1,
+        temperature: 0.3,
       });
 
       const content = resp.choices[0]?.message?.content || '';
@@ -150,26 +174,30 @@ ${dialogueText}
         return [];
       }
 
-      const parsedData = JSON.parse(jsonMatch[0]);
+      const parsedData = parseLLMJson<{ facts?: any[] }>(jsonMatch[0]);
 
-      if (!parsedData.facts || !Array.isArray(parsedData.facts)) {
+      if (!parsedData?.facts || !Array.isArray(parsedData.facts)) {
         devLog('Invalid facts structure in dialogue extraction:', parsedData);
         return [];
       }
 
-      return parsedData.facts.map((f: any) => ({
-        id: uuidv4(),
-        content: f.content,
-        domain: f.domain,
-        factType: f.factType,
-        confidence: f.confidence || 0.5,
-        sourceContext: f.evidence || dialogueText.slice(0, 200),
-        extractedAt: new Date(),
-        importance: f.importance || 0.5,
-        tags: Array.isArray(f.tags) ? f.tags : [],
-        subject: f.subject === 'contact' ? 'contact' : 'user',
-        contactName: f.subject === 'contact' && f.contactName ? String(f.contactName).trim() : undefined,
-      })) as ExtractedFact[];
+      return parsedData.facts
+        .filter((f: any) => f?.content && String(f.content).trim().length > 0)
+        .filter((f: any) => (f.confidence ?? 0.5) >= 0.4)
+        .filter((f: any) => f.subject !== 'contact' || (f.contactName && String(f.contactName).trim().length > 0 && String(f.contactName).trim().length < 100))
+        .map((f: any) => ({
+          id: uuidv4(),
+          content: String(f.content).trim(),
+          domain: normalizeDomain(f.domain),
+          factType: normalizeFactType(f.factType),
+          confidence: f.confidence ?? 0.5,
+          sourceContext: f.evidence || dialogueText.slice(0, 200),
+          extractedAt: new Date(),
+          importance: f.importance ?? 0.5,
+          tags: Array.isArray(f.tags) ? f.tags : [],
+          subject: f.subject === 'contact' ? 'contact' : 'user',
+          contactName: f.subject === 'contact' ? String(f.contactName).trim() : undefined,
+        })) as ExtractedFact[];
 
     } catch (e) {
       console.error('Dialogue fact extraction error:', e);

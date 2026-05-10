@@ -1,4 +1,5 @@
-import { Bot, MemorySessionStorage, session } from "grammy";
+import { Bot, session } from "grammy";
+import { TypeORMSessionStorage } from "./services/SessionStorage";
 import { BotContext, SessionData } from "./types";
 import { registerCallback } from "./callbacks";
 import { handleUnauthorizedUserMessage } from "./agents/unauthorizedUserAgent";
@@ -9,6 +10,7 @@ import { upsertChat, isChatPublicMode } from "./services/chatRegistry";
 import openai from "./openai";
 import { getBotPersona } from "./persona";
 import { config } from "./config";
+import { pushGroupChatMessage } from "./stores/GroupChatBuffer";
 
 const DISMISSAL_VARIANTS = [
   "занята важными делами",
@@ -28,7 +30,7 @@ async function handleGroupPrivateDismissal(ctx: BotContext): Promise<void> {
 
   try {
     const resp = await openai.chat.completions.create({
-      model: "gpt-5-nano",
+      model: "gpt-5.4-nano",
       messages: [
         {
           role: "system",
@@ -170,7 +172,7 @@ function setupBot(bot: Bot<BotContext>, config: any) {
         sentMessages: {},
       };
     },
-    storage: new MemorySessionStorage(),
+    storage: new TypeORMSessionStorage(),
   }));
 
   // В групповых чатах реагируем только на явные упоминания бота (или команды)
@@ -188,6 +190,16 @@ function setupBot(bot: Bot<BotContext>, config: any) {
         await next();
         return;
       }
+
+      // Сохраняем все сообщения в буфер для контекста (до фильтра по упоминанию)
+      if (text && ctx.from && !ctx.from.is_bot) {
+        pushGroupChatMessage(ctx.chat!.id, {
+          senderName: ctx.from.first_name || ctx.from.username || 'Участник',
+          text,
+          date: new Date((ctx.message?.date ?? 0) * 1000),
+        });
+      }
+
       const entities = ctx.message?.entities || ctx.message?.caption_entities || [];
       const botUsername = config.botUsername.toLowerCase();
       const isMentioned = entities.some(e =>
@@ -237,7 +249,7 @@ function setupBot(bot: Bot<BotContext>, config: any) {
       const isGroupChat = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
       if (isGroupChat && ctx.callbackQuery) {
         // Не-владелец нажал кнопку в группе — тихо отвечаем toast'ом, не спамим в чат
-        await ctx.answerCallbackQuery({ text: "Кнопки только для владельца бота" }).catch(() => {});
+        await ctx.answerCallbackQuery({ text: "Кнопки только для владельца бота" }).catch(() => { });
       } else if (isGroupChat && (config.groupPublicMode || await isChatPublicMode(ctx.chat!.id))) {
         devLog(`Group public mode: handling message from user ${ctx.from?.id}`);
         await handleGroupPublicUserMessage(ctx);

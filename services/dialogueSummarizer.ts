@@ -63,7 +63,7 @@ export async function summarizeDialogue(
 
         // Отправка запроса к API OpenAI
         const response = await openai.chat.completions.create({
-            model: "gpt-5-nano",
+            model: "gpt-5.4-nano",
             messages: [
                 {
                     role: "system",

@@ -4,6 +4,7 @@ import { saveMemory } from './enhancedDomainMemory';
 import { devLog, parseLLMJson } from '../utils';
 import { rememberFact } from './domainMemory';
 import openai from '../openai';
+import { saveContactMemoryFactOrAsk } from './contactMemory';
 
 interface QuickFact {
     content: string;
@@ -21,8 +22,8 @@ const EXPLICIT_REMEMBER_PATTERNS: RegExp[] = [
     // «Запомни это: …» / «Запомни на будущее что …»
     /запомни\s+(?:это|на будущее)\s*(?:[:\s,]+|что\s+)?(.+)/i,
     // «Сохрани в память что …» / «Сохрани что …»
-    /сохрани\s+в память\s*(?:,|что)\s*(.+)/i,
-    /сохрани\s*(?:,|что)\s*(.+)/i,
+    /сохрани\s+в память\s*(?:,|что|:)\s*(.+)/i,
+    /сохрани\s*(?:,|что|:)\s*(.+)/i,
     // «Запиши что …» / «Запиши, что …»
     /запиши\s*(?:,|что)\s*(.+)/i,
     // «Не забывай что …» / «Не забывай, что …»
@@ -57,14 +58,33 @@ export interface ExplicitRememberFact {
  */
 const NAME_WORD = '[А-ЯЁA-Zа-яёa-z][А-ЯЁA-Zа-яёa-z-]*';
 const NAME_PATTERN = `(${NAME_WORD}(?:\\s+${NAME_WORD}){0,2})`;
+const CAPITALIZED_NAME_WORD = '[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]*';
+const CAPITALIZED_NAME_PATTERN = `(${CAPITALIZED_NAME_WORD}(?:\\s+${CAPITALIZED_NAME_WORD}){0,2})`;
+const USERNAME_PATTERN = '(@[a-zA-Z0-9_]{3,32})';
 
 /** Паттерны вида «о/об/про [Имя Фамилия]» в начале извлечённого содержимого */
 const THIRD_PARTY_PATTERNS: RegExp[] = [
+    // «инфу про @username»
+    new RegExp(`^(?:эти\\s+)?(?:факты?|данные|сведения|информацию?|инфу)\\s+(?:об?\\s+|про\\s+)${USERNAME_PATTERN}`, 'i'),
+    new RegExp(`^(?:об?\\s+|про\\s+)${USERNAME_PATTERN}`, 'i'),
     // «эти факты об Юрии Никишенко», «информацию про Сашу Клименко»
     new RegExp(`^(?:эти\\s+)?(?:факты?|данные|сведения|информацию?|инфу)\\s+(?:об?\\s+|про\\s+)${NAME_PATTERN}`, 'i'),
     // «об Юрии Никишенко», «о Юре», «про Сашу Никонова»
     new RegExp(`^(?:об?\\s+|про\\s+)${NAME_PATTERN}`, 'i'),
 ];
+
+/** Паттерны вида «Юра любит кофе» после явного «запомни, что …». */
+const THIRD_PARTY_SUBJECT_PATTERNS: RegExp[] = [
+    new RegExp(`^${USERNAME_PATTERN}\\s+`, 'i'),
+    new RegExp(`^${CAPITALIZED_NAME_PATTERN}\\s+(?:любит|не\\s+любит|работает|жив[её]т|переехал[аи]?|болеет|заболел[аи]?|учится|женат|замужем|развел[а-я]*|встречается|знает|умеет|предпочитает|хочет|планирует|собирается)(?=\\s|$|[,.:;!?])`),
+    new RegExp(`^${NAME_PATTERN}\\s+(?:любит|не\\s+любит|работает|жив[её]т|переехал[аи]?|болеет|заболел[аи]?|учится|женат|замужем|развел[а-я]*|встречается|знает|умеет|предпочитает|хочет|планирует|собирается)(?=\\s|$|[,.:;!?])`, 'i'),
+];
+
+const NON_CONTACT_SUBJECT_WORDS = new Set([
+    'я', 'меня', 'мне', 'мой', 'моя', 'моё', 'мои', 'мы', 'нас', 'нам', 'наш', 'наша', 'наши',
+    'ты', 'тебя', 'тебе', 'он', 'она', 'они', 'его', 'ее', 'её', 'их',
+    'жена', 'муж', 'мама', 'папа', 'сын', 'дочь', 'брат', 'сестра', 'коллега', 'друг', 'подруга',
+]);
 
 /**
  * Нормализует имя контакта.
@@ -77,6 +97,13 @@ function normalizeContactName(name: string): string {
         // Для кириллицы: первая буква upper, остальные lower
         return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
     }).join(' ');
+}
+
+function looksLikeConcreteContactName(name: string): boolean {
+    const firstWord = name.trim().split(/\s+/)[0]?.toLowerCase();
+    if (!firstWord || NON_CONTACT_SUBJECT_WORDS.has(firstWord)) return false;
+    if (name.startsWith('@')) return true;
+    return /^[А-ЯЁA-Zа-яёa-z][А-ЯЁA-Zа-яёa-z-]*(?:\s+[А-ЯЁA-Zа-яёa-z][А-ЯЁA-Zа-яёa-z-]*){0,2}$/.test(name.trim());
 }
 
 /**
@@ -97,6 +124,20 @@ export function extractExplicitRememberFact(message: string): ExplicitRememberFa
             for (const tpRe of THIRD_PARTY_PATTERNS) {
                 const tpMatch = content.match(tpRe);
                 if (tpMatch && tpMatch[1]) {
+                    if (!looksLikeConcreteContactName(tpMatch[1])) continue;
+                    return {
+                        content,
+                        domain: EXPLICIT_REMEMBER_DOMAIN,
+                        importance: EXPLICIT_REMEMBER_IMPORTANCE,
+                        contactName: normalizeContactName(tpMatch[1]),
+                    };
+                }
+            }
+
+            for (const tpRe of THIRD_PARTY_SUBJECT_PATTERNS) {
+                const tpMatch = content.match(tpRe);
+                if (tpMatch && tpMatch[1]) {
+                    if (!looksLikeConcreteContactName(tpMatch[1])) continue;
                     return {
                         content,
                         domain: EXPLICIT_REMEMBER_DOMAIN,
@@ -123,7 +164,8 @@ export async function extractAndSaveFactsFromConversation(
     try {
         // Анализируем только новые сообщения: история в порядке от новых к старым (index 0 = последнее)
         const totalCount = ctx.session.messageHistory.length;
-        const newCount = Math.max(0, totalCount - startIndex);
+        const effectiveStartIndex = startIndex >= totalCount ? 0 : Math.max(0, startIndex);
+        const newCount = Math.max(0, totalCount - effectiveStartIndex);
         const recentMessages = ctx.session.messageHistory.slice(0, Math.min(10, newCount));
         const conversation = recentMessages.reverse();
 
@@ -147,18 +189,14 @@ export async function extractAndSaveFactsFromConversation(
             // const singleMessageFacts = await factService.extractFactsFromSingleMessage(lastUserMessage.content);
         }
 
-        if (conversation.length < 2) {
-            devLog('Недостаточно сообщений для анализа фактов');
-            return 0;
-        }
-
         devLog(`Анализ фактов: ${conversation.length} сообщений, начиная с индекса ${startIndex}`);
 
         const dialoguePairs = groupMessagesIntoDialogue(conversation);
 
         if (dialoguePairs.length === 0) {
-            devLog('⚠️ Нет диалоговых пар, но проверяем одиночные сообщения');
-            // Не прерываем выполнение, так как могут быть одиночные факты
+            devLog('Нет пользовательских сообщений для анализа фактов');
+            ctx.session.lastFactAnalysisIndex = ctx.session.messageHistory.length;
+            return 0;
         }
 
         const facts = await factService.extractFactsFromDialogue(dialoguePairs);
@@ -191,12 +229,21 @@ export async function extractAndSaveFactsFromConversation(
                 }
 
                 if (fact.subject === 'contact' && fact.contactName) {
-                    const contactTags = [...fact.tags, `contact:${fact.contactName}`];
-                    await saveMemory(ctx, fact.domain, factContent, fact.importance, contactTags);
-                    rememberFact(ctx, fact.domain, factContent);
+                    const result = await saveContactMemoryFactOrAsk(ctx, {
+                        contactName: fact.contactName,
+                        content: fact.content,
+                        domain: fact.domain,
+                        importance: fact.importance,
+                        tags: fact.tags,
+                    });
+                    if (result.status !== 'saved') {
+                        devLog(`Факт о контакте ожидает уточнения: [${fact.contactName}] ${fact.content}`);
+                        continue;
+                    }
                     devLog(`Сохранен факт о контакте [${fact.contactName}]: ${fact.content}`);
                 } else {
-                    await saveMemory(ctx, fact.domain, fact.content, fact.importance, fact.tags);
+                    const saved = await saveMemory(ctx, fact.domain, fact.content, fact.importance, fact.tags);
+                    if (!saved) continue;
                     rememberFact(ctx, fact.domain, fact.content);
                     devLog(`Сохранен факт о пользователе: ${fact.content}`);
                 }
@@ -262,7 +309,7 @@ export async function quickFactCheck(message: string): Promise<QuickFact[]> {
 
     try {
         const response = await openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 {
                     role: 'system',
@@ -308,6 +355,7 @@ interface DialoguePair {
 
 function groupMessagesIntoDialogue(messages: any[]): DialoguePair[] {
     const pairs: DialoguePair[] = [];
+    const consumedUserIndexes = new Set<number>();
 
     devLog(`🔍 Группировка ${messages.length} сообщений в диалоги`);
 
@@ -332,8 +380,22 @@ function groupMessagesIntoDialogue(messages: any[]): DialoguePair[] {
             };
 
             pairs.push(pair);
+            consumedUserIndexes.add(i);
+            if (userReply) consumedUserIndexes.add(i + 2);
             devLog(`✅ Создана диалоговая пара: "${current.content}" -> "${next.content}"`);
         }
+    }
+
+    for (let i = 0; i < messages.length; i++) {
+        const current = messages[i];
+        if (current.role !== 'user' || consumedUserIndexes.has(i)) continue;
+        pairs.push({
+            userMessage: current.content,
+            botResponse: '[Бот ещё не отвечал]',
+            timestamp: current.timestamp,
+            isUserInitiated: true,
+        });
+        devLog(`✅ Создана одиночная пользовательская запись для анализа: "${current.content}"`);
     }
 
     devLog(`📊 Создано диалоговых пар: ${pairs.length}`);

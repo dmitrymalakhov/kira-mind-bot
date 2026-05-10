@@ -5,7 +5,7 @@ import { devLog, processReminderTime } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import openai from "../openai";
 import { USER_TIMEZONE } from "../constants";
-import type { ReminderTargetChat } from "../reminder";
+import type { ReminderTargetChat, RecurrenceRule } from "../reminder";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -18,6 +18,8 @@ interface ReminderAnalysis {
     reminderMessage: string;
     /** Если пользователь просит напомнить "в чате с X" / "в группе Y" — куда отправить напоминание (резолвится из памяти) */
     targetChat?: ReminderTargetChat;
+    /** Правило повторения, если пользователь просит напоминать регулярно */
+    recurrence?: RecurrenceRule | null;
 }
 
 interface MultiReminderAnalysis {
@@ -89,17 +91,31 @@ export async function reminderAgent(
         - Если нельзя определить время, используй значение по умолчанию - через 30 минут
         - Формат времени должен быть строго ISO и включать таймзону (например, 2026-05-20T15:00:00+03:00)
 
+        6. Если пользователь просит напоминать РЕГУЛЯРНО ("каждый день", "каждую неделю", "каждый понедельник", "раз в месяц", "каждые 2 дня" и т.п.) — укажи recurrence:
+           - "каждый день" / "ежедневно" → { "type": "daily", "interval": 1 }
+           - "каждые 2 дня" → { "type": "daily", "interval": 2 }
+           - "каждый час" → { "type": "hourly", "interval": 1 }
+           - "каждую неделю" / "еженедельно" → { "type": "weekly", "interval": 1 }
+           - "каждый понедельник" → { "type": "weekly", "interval": 1, "daysOfWeek": [1] }
+           - "каждый вторник и четверг" → { "type": "weekly", "interval": 1, "daysOfWeek": [2, 4] }
+           - "каждые 2 недели" → { "type": "weekly", "interval": 2 }
+           - "каждый месяц" / "ежемесячно" → { "type": "monthly", "interval": 1 }
+           - "каждый год" / "ежегодно" → { "type": "yearly", "interval": 1 }
+           - Если повторение не указано → "recurrence": null
+           Дни недели: 0=вс, 1=пн, 2=вт, 3=ср, 4=чт, 5=пт, 6=сб
+
         Если в сообщении несколько напоминаний, выдели каждое в отдельный объект массива.
         Ответ предоставь в формате JSON:
         {
           "reminders": [
             {
               "reminderText": "краткий текст о чем напомнить (для внутреннего использования)",
-              "reminderTime": "время в ISO формате",
+              "reminderTime": "время первого срабатывания в ISO формате",
               "exactTimeSpecified": true/false,
-              "confirmationMessage": "естественное сообщение для подтверждения создания напоминания",
+              "confirmationMessage": "естественное сообщение для подтверждения (упомяни повторение, если оно есть)",
               "reminderMessage": "текст самого напоминания (то, что пользователь получит в указанное время)",
-              "targetChat": null или { "type": "group", "groupName": "название группы" } или { "type": "contact", "contactQuery": "имя/ник контакта" }
+              "targetChat": null или { "type": "group", "groupName": "название группы" } или { "type": "contact", "contactQuery": "имя/ник контакта" },
+              "recurrence": null или { "type": "daily"|"weekly"|"monthly"|"yearly"|"hourly", "interval": N, "daysOfWeek": [0-6] }
             }
           ]
         }
@@ -160,6 +176,17 @@ export async function reminderAgent(
             return undefined;
         };
 
+        const normalizeRecurrence = (rec: ReminderAnalysis["recurrence"]): RecurrenceRule | undefined => {
+            if (!rec || typeof rec !== "object") return undefined;
+            const validTypes = ["hourly", "daily", "weekly", "monthly", "yearly"];
+            if (!validTypes.includes(rec.type)) return undefined;
+            const interval = typeof rec.interval === "number" && rec.interval > 0 ? rec.interval : 1;
+            const daysOfWeek = Array.isArray(rec.daysOfWeek)
+                ? rec.daysOfWeek.filter((d: number) => d >= 0 && d <= 6)
+                : undefined;
+            return { type: rec.type, interval, ...(daysOfWeek && daysOfWeek.length > 0 ? { daysOfWeek } : {}) };
+        };
+
         const detailsList = validReminders.map((r, idx) => {
             const due = new Date(processReminderTime(r.reminderTime));
             return {
@@ -167,7 +194,8 @@ export async function reminderAgent(
                 text: r.reminderText,
                 reminderMessage: r.reminderMessage,
                 dueDate: due,
-                targetChat: normalizeTargetChat(r.targetChat)
+                targetChat: normalizeTargetChat(r.targetChat),
+                recurrence: normalizeRecurrence(r.recurrence),
             };
         });
 

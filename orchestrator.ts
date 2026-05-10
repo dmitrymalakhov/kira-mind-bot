@@ -1,15 +1,10 @@
 import * as dotenv from "dotenv";
 import { MessageHistory } from "./types";
-import { conversationAgent } from "./agents/conversationAgent";
 import { reminderAgent } from "./agents/reminderAgent";
-import { unclearIntentAgent } from "./agents/unclearIntentAgent";
 import { imageAgent } from "./agents/imageAgent";
 import { imageGenerationAgent } from "./agents/imageGenerationAgent";
 import { mapsAgent } from "./agents/googleMapsAgent";
-import { readMessagesAgent } from "./agents/readMessagesAgent";
-import { webSearchAgent } from "./agents/webSearchAgent";
 import { InlineKeyboard } from "grammy";
-import { sendMessagesAgent } from "./agents/sendMessagesAgent";
 import { devLog, parseLLMJson } from "./utils";
 import openai from "./openai";
 import { llmCache, LLM_CACHE_TTL } from "./utils/llmCache";
@@ -19,6 +14,9 @@ import { detectRelationshipInMessage, resolveRelationshipFromMemory } from "./ut
 import { createPlan } from "./orchestration/planner";
 import { executePlan } from "./orchestration/executor";
 import { Plan } from "./orchestration/types";
+import { ChatGroupRepository } from "./services/ChatGroupRepository";
+import { handlePendingContactMemoryText } from "./utils/contactMemory";
+import { handlePendingContactLookupText, maybeStartContactMemoryLookup } from "./utils/contactMemoryLookup";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -28,7 +26,16 @@ dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
 // Расширенный интерфейс для результата классификации сообщения
 export interface MessageClassification {
     intent: "НАПОМИНАНИЕ" | "РАЗГОВОР" | "НЕОПРЕДЕЛЕНО" | "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ" |
-    "КАРТЫ_ЛОКАЦИИ" | "ПРОВЕРКА_СООБЩЕНИЙ" | "ВЕБ_ПОИСК" | "ОТПРАВКА_СООБЩЕНИЯ" | "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ" | "ВОЗМОЖНОСТИ_БОТА";
+    "КАРТЫ_ЛОКАЦИИ" | "ПРОВЕРКА_СООБЩЕНИЙ" | "ВЕБ_ПОИСК" | "ОТПРАВКА_СООБЩЕНИЯ" | "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ" | "ВОЗМОЖНОСТИ_БОТА" | "БРАУЗЕР_ЗАДАЧА";
+    /**
+     * Дополнительные намерения, если запрос составной (два явных независимых действия).
+     * Пример: «напомни завтра и напиши маме сейчас» →
+     *   intent: НАПОМИНАНИЕ, subIntents: [{intent: "ОТПРАВКА_СООБЩЕНИЯ", details: {contactQuery: "мама"}}]
+     */
+    subIntents?: Array<{
+        intent: MessageClassification["intent"];
+        details?: Partial<MessageClassification["details"]>;
+    }>;
     confidenceLevel: "ВЫСОКИЙ" | "СРЕДНИЙ" | "НИЗКИЙ";
     details: {
         category?: string;
@@ -46,10 +53,31 @@ export interface MessageClassification {
         saveFactsAboutUser?: boolean;
         /** Имя контакта, разрешённое из памяти на шаге resolveContact (для readMessages) */
         resolvedContactName?: string;
-        /** Название группового чата (если запрос о групповом чате, а не переписке с конкретным человеком) */
+        /** Название группового чата (если запрос об одном групповом чате) */
         groupChatQuery?: string;
+        /** Названия нескольких групповых чатов (если пользователь перечисляет несколько чатов) */
+        groupChatQueries?: string[];
         /** Предложенная реакция-эмодзи на сообщение пользователя */
         botReaction?: string;
+        /**
+         * Для интента НАПОМИНАНИЕ: тип операции.
+         * "create" — создать напоминание (по умолчанию).
+         * "cancel" — отменить существующее напоминание по текстовому запросу.
+         * "cancelAll" — отменить ВСЕ активные напоминания (или все за период).
+         * "update" — изменить время и/или текст существующего напоминания.
+         * "updateAll" — перенести ВСЕ активные напоминания (или все за период) на новое время.
+         */
+        reminderAction?: "create" | "cancel" | "cancelAll" | "update" | "updateAll";
+        /** Фильтр периода для cancelAll/updateAll: "today" | "tomorrow" | "week" | undefined (=все) */
+        reminderBatchPeriod?: "today" | "tomorrow" | "week";
+        /** Поисковый запрос для поиска напоминания при reminderAction = "cancel" */
+        reminderCancelQuery?: string;
+        /** Поисковый запрос для поиска напоминания при reminderAction = "update" */
+        reminderUpdateQuery?: string;
+        /** Новое время срабатывания при reminderAction = "update" (человекочитаемое, напр. "завтра в 15:00") */
+        reminderUpdateNewTime?: string;
+        /** Новый текст напоминания при reminderAction = "update" */
+        reminderUpdateNewText?: string;
     };
 }
 
@@ -64,6 +92,7 @@ export interface ProcessingResult {
         dueDate: Date;
         /** Куда отправить напоминание: в группу или контакту (резолвится при срабатывании) */
         targetChat?: { type: "group"; groupName: string } | { type: "contact"; contactQuery: string };
+        recurrence?: import("./types/reminderTypes").RecurrenceRule;
     };
     reminderDetailsList?: {
         id: string;
@@ -71,6 +100,7 @@ export interface ProcessingResult {
         reminderMessage?: string;
         dueDate: Date;
         targetChat?: { type: "group"; groupName: string } | { type: "contact"; contactQuery: string };
+        recurrence?: import("./types/reminderTypes").RecurrenceRule;
     }[];
     detectedText?: string; // Текст, который был распознан в сообщении
     description?: string; // Описание изображения, если оно было сгенерировано
@@ -102,7 +132,10 @@ interface IntentDedupCheckResult {
 
 const INTENT_DEDUP_WINDOW_MS = 3 * 60 * 1000;
 const INTENT_DEDUP_MIN_CONFIDENCE = 0.8;
-const NON_DEDUP_INTENTS = new Set(["РАЗГОВОР", "ОТПРАВКА_СООБЩЕНИЯ", "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ", "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ", "ПРОВЕРКА_СООБЩЕНИЙ", "НАПОМИНАНИЕ", "ВЕБ_ПОИСК"]);
+const NON_DEDUP_INTENTS = new Set(["РАЗГОВОР", "ОТПРАВКА_СООБЩЕНИЯ", "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ", "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ", "ПРОВЕРКА_СООБЩЕНИЙ", "ВЕБ_ПОИСК", "БРАУЗЕР_ЗАДАЧА"]);
+const BROWSER_CONTINUATION_RE = /^Продолжи задачу в браузере через Playwright\.|browserSessionId:/i;
+const BROWSER_TASK_FORCE_RE = /\b(открой\s+браузер|зайди\s+на\s+сайт|на\s+сайте|через\s+сайт|заполни\s+форму|отправь\s+форму|забронируй|забронь|зарегистрируй(?:ся)?|купи\s+(?:билет|билеты)|оформи\s+заказ|checkout|запишись|запиши\s+меня|нажми\s+(?:кнопку|на))/iu;
+const REMINDER_EXPLICIT_RE = /\b(напомни|создай\s+напоминание|поставь\s+напоминание|добавь\s+напоминание)\b/iu;
 
 function normalizeForDedup(text: string): string {
     return text
@@ -248,7 +281,8 @@ export async function classifyMessage(
     message: string,
     isForwarded: boolean = false,
     forwardFrom: string = "",
-    messageHistory: MessageHistory[] = []
+    messageHistory: MessageHistory[] = [],
+    knownChatGroups?: { name: string; chatNames: string[] }[]
 ): Promise<MessageClassification> {
     try {
         // Подготовка истории сообщений для контекста
@@ -271,23 +305,57 @@ export async function classifyMessage(
             weekday: 'long'
         });
 
+        // Сохранённые группы чатов пользователя (если есть)
+        const chatGroupsContext = knownChatGroups && knownChatGroups.length > 0
+            ? `\nСохранённые группы чатов пользователя (важно для распознавания):
+${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')})`).join('\n')}
+Если пользователь упоминает название любой из этих групп (или часть названия) в контексте анализа/проверки — это ПРОВЕРКА_СООБЩЕНИЙ с groupChatQuery = точное название группы и messagesCheckType: ANALYZE_CONVERSATION.\n`
+            : '';
+
         // Подготовка промпта для классификации
         const prompt = `
         Текущая дата и время: ${formattedDateTime}
-        
+        ${chatGroupsContext}
         Проанализируй следующее сообщение${isForwarded ? `, пересланное от ${forwardFrom}` : ""}:
 
         "${message}"
         ${historyContext}
+
+        Коррекции и уточнения: если текущее сообщение начинается с «нет», «не то», «не так», «стоп», «подожди», «я имел в виду», «имею в виду», «точнее», «вернее» — это РАЗГОВОР (пользователь исправляет или уточняет предыдущий ответ). Классифицируй как РАЗГОВОР c confidenceLevel: ВЫСОКИЙ, даже если предыдущий интент был другим.
+        Примеры: «нет, я имел в виду жену» → РАЗГОВОР; «стоп, не то» → РАЗГОВОР; «точнее — напомни через час» → НАПОМИНАНИЕ (тут явная просьба, а не просто коррекция).
+
+        Разрешение анафоры: если в ТЕКУЩЕМ сообщении есть местоимения или неполные ссылки («ему», «ей», «его», «её», «им», «них», «туда», «там», «это», «про это», «об этом», «по этому», «они», «тот», «та», «те»), используй историю переписки выше, чтобы понять, к кому или к чему они относятся. Подставляй найденный контекст в поля details:
+        - Местоимение человека → contactQuery (всегда именительный падеж: «жена», «муж», «мама»)
+        - Ссылка на тему предыдущего сообщения → keywords и category
+        - Ссылка на место → locationQuery
+        Примеры:
+          История: «проверь переписку с женой» / Текущее: «а теперь напиши ей» → intent: ОТПРАВКА_СООБЩЕНИЯ, contactQuery: «жена»
+          История: «напиши Артёму про встречу» / Текущее: «напомни мне про это завтра» → intent: НАПОМИНАНИЕ, category: «встреча с Артёмом»
+          История: «найди кафе на Арбате» / Текущее: «проложи туда маршрут» → intent: КАРТЫ_ЛОКАЦИИ, locationQuery: «кафе на Арбате»
 
         Твоя задача: однозначно определить намерение пользователя и вернуть одну из категорий ниже.
         Выбирай конкретный интент (не НЕОПРЕДЕЛЕНО), если сообщение хотя бы примерно подходит под категорию. НЕОПРЕДЕЛЕНО — только если сообщение действительно непонятно или не подходит ни под одну категорию. Для ясных просьб всегда указывай confidenceLevel: ВЫСОКИЙ.
         
         Категории (выбери одну):
         
-        1. НАПОМИНАНИЕ - пользователь явно просит установить напоминание, создать задачу, 
-           запланировать встречу или отследить событие. Используются слова "напомни", "создай напоминание", 
+        1. НАПОМИНАНИЕ - пользователь явно просит установить напоминание, создать задачу,
+           запланировать встречу или отследить событие. Используются слова "напомни", "создай напоминание",
            "не забудь", "запланируй", "встреча", "записаться", "запись на прием", "мероприятие", "событие" и т.п.
+           ТАКЖЕ относится к НАПОМИНАНИЕ: явная просьба ОТМЕНИТЬ существующее напоминание:
+           «отмени напоминание про встречу», «удали напоминание о враче», «убери напоминание на завтра»,
+           «сними напоминание о звонке», «не напоминай мне о X», «отмени все напоминания».
+           В этом случае: details.reminderAction = "cancel", details.reminderCancelQuery = ключевые слова для поиска напоминания (например "врач", "встреча", "звонок маме").
+           ТАКЖЕ относится к НАПОМИНАНИЕ: явная просьба ОТМЕНИТЬ ВСЕ или несколько напоминаний:
+           «отмени все напоминания», «удали все напоминания на сегодня», «убери все напоминания на эту неделю».
+           В этом случае: details.reminderAction = "cancelAll", details.reminderBatchPeriod = "today" | "tomorrow" | "week" | undefined (если нет периода).
+           ТАКЖЕ относится к НАПОМИНАНИЕ: явная просьба ПЕРЕНЕСТИ ВСЕ напоминания:
+           «перенеси все напоминания на завтра», «передвинь все напоминания на неделю вперёд».
+           В этом случае: details.reminderAction = "updateAll", details.reminderBatchPeriod = "today" | "tomorrow" | "week", details.reminderUpdateNewTime = новое время.
+           ТАКЖЕ относится к НАПОМИНАНИЕ: явная просьба ИЗМЕНИТЬ или ПЕРЕНЕСТИ существующее напоминание:
+           «перенеси напоминание про встречу на завтра», «передвинь напоминание о враче на 15:00»,
+           «поменяй время напоминания про X на Y», «измени текст напоминания о звонке»,
+           «сдвинь напоминание на час позже», «напоминание про X — перенеси на пятницу».
+           В этом случае: details.reminderAction = "update", details.reminderUpdateQuery = ключевые слова для поиска (например "врач", "встреча"), details.reminderUpdateNewTime = новое время (например "завтра в 15:00"), details.reminderUpdateNewText = новый текст (если меняется текст).
            
         2. РАЗГОВОР - пользователь делится информацией, задает вопрос, выражает эмоции,
            рассказывает о событии БЕЗ просьбы о напоминании.
@@ -336,12 +404,18 @@ export async function classifyMessage(
 
         9. ВОЗМОЖНОСТИ_БОТА - пользователь спрашивает, что умеет бот, какие у него функции, чем может помочь, просит рассказать о себе / о возможностях. Примеры: "что ты умеешь", "чем можешь помочь", "расскажи о себе", "твои возможности", "what can you do", "your capabilities".
 
-        10. НЕОПРЕДЕЛЕНО - только если сообщение действительно не подходит ни под одну категорию выше (неясный или общий текст без явной просьбы).
+        10. БРАУЗЕР_ЗАДАЧА - пользователь просит выполнить действие в браузере / в интернете в автоматическом режиме: записаться куда-то, заполнить форму, сделать что-то на сайте, забронировать, зарегистрироваться, купить, отправить форму, нажать кнопку, проверить что-то на конкретном сайте — что требует реального браузера (не просто поиска).
+           Ключевые маркеры: "запишись", "запиши меня", "заполни форму", "забронируй", "зарегистрируйся", "купи билет", "зайди на сайт и ...", "на сайте X сделай ...", "открой браузер", "запись к врачу онлайн", "сделай это через браузер".
+           ОТЛИЧИЕ от ВЕБ_ПОИСК: ВЕБ_ПОИСК — найти и прочитать информацию. БРАУЗЕР_ЗАДАЧА — совершить действие (клик, заполнение, отправка формы) на конкретном сайте.
+
+        11. НЕОПРЕДЕЛЕНО - только если сообщение действительно не подходит ни под одну категорию выше (неясный или общий текст без явной просьбы).
 
         Дополнительные факторы для анализа:
         - Просьба о планировании встречи, совещания, мероприятия = НАПОМИНАНИЕ
         - Просьба добавить что-то в календарь = НАПОМИНАНИЕ
         - Просьба создать запись к врачу, парикмахеру и т.п. = НАПОМИНАНИЕ
+        - Просьба перенести, сдвинуть, передвинуть, поменять время существующего напоминания = НАПОМИНАНИЕ, reminderAction: update
+        - Просьба изменить текст существующего напоминания = НАПОМИНАНИЕ, reminderAction: update
         - Просто упоминание будущего события БЕЗ просьбы напомнить = РАЗГОВОР, а не НАПОМИНАНИЕ
         - Выражение эмоций (страх, тревога, радость) обычно = РАЗГОВОР
         - Запрос на информацию или совет = РАЗГОВОР
@@ -360,17 +434,36 @@ export async function classifyMessage(
         - Даже если предыдущие сообщения были о ПРОВЕРКЕ_СООБЩЕНИЙ, простой вопрос о факте = РАЗГОВОР
         - Запрос на составление психологического портрета по переписке = ПРОВЕРКА_СООБЩЕНИЙ (contactQuery = имя)
         - Упоминание "анализ переписки", "анализируй сообщения" и подобных фраз = ПРОВЕРКА_СООБЩЕНИЙ
-        - Просьба почитать/изучить групповой чат по названию ("посмотри чат Leads", "изучи в чате Каркас", "почитай группу X") = ПРОВЕРКА_СООБЩЕНИЙ (groupChatQuery = название чата)
-        - Ключевое различие: "переписку с Юлей" / "чат с мамой" → contactQuery; "чат Leads" / "группу Каркас" / "в чате Старт" → groupChatQuery
+        - Просьба почитать/изучить ОДИН групповой чат по названию ("посмотри чат Leads", "изучи в чате Каркас", "почитай группу X") = ПРОВЕРКА_СООБЩЕНИЙ (groupChatQuery = название чата)
+        - Просьба изучить НЕСКОЛЬКО групповых чатов по названиям ("изучи чаты Leads и Каркас", "посмотри чаты «Старт», «Финиш» и «Пуск»") = ПРОВЕРКА_СООБЩЕНИЙ (groupChatQueries = массив названий чатов, groupChatQuery НЕ заполнять)
+        - Ключевое различие: "переписку с Юлей" / "чат с мамой" → contactQuery; один "чат Leads" / "группу Каркас" / "в чате Старт" → groupChatQuery; несколько чатов → groupChatQueries
         - «Изучи чат с X и запомни/узнай факты про меня» = ПРОВЕРКА_СООБЩЕНИЙ, messagesCheckType: ANALYZE_CONVERSATION, saveFactsAboutUser: true, contactQuery = X
         - «Изучи чат с X и запомни важное о нём/о ней» = ПРОВЕРКА_СООБЩЕНИЙ, messagesCheckType: ANALYZE_CONVERSATION, saveFactsAboutUser: true, contactQuery = X
         - «Изучи чат с X и запомни» (любая просьба запомнить/сохранить в контексте изучения переписки) = ПРОВЕРКА_СООБЩЕНИЙ, messagesCheckType: ANALYZE_CONVERSATION, saveFactsAboutUser: true, contactQuery = X
         - «Изучи чат [GroupName] и запомни/сохрани факты» ("изучи чат Важный вопрос и запомни", "прочитай группу Leads и сохрани факты") = ПРОВЕРКА_СООБЩЕНИЙ, messagesCheckType: ANALYZE_CONVERSATION, saveFactsAboutUser: true, groupChatQuery = GroupName
 
+        Составные запросы (subIntents):
+        Если запрос явно содержит ДВА независимых действия одновременно (разделены «и», «а также», «плюс», «заодно» или явным перечислением),
+        укажи основное намерение в "intent", а дополнительное — в "subIntents".
+        Добавляй subIntents ТОЛЬКО когда оба намерения явные и НЕЗАВИСИМЫЕ по времени и исполнению.
+        НЕ добавляй subIntents, если одно намерение является контекстом другого:
+          «напомни написать жене» — это просто НАПОМИНАНИЕ (написать жене — цель напоминания, не отдельное действие);
+          «найди рецепт и скажи мне» — это просто ВЕБ_ПОИСК + conversation (один поток).
+        Примеры ЯВНЫХ составных запросов (subIntents нужен):
+          «напомни мне завтра и прямо сейчас напиши маме что задержусь» → intent: НАПОМИНАНИЕ, subIntents: [{intent: "ОТПРАВКА_СООБЩЕНИЯ", details: {contactQuery: "мама", messageContent: "задержусь"}}]
+          «напиши Артёму про встречу и поставь напоминание на 18:00» → intent: ОТПРАВКА_СООБЩЕНИЯ, subIntents: [{intent: "НАПОМИНАНИЕ", details: {timeReferences: ["18:00"]}}]
+          «найди адрес клиники и поставь напоминание на завтра в 9» → intent: ВЕБ_ПОИСК, subIntents: [{intent: "НАПОМИНАНИЕ", details: {timeReferences: ["завтра 9:00"]}}]
+
         Ответ предоставь в формате JSON:
         {
-          "intent": "НАПОМИНАНИЕ | РАЗГОВОР | ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ | КАРТЫ_ЛОКАЦИИ | НЕОПРЕДЕЛЕНО | ПРОВЕРКА_СООБЩЕНИЙ | ВЕБ_ПОИСК | ОТПРАВКА_СООБЩЕНИЯ | ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ | ВОЗМОЖНОСТИ_БОТА",
+          "intent": "НАПОМИНАНИЕ | РАЗГОВОР | ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ | КАРТЫ_ЛОКАЦИИ | НЕОПРЕДЕЛЕНО | ПРОВЕРКА_СООБЩЕНИЙ | ВЕБ_ПОИСК | ОТПРАВКА_СООБЩЕНИЯ | ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ | ВОЗМОЖНОСТИ_БОТА | БРАУЗЕР_ЗАДАЧА",
           "confidenceLevel": "ВЫСОКИЙ | СРЕДНИЙ | НИЗКИЙ",
+          "subIntents": [
+            {
+              "intent": "второй интент (только если запрос явно составной, иначе опустить поле)",
+              "details": { "contactQuery": "...", "timeReferences": ["..."], "messageContent": "..." }
+            }
+          ],
           "details": {
             "category": "категория сообщения (например, медицина, работа, личное)",
             "keywords": ["ключевые слова из сообщения"],
@@ -382,16 +475,24 @@ export async function classifyMessage(
             "searchQuery": "запрос для поиска в интернете (только для намерения ВЕБ_ПОИСК)",
             "messagesCheckType": "ALL_MESSAGES | ANALYZE_CONVERSATION (только для намерения ПРОВЕРКА_СООБЩЕНИЙ)",
             "contactQuery": "имя или роль человека при анализе личной переписки с ним (только при фразах 'переписка с X', 'чат с X', 'диалог с X' — личный контакт). ВСЕГДА используй именительный падеж: 'жена' (не 'женой'), 'муж' (не 'мужем'), 'мама' (не 'мамой'). Пример: 'чат с моей женой' → contactQuery: 'жена'",
-            "groupChatQuery": "название группового чата если запрос о групповом чате (при фразах 'чат Leads', 'в чате Каркас', 'группа X', 'посмотри чат X' без предлога 'с' перед именем человека)",
+            "groupChatQuery": "название ОДНОГО группового чата (при фразах 'чат Leads', 'в чате Каркас', 'группа X', 'посмотри чат X' без предлога 'с' перед именем человека). Заполнять только если чат один.",
+            "groupChatQueries": ["массив названий групповых чатов если пользователь перечисляет НЕСКОЛЬКО чатов. Пример: 'изучи чаты «Leads» и «Каркас»' → [\"Leads\", \"Каркас\"]. Если чат один — НЕ заполнять, использовать groupChatQuery."],
             "analysisQuery": "что нужно проанализировать в переписке (только для намерения ПРОВЕРКА_СООБЩЕНИЙ и messagesCheckType: ANALYZE_CONVERSATION)",
             "saveFactsAboutUser": "true если пользователь просит изучить переписку и сохранить/узнать/запомнить факты — о СЕБЕ (обо мне, про меня) ИЛИ О КОНТАКТЕ (о нём, о ней, про него, важное о нём, запомни что узнаешь, запомни важное, сохрани факты). Любая просьба 'запомни', 'сохрани', 'узнай и сохрани' в контексте изучения переписки = true. Примеры: 'изучи чат с женой и узнай факты про меня' → true; 'изучи чат с Артемом и запомни важное о нём' → true; 'прочитай переписку с мамой и запомни' → true",
-            "botReaction": "эмодзи, которым стоит отреагировать на сообщение пользователя, или NONE, если реакция не нужна"
+            "botReaction": "эмодзи, которым стоит отреагировать на сообщение пользователя, или NONE, если реакция не нужна",
+            "reminderAction": "create | cancel | cancelAll | update | updateAll — только для интента НАПОМИНАНИЕ. По умолчанию create. cancel/cancelAll — отменить одно или все, update/updateAll — изменить одно или все.",
+            "reminderBatchPeriod": "today | tomorrow | week — фильтр периода для cancelAll/updateAll. Не заполнять если операция применяется ко всем напоминаниям без фильтра.",
+            "reminderCancelQuery": "ключевые слова для поиска напоминания при reminderAction=cancel. Например: 'врач', 'встреча с Артёмом', 'звонок маме'",
+            "reminderUpdateQuery": "ключевые слова для поиска напоминания при reminderAction=update. Например: 'врач', 'встреча', 'звонок маме'",
+            "reminderUpdateNewTime": "новое время при reminderAction=update, человекочитаемое. Например: 'завтра в 15:00', 'в пятницу в 10', 'через 2 часа'",
+            "reminderUpdateNewText": "новый текст напоминания при reminderAction=update (только если пользователь меняет именно текст)"
           }
         }
         `;
 
-        // Кэш по тексту сообщения (история не меняет интент для одного и того же запроса)
-        const cacheKey = `classify:${message.slice(0, 200)}`;
+        // Кэш с учётом списка групп (разные пользователи = разные группы)
+        const groupsCacheKey = knownChatGroups?.map(g => g.name).sort().join('|') ?? '';
+        const cacheKey = `classify:${message.slice(0, 200)}:${groupsCacheKey.slice(0, 60)}`;
         const cached = llmCache.get<MessageClassification>(cacheKey);
         if (cached) {
             devLog('classifyMessage: cache hit');
@@ -404,8 +505,9 @@ export async function classifyMessage(
             messages: [
                 {
                     role: "system",
-                    content: `Ты — классификатор намерений для универсального оркестратора. Твоя задача: по сообщению пользователя выбрать ОДИН конкретный интент из списка (НАПОМИНАНИЕ, РАЗГОВОР, ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ, КАРТЫ_ЛОКАЦИИ, ПРОВЕРКА_СООБЩЕНИЙ, ВЕБ_ПОИСК, ОТПРАВКА_СООБЩЕНИЯ, ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ, ВОЗМОЖНОСТИ_БОТА).
-                    Выбирай тот интент, который лучше всего соответствует запросу. Для явных просьб (напомни, напиши сообщение, нарисуй, найди на карте, отправь маме и т.п.) всегда указывай соответствующий интент и confidenceLevel: ВЫСОКИЙ.
+                    content: `Ты — классификатор намерений для универсального оркестратора. Твоя задача: по сообщению пользователя выбрать ОДИН конкретный интент из списка (НАПОМИНАНИЕ, РАЗГОВОР, ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ, КАРТЫ_ЛОКАЦИИ, ПРОВЕРКА_СООБЩЕНИЙ, ВЕБ_ПОИСК, ОТПРАВКА_СООБЩЕНИЯ, ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ, ВОЗМОЖНОСТИ_БОТА, БРАУЗЕР_ЗАДАЧА).
+                    Выбирай тот интент, который лучше всего соответствует запросу. Для явных просьб (напомни, напиши сообщение, нарисуй, найди на карте, отправь маме, запишись на сайте, заполни форму и т.п.) всегда указывай соответствующий интент и confidenceLevel: ВЫСОКИЙ.
+                    БРАУЗЕР_ЗАДАЧА — когда пользователь просит реально что-то сделать в браузере: записаться, заполнить форму, забронировать, нажать кнопку на конкретном сайте (не просто найти информацию).
                     НЕОПРЕДЕЛЕНО возвращай только если сообщение действительно непонятно или не подходит ни под одну категорию. Не используй НЕОПРЕДЕЛЕНО для ясных просьб.`
                 },
                 {
@@ -453,6 +555,24 @@ export async function processMessage(
     lastLocation?: { latitude: number; longitude: number; address?: string; }
 ): Promise<ProcessingResult> {
     try {
+        const explicitRemember = extractExplicitRememberFact(message);
+        if (!explicitRemember) {
+            const contactMemoryResolution = await handlePendingContactMemoryText(ctx, message);
+            if (contactMemoryResolution) {
+                return { responseText: contactMemoryResolution };
+            }
+            const pendingContactLookup = await handlePendingContactLookupText(ctx, message);
+            if (pendingContactLookup) {
+                return pendingContactLookup;
+            }
+            const contactLookup = await maybeStartContactMemoryLookup(ctx, message);
+            if (contactLookup) {
+                return contactLookup;
+            }
+        } else if (explicitRemember.contactName && ctx.session?.pendingContactMemory) {
+            return { responseText: 'Выбери контакт в сообщении выше — сохраню факт после уточнения.' };
+        }
+
         const dedupSnapshot = getSessionDedupSnapshot(ctx);
         if (!isForwarded && dedupSnapshot && !NON_DEDUP_INTENTS.has(dedupSnapshot.intent)) {
             const ageMs = Date.now() - Number(dedupSnapshot.createdAt || 0);
@@ -489,10 +609,43 @@ export async function processMessage(
             }
         }
 
-        // Шаг 2: Оркестратор определяет, куда направить запрос (классификация + план)
-        let classification = await classifyMessage(message, isForwarded, forwardFrom, messageHistory);
+        // Загружаем сохранённые группы чатов для инжекта в классификатор и контекст разговора
+        let knownChatGroups: { name: string; chatNames: string[] }[] = [];
+        const ownerChatId = ctx?.chat?.id;
+        if (ownerChatId) {
+            try {
+                const groups = await ChatGroupRepository.findAll(ownerChatId);
+                knownChatGroups = groups.map(g => ({ name: g.name, chatNames: g.chatNames }));
+            } catch { /* не критично — продолжаем без групп */ }
+        }
 
-        if (extractExplicitRememberFact(message) && classification.intent !== "ПРОВЕРКА_СООБЩЕНИЙ") {
+        // Инжектируем группы в контекст разговора, чтобы агент знал о них при casual упоминании
+        if (knownChatGroups.length > 0) {
+            const groupsLine = knownChatGroups
+                .map(g => `«${g.name}» (чаты: ${g.chatNames.join(', ')})`)
+                .join('; ');
+            enrichedContextFromMemory += `Сохранённые группы чатов пользователя: ${groupsLine}.\n\n`;
+        }
+
+        // Шаг 2: Оркестратор определяет, куда направить запрос (классификация + план)
+        let classification = await classifyMessage(message, isForwarded, forwardFrom, messageHistory, knownChatGroups);
+
+        if (BROWSER_CONTINUATION_RE.test(message)) {
+            classification = { ...classification, intent: "БРАУЗЕР_ЗАДАЧА", confidenceLevel: "ВЫСОКИЙ" };
+            devLog("Browser continuation detected, routing to browserTask");
+        }
+
+        if (
+            classification.intent !== "БРАУЗЕР_ЗАДАЧА" &&
+            BROWSER_TASK_FORCE_RE.test(message) &&
+            !REMINDER_EXPLICIT_RE.test(message)
+        ) {
+            classification = { ...classification, intent: "БРАУЗЕР_ЗАДАЧА", confidenceLevel: "ВЫСОКИЙ" };
+            devLog("Browser action override: routing to browserTask");
+            console.log("[ORCH] browser override: action verb matched, routing to browserTask");
+        }
+
+        if (explicitRemember && classification.intent !== "ПРОВЕРКА_СООБЩЕНИЙ") {
             classification = { ...classification, intent: "РАЗГОВОР", confidenceLevel: "ВЫСОКИЙ" };
             devLog("Explicit remember detected, routing to conversation");
         }
@@ -502,7 +655,8 @@ export async function processMessage(
             classification.intent === "ПРОВЕРКА_СООБЩЕНИЙ" &&
             classification.confidenceLevel !== "ВЫСОКИЙ" &&
             !classification.details.contactQuery &&
-            !classification.details.groupChatQuery
+            !classification.details.groupChatQuery &&
+            !classification.details.groupChatQueries?.length
         ) {
             devLog("ПРОВЕРКА_СООБЩЕНИЙ with low confidence and no contact, downgrading to РАЗГОВОР");
             classification = { ...classification, intent: "РАЗГОВОР", confidenceLevel: "СРЕДНИЙ" };

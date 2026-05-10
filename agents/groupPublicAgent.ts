@@ -20,6 +20,7 @@ import openai from "../openai";
 import { parseLLMJson } from "../utils";
 import { searchMemories } from "../utils/enhancedDomainMemory";
 import { getChatAllowedDomains, getChatForbiddenTopics } from "../services/chatRegistry";
+import { getRecentGroupMessages } from "../stores/GroupChatBuffer";
 
 type PublicIntent = "CONVERSATION" | "WEB_SEARCH" | "MAPS" | "IMAGE_GENERATION" | "CAPABILITIES";
 
@@ -47,7 +48,7 @@ function pushGroupHistory(chatId: number, entry: GroupHistoryEntry): void {
 async function classifyPublicMessage(message: string): Promise<PublicIntent> {
     try {
         const resp = await openai.chat.completions.create({
-            model: "gpt-5-nano",
+            model: "gpt-5.4-nano",
             messages: [
                 {
                     role: "system",
@@ -161,6 +162,13 @@ export async function handleGroupPublicUserMessage(ctx: BotContext): Promise<voi
     }
 }
 
+function buildRecentChatContext(chatId: number, excludeText: string): string {
+    const recent = getRecentGroupMessages(chatId, excludeText, 15);
+    if (recent.length === 0) return '';
+    const lines = recent.map(m => `[${m.senderName}]: ${m.text}`).join('\n');
+    return `\n\nПоследние сообщения в чате (для контекста, от старых к новым):\n${lines}`;
+}
+
 async function handlePublicConversation(
     ctx: BotContext,
     message: string,
@@ -170,7 +178,10 @@ async function handlePublicConversation(
     history: GroupHistoryEntry[],
 ): Promise<void> {
     const chatId = ctx.chat!.id;
-    const memoryContext = await buildMemoryContext(ctx, message, allowedDomains);
+    const [memoryContext, recentChatContext] = await Promise.all([
+        buildMemoryContext(ctx, message, allowedDomains),
+        Promise.resolve(buildRecentChatContext(chatId, message)),
+    ]);
 
     const forbiddenBlock = forbiddenTopics.trim()
         ? `\n\nЗАПРЕЩЁННЫЕ ТЕМЫ: Следующие темы полностью запрещены к обсуждению. Если пользователь поднимает любую из них — вежливо откажи и не продолжай тему:\n${forbiddenTopics.trim()}`
@@ -188,8 +199,9 @@ async function handlePublicConversation(
         `Сейчас с тобой общается пользователь по имени ${userName}. Обращайся к нему ТОЛЬКО как "${userName}".\n` +
         `Владелец бота — ${ownerRef} — сейчас НЕ пишет. Не путай собеседника с владельцем.\n` +
         `Если спрашивают о владельце (${ownerRef}) — отвечай строго по данным из памяти ниже. Нет данных — скажи что не знаешь.\n` +
-        `Отвечай дружелюбно и по делу.` +
+        `Отвечай дружелюбно и по делу. Если сообщение пользователя относится к предыдущему обсуждению в чате — учитывай этот контекст в ответе.` +
         forbiddenBlock +
+        recentChatContext +
         memoryContext;
 
     // Формируем историю предыдущих обменов как messages[]

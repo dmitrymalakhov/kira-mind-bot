@@ -15,7 +15,8 @@ export type AgentId =
     | 'imageGeneration'
     | 'maps'
     | 'unclearIntent'
-    | 'capabilities';  // ответ «что умеет бот» — по решению классификатора/планировщика
+    | 'capabilities'  // ответ «что умеет бот» — по решению классификатора/планировщика
+    | 'browserTask';  // автоматизация браузера через Playwright (запись, заполнение форм и т.д.)
 
 /** Один шаг плана: какой агент вызвать и с какими параметрами. */
 export interface PlanStep {
@@ -41,6 +42,12 @@ export interface StepResult {
 /** Вход для планировщика (classification передаётся из оркестратора). */
 export interface PlanningInput {
     message: string;
-    classification: { intent: string; confidenceLevel?: string; details?: Record<string, unknown> };
+    classification: {
+        intent: string;
+        /** Дополнительные намерения составного запроса, если есть. */
+        subIntents?: Array<{ intent: string; details?: Record<string, unknown> }>;
+        confidenceLevel?: string;
+        details?: Record<string, unknown>;
+    };
     messageHistory?: { role: string; content: string }[];
 }

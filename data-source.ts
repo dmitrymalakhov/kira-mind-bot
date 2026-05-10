@@ -3,6 +3,8 @@ import { DataSource } from 'typeorm';
 import { ReminderEntity } from './entity/ReminderEntity';
 import { ChatEntity } from './entity/ChatEntity';
 import { BotSettingEntity } from './entity/BotSettingEntity';
+import { ChatGroupEntity } from './entity/ChatGroupEntity';
+import { SessionEntity } from './entity/SessionEntity';
 
 export const AppDataSource = new DataSource({
   type: 'postgres',
@@ -13,6 +15,6 @@ export const AppDataSource = new DataSource({
   database: process.env.DB_NAME ?? 'KiraMind',
   synchronize: true,
   logging: process.env.NODE_ENV === 'development',
-  entities: [ReminderEntity, ChatEntity, BotSettingEntity],
+  entities: [ReminderEntity, ChatEntity, BotSettingEntity, ChatGroupEntity, SessionEntity],
   migrations: [],
 });

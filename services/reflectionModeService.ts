@@ -5,7 +5,7 @@
  * чатах Telegram попадает в буфер. Планировщик периодически проверяет буферы
  * и запускает двухэтапный анализ:
  *
- *   1. Pre-screen (gpt-5-nano, ~150 токенов): есть ли в батче что-то стоящее?
+ *   1. Pre-screen (gpt-5.4-nano, ~150 токенов): есть ли в батче что-то стоящее?
  *   2. Полное извлечение (gpt-5.4): только если pre-screen ответил YES.
  *
  * Гарантии отсутствия повторного анализа:
@@ -29,6 +29,7 @@ import { BotContext } from '../types';
 import { config } from '../config';
 import { runAnalyzeConversationAgent } from '../agents/analyzeConversationAgent';
 import { saveMemory, searchAllDomainsMemories } from '../utils/enhancedDomainMemory';
+import { saveContactMemoryFactOrAsk } from '../utils/contactMemory';
 import { getSetting, setSetting } from './botSettingsService';
 import { devLog, parseLLMJson } from '../utils';
 import openai from '../openai';
@@ -116,6 +117,8 @@ const botChatIds = new Set<string>();
 let enabled = true;
 let analysesThisHour = 0;
 let hourWindowStart = Date.now();
+/** Per-chat счётчик анализов в текущем часовом окне — предотвращает монополизацию слотов */
+const chatAnalysesThisHour = new Map<string, number>();
 
 // Fix 5: Session metrics (сбрасываются при рестарте)
 let prescreenTotal = 0;
@@ -250,7 +253,7 @@ function scheduleAsyncTriage(chatId: string, senderName: string, text: string): 
 }
 
 /**
- * Определяет через gpt-5-nano, является ли сообщение жизненно важным событием.
+ * Определяет через gpt-5.4-nano, является ли сообщение жизненно важным событием.
  * Если да — помечает буфер как highPriority для немедленного анализа.
  */
 async function triageForHighPriority(chatId: string, senderName: string, text: string): Promise<void> {
@@ -267,7 +270,7 @@ JSON: {"urgent": true/false}`;
 
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -344,9 +347,20 @@ export async function processBuffers(bot: Bot<BotContext>): Promise<void> {
         return yB - yA;
     });
 
+    // Per-chat квота: каждый чат получает не более ceil(лимит / активные чаты) слотов.
+    // Предотвращает монополизацию всех слотов одним болтливым чатом.
+    const activeChats = entries.filter(([, buf]) => isBufferReady(buf)).length;
+    const perChatLimit = Math.max(1, Math.ceil(HOURLY_ANALYSIS_LIMIT / Math.max(1, activeChats)));
+
     for (const [chatId, buf] of entries) {
         if (analysesThisHour >= HOURLY_ANALYSIS_LIMIT) break;
         if (!isBufferReady(buf)) continue;
+
+        const chatUsed = chatAnalysesThisHour.get(chatId) ?? 0;
+        if (chatUsed >= perChatLimit) {
+            devLog(`[reflection] Per-chat limit for "${buf.chatTitle}": ${chatUsed}/${perChatLimit}, skipping`);
+            continue;
+        }
 
         const batch = [...buf.messages];
         buf.messages = [];
@@ -365,6 +379,7 @@ function resetHourWindowIfNeeded(): void {
     if (now - hourWindowStart >= 60 * 60 * 1000) {
         hourWindowStart = now;
         analysesThisHour = 0;
+        chatAnalysesThisHour.clear();
     }
 }
 
@@ -448,7 +463,7 @@ JSON: {"useful": true/false, "emotion": "neutral|stress|conflict|grief|joy|anxie
 
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -536,7 +551,7 @@ async function classifyChat(chatId: string, chatTitle: string, messages: Buffere
 
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -652,6 +667,7 @@ async function analyzeBatch(
         prescreenPassed++;
         devLog(`[reflection] Pre-screen: USEFUL (emotion=${emotion}) — extracting from "${buf.chatTitle}"`);
         analysesThisHour++;
+        chatAnalysesThisHour.set(chatId, (chatAnalysesThisHour.get(chatId) ?? 0) + 1);
 
         // ── Шаг 3: Формируем текст переписки с контекстом и доменом ────────
         const ctx = makeFakeCtx();
@@ -733,12 +749,20 @@ async function analyzeBatch(
         for (const fact of eligible) {
             const isContactFact = fact.subject === 'contact';
             const contactName = fact.contactName ?? buf.chatTitle;
-            const content = isContactFact ? `[${contactName}] ${fact.content}` : fact.content;
-            const tags = isContactFact
-                ? [...fact.tags, `contact:${contactName}`, 'reflection']
-                : [...fact.tags, 'reflection'];
-            await saveMemory(ctx, fact.domain, content, fact.importance, tags);
-            savedCount++;
+            if (isContactFact) {
+                const result = await saveContactMemoryFactOrAsk(ctx, {
+                    contactName,
+                    content: fact.content,
+                    domain: fact.domain,
+                    importance: fact.importance,
+                    tags: [...fact.tags, 'reflection'],
+                }, { askOnAmbiguous: false });
+                if (result.status === 'saved') savedCount++;
+                else devLog(`[reflection] Skipped ambiguous contact fact for "${contactName}"`);
+            } else {
+                const saved = await saveMemory(ctx, fact.domain, fact.content, fact.importance, [...fact.tags, 'reflection']);
+                if (saved) savedCount++;
+            }
         }
 
         // Fix 5: Обновляем счётчики сохранённых фактов

@@ -98,6 +98,10 @@ interface AssistantConfig {
   proactiveOnlyPrivateChat: boolean;
   /** Режим публичных групп: бот отвечает другим пользователям (не владельцу) в групповых чатах */
   groupPublicMode: boolean;
+  /** Утренний дайджест: краткая сводка напоминаний на день */
+  morningDigestEnabled: boolean;
+  /** Час отправки утреннего дайджеста (0–23, по часовому поясу сервера) */
+  morningDigestHour: number;
 }
 
 export interface Config extends AssistantConfig {
@@ -190,6 +194,8 @@ function assistants(activeAssistant: string): AssistantConfig {
       memoryInsightIntervalMs: toNumber(process.env.MEMORY_INSIGHT_INTERVAL_MS, 3 * 60 * 60 * 1000),
       proactiveOnlyPrivateChat: toBoolean(process.env.PROACTIVE_ONLY_PRIVATE_CHAT, true),
       groupPublicMode: toBoolean(process.env.GROUP_PUBLIC_MODE, false),
+      morningDigestEnabled: toBoolean(process.env.MORNING_DIGEST_ENABLED, true),
+      morningDigestHour: toNumber(process.env.MORNING_DIGEST_HOUR, 9),
     },
     SergeyBrainBot: {
       botToken: envResult.parsed?.SERGEY_BOT_TOKEN || process.env.SERGEY_BOT_TOKEN || "",
@@ -246,6 +252,8 @@ function assistants(activeAssistant: string): AssistantConfig {
       memoryInsightIntervalMs: toNumber(process.env.MEMORY_INSIGHT_INTERVAL_MS, 3 * 60 * 60 * 1000),
       proactiveOnlyPrivateChat: toBoolean(process.env.PROACTIVE_ONLY_PRIVATE_CHAT, true),
       groupPublicMode: toBoolean(process.env.GROUP_PUBLIC_MODE, false),
+      morningDigestEnabled: false,
+      morningDigestHour: 9,
     }
   }
 

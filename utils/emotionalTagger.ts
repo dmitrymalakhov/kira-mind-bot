@@ -21,7 +21,7 @@ export async function detectEmotionalTag(content: string): Promise<EmotionalTag 
 
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON без пояснений.' },
                 {

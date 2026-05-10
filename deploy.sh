@@ -198,7 +198,8 @@ ssh root@${SERVER_IP} << EOF
     local name="\$1"
     echo "🚀 Деплой: \$name"
     docker-compose -f docker-compose.yml stop "\$name" 2>/dev/null || true
-    docker-compose -f docker-compose.yml up "\$name" -d --build
+    docker-compose -f docker-compose.yml build --no-cache "\$name"
+    docker-compose -f docker-compose.yml up "\$name" -d
     echo "✅ \$name запущен."
     DEPLOYED_SERVICES="\$DEPLOYED_SERVICES \$name"
   }

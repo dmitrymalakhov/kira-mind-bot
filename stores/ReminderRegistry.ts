@@ -1,9 +1,9 @@
 import { Reminder, ReminderStatus } from '../reminder';
 
 function isActive(r: Reminder): boolean {
-    if (r.status === ReminderStatus.Completed || r.status === ReminderStatus.Expired) return false;
-    // Сработавшие напоминания (Sent) остаются в списке пока пользователь не примет решение
-    if (r.status === ReminderStatus.Sent) return true;
+    if (r.status === ReminderStatus.Completed) return false;
+    // Сработавшие (Sent) и просроченные (Expired) остаются в списке пока пользователь не примет решение
+    if (r.status === ReminderStatus.Sent || r.status === ReminderStatus.Expired) return true;
     return new Date(r.dueDate) > new Date();
 }
 

@@ -5,6 +5,7 @@ import { devLog, parseLLMJson } from '../utils';
 import openai from '../openai';
 import { llmCache, LLM_CACHE_TTL } from './llmCache';
 import { detectEmotionalTag } from './emotionalTagger';
+import { PREDEFINED_DOMAINS } from '../constants/domains';
 
 function vectorService() {
     return getVectorService();
@@ -18,13 +19,208 @@ export function getLastSaveError(): string | null {
     return lastSaveError;
 }
 
-// Факты с косинусным сходством выше этого порога считаются дубликатами — обновляем без проверки
-const DEDUP_SIMILARITY_THRESHOLD = 0.92;
-// Факты в диапазоне [CONTRADICTION_THRESHOLD, DEDUP_SIMILARITY_THRESHOLD) — похожие, но не идентичные.
-// Именно здесь живут противоречия: "работаю в X" vs "перешёл в Y".
-const CONTRADICTION_THRESHOLD = 0.72;
 // Нижний порог для поиска устаревших планировочных фактов при смене состояния
 const PLANNING_SWEEP_THRESHOLD = 0.55;
+const DEDUP_CROSS_DOMAIN_LIMIT = 20;
+const CONTRADICTION_CROSS_DOMAIN_LIMIT = 20;
+// Дефолтный порог противоречий (используется в invalidatePlanningFacts при кросс-доменном поиске)
+const DEFAULT_CONTRADICTION_THRESHOLD = 0.72;
+
+// Домено-специфичные пороги сходства.
+// contacts/health/travel — осторожнее, мелкие детали важны ("живёт в Москве" vs "живёт в Питере")
+// hobbies/entertainment — много похожих вариантов нормально сосуществуют
+const DOMAIN_SIMILARITY_CONFIG: Record<string, { dedup: number; contradiction: number }> = {
+    contacts:      { dedup: 0.88, contradiction: 0.68 },
+    health:        { dedup: 0.90, contradiction: 0.70 },
+    finance:       { dedup: 0.90, contradiction: 0.70 },
+    work:          { dedup: 0.91, contradiction: 0.71 },
+    travel:        { dedup: 0.90, contradiction: 0.70 },
+    family:        { dedup: 0.91, contradiction: 0.71 },
+    personal:      { dedup: 0.91, contradiction: 0.71 },
+    home:          { dedup: 0.91, contradiction: 0.71 },
+    education:     { dedup: 0.92, contradiction: 0.72 },
+    social:        { dedup: 0.92, contradiction: 0.72 },
+    hobbies:       { dedup: 0.93, contradiction: 0.74 },
+    entertainment: { dedup: 0.93, contradiction: 0.74 },
+    general:       { dedup: 0.91, contradiction: 0.71 },
+};
+
+function getDedupThreshold(domain: string): number {
+    return DOMAIN_SIMILARITY_CONFIG[domain]?.dedup ?? 0.92;
+}
+
+function getContradictionThreshold(domain: string): number {
+    return DOMAIN_SIMILARITY_CONFIG[domain]?.contradiction ?? DEFAULT_CONTRADICTION_THRESHOLD;
+}
+
+function normalizeMemoryDomain(domain: string | undefined): string {
+    const normalized = String(domain || '').trim().toLowerCase();
+    return Object.values(PREDEFINED_DOMAINS).includes(normalized as any)
+        ? normalized
+        : PREDEFINED_DOMAINS.GENERAL;
+}
+
+function contactIdFromTags(tags: string[] | undefined): string | null {
+    const tag = (tags ?? []).find(t => String(t).startsWith('contact_id:'));
+    return tag ? String(tag).replace('contact_id:', '').trim() : null;
+}
+
+function contactNamesFromTags(tags: string[] | undefined): Set<string> {
+    const names = new Set<string>();
+    for (const tag of tags ?? []) {
+        const value = String(tag);
+        if (value.startsWith('contact:') || value.startsWith('contact_name:') || value.startsWith('contact_alias:')) {
+            names.add(value.replace(/^contact(_name|_alias)?:/, '').trim().toLowerCase());
+        }
+    }
+    return names;
+}
+
+function hasStableContactIdentity(tags: string[] | undefined): boolean {
+    return (tags ?? []).some(t =>
+        String(t).startsWith('contact_id:') ||
+        String(t).startsWith('contact_key:')
+    );
+}
+
+function hasContactId(tags: string[] | undefined): boolean {
+    return (tags ?? []).some(t => String(t).startsWith('contact_id:'));
+}
+
+function isContactLikeMemory(memory: Pick<MemoryEntry, 'content' | 'tags'>): boolean {
+    const tags = memory.tags ?? [];
+    return /^\[[^\]]+\]\s+/.test(memory.content) ||
+        tags.includes('subject:contact') ||
+        tags.some(t =>
+            String(t).startsWith('contact:') ||
+            String(t).startsWith('contact_name:') ||
+            String(t).startsWith('contact_alias:') ||
+            String(t).startsWith('contact_id:') ||
+            String(t).startsWith('contact_key:')
+        );
+}
+
+function normalizeMemoryTags(tags: string[]): string[] {
+    const normalized = tags
+        .map(tag => String(tag).trim())
+        .filter(Boolean);
+    const isContact = normalized.some(tag =>
+        tag.startsWith('contact:') ||
+        tag.startsWith('contact_name:') ||
+        tag.startsWith('contact_alias:') ||
+        tag.startsWith('contact_id:') ||
+        tag.startsWith('contact_key:')
+    );
+    if (isContact) {
+        return [...new Set([
+            ...normalized.filter(tag => !tag.startsWith('subject:')),
+            'subject:contact',
+        ])];
+    }
+
+    const hasSubjectTag = normalized.some(tag => tag.startsWith('subject:'));
+    if (!hasSubjectTag) {
+        normalized.push('subject:user');
+    }
+    return [...new Set(normalized)];
+}
+
+function canonicalFactText(content: string): string {
+    return content
+        .toLowerCase()
+        .replace(/^\[[^\]]+\]\s+/, '')
+        .replace(/[«»"']/g, '')
+        .replace(/[^\p{L}\p{N}@]+/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function hasSpecificTemporalOrSourceDetail(content: string): boolean {
+    return /(?:\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b|\b20\d{2}\b|\([^)]{3,80}\)|\bс\s+\d{1,2}\s+[а-яё]+\b|\bс\s+20\d{2}\b|сегодня|вчера|позавчера)/i
+        .test(content);
+}
+
+function chooseDedupContent(existingContent: string, newContent: string): string {
+    const existing = existingContent.trim();
+    const incoming = newContent.trim();
+    if (!existing) return incoming;
+    if (!incoming) return existing;
+    if (canonicalFactText(existing) === canonicalFactText(incoming)) return existing;
+
+    const existingHasDetail = hasSpecificTemporalOrSourceDetail(existing);
+    const incomingHasDetail = hasSpecificTemporalOrSourceDetail(incoming);
+    if (existingHasDetail && !incomingHasDetail) return existing;
+    if (incomingHasDetail && !existingHasDetail) return incoming;
+
+    // Near-duplicate confirmations are often shorter paraphrases. Keep the richer
+    // canonical wording and only boost confidence/tags.
+    if (existing.length >= incoming.length * 1.25 && incoming.length < 160) {
+        return existing;
+    }
+    return incoming;
+}
+
+function isSameContactScope(newTags: string[], existingTags: string[] | undefined): boolean {
+    const newContactId = contactIdFromTags(newTags);
+    const existingContactId = contactIdFromTags(existingTags);
+    if (newContactId && existingContactId) return newContactId === existingContactId;
+
+    const newNames = contactNamesFromTags(newTags);
+    const existingNames = contactNamesFromTags(existingTags);
+    const newHasContactScope = Boolean(newContactId) || newNames.size > 0;
+    const existingHasContactScope = Boolean(existingContactId) || existingNames.size > 0;
+    if (newHasContactScope !== existingHasContactScope) return false;
+    if (!newHasContactScope && !existingHasContactScope) return true;
+
+    const newHasStableIdentity = hasStableContactIdentity(newTags);
+    const existingHasStableIdentity = hasStableContactIdentity(existingTags);
+    if (newHasStableIdentity !== existingHasStableIdentity) return false;
+    if ((newContactId || existingContactId) && newContactId !== existingContactId) return false;
+
+    if (newNames.size > 0 && existingNames.size > 0) {
+        for (const name of newNames) {
+            if (existingNames.has(name)) return true;
+        }
+        return false;
+    }
+
+    return true;
+}
+
+// Категории состояний для расширенного поиска противоречий.
+// Ловит логические противоречия с низким векторным сходством:
+// "живёт в Москве" vs "переехал в Питер" — разные векторы, но одна категория.
+const STATE_CATEGORY_QUERIES: Record<string, string[]> = {
+    location:      ['место жительства', 'живёт переехал город', 'адрес проживания'],
+    job:           ['место работы должность', 'компания работодатель', 'уволился устроился'],
+    relationship:  ['семейное положение партнёр', 'женат замужем отношения', 'расстались разведён'],
+    study:         ['учится университет школа', 'студент учебное заведение'],
+    health_status: ['диагноз болезнь хроническое', 'состояние здоровья лечение'],
+};
+
+function detectStateCategory(content: string): string | null {
+    const lc = content.toLowerCase();
+    if (/живёт|переехал|адрес|прописан|жить в|город где/.test(lc)) return 'location';
+    if (/работает|должность|компания|уволился|нанялся|устроился|работодатель/.test(lc)) return 'job';
+    if (/женат|замужем|партнёр|встречается|разведён|расстались|вместе с/.test(lc)) return 'relationship';
+    if (/учится|студент|университет|школа|поступил|учёба в/.test(lc)) return 'study';
+    if (/диагноз|хронический|принимает лекарств|принимает таблетк|принимает препарат/.test(lc)) return 'health_status';
+    return null;
+}
+
+// Счётчик ошибок в fire-and-forget задачах
+const _asyncTaskErrors: Record<string, number> = {};
+
+function fireAndForget(taskName: string, fn: () => Promise<void>): void {
+    fn().catch((e) => {
+        _asyncTaskErrors[taskName] = (_asyncTaskErrors[taskName] ?? 0) + 1;
+        console.error(`❌ [async] ${taskName}:`, e instanceof Error ? e.message : String(e));
+    });
+}
+
+export function getAsyncTaskErrors(): Readonly<Record<string, number>> {
+    return { ..._asyncTaskErrors };
+}
 
 /**
  * Определяет через LLM, является ли факт сменой состояния.
@@ -39,7 +235,7 @@ async function isStateChangeFact(content: string): Promise<boolean> {
     const prompt = `Факт: "${content}"\nЭто факт смены состояния? (человек что-то сделал/изменил: приехал, переехал, уволился, купил, вернулся, начал/закончил работу, получил диагноз и т.п.)\nJSON: {"state_change": true/false}`;
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -69,7 +265,7 @@ async function isPlanningFact(content: string): Promise<boolean> {
     const prompt = `Факт: "${content}"\nЭто планировочный/будущий факт? (человек планирует, собирается, хочет, намерен что-то сделать — но ещё не сделал)\nJSON: {"planning": true/false}`;
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -150,7 +346,7 @@ async function checkContradiction(
 
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -233,7 +429,7 @@ async function detectTemporalExpiry(content: string): Promise<Date | undefined> 
 
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 {
@@ -286,6 +482,7 @@ async function invalidatePlanningFacts(
     newContent: string,
     userId: string,
     newFactId: string,
+    newTags: string[],
     svc: ReturnType<typeof vectorService>
 ): Promise<void> {
     if (!svc) return;
@@ -295,8 +492,9 @@ async function invalidatePlanningFacts(
         const candidates = await svc.searchAllDomains(newContent, userId, 12);
         for (const candidate of candidates) {
             if (candidate.id === newFactId) continue;
+            if (!isSameContactScope(newTags, candidate.tags)) continue;
             // Обрабатываем только зону ниже обычного contradiction-check
-            if (candidate.score >= CONTRADICTION_THRESHOLD) continue;
+            if (candidate.score >= DEFAULT_CONTRADICTION_THRESHOLD) continue;
             if (candidate.score < PLANNING_SWEEP_THRESHOLD) continue;
             if (!await isPlanningFact(candidate.content)) continue;
 
@@ -340,16 +538,28 @@ export async function saveMemory(
     importance: number,
     tags: string[] = [],
     isAnchor = false
-): Promise<void> {
+): Promise<boolean> {
     const userId = ctx.from?.id;
+    const normalizedDomain = normalizeMemoryDomain(domain);
+    const normalizedContent = content.trim();
     devLog('💾 Сохранение в векторную БД (долговременная память):', {
         userId,
-        domain,
-        content: content.slice(0, 100) + '...',
+        domain: normalizedDomain,
+        content: normalizedContent.slice(0, 100) + '...',
         importance,
         isAnchor,
         vectorServiceAvailable: !!vectorService()
     });
+
+    if (!userId) {
+        const msg = 'Не удалось определить пользователя. Факт не сохранён в долговременную память.';
+        console.error('❌', msg);
+        lastSaveError = msg;
+        if (ctx.session) ctx.session.lastFactSaveError = msg;
+        return false;
+    }
+
+    if (!normalizedContent) return false;
 
     const svc = vectorService();
     if (!svc) {
@@ -357,25 +567,34 @@ export async function saveMemory(
         console.error('❌', msg);
         lastSaveError = msg;
         if (ctx.session) ctx.session.lastFactSaveError = msg;
-        return;
+        return false;
     }
 
     try {
+        domain = normalizedDomain;
+        content = normalizedContent;
+        tags = normalizeMemoryTags(tags);
+
+        const dedupThreshold = getDedupThreshold(domain);
+        const contradictionThreshold = getContradictionThreshold(domain);
+
         // ── Шаг 1: Дедупликация (почти идентичные факты) ─────────────────────
         // Ищем кросс-доменно: факт мог быть сохранён с другим доменом ранее
         const nearIdenticalInDomain = await svc.searchMemories(content, String(userId), {
             domain,
-            limit: 1,
-            minScore: DEDUP_SIMILARITY_THRESHOLD,
+            limit: 5,
+            minScore: dedupThreshold,
         });
-        const nearIdenticalAllDomains = nearIdenticalInDomain.length > 0
-            ? nearIdenticalInDomain
-            : (await svc.searchAllDomains(content, String(userId), 3))
-                .filter(r => r.score >= DEDUP_SIMILARITY_THRESHOLD)
-                .slice(0, 1);
+        let dedupCandidate = nearIdenticalInDomain.find(existing => isSameContactScope(tags, existing.tags));
+        if (!dedupCandidate) {
+            dedupCandidate = (await svc.searchAllDomains(content, String(userId), DEDUP_CROSS_DOMAIN_LIMIT))
+                .filter(r => r.score >= dedupThreshold)
+                .find(existing => isSameContactScope(tags, existing.tags));
+        }
 
-        if (nearIdenticalAllDomains.length > 0) {
-            const existing = nearIdenticalAllDomains[0];
+        if (dedupCandidate) {
+            const existing = dedupCandidate;
+            const canonicalContent = chooseDedupContent(existing.content, content);
             // Каждое подтверждение того же факта повышает достоверность (+0.1, cap 1.0)
             const boostedConfidence = Math.min(1.0, (existing.confidence ?? 0.6) + 0.1);
             const mergedImportance = Math.max(importance, existing.importance);
@@ -383,7 +602,7 @@ export async function saveMemory(
             const shouldAutoAnchor = boostedConfidence >= 0.9 && mergedImportance >= 0.8;
             if (shouldAutoAnchor) devLog('⚓ Авто-продвижение в anchor:', content.slice(0, 60));
             await svc.updateMemory(existing.id, existing.domain, {
-                content,
+                content: canonicalContent,
                 domain: existing.domain,
                 timestamp: new Date(),
                 importance: mergedImportance,
@@ -396,7 +615,7 @@ export async function saveMemory(
             devLog('✅ Факт обновлён (дедупликация) ID:', existing.id, '| confidence:', boostedConfidence);
             lastSaveError = null;
             if (ctx.session) delete ctx.session.lastFactSaveError;
-            return;
+            return true;
         }
 
         // ── Шаг 2: Поиск похожих фактов для проверки противоречий ────────────
@@ -405,24 +624,42 @@ export async function saveMemory(
         const relatedInDomain = await svc.searchMemories(content, String(userId), {
             domain,
             limit: 7,
-            minScore: CONTRADICTION_THRESHOLD,
+            minScore: contradictionThreshold,
         });
-        const relatedAllDomains = await svc.searchAllDomains(content, String(userId), 7);
+        const relatedAllDomains = await svc.searchAllDomains(content, String(userId), CONTRADICTION_CROSS_DOMAIN_LIMIT);
 
         // Объединяем результаты, дедуплицируем по id, фильтруем по порогу
-        const seenIds = new Set(relatedInDomain.map(r => r.id));
-        const related = [...relatedInDomain];
+        const related = relatedInDomain.filter(r => isSameContactScope(tags, r.tags));
+        const seenIds = new Set(related.map(r => r.id));
         for (const r of relatedAllDomains) {
-            if (!seenIds.has(r.id) && r.score >= CONTRADICTION_THRESHOLD && r.score < DEDUP_SIMILARITY_THRESHOLD) {
+            if (!seenIds.has(r.id) && r.score >= contradictionThreshold && r.score < dedupThreshold) {
+                if (!isSameContactScope(tags, r.tags)) continue;
                 seenIds.add(r.id);
                 related.push(r);
+            }
+        }
+
+        // Расширенный поиск по семантической категории состояния:
+        // ловит противоречия с низким векторным сходством ("живёт в Москве" vs "переехал в Питер")
+        const stateCategory = detectStateCategory(content);
+        if (stateCategory) {
+            for (const catQuery of STATE_CATEGORY_QUERIES[stateCategory]) {
+                const catResults = await svc.searchAllDomains(catQuery, String(userId), 3);
+                for (const r of catResults) {
+                    if (seenIds.has(r.id)) continue;
+                    if (!isSameContactScope(tags, r.tags)) continue;
+                    if (r.score < 0.55 || r.score >= dedupThreshold) continue;
+                    seenIds.add(r.id);
+                    related.push(r);
+                }
             }
         }
 
         let mergedCount = 0;
         for (const candidate of related) {
             // Пропускаем то, что уже обработано порогом дедупликации
-            if (candidate.score >= DEDUP_SIMILARITY_THRESHOLD) continue;
+            if (candidate.score >= dedupThreshold) continue;
+            if (!isSameContactScope(tags, candidate.tags)) continue;
 
             const check = await checkContradiction(candidate.content, content);
             devLog(`🔍 Проверка противоречия [${check.verdict}]:`, {
@@ -489,7 +726,7 @@ export async function saveMemory(
         if (mergedCount > 0) {
             lastSaveError = null;
             if (ctx.session) delete ctx.session.lastFactSaveError;
-            return; // Новый факт поглощён существующими записями
+            return true; // Новый факт поглощён существующими записями
         }
 
         // ── Шаг 3: Эмоциональная маркировка (только для значимых фактов) ────
@@ -532,15 +769,16 @@ export async function saveMemory(
         devLog('✅ Факт успешно сохранён с ID:', result);
 
         // ── Шаг 5: Строим граф связей (fire & forget) ────────────────────────
-        buildMemoryRelationships(result, content, String(userId), domain, svc).catch(() => { });
+        fireAndForget('buildMemoryRelationships', () => buildMemoryRelationships(result, content, String(userId), domain, tags, svc));
 
         // ── Шаг 5.5: Аннулируем устаревшие планировочные факты (fire & forget) ─
         // Обрабатывает зону similarity 0.55–0.72 — ниже порога contradiction-check,
         // но достаточно близко чтобы "планирую поездку" нашлось по "прилетел".
-        invalidatePlanningFacts(content, String(userId), result, svc).catch(() => { });
+        fireAndForget('invalidatePlanningFacts', () => invalidatePlanningFacts(content, String(userId), result, tags, svc));
 
         lastSaveError = null;
         if (ctx.session) delete ctx.session.lastFactSaveError;
+        return true;
     } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         lastSaveError = msg;
@@ -550,6 +788,7 @@ export async function saveMemory(
                 ? 'Не удалось сохранить в долговременную память (ошибка сервиса или сети). Попробуй позже.'
                 : msg;
         if (ctx.session) ctx.session.lastFactSaveError = userMsg;
+        return false;
     }
 }
 
@@ -563,18 +802,19 @@ async function buildMemoryRelationships(
     content: string,
     userId: string,
     domain: string,
+    tags: string[],
     svc: ReturnType<typeof vectorService>
 ): Promise<void> {
     if (!svc || !newId) return;
     try {
-        // Ищем связанные факты в диапазоне [0.60, 0.92) — не дубликаты, но семантически близкие
-        const candidates = await svc.searchMemories(content, userId, {
-            limit: 6,
-            minScore: 0.60,
-        });
+        // Ищем связанные факты в диапазоне [0.60, dedup) — не дубликаты, но семантически близкие
+        const candidates = await svc.searchAllDomains(content, userId, 8);
         for (const candidate of candidates) {
             if (candidate.id === newId) continue;
-            if (candidate.score >= DEDUP_SIMILARITY_THRESHOLD) continue; // пропускаем дубликаты
+            if (!isSameContactScope(tags, candidate.tags)) continue;
+            const candidateDomain = normalizeMemoryDomain(candidate.domain || domain);
+            const domainDedupThreshold = getDedupThreshold(candidateDomain);
+            if (candidate.score >= domainDedupThreshold) continue; // пропускаем дубликаты
             await svc.addRelationship(newId, domain, candidate.id, candidate.domain);
         }
     } catch (e) {
@@ -756,10 +996,10 @@ export async function generateMemoryBiography(ctx: BotContext): Promise<string> 
         f.domain === 'contacts' && f.tags?.some(t => String(t).startsWith('portrait:'))
     );
     const userFacts = all.filter(f =>
-        !f.tags?.some(t => String(t).startsWith('contact:')) && f.domain !== 'contacts'
+        !isContactLikeMemory(f) && f.domain !== 'contacts'
     );
     const contactFacts = all.filter(f =>
-        f.domain !== 'contacts' && f.tags?.some(t => String(t).startsWith('contact:'))
+        f.domain !== 'contacts' && isContactLikeMemory(f)
     );
 
     const byDomain: Record<string, MemoryEntry[]> = {};
@@ -843,7 +1083,7 @@ export async function generateMemoryInsights(ctx: BotContext): Promise<string> {
 
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 {
                     role: 'system',
@@ -938,7 +1178,8 @@ export async function compressOldMemories(
     if (!svc) return { compressed: 0, deleted: 0 };
 
     const userId = String(ctx.from?.id);
-    const old = await svc.getMemoriesForCompression(userId, domain, olderThanDays);
+    const old = (await svc.getMemoriesForCompression(userId, domain, olderThanDays))
+        .filter(memory => !isContactLikeMemory(memory));
 
     if (old.length < 5) {
         devLog(`compressOldMemories [${domain}]: only ${old.length} facts, skipping`);
@@ -952,7 +1193,7 @@ export async function compressOldMemories(
     let summaries: string[] = [];
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5-nano',
+            model: 'gpt-5.4-nano',
             messages: [
                 {
                     role: 'system',
@@ -1029,18 +1270,49 @@ export async function getMemoryHealthReport(ctx: BotContext): Promise<string> {
     let lowConfidence = 0;
     let stale = 0;             // не вспоминался > 60 дней
     let expiringSoon = 0;      // expiresAt в ближайшие 7 дней
+    let contactFactsWithoutTelegramId = 0;
+    let contactFactsWithoutStableIdentity = 0;
+    let contactFactsWithoutSubjectTag = 0;
+    let factsWithHistory = 0;
     const domainCounts: Record<string, number> = {};
+    const duplicateGroups = new Map<string, MemoryEntry[]>();
 
     for (const m of all) {
         const conf = m.confidence ?? 0.6;
         if (conf < 0.4) lowConfidence++;
+        if ((m.previousVersions?.length ?? 0) > 0) factsWithHistory++;
 
         const accessed = m.lastAccessedAt ?? m.timestamp;
         const daysSinceAccess = (now - new Date(accessed).getTime()) / day;
         if (daysSinceAccess > 60) stale++;
 
+        if (m.expiresAt) {
+            const msToExpire = new Date(m.expiresAt).getTime() - now;
+            if (msToExpire > 0 && msToExpire < 7 * day) expiringSoon++;
+        }
+
+        if (isContactLikeMemory(m) && !hasContactId(m.tags)) {
+            contactFactsWithoutTelegramId++;
+        }
+        if (isContactLikeMemory(m)) {
+            if (!hasStableContactIdentity(m.tags)) contactFactsWithoutStableIdentity++;
+            if (!m.tags?.includes('subject:contact')) contactFactsWithoutSubjectTag++;
+        }
+
         domainCounts[m.domain] = (domainCounts[m.domain] ?? 0) + 1;
+
+        const canonical = canonicalFactText(m.content);
+        if (canonical.length >= 20) {
+            const group = duplicateGroups.get(canonical) ?? [];
+            group.push(m);
+            duplicateGroups.set(canonical, group);
+        }
     }
+
+    const likelyDuplicateGroups = [...duplicateGroups.values()]
+        .filter(group => group.length > 1)
+        .sort((a, b) => b.length - a.length);
+    const asyncErrors = getAsyncTaskErrors();
 
     const lines: string[] = [
         `🏥 Состояние долговременной памяти\n`,
@@ -1048,6 +1320,11 @@ export async function getMemoryHealthReport(ctx: BotContext): Promise<string> {
         `⚠️  Низкая достоверность (< 0.4): ${lowConfidence}`,
         `🕸️  Давно не всплывали (> 60 дней): ${stale}`,
         `⏳ Скоро истекут (< 7 дней): ${expiringSoon}`,
+        `🧬 Факты с историей изменений: ${factsWithHistory}`,
+        `♻️  Вероятные точные дубли: ${likelyDuplicateGroups.length} групп`,
+        `👥 Контактные факты без Telegram contact_id: ${contactFactsWithoutTelegramId}`,
+        `👥 Контактные факты без stable identity: ${contactFactsWithoutStableIdentity}`,
+        `👥 Контактные факты без subject:contact: ${contactFactsWithoutSubjectTag}`,
         ``,
         `📂 По доменам:`,
     ];
@@ -1060,6 +1337,26 @@ export async function getMemoryHealthReport(ctx: BotContext): Promise<string> {
     if (lowConfidence > 0) {
         lines.push(`\n💡 Совет: запусти /memory_cleanup чтобы очистить устаревшие факты,`);
         lines.push(`  или /memory_compress <домен> чтобы сжать старые воспоминания.`);
+    }
+    if (contactFactsWithoutTelegramId > 0) {
+        lines.push(`\n💡 Для старых контактных фактов запусти /memory_repair_contacts.`);
+    }
+    if (contactFactsWithoutSubjectTag > 0) {
+        lines.push(`\n💡 Старые контактные факты без subject:contact будут читаться fallback-поиском,`);
+        lines.push(`  но лучше постепенно мигрировать их через /memory_repair_contacts.`);
+    }
+    if (likelyDuplicateGroups.length > 0) {
+        lines.push(`\n🔎 Примеры вероятных дублей:`);
+        for (const group of likelyDuplicateGroups.slice(0, 3)) {
+            const sample = group[0].content.slice(0, 100);
+            lines.push(`  ×${group.length}: ${sample}`);
+        }
+    }
+    if (Object.keys(asyncErrors).length > 0) {
+        lines.push(`\n⚠️ Ошибки фоновых задач памяти:`);
+        for (const [task, count] of Object.entries(asyncErrors)) {
+            lines.push(`  ${task}: ${count}`);
+        }
     }
 
     return lines.join('\n');

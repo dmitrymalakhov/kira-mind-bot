@@ -24,6 +24,7 @@ import { StudyChatPeriod, extractFactsAboutUserFromConversation } from "../utils
 import { resolveRelationshipFromMemory } from "../utils/resolveRelationshipFromMemory";
 import { runUpdateLongTermMemoryAgent } from "./updateLongTermMemoryAgent";
 import { queueMessage as queueForReflection, markChatAsBot } from "../services/reflectionModeService";
+import { ChatGroupRepository } from "../services/ChatGroupRepository";
 
 
 // Глобальное хранилище сообщений
@@ -877,6 +878,72 @@ ${conversationText}`;
     return response.choices[0]?.message?.content?.trim() || "Не удалось проанализировать сообщения чата.";
 }
 
+async function analyzeMultipleGroupChats(
+    groupNames: string[],
+    analysisQuery: string,
+    memoryContext: string = ""
+): Promise<string> {
+    const client = await initTelegramClient();
+    if (!client) {
+        return "Не удалось подключиться к Telegram. Проверь статус подключения.";
+    }
+
+    const results = await Promise.all(
+        groupNames.map(async (groupName) => {
+            const group = await searchGroupByTitle(client, groupName);
+            if (!group) {
+                return { name: groupName, error: `Чат «${groupName}» не найден` };
+            }
+            const messages = await client.getMessages(group.id, { limit: 200 });
+            if (!messages || messages.length === 0) {
+                return { name: group.title, error: `В чате «${group.title}» нет сообщений` };
+            }
+            const conversationText = formatGroupMessages(messages as Api.Message[]);
+            if (!conversationText.trim()) {
+                return { name: group.title, error: `В чате «${group.title}» нет текстовых сообщений` };
+            }
+            return { name: group.title, text: conversationText, count: messages.length };
+        })
+    );
+
+    const errors = results.filter(r => r.error);
+    const chats = results.filter(r => r.text);
+
+    if (chats.length === 0) {
+        return errors.map(e => e.error).join('\n');
+    }
+
+    const persona = getBotPersona();
+    const style = getCommunicationStyle();
+    const memoryBlock = memoryContext ? `\nКонтекст из долговременной памяти:\n${memoryContext}` : '';
+    const systemPrompt = `${persona}\n\n${style}${memoryBlock}`.trim();
+
+    const chatSections = chats.map(c =>
+        `=== Чат «${c.name}» (последние ${c.count} сообщений) ===\n${c.text}`
+    ).join('\n\n');
+
+    const notFoundNote = errors.length > 0
+        ? `\n\nПримечание: ${errors.map(e => e.error).join('; ')}.`
+        : '';
+
+    const userPrompt = `Ниже — сообщения из ${chats.length} групповых чатов.
+
+Задача: ${analysisQuery}
+
+${chatSections}${notFoundNote}`;
+
+    const response = await openai.chat.completions.create({
+        model: "gpt-5.4",
+        messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+        ],
+        temperature: 0.4,
+    });
+
+    return response.choices[0]?.message?.content?.trim() || "Не удалось проанализировать сообщения чатов.";
+}
+
 /**
  * Агент для интеграции с аккаунтом Telegram
  * @param ctx Контекст бота (для сессии и сценария «изучить переписку»)
@@ -910,10 +977,40 @@ export async function readMessagesAgent(
         }
 
         if (classification && classification.details.messagesCheckType === "ANALYZE_CONVERSATION") {
-            // Трек группового чата: анализ сообщений из группы/канала по названию
+            // Несколько групповых чатов
+            if (classification.details.groupChatQueries?.length) {
+                const groupQueries = classification.details.groupChatQueries.map(q => q.trim()).filter(Boolean);
+                const analysisQuery = classification.details.analysisQuery || message;
+                const names = groupQueries.map(q => `«${q}»`).join(', ');
+                await notifyUser(ctx, `📨 Анализирую чаты ${names}…`);
+                const answer = await analyzeMultipleGroupChats(groupQueries, analysisQuery, memoryContext);
+
+                // Предлагаем сохранить набор чатов как группу
+                const { InlineKeyboard } = await import('grammy');
+                const saveKb = new InlineKeyboard().text('💾 Сохранить как группу', 'cg:quicksave');
+                if (ctx.session) {
+                    ctx.session.chatGroupState = { step: 'awaiting_name', pendingChatNames: groupQueries };
+                }
+                return { responseText: answer, keyboard: saveKb };
+            }
+
+            // Один групповой чат (или название сохранённой группы чатов)
             if (classification.details.groupChatQuery) {
                 const groupQuery = classification.details.groupChatQuery.trim();
                 const analysisQuery = classification.details.analysisQuery || message;
+
+                // Проверяем, не является ли groupChatQuery именем сохранённой группы
+                const ownerChatId = ctx.chat?.id;
+                if (ownerChatId) {
+                    const savedGroup = await ChatGroupRepository.findBestMatch(ownerChatId, groupQuery);
+                    if (savedGroup && savedGroup.chatNames.length > 0) {
+                        const names = savedGroup.chatNames.map(n => `«${n}»`).join(', ');
+                        await notifyUser(ctx, `📨 Анализирую группу «${savedGroup.name}» (${names})…`);
+                        const answer = await analyzeMultipleGroupChats(savedGroup.chatNames, analysisQuery, memoryContext);
+                        return { responseText: answer };
+                    }
+                }
+
                 if (classification.details.saveFactsAboutUser) {
                     await notifyUser(ctx, '📨 Загружаю сообщения из группы «' + groupQuery + '»…');
                     const answer = await studyGroupChatAndSaveFacts(ctx, groupQuery, analysisQuery, memoryContext);
