@@ -101,6 +101,28 @@ function ensureConfigLoaded() {
   }
 }
 
+function createInitialSession(): SessionData {
+  return {
+    reminders: [],
+    messageHistory: [],
+    dialogueSummary: "",
+    lastSummarizedIndex: -1,
+    unauthorizedChat: undefined,
+    domains: {},
+    sentMessages: {},
+  };
+}
+
+function ensureSessionDefaults(data: SessionData): SessionData {
+  if (!Array.isArray(data.reminders)) data.reminders = [];
+  if (!Array.isArray(data.messageHistory)) data.messageHistory = [];
+  if (typeof data.dialogueSummary !== "string") data.dialogueSummary = "";
+  if (typeof data.lastSummarizedIndex !== "number") data.lastSummarizedIndex = -1;
+  if (!data.domains || typeof data.domains !== "object") data.domains = {};
+  if (!data.sentMessages || typeof data.sentMessages !== "object") data.sentMessages = {};
+  return data;
+}
+
 export function createBot() {
   // Гарантированная загрузка конфигурации
   const config = ensureConfigLoaded();
@@ -129,7 +151,13 @@ export function createBot() {
   // Проверяем, что токен не пустой ПЕРЕД созданием бота
   if (!config.botToken || config.botToken.trim() === "") {
     console.error("❌ КРИТИЧЕСКАЯ ОШИБКА: config.botToken пустой!");
-    console.error("Весь config объект:", JSON.stringify(config, null, 2));
+    console.error("Config summary:", JSON.stringify({
+      characterName: config.characterName,
+      botUsername: config.botUsername,
+      allowedUserId: config.allowedUserId,
+      botTokenExists: Boolean(config.botToken),
+      openAiApiKeyExists: Boolean(config.openAiApiKey),
+    }, null, 2));
 
     // Пробуем прямую проверку переменных окружения
     console.error("Прямая проверка env переменных:");
@@ -162,15 +190,7 @@ export function createBot() {
 function setupBot(bot: Bot<BotContext>, config: any) {
   bot.use(session({
     initial(): SessionData {
-      return {
-        reminders: [],
-        messageHistory: [],
-        dialogueSummary: "",
-        lastSummarizedIndex: -1,
-        unauthorizedChat: undefined,
-        domains: {},
-        sentMessages: {},
-      };
+      return createInitialSession();
     },
     storage: new TypeORMSessionStorage(),
   }));
@@ -213,16 +233,9 @@ function setupBot(bot: Bot<BotContext>, config: any) {
 
   bot.use(async (ctx, next) => {
     if (!ctx.session) {
-      ctx.session = {
-        reminders: [],
-        messageHistory: [],
-        dialogueSummary: "",
-        lastSummarizedIndex: -1,
-        isAllowedUser: false,
-        unauthorizedChat: undefined,
-        domains: {},
-        sentMessages: {},
-      };
+      ctx.session = createInitialSession();
+    } else {
+      ensureSessionDefaults(ctx.session);
     }
 
     ctx.session.isAllowedUser = ctx.from?.id === config.allowedUserId;

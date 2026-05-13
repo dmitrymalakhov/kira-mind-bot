@@ -116,16 +116,64 @@ export interface SessionData {
         sessionId?: string;
         userAnswer?: string;
         risk?: 'high_impact';
+        choices?: Array<{
+            label: string;
+            answer: string;
+        }>;
         createdAt: number;
         expiresAt: number;
     };
+    /** Сейчас выполняется активная браузерная задача; используется для аварийной отмены */
+    activeBrowserTask?: {
+        originalTask: string;
+        sessionId: string;
+        createdAt: number;
+        expiresAt: number;
+    };
+    /** Последняя успешно завершённая браузерная задача — для коротких follow-up вроде «запиши меня туда» */
+    lastBrowserTask?: {
+        originalTask: string;
+        summary: string;
+        url?: string;
+        title?: string;
+        notes?: string[];
+        pageText?: string;
+        createdAt: number;
+        expiresAt: number;
+    };
+    /** Ожидает выбора одного из быстрых вариантов уточнения через inline-кнопки */
+    pendingQuickChoices?: Record<string, {
+        originalMessage: string;
+        choices: Array<{
+            label: string;
+            message: string;
+        }>;
+        createdAt: number;
+        expiresAt: number;
+    }>;
     /** chatId группового чата, напоминания которого просматриваются из приватного чата */
     viewingRemindersInChat?: number;
-    /** Состояние сценария «изучить переписку и сохранить факты обо мне»: выбор периода */
+    /** Состояние сценария «изучить переписку и сохранить найденные факты»: выбор периода */
     studyChatRequest?: {
+        requestId?: string;
         contactName: string;
         contactId: number;
         step: 'period';
+        createdAt?: number;
+        expiresAt?: number;
+    };
+    /** Состояние выбора периода для анализа группового чата или группы чатов */
+    chatAnalysisPeriodRequest?: {
+        requestId: string;
+        groupNames: string[];
+        displayName: string;
+        analysisQuery: string;
+        step: 'period';
+        saveFactsAboutUser?: boolean;
+        offerSaveGroup?: boolean;
+        memoryContext?: string;
+        createdAt: number;
+        expiresAt: number;
     };
     /** Состояние мастера создания/редактирования группы чатов через /chatgroups */
     chatGroupState?: {

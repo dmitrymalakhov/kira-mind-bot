@@ -20,17 +20,70 @@ import openai from "../openai";
 import { sendMessage as sendTelegramMessage } from "../services/telegram";
 import { InlineKeyboard } from "grammy";
 import { studyChatAndSaveFacts } from "../utils/studyChatPipeline";
-import { StudyChatPeriod, extractFactsAboutUserFromConversation } from "../utils/studyChatFlow";
+import {
+    StudyChatPeriod,
+    extractFactsAboutUserFromConversation,
+    getMessagesInDateRange,
+} from "../utils/studyChatFlow";
 import { resolveRelationshipFromMemory } from "../utils/resolveRelationshipFromMemory";
 import { runUpdateLongTermMemoryAgent } from "./updateLongTermMemoryAgent";
 import { queueMessage as queueForReflection, markChatAsBot } from "../services/reflectionModeService";
 import { ChatGroupRepository } from "../services/ChatGroupRepository";
+import { persistSessionNow } from "../services/SessionStorage";
 
 
 // Глобальное хранилище сообщений
 const messageStore = MessageStore.getInstance();
+const STUDY_CHAT_PERIOD_SELECTION_TTL_MS = 15 * 60 * 1000;
+const processingStudyChatRequests = new Set<string>();
+const processingChatAnalysisRequests = new Set<string>();
+
+const CHAT_ANALYSIS_PERIOD_DAYS: Record<StudyChatPeriod, number> = {
+    week: 7,
+    month: 30,
+    '3months': 90,
+    year: 365,
+};
+
+const CHAT_ANALYSIS_PERIOD_LABELS: Record<StudyChatPeriod, string> = {
+    week: 'неделю',
+    month: 'месяц',
+    '3months': 'квартал',
+    year: 'год',
+};
+
+const CHAT_ANALYSIS_PERIOD_TITLES: Record<StudyChatPeriod, string> = {
+    week: 'неделя',
+    month: 'месяц',
+    '3months': 'квартал',
+    year: 'год',
+};
 
 let isListening: boolean = false;
+
+function createStudyChatRequestId(): string {
+    return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getChatAnalysisDateRange(period: StudyChatPeriod): { startDate: Date; endDate: Date } {
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - CHAT_ANALYSIS_PERIOD_DAYS[period]);
+    return { startDate, endDate };
+}
+
+function detectExplicitChatAnalysisPeriod(message: string): StudyChatPeriod | undefined {
+    const text = message.toLowerCase();
+    if (/(?:за|последн(?:ие|юю|ий|его)?)\s+(?:недел[юяи]|7\s*(?:дн|дней|дня))/iu.test(text)) return 'week';
+    if (/(?:за|последн(?:ие|юю|ий|его)?)\s+(?:квартал|3\s*месяц|три\s+месяц)/iu.test(text)) return '3months';
+    if (/(?:за|последн(?:ие|юю|ий|его)?)\s+(?:год|12\s*месяц)/iu.test(text)) return 'year';
+    if (/(?:за|последн(?:ие|юю|ий|его)?)\s+(?:месяц|30\s*(?:дн|дней|дня))/iu.test(text)) return 'month';
+    return undefined;
+}
+
+function withChatAnalysisPeriodHeader(text: string, period: StudyChatPeriod): string {
+    return `Период анализа: ${CHAT_ANALYSIS_PERIOD_TITLES[period]}.\n\n${text}`;
+}
 
 /**
  * Пытается сгенерировать ответ контакту по задаче и истории или запросить ответ у пользователя.
@@ -736,12 +789,28 @@ function isStudyChatSaveFactsRequest(classification?: MessageClassification): bo
 /**
  * Клавиатура выбора периода для сценария «изучить переписку и сохранить факты».
  */
-export function buildStudyChatPeriodKeyboard(): InlineKeyboard {
+export function buildStudyChatPeriodKeyboard(requestId?: string): InlineKeyboard {
+    const callback = (period: StudyChatPeriod) =>
+        requestId ? `study_chat:${requestId}:${period}` : `study_chat:${period}`;
+
     return new InlineKeyboard()
-        .text("Неделя", "study_chat:week")
-        .text("Месяц", "study_chat:month").row()
-        .text("3 месяца", "study_chat:3months")
-        .text("Год", "study_chat:year");
+        .text("Неделя", callback("week"))
+        .text("Месяц", callback("month")).row()
+        .text("Квартал", callback("3months"))
+        .text("Год", callback("year"));
+}
+
+/**
+ * Клавиатура выбора периода для анализа групповых чатов.
+ */
+export function buildChatAnalysisPeriodKeyboard(requestId: string): InlineKeyboard {
+    const callback = (period: StudyChatPeriod) => `chat_analysis:${requestId}:${period}`;
+
+    return new InlineKeyboard()
+        .text("Неделя", callback("week"))
+        .text("Месяц", callback("month")).row()
+        .text("Квартал", callback("3months"))
+        .text("Год", callback("year"));
 }
 
 /**
@@ -773,7 +842,8 @@ async function studyGroupChatAndSaveFacts(
     ctx: BotContext,
     groupName: string,
     analysisQuery: string,
-    memoryContext: string = ""
+    memoryContext: string,
+    period: StudyChatPeriod
 ): Promise<string> {
     const client = await initTelegramClient();
     if (!client) return "Не удалось подключиться к Telegram. Проверь статус подключения.";
@@ -783,8 +853,9 @@ async function studyGroupChatAndSaveFacts(
         return `Не нашла групповой чат с названием «${groupName}». Проверь название — оно должно совпадать с тем, что в списке диалогов.`;
     }
 
-    const messages = await client.getMessages(group.id, { limit: 200 });
-    if (!messages || messages.length === 0) return `В чате «${group.title}» не найдено сообщений.`;
+    const { startDate, endDate } = getChatAnalysisDateRange(period);
+    const messages = await getMessagesInDateRange(group.id, startDate, endDate);
+    if (!messages || messages.length === 0) return `В чате «${group.title}» за ${CHAT_ANALYSIS_PERIOD_LABELS[period]} не найдено сообщений.`;
 
     const conversationText = formatGroupMessages(messages as Api.Message[]);
     if (!conversationText.trim()) return `В чате «${group.title}» нет текстовых сообщений для анализа.`;
@@ -793,7 +864,7 @@ async function studyGroupChatAndSaveFacts(
     const style = getCommunicationStyle();
     const memoryBlock = memoryContext ? `\nКонтекст из долговременной памяти (факты о пользователе и его контактах):\n${memoryContext}` : '';
     const systemPrompt = `${persona}\n\n${style}${memoryBlock}`.trim();
-    const userPrompt = `Ниже — сообщения из группового чата «${group.title}» (последние ${messages.length} сообщений).\n\nЗадача: ${analysisQuery}\n\nСообщения чата:\n${conversationText}`;
+    const userPrompt = `Ниже — сообщения из группового чата «${group.title}» за ${CHAT_ANALYSIS_PERIOD_LABELS[period]} (${messages.length} сообщений).\n\nЗадача: ${analysisQuery}\n\nСообщения чата:\n${conversationText}`;
 
     // Параллельно: текстовый анализ + извлечение структурированных фактов
     const [analysisResult, factsResult] = await Promise.allSettled([
@@ -805,7 +876,7 @@ async function studyGroupChatAndSaveFacts(
             ],
             temperature: 0.4,
         }),
-        extractFactsAboutUserFromConversation(conversationText, group.title as string),
+        extractFactsAboutUserFromConversation(conversationText, group.title as string, startDate, endDate),
     ]);
 
     const analysisText = analysisResult.status === 'fulfilled'
@@ -831,7 +902,8 @@ async function studyGroupChatAndSaveFacts(
 async function analyzeGroupChatMessages(
     groupName: string,
     analysisQuery: string,
-    memoryContext: string = ""
+    memoryContext: string,
+    period: StudyChatPeriod
 ): Promise<string> {
     const client = await initTelegramClient();
     if (!client) {
@@ -843,9 +915,10 @@ async function analyzeGroupChatMessages(
         return `Не нашла групповой чат с названием «${groupName}». Проверь название — оно должно совпадать с тем, что в списке диалогов.`;
     }
 
-    const messages = await client.getMessages(group.id, { limit: 200 });
+    const { startDate, endDate } = getChatAnalysisDateRange(period);
+    const messages = await getMessagesInDateRange(group.id, startDate, endDate);
     if (!messages || messages.length === 0) {
-        return `В чате «${group.title}» не найдено сообщений.`;
+        return `В чате «${group.title}» за ${CHAT_ANALYSIS_PERIOD_LABELS[period]} не найдено сообщений.`;
     }
 
     const conversationText = formatGroupMessages(messages as Api.Message[]);
@@ -859,7 +932,7 @@ async function analyzeGroupChatMessages(
 
     const systemPrompt = `${persona}\n\n${style}${memoryBlock2}`.trim();
 
-    const userPrompt = `Ниже — сообщения из группового чата «${group.title}» (последние ${messages.length} сообщений).
+    const userPrompt = `Ниже — сообщения из группового чата «${group.title}» за ${CHAT_ANALYSIS_PERIOD_LABELS[period]} (${messages.length} сообщений).
 
 Задача: ${analysisQuery}
 
@@ -881,7 +954,8 @@ ${conversationText}`;
 async function analyzeMultipleGroupChats(
     groupNames: string[],
     analysisQuery: string,
-    memoryContext: string = ""
+    memoryContext: string,
+    period: StudyChatPeriod
 ): Promise<string> {
     const client = await initTelegramClient();
     if (!client) {
@@ -894,9 +968,10 @@ async function analyzeMultipleGroupChats(
             if (!group) {
                 return { name: groupName, error: `Чат «${groupName}» не найден` };
             }
-            const messages = await client.getMessages(group.id, { limit: 200 });
+            const { startDate, endDate } = getChatAnalysisDateRange(period);
+            const messages = await getMessagesInDateRange(group.id, startDate, endDate);
             if (!messages || messages.length === 0) {
-                return { name: group.title, error: `В чате «${group.title}» нет сообщений` };
+                return { name: group.title, error: `В чате «${group.title}» за ${CHAT_ANALYSIS_PERIOD_LABELS[period]} нет сообщений` };
             }
             const conversationText = formatGroupMessages(messages as Api.Message[]);
             if (!conversationText.trim()) {
@@ -919,14 +994,14 @@ async function analyzeMultipleGroupChats(
     const systemPrompt = `${persona}\n\n${style}${memoryBlock}`.trim();
 
     const chatSections = chats.map(c =>
-        `=== Чат «${c.name}» (последние ${c.count} сообщений) ===\n${c.text}`
+        `=== Чат «${c.name}» за ${CHAT_ANALYSIS_PERIOD_LABELS[period]} (${c.count} сообщений) ===\n${c.text}`
     ).join('\n\n');
 
     const notFoundNote = errors.length > 0
         ? `\n\nПримечание: ${errors.map(e => e.error).join('; ')}.`
         : '';
 
-    const userPrompt = `Ниже — сообщения из ${chats.length} групповых чатов.
+    const userPrompt = `Ниже — сообщения из ${chats.length} групповых чатов за ${CHAT_ANALYSIS_PERIOD_LABELS[period]}.
 
 Задача: ${analysisQuery}
 
@@ -942,6 +1017,92 @@ ${chatSections}${notFoundNote}`;
     });
 
     return response.choices[0]?.message?.content?.trim() || "Не удалось проанализировать сообщения чатов.";
+}
+
+interface ChatAnalysisPeriodRequest {
+    requestId: string;
+    groupNames: string[];
+    displayName: string;
+    analysisQuery: string;
+    step: 'period';
+    saveFactsAboutUser?: boolean;
+    offerSaveGroup?: boolean;
+    memoryContext?: string;
+    createdAt: number;
+    expiresAt: number;
+}
+
+async function runChatAnalysisPeriodRequest(
+    ctx: BotContext,
+    req: ChatAnalysisPeriodRequest,
+    period: StudyChatPeriod
+): Promise<ProcessingResult> {
+    let answer: string;
+
+    if (req.saveFactsAboutUser && req.groupNames.length === 1) {
+        answer = await studyGroupChatAndSaveFacts(
+            ctx,
+            req.groupNames[0],
+            req.analysisQuery,
+            req.memoryContext || "",
+            period
+        );
+    } else if (req.groupNames.length === 1) {
+        answer = await analyzeGroupChatMessages(
+            req.groupNames[0],
+            req.analysisQuery,
+            req.memoryContext || "",
+            period
+        );
+    } else {
+        answer = await analyzeMultipleGroupChats(
+            req.groupNames,
+            req.analysisQuery,
+            req.memoryContext || "",
+            period
+        );
+    }
+
+    const result: ProcessingResult = {
+        responseText: withChatAnalysisPeriodHeader(answer, period),
+    };
+
+    if (req.offerSaveGroup && ctx.session) {
+        ctx.session.chatGroupState = { step: 'awaiting_name', pendingChatNames: req.groupNames };
+        await persistSessionNow(ctx);
+        result.keyboard = new InlineKeyboard().text('💾 Сохранить как группу', 'cg:quicksave');
+    }
+
+    return result;
+}
+
+async function askChatAnalysisPeriod(
+    ctx: BotContext,
+    req: ChatAnalysisPeriodRequest
+): Promise<ProcessingResult> {
+    if (ctx.session) {
+        ctx.session.chatAnalysisPeriodRequest = req;
+        await persistSessionNow(ctx);
+    }
+
+    return {
+        responseText: `За какой период проанализировать ${req.displayName}?`,
+        keyboard: buildChatAnalysisPeriodKeyboard(req.requestId),
+    };
+}
+
+async function runOrAskChatAnalysisPeriod(
+    ctx: BotContext,
+    req: ChatAnalysisPeriodRequest,
+    message: string
+): Promise<ProcessingResult> {
+    const explicitPeriod = detectExplicitChatAnalysisPeriod(message);
+    if (explicitPeriod) {
+        await notifyUser(ctx, `📨 Анализирую ${req.displayName} за ${CHAT_ANALYSIS_PERIOD_LABELS[explicitPeriod]}…`);
+        return runChatAnalysisPeriodRequest(ctx, req, explicitPeriod);
+    }
+
+    return askChatAnalysisPeriod(ctx, req);
 }
 
 /**
@@ -982,16 +1143,18 @@ export async function readMessagesAgent(
                 const groupQueries = classification.details.groupChatQueries.map(q => q.trim()).filter(Boolean);
                 const analysisQuery = classification.details.analysisQuery || message;
                 const names = groupQueries.map(q => `«${q}»`).join(', ');
-                await notifyUser(ctx, `📨 Анализирую чаты ${names}…`);
-                const answer = await analyzeMultipleGroupChats(groupQueries, analysisQuery, memoryContext);
-
-                // Предлагаем сохранить набор чатов как группу
-                const { InlineKeyboard } = await import('grammy');
-                const saveKb = new InlineKeyboard().text('💾 Сохранить как группу', 'cg:quicksave');
-                if (ctx.session) {
-                    ctx.session.chatGroupState = { step: 'awaiting_name', pendingChatNames: groupQueries };
-                }
-                return { responseText: answer, keyboard: saveKb };
+                const now = Date.now();
+                return runOrAskChatAnalysisPeriod(ctx, {
+                    requestId: createStudyChatRequestId(),
+                    groupNames: groupQueries,
+                    displayName: `чаты ${names}`,
+                    analysisQuery,
+                    step: 'period',
+                    offerSaveGroup: true,
+                    memoryContext,
+                    createdAt: now,
+                    expiresAt: now + STUDY_CHAT_PERIOD_SELECTION_TTL_MS,
+                }, message);
             }
 
             // Один групповой чат (или название сохранённой группы чатов)
@@ -1005,20 +1168,45 @@ export async function readMessagesAgent(
                     const savedGroup = await ChatGroupRepository.findBestMatch(ownerChatId, groupQuery);
                     if (savedGroup && savedGroup.chatNames.length > 0) {
                         const names = savedGroup.chatNames.map(n => `«${n}»`).join(', ');
-                        await notifyUser(ctx, `📨 Анализирую группу «${savedGroup.name}» (${names})…`);
-                        const answer = await analyzeMultipleGroupChats(savedGroup.chatNames, analysisQuery, memoryContext);
-                        return { responseText: answer };
+                        const now = Date.now();
+                        return runOrAskChatAnalysisPeriod(ctx, {
+                            requestId: createStudyChatRequestId(),
+                            groupNames: savedGroup.chatNames,
+                            displayName: `группу «${savedGroup.name}» (${names})`,
+                            analysisQuery,
+                            step: 'period',
+                            memoryContext,
+                            createdAt: now,
+                            expiresAt: now + STUDY_CHAT_PERIOD_SELECTION_TTL_MS,
+                        }, message);
                     }
                 }
 
                 if (classification.details.saveFactsAboutUser) {
-                    await notifyUser(ctx, '📨 Загружаю сообщения из группы «' + groupQuery + '»…');
-                    const answer = await studyGroupChatAndSaveFacts(ctx, groupQuery, analysisQuery, memoryContext);
-                    return { responseText: answer };
+                    const now = Date.now();
+                    return runOrAskChatAnalysisPeriod(ctx, {
+                        requestId: createStudyChatRequestId(),
+                        groupNames: [groupQuery],
+                        displayName: `чат «${groupQuery}»`,
+                        analysisQuery,
+                        step: 'period',
+                        saveFactsAboutUser: true,
+                        memoryContext,
+                        createdAt: now,
+                        expiresAt: now + STUDY_CHAT_PERIOD_SELECTION_TTL_MS,
+                    }, message);
                 }
-                await notifyUser(ctx, '📨 Анализирую чат «' + groupQuery + '»…');
-                const answer = await analyzeGroupChatMessages(groupQuery, analysisQuery, memoryContext);
-                return { responseText: answer };
+                const now = Date.now();
+                return runOrAskChatAnalysisPeriod(ctx, {
+                    requestId: createStudyChatRequestId(),
+                    groupNames: [groupQuery],
+                    displayName: `чат «${groupQuery}»`,
+                    analysisQuery,
+                    step: 'period',
+                    memoryContext,
+                    createdAt: now,
+                    expiresAt: now + STUDY_CHAT_PERIOD_SELECTION_TTL_MS,
+                }, message);
             }
 
             if (!classification.details.contactQuery) {
@@ -1065,18 +1253,24 @@ export async function readMessagesAgent(
             const contact = contacts[0];
             const displayName = `${contact.firstName} ${contact.lastName || ""}`.trim() || nameToSearch;
 
-            // Сценарий: изучить переписку и сохранить факты обо мне — предлагаем выбор периода
+            // Сценарий: изучить переписку и сохранить найденные факты — предлагаем выбор периода
             if (isStudyChatSaveFactsRequest(classification)) {
+                const requestId = createStudyChatRequestId();
                 if (ctx.session) {
+                    const now = Date.now();
                     ctx.session.studyChatRequest = {
+                        requestId,
                         contactName: displayName,
                         contactId: contact.id,
                         step: "period",
+                        createdAt: now,
+                        expiresAt: now + STUDY_CHAT_PERIOD_SELECTION_TTL_MS,
                     };
+                    await persistSessionNow(ctx);
                 }
                 return {
-                    responseText: `Хорошо, изучу переписку с ${displayName} и сохраню факты о тебе в долговременную память. За какой период прочитать переписку?`,
-                    keyboard: buildStudyChatPeriodKeyboard(),
+                    responseText: `Хорошо, изучу переписку с ${displayName} и сохраню найденные факты в долговременную память. За какой период прочитать переписку?`,
+                    keyboard: buildStudyChatPeriodKeyboard(requestId),
                 };
             }
 
@@ -1119,16 +1313,86 @@ export async function readMessagesAgent(
  */
 export async function handleStudyChatPeriodCallback(
     ctx: BotContext,
-    period: StudyChatPeriod
+    period: StudyChatPeriod,
+    requestId?: string
 ): Promise<{ responseText: string }> {
     const req = ctx.session?.studyChatRequest;
-    if (!req || req.step !== "period") {
-        return { responseText: "Сессия сценария истекла. Напиши снова: «изучи переписку с [имя] и узнай больше про меня»." };
+    if (!req && requestId && processingStudyChatRequests.has(requestId)) {
+        return { responseText: "Анализ этой переписки уже запущен. Дождись результата." };
     }
-    if (ctx.session) ctx.session.studyChatRequest = undefined;
+    if (!req || req.step !== "period") {
+        return { responseText: "Сессия сценария истекла. Напиши снова: «изучи переписку с [имя] и запомни факты»." };
+    }
+    if (req.requestId && req.requestId !== requestId) {
+        return { responseText: "Это старая кнопка выбора периода. Нажми период в последнем сообщении со сценарием." };
+    }
+    if (req.expiresAt && req.expiresAt <= Date.now()) {
+        if (ctx.session) {
+            ctx.session.studyChatRequest = undefined;
+            await persistSessionNow(ctx);
+        }
+        return { responseText: "Сессия выбора периода истекла. Напиши снова: «изучи переписку с [имя] и запомни факты»." };
+    }
+    const processingKey = req.requestId || `${ctx.chat?.id ?? "chat"}:${req.contactId}`;
+    if (processingStudyChatRequests.has(processingKey)) {
+        return { responseText: "Анализ этой переписки уже запущен. Дождись результата." };
+    }
+    processingStudyChatRequests.add(processingKey);
+    if (ctx.session) {
+        ctx.session.studyChatRequest = undefined;
+        await persistSessionNow(ctx);
+    }
 
-    const { responseText } = await studyChatAndSaveFacts(ctx, req.contactName, req.contactId, period);
-    return { responseText };
+    try {
+        const { responseText } = await studyChatAndSaveFacts(ctx, req.contactName, req.contactId, period);
+        return { responseText };
+    } finally {
+        processingStudyChatRequests.delete(processingKey);
+    }
+}
+
+/**
+ * Обрабатывает выбор периода для анализа группового чата или сохранённой группы чатов.
+ */
+export async function handleChatAnalysisPeriodCallback(
+    ctx: BotContext,
+    period: StudyChatPeriod,
+    requestId: string
+): Promise<ProcessingResult> {
+    const req = ctx.session?.chatAnalysisPeriodRequest;
+    if (!req && requestId && processingChatAnalysisRequests.has(requestId)) {
+        return { responseText: "Анализ этих чатов уже запущен. Дождись результата." };
+    }
+    if (!req || req.step !== "period") {
+        return { responseText: "Сессия выбора периода истекла. Напиши запрос на анализ чатов заново." };
+    }
+    if (req.requestId !== requestId) {
+        return { responseText: "Это старая кнопка выбора периода. Нажми период в последнем сообщении со сценарием." };
+    }
+    if (req.expiresAt <= Date.now()) {
+        if (ctx.session) {
+            ctx.session.chatAnalysisPeriodRequest = undefined;
+            await persistSessionNow(ctx);
+        }
+        return { responseText: "Сессия выбора периода истекла. Напиши запрос на анализ чатов заново." };
+    }
+
+    const processingKey = req.requestId;
+    if (processingChatAnalysisRequests.has(processingKey)) {
+        return { responseText: "Анализ этих чатов уже запущен. Дождись результата." };
+    }
+
+    processingChatAnalysisRequests.add(processingKey);
+    if (ctx.session) {
+        ctx.session.chatAnalysisPeriodRequest = undefined;
+        await persistSessionNow(ctx);
+    }
+
+    try {
+        return await runChatAnalysisPeriodRequest(ctx, req, period);
+    } finally {
+        processingChatAnalysisRequests.delete(processingKey);
+    }
 }
 
 // Запускаем подписку на новые сообщения

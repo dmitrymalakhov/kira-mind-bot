@@ -15,7 +15,7 @@ import { getBotPersona, getCommunicationStyle, getBotBiography } from "../person
 import { webSearchAgent } from "./webSearchAgent";
 import { mapsAgent } from "./googleMapsAgent";
 import { imageGenerationAgent } from "./imageGenerationAgent";
-import { getCapabilitiesMessage } from "../capabilities";
+import { answerCapabilitiesQuestion } from "../capabilities";
 import openai from "../openai";
 import { parseLLMJson } from "../utils";
 import { searchMemories } from "../utils/enhancedDomainMemory";
@@ -56,7 +56,7 @@ async function classifyPublicMessage(message: string): Promise<PublicIntent> {
                 },
                 {
                     role: "user",
-                    content: `Message: "${message}"\n\nRules:\n- WEB_SEARCH: user asks to find/search info online, news, facts\n- MAPS: routes, addresses, places, navigation\n- IMAGE_GENERATION: draw/generate/create image/picture\n- CAPABILITIES: asks what the bot can do, its features\n- CONVERSATION: everything else (questions, chat, advice, etc.)`,
+                    content: `Message: "${message}"\n\nRules:\n- WEB_SEARCH: user asks to find/search info online, news, facts\n- MAPS: routes, addresses, places, navigation\n- IMAGE_GENERATION: draw/generate/create image/picture\n- CAPABILITIES: asks what the bot can do, whether it can do a specific thing, or how to ask it to do something\n- CONVERSATION: everything else (questions, chat, advice, etc.)`,
                 },
             ],
             temperature: 1,
@@ -113,7 +113,8 @@ export async function handleGroupPublicUserMessage(ctx: BotContext): Promise<voi
         const intent = await classifyPublicMessage(message);
 
         if (intent === "CAPABILITIES") {
-            await ctx.reply(getCapabilitiesMessage());
+            const response = await answerCapabilitiesQuestion(message, { publicMode: true });
+            await ctx.reply(response);
             return;
         }
 

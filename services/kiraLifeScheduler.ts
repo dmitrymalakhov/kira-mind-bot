@@ -10,6 +10,8 @@ import {
   KiraSelfEvent,
 } from "../utils/kiraSelfMemory";
 import { getProactiveChatId } from "../utils/allowedUserChatStore";
+import { getSetting, setSetting } from "./botSettingsService";
+import { appendPersistedHistory } from "./SessionStorage";
 
 const PROACTIVE_MESSAGE_FORMATS = [
   "поделись чем-то что произошло или что сейчас чувствуешь — искренне, без пафоса",
@@ -23,6 +25,18 @@ const PROACTIVE_MESSAGE_FORMATS = [
 let timer: NodeJS.Timeout | undefined;
 let isRunning = false;
 let lastSentAt = 0;
+
+const LAST_SENT_SETTING_KEY = `${process.env.ASSISTANT_PROFILE || "KiraMindBot"}:kiraLife:lastSentAt`;
+
+async function loadLastSentAt(): Promise<number> {
+  const raw = await getSetting(LAST_SENT_SETTING_KEY, "0");
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+async function saveLastSentAt(value: number): Promise<void> {
+  await setSetting(LAST_SENT_SETTING_KEY, String(value));
+}
 
 function getDayContext(): {
   weekday: string;
@@ -188,6 +202,13 @@ async function runCycle(bot: Bot<BotContext>): Promise<void> {
       return;
     }
 
+    lastSentAt = Math.max(lastSentAt, await loadLastSentAt());
+    if (lastSentAt === 0) {
+      lastSentAt = Date.now();
+      await saveLastSentAt(lastSentAt);
+      return;
+    }
+
     if (Date.now() - lastSentAt < config.kiraLifeProactiveIntervalMs) {
       return;
     }
@@ -199,6 +220,8 @@ async function runCycle(bot: Bot<BotContext>): Promise<void> {
     await bot.api.sendMessage(chatId, message);
 
     lastSentAt = Date.now();
+    await saveLastSentAt(lastSentAt);
+    await appendPersistedHistory(chatId, "bot", message);
   } catch (error) {
     console.error("[kira-life] proactive cycle failed:", error);
   } finally {

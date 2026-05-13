@@ -38,9 +38,8 @@ function ensureEnvironmentLoaded() {
     const envResult = dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
     if (envResult.parsed) {
       console.log("✅ Loaded .env file with NODE_ENV:", process.env.NODE_ENV);
+      console.log("📋 Loaded .env keys:", Object.keys(envResult.parsed).join(", "));
     }
-
-    console.log("📋 Environment variables:", envResult);
   } catch (e) {
     console.log("ℹ️ Specific .env file not found, trying default .env");
   }

@@ -1,6 +1,9 @@
 import { Bot, InlineKeyboard } from "grammy";
+import { InputFile } from "grammy/types";
+import * as fs from "fs";
+import * as path from "path";
 import { BotContext } from "../types";
-import { Reminder, ReminderStatus, cancelReminder, markReminderAsCompleted, postponeReminder, scheduleReminder } from "../reminder";
+import { Reminder, ReminderStatus, cancelReminder, markReminderAsCompleted, postponeReminder, resolveTargetChat, scheduleReminder } from "../reminder";
 import { reminderAgent } from "../agents/reminderAgent";
 import { ReminderRepository } from "../services/ReminderRepository";
 import { hasFreshPendingReminder } from "../utils/implicitReminderDetector";
@@ -16,11 +19,110 @@ import {
 } from "../stores/NegotiationStore";
 import { scheduleNegotiationAgreementReminders } from "../agents/negotiationAgreementReminders";
 import { initTelegramClient, sendMessage as sendTelegramMessage } from "../services/telegram";
-import { getMessagesSummary, handleStudyChatPeriodCallback } from "../agents/readMessagesAgent";
+import { getMessagesSummary, handleChatAnalysisPeriodCallback, handleStudyChatPeriodCallback } from "../agents/readMessagesAgent";
 import { sendMessage } from "../utils";
 import type { StudyChatPeriod } from "../utils/studyChatFlow";
 import { handleContactMemoryCallback } from "../utils/contactMemory";
 import { handleContactMemoryLookupCallback } from "../utils/contactMemoryLookup";
+import { processMessage, type ProcessingResult } from "../orchestrator";
+import { addToHistory } from "../utils/history";
+import { consumeQuickChoice, isQuickChoiceCallback } from "../utils/quickChoice";
+import { MAX_MESSAGE_LENGTH } from "../constants";
+
+async function saveRemindersFromResult(ctx: BotContext, bot: Bot<BotContext>, result: ProcessingResult) {
+    if (!result.reminderCreated) return;
+    if (!Array.isArray(ctx.session.reminders)) ctx.session.reminders = [];
+    const list = result.reminderDetailsList ?? (result.reminderDetails ? [result.reminderDetails] : []);
+    const chatType = ctx.chat?.type;
+    const chatTitle = chatType === "group" || chatType === "supergroup"
+        ? `👥 ${(ctx.chat as any).title ?? "Группа"}`
+        : undefined;
+
+    for (const details of list) {
+        const reminder: Reminder = {
+            id: details.id,
+            text: details.text,
+            displayText: details.reminderMessage,
+            dueDate: details.dueDate,
+            chatId: ctx.chat!.id,
+            status: ReminderStatus.Pending,
+            createdAt: new Date(),
+            targetChat: details.targetChat,
+            chatTitle,
+            recurrence: details.recurrence,
+        };
+        ctx.session.reminders.push(reminder);
+        ReminderRegistry.getInstance().add(reminder);
+        await ReminderRepository.save(reminder).catch(e => console.error("[reminder] DB save failed on quick choice:", e));
+        scheduleReminder(bot, reminder);
+
+        if (details.targetChat) {
+            resolveTargetChat(details.targetChat).then((resolved) => {
+                if (!resolved) {
+                    const what = details.targetChat!.type === "group"
+                        ? `группу «${(details.targetChat as any).groupName}»`
+                        : `контакт «${(details.targetChat as any).contactQuery}»`;
+                    ctx.reply(
+                        `⚠️ Не нашла ${what}. Напоминание сохранено, но проверь правильность названия — иначе оно не дойдёт до адресата.`
+                    ).catch(() => {});
+                }
+            }).catch(() => {});
+        }
+    }
+}
+
+async function sendProcessingResult(ctx: BotContext, result: ProcessingResult) {
+    if (result.negotiationSummarySent) {
+        await addToHistory(ctx, "bot", "[Переговоры запущены — см. сообщение выше]");
+        return;
+    }
+
+    await addToHistory(ctx, "bot", result.responseText);
+    const replyOptions = result.keyboard ? { reply_markup: result.keyboard } : {};
+    await sendMessage(ctx, result.responseText, replyOptions);
+
+    if (result.reminderCreated && result.icsFilePath) {
+        try {
+            await ctx.api.sendChatAction(ctx.chat!.id, "upload_document");
+            const fileStream = fs.createReadStream(result.icsFilePath);
+            const filename = path.basename(result.icsFilePath);
+            await ctx.replyWithDocument(new InputFile(fileStream, filename), {
+                caption: "Открой этот файл, чтобы добавить событие в свой календарь.",
+            });
+            fs.unlinkSync(result.icsFilePath);
+        } catch (fileError) {
+            console.error("Ошибка при отправке ICS файла:", fileError);
+            await ctx.reply("К сожалению, не удалось отправить файл календаря. Но я всё равно напомню тебе о событии в назначенное время.");
+        }
+    }
+
+    if (result.imageGenerated && result.generatedImageUrl) {
+        try {
+            await ctx.api.sendChatAction(ctx.chat!.id, "upload_photo");
+            await ctx.replyWithPhoto(result.generatedImageUrl);
+            await addToHistory(ctx, "bot", `[Сгенерированное изображение: ${result.generatedImageUrl}]`);
+        } catch (imageError) {
+            console.error("Ошибка при отправке сгенерированного изображения:", imageError);
+            await ctx.reply("К сожалению, не удалось отправить сгенерированное изображение. Возможно, проблема с URL или сервисом генерации изображений.");
+        }
+    }
+
+    if (ctx.session.lastFactSaveError) {
+        await ctx.reply(`⚠️ ${ctx.session.lastFactSaveError}`);
+        delete ctx.session.lastFactSaveError;
+    }
+}
+
+async function sendChoiceReceipt(ctx: BotContext, choiceText: string) {
+    const normalized = choiceText.replace(/\s+/g, " ").trim();
+    if (!normalized) return;
+
+    const displayText = normalized.length <= 220
+        ? normalized
+        : `${normalized.slice(0, 217).trimEnd()}...`;
+
+    await ctx.reply(`Выбрано: ${displayText}`).catch(() => {});
+}
 
 /**
  * Регистрирует обработчики колбэков для бота
@@ -35,6 +137,96 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 return;
             }
             if (await handleContactMemoryLookupCallback(ctx, callbackData)) {
+                return;
+            }
+
+            if (isQuickChoiceCallback(callbackData)) {
+                const selection = consumeQuickChoice(ctx, callbackData);
+                if (!selection) {
+                    await ctx.answerCallbackQuery({ text: "Этот вариант уже недоступен." });
+                    if (ctx.callbackQuery.message?.message_id && ctx.callbackQuery.message?.chat?.id) {
+                        await ctx.api.editMessageReplyMarkup(
+                            ctx.callbackQuery.message.chat.id,
+                            ctx.callbackQuery.message.message_id,
+                            { reply_markup: new InlineKeyboard() }
+                        ).catch(() => {});
+                    }
+                    return;
+                }
+
+                await ctx.answerCallbackQuery({ text: "Выбрано" });
+                if (ctx.callbackQuery.message?.message_id && ctx.callbackQuery.message?.chat?.id) {
+                    await ctx.api.editMessageReplyMarkup(
+                        ctx.callbackQuery.message.chat.id,
+                        ctx.callbackQuery.message.message_id,
+                        { reply_markup: new InlineKeyboard() }
+                    ).catch(() => {});
+                }
+
+                await sendChoiceReceipt(ctx, selection.choice.label);
+                await addToHistory(ctx, "user", selection.choice.message);
+                await ctx.api.sendChatAction(ctx.chat!.id, "typing");
+                const result = await processMessage(
+                    ctx,
+                    selection.choice.message,
+                    false,
+                    "",
+                    ctx.session.messageHistory.slice().reverse()
+                );
+                await saveRemindersFromResult(ctx, bot, result);
+                await sendProcessingResult(ctx, result);
+                return;
+            }
+
+            if (callbackData.startsWith("browser_choice:")) {
+                const [, sessionId, indexRaw] = callbackData.split(":");
+                const index = Number(indexRaw);
+                const pending = ctx.session.pendingBrowserTask;
+                const choice = Number.isInteger(index) ? pending?.choices?.[index] : undefined;
+
+                if (!pending || !choice || pending.sessionId !== sessionId || Date.now() > pending.expiresAt) {
+                    await ctx.answerCallbackQuery({ text: "Этот выбор уже недоступен." });
+                    if (ctx.callbackQuery.message?.message_id && ctx.callbackQuery.message?.chat?.id) {
+                        await ctx.api.editMessageReplyMarkup(
+                            ctx.callbackQuery.message.chat.id,
+                            ctx.callbackQuery.message.message_id,
+                            { reply_markup: new InlineKeyboard() }
+                        ).catch(() => {});
+                    }
+                    return;
+                }
+
+                await ctx.answerCallbackQuery({ text: "Выбрано" });
+                if (ctx.callbackQuery.message?.message_id && ctx.callbackQuery.message?.chat?.id) {
+                    await ctx.api.editMessageReplyMarkup(
+                        ctx.callbackQuery.message.chat.id,
+                        ctx.callbackQuery.message.message_id,
+                        { reply_markup: new InlineKeyboard() }
+                    ).catch(() => {});
+                }
+
+                await sendChoiceReceipt(ctx, choice.label || choice.answer);
+                pending.userAnswer = choice.answer;
+                const messageForProcessing = [
+                    "Продолжи задачу в браузере через Playwright.",
+                    `browserSessionId: ${pending.sessionId ?? "none"}`,
+                    `Исходная задача пользователя: ${pending.originalTask}`,
+                    `Вопрос агента пользователю: ${pending.question}`,
+                    `Ответ пользователя: ${choice.answer}`,
+                    "Используй ответ как недостающий параметр, подтяни долговременную память как обычно и продолжи выполнение.",
+                ].join("\n");
+
+                await addToHistory(ctx, "user", choice.answer);
+                await ctx.api.sendChatAction(ctx.chat!.id, "typing");
+                const result = await processMessage(
+                    ctx,
+                    messageForProcessing,
+                    false,
+                    "",
+                    ctx.session.messageHistory.slice().reverse()
+                );
+                await saveRemindersFromResult(ctx, bot, result);
+                await sendProcessingResult(ctx, result);
                 return;
             }
 
@@ -54,6 +246,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         { reply_markup: new InlineKeyboard() }
                     ).catch(() => {});
                 }
+                await sendChoiceReceipt(ctx, "Отменить браузерную задачу");
                 return;
             }
 
@@ -315,23 +508,96 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         );
                     }
                 }
+            } else if (callbackData.startsWith("chat_analysis:")) {
+                const parts = callbackData.split(":");
+                if (parts.length !== 3) {
+                    await ctx.answerCallbackQuery({ text: "Некорректный выбор периода" });
+                    return;
+                }
+                const requestId = parts[1];
+                const period = parts[2] as StudyChatPeriod;
+                if (!["week", "month", "3months", "year"].includes(period)) {
+                    await ctx.answerCallbackQuery({ text: "Неизвестный период" });
+                    return;
+                }
+                await ctx.answerCallbackQuery({ text: "Анализирую чаты..." });
+                const callbackChatId = ctx.callbackQuery.message?.chat.id;
+                const callbackMessageId = ctx.callbackQuery.message?.message_id;
+                if (callbackChatId && callbackMessageId) {
+                    await ctx.api.editMessageText(
+                        callbackChatId,
+                        callbackMessageId,
+                        "Период выбран. Начинаю анализ и пришлю результат здесь…",
+                        { reply_markup: new InlineKeyboard() }
+                    ).catch(() => {});
+                }
+
+                const result = await handleChatAnalysisPeriodCallback(ctx, period, requestId);
+                const replyOptions = result.keyboard ? { reply_markup: result.keyboard } : { reply_markup: new InlineKeyboard() };
+                if (callbackChatId && callbackMessageId && result.responseText.length <= MAX_MESSAGE_LENGTH) {
+                    await ctx.api.editMessageText(
+                        callbackChatId,
+                        callbackMessageId,
+                        result.responseText,
+                        replyOptions
+                    ).catch(async () => {
+                        await sendMessage(ctx, result.responseText, result.keyboard ? { reply_markup: result.keyboard } : {});
+                    });
+                } else {
+                    if (callbackChatId && callbackMessageId) {
+                        await ctx.api.editMessageText(
+                            callbackChatId,
+                            callbackMessageId,
+                            "Готово. Результат отправляю отдельными сообщениями.",
+                            { reply_markup: new InlineKeyboard() }
+                        ).catch(() => {});
+                    }
+                    await sendMessage(ctx, result.responseText, result.keyboard ? { reply_markup: result.keyboard } : {});
+                }
             } else if (callbackData.startsWith("study_chat:")) {
-                const period = callbackData.replace("study_chat:", "") as StudyChatPeriod;
+                const parts = callbackData.split(":");
+                if (parts.length !== 2 && parts.length !== 3) {
+                    await ctx.answerCallbackQuery({ text: "Некорректный выбор периода" });
+                    return;
+                }
+                const requestId = parts.length === 3 ? parts[1] : undefined;
+                const period = (parts.length === 3 ? parts[2] : parts[1]) as StudyChatPeriod;
                 if (!["week", "month", "3months", "year"].includes(period)) {
                     await ctx.answerCallbackQuery({ text: "Неизвестный период" });
                     return;
                 }
                 await ctx.answerCallbackQuery({ text: "Читаю переписку..." });
-                const { responseText } = await handleStudyChatPeriodCallback(ctx, period);
-                if (ctx.callbackQuery.message?.message_id) {
+                const callbackChatId = ctx.callbackQuery.message?.chat.id;
+                const callbackMessageId = ctx.callbackQuery.message?.message_id;
+                if (callbackChatId && callbackMessageId) {
                     await ctx.api.editMessageText(
-                        ctx.callbackQuery.message.chat.id,
-                        ctx.callbackQuery.message.message_id,
+                        callbackChatId,
+                        callbackMessageId,
+                        "Период выбран. Начинаю анализ и буду писать этапы отдельными сообщениями…",
+                        { reply_markup: new InlineKeyboard() }
+                    ).catch(() => {});
+                }
+
+                const { responseText } = await handleStudyChatPeriodCallback(ctx, period, requestId);
+                if (callbackChatId && callbackMessageId && responseText.length <= MAX_MESSAGE_LENGTH) {
+                    await ctx.api.editMessageText(
+                        callbackChatId,
+                        callbackMessageId,
                         responseText,
                         { reply_markup: new InlineKeyboard() }
-                    );
+                    ).catch(async () => {
+                        await sendMessage(ctx, responseText);
+                    });
                 } else {
-                    await ctx.reply(responseText);
+                    if (callbackChatId && callbackMessageId) {
+                        await ctx.api.editMessageText(
+                            callbackChatId,
+                            callbackMessageId,
+                            "Готово. Результат отправляю отдельными сообщениями.",
+                            { reply_markup: new InlineKeyboard() }
+                        ).catch(() => {});
+                    }
+                    await sendMessage(ctx, responseText);
                 }
             // Проверяем, что колбэк связан с напоминанием
             } else if (callbackData.startsWith("reminder_")) {

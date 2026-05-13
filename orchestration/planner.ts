@@ -13,12 +13,40 @@ const AVAILABLE_STEPS = `
 - readMessages — работа с перепиской в Telegram: показать сообщения или изучить переписку с контактом и сохранить факты. Если после readMessages есть ещё шаги — результат анализа автоматически передаётся следующему шагу.
 - sendMessage — отправить сообщение контакту.
 - imageGeneration — сгенерировать изображение.
-- maps — карты, маршруты, места.
+- maps — карты, маршруты, адреса и физические места на карте. Не использовать для расписания событий, игр, квизов, афиши или билетов.
 - negotiateOnBehalf — договориться с контактом от имени пользователя: начать переписку, при необходимости спрашивать пользователя что ответить.
 - unclearIntent — уточнить намерение, если непонятно.
-- capabilities — ответить текстом о возможностях бота (что умеет, чем может помочь). Использовать, когда пользователь спрашивает «что ты умеешь», «расскажи о себе», «твои возможности» и т.п.
-- browserTask — выполнить задачу в браузере через Playwright: записаться, заполнить форму, забронировать, нажать кнопку на сайте. Использовать, когда нужно ДЕЙСТВИЕ в браузере (не просто поиск информации).
+- capabilities — ответить нейросетью по каталогу возможностей бота: что умеет, умеет ли конкретное действие, как правильно попросить. Использовать, когда пользователь спрашивает «что ты умеешь», «можешь ли ты X», «как попросить тебя X», «твои возможности» и т.п.
+- browserTask — выполнить задачу в браузере через Playwright: записаться, заполнить форму, забронировать, нажать кнопку на сайте или выполнить явную просьбу «используй браузер».
 `.trim();
+
+const BROWSER_CONTINUATION_RE = /^Продолжи задачу в браузере через Playwright\.|browserSessionId:/i;
+
+function hasSubIntent(
+    classification: PlanningInput['classification'],
+    intent: string
+): boolean {
+    return classification.subIntents?.some((subIntent) => subIntent.intent === intent) ?? false;
+}
+
+function postProcessPlan(plan: Plan, classification: PlanningInput['classification']): Plan {
+    const intent = classification.intent || 'РАЗГОВОР';
+
+    if (intent === 'БРАУЗЕР_ЗАДАЧА') {
+        return { steps: [{ agentId: 'browserTask' }] };
+    }
+
+    if (intent === 'НЕОПРЕДЕЛЕНО') {
+        return { steps: [{ agentId: 'unclearIntent' }] };
+    }
+
+    if (intent === 'ВЕБ_ПОИСК' && !hasSubIntent(classification, 'КАРТЫ_ЛОКАЦИИ')) {
+        const withoutMaps = plan.steps.filter((s) => s.agentId !== 'maps');
+        return { steps: withoutMaps.length ? withoutMaps : [{ agentId: 'webSearch' }] };
+    }
+
+    return plan;
+}
 
 /**
  * Строит план выполнения на основе запроса пользователя.
@@ -28,15 +56,27 @@ export async function createPlan(input: PlanningInput): Promise<Plan> {
     const { message, classification } = input;
     const intent = classification.intent || 'РАЗГОВОР';
 
-    if (/^Продолжи задачу в браузере через Playwright\.|browserSessionId:/i.test(message)) {
+    if (BROWSER_CONTINUATION_RE.test(message)) {
         return { steps: [{ agentId: 'browserTask' }] };
+    }
+
+    if (intent === 'БРАУЗЕР_ЗАДАЧА') {
+        return { steps: [{ agentId: 'browserTask' }] };
+    }
+
+    if (intent === 'НЕОПРЕДЕЛЕНО') {
+        return { steps: [{ agentId: 'unclearIntent' }] };
+    }
+
+    if (intent === 'НАПОМИНАНИЕ' && !classification.subIntents?.length) {
+        return { steps: [{ agentId: 'reminder' }] };
     }
 
     const cacheKey = `plan:${intent}:${message.slice(0, 200)}`;
     const cached = llmCache.get<Plan>(cacheKey);
     if (cached) {
         devLog('createPlan: cache hit');
-        return cached;
+        return postProcessPlan(cached, input.classification);
     }
 
     const subIntentsBlock = input.classification.subIntents?.length
@@ -61,9 +101,10 @@ ${AVAILABLE_STEPS}
 - Если пользователь просит договориться с кем-то, провести переговоры, решить вопрос с контактом (переписка с уточнениями) — шаг negotiateOnBehalf (один или после resolveContact).
 - Переписка "с женой", "с мамой" и т.п. — СНАЧАЛА resolveContact с params: { "relationship": "жена" }, ПОТОМ readMessages.
 - Поиск в интернете — webSearch. Если после поиска нужен ещё шаг — результат автоматически передаётся дальше.
-- Для напоминания — reminder. Для картинки — imageGeneration. Для карт — maps.
-- Для запроса о возможностях бота («что умеешь», «расскажи о себе», «твои функции») — один шаг capabilities.
-- Для задачи в браузере (записаться, заполнить форму, забронировать, нажать кнопку на сайте) — один шаг browserTask.
+- Афиша, расписание, ближайшие игры/квизы/мероприятия/билеты в городе — webSearch, НЕ maps. Слово «ближайшие» в таких запросах обычно значит ближайшие по времени.
+- Для напоминания — reminder. Для картинки — imageGeneration. Для карт/маршрутов/адресов/физических мест поблизости — maps.
+- Для запроса о возможностях бота («что умеешь», «можешь ли ты X», «как попросить тебя X», «твои функции») — один шаг capabilities.
+- Для задачи в браузере (записаться, заполнить форму, забронировать, нажать кнопку на сайте или «используй браузер») — browserTask.
 - Минимум один шаг. params можно опустить или передать пустой объект.`;
 
     try {
@@ -84,7 +125,7 @@ ${AVAILABLE_STEPS}
             devLog('Planner: no JSON in response, using fallback');
             return fallbackPlan(intent, message);
         }
-        const steps: PlanStep[] = Array.isArray(parsed.steps)
+        let steps: PlanStep[] = Array.isArray(parsed.steps)
             ? parsed.steps
                 .filter((s: unknown) => s && typeof s === 'object' && 'agentId' in s)
                 .map((s: any) => ({
@@ -93,6 +134,7 @@ ${AVAILABLE_STEPS}
                 }))
                 .filter((s: PlanStep) => s.agentId)
             : [];
+        steps = postProcessPlan({ steps }, input.classification).steps;
         if (steps.length === 0) return fallbackPlan(intent, message);
         // Если интент — отправка сообщения, в плане обязан быть sendMessage; иначе пользователь получит уточняющий диалог вместо черновика сообщения.
         if (intent === 'ОТПРАВКА_СООБЩЕНИЯ' && !steps.some((s) => s.agentId === 'sendMessage')) {
@@ -116,7 +158,7 @@ ${AVAILABLE_STEPS}
             steps.push({ agentId: 'conversation' });
         }
         devLog('Planner: LLM plan', steps.map((s) => s.agentId));
-        const plan: Plan = { steps };
+        const plan: Plan = postProcessPlan({ steps }, input.classification);
         llmCache.set(cacheKey, plan, LLM_CACHE_TTL.PLAN);
         return plan;
     } catch (e) {
@@ -150,7 +192,6 @@ function normalizeRelationship(word: string): string {
 
 /** Запасной план по интенту, если LLM не вернул валидный план. */
 function fallbackPlan(intent: string, message: string): Plan {
-    const m = message.toLowerCase();
     switch (intent) {
         case 'НАПОМИНАНИЕ':
             return { steps: [{ agentId: 'reminder' }] };

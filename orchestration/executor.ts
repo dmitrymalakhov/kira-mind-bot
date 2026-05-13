@@ -13,12 +13,13 @@ import { imageGenerationAgent } from '../agents/imageGenerationAgent';
 import { mapsAgent } from '../agents/googleMapsAgent';
 import { unclearIntentAgent } from '../agents/unclearIntentAgent';
 import { resolveRelationshipFromMemory, detectRelationshipInMessage } from '../utils/resolveRelationshipFromMemory';
-import { getCapabilitiesMessage } from '../capabilities';
+import { answerCapabilitiesQuestion, getCapabilitiesMessage } from '../capabilities';
 import { browserAgent } from '../agents/browserAgent';
 import { ReminderRegistry } from '../stores/ReminderRegistry';
 import { cancelReminder, rescheduleReminder } from '../reminder';
 import { ReminderRepository } from '../services/ReminderRepository';
 import { devLog, parseLLMJson } from '../utils';
+import { buildQuickChoiceKeyboard } from '../utils/quickChoice';
 import openai from '../openai';
 
 /**
@@ -504,6 +505,10 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
                 ));
                 if (conv === null) return { responseText: 'Не смогла сформировать ответ. Попробуй ещё раз 🙏', botReaction: classification.details?.botReaction };
                 conv.botReaction = classification.details?.botReaction;
+                if (collectedResults.length > 0) {
+                    collectedResults.push(conv);
+                    return mergeProcessingResults(collectedResults, classification.details?.botReaction as string | undefined);
+                }
                 return conv;
             }
 
@@ -632,14 +637,18 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
                     message, isForwarded, forwardFrom, messageHistory, classification, enrichedContextFromMemory || ''
                 ));
                 if (unclearRes === null) return { responseText: 'Не смогла уточнить запрос. Попробуй сформулировать иначе 🙏', botReaction: classification.details?.botReaction };
+                const keyboard = buildQuickChoiceKeyboard(ctx, message, unclearRes.responseText, classification);
+                if (keyboard) unclearRes.keyboard = keyboard;
                 unclearRes.botReaction = classification.details?.botReaction;
                 return unclearRes;
             }
 
             case 'capabilities': {
-                const capabilitiesText = getCapabilitiesMessage();
+                const capabilitiesText = await safeStep('capabilities', () => answerCapabilitiesQuestion(message, {
+                    publicMode: ctx.chat?.type !== 'private' && !ctx.session?.isAllowedUser,
+                }));
                 return {
-                    responseText: capabilitiesText,
+                    responseText: capabilitiesText ?? getCapabilitiesMessage(),
                     botReaction: classification.details?.botReaction,
                 };
             }

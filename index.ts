@@ -38,6 +38,8 @@ import { maybeAskMemoryGap } from "./utils/memoryGapDetector";
 import { maybeDetectImplicitReminder } from "./utils/implicitReminderDetector";
 import { AppDataSource } from "./data-source";
 import { ReminderRepository } from "./services/ReminderRepository";
+import { getTelegramMenuCommands } from "./capabilities";
+import { persistSessionNow } from "./services/SessionStorage";
 
 
 // Загрузка переменных окружения
@@ -124,8 +126,15 @@ async function replyAndStore(ctx: BotContext, text: string, options: any = {}) {
     return msg;
 }
 
+async function flushSessionAfterAsyncWork(ctx: BotContext, label: string) {
+    await persistSessionNow(ctx).catch((e) => {
+        console.error(`[SessionStorage] async flush failed (${label}):`, e);
+    });
+}
+
 async function saveRemindersFromResult(ctx: BotContext, result: ProcessingResult) {
     if (!result.reminderCreated) return;
+    if (!Array.isArray(ctx.session.reminders)) ctx.session.reminders = [];
     const list = result.reminderDetailsList ?? (result.reminderDetails ? [result.reminderDetails] : []);
     // Название группового чата — для пикера в приватном
     const chatType = ctx.chat?.type;
@@ -586,7 +595,7 @@ bot.on("message:text", async (ctx, next) => {
                         ctx.session.pendingBrowserTask = undefined;
                     } else {
                         const normalized = message.trim().toLowerCase();
-                        if (['отмена', 'отмени', 'cancel', 'стоп', 'stop'].includes(normalized)) {
+                        if (/^(?:отмена|отмени(?:ть)?|cancel|stop|стоп|(?:просто\s+)?останови\p{L}*(?:\s+вс[её].*)?|остановить(?:\s+вс[её].*)?|прекрати|хватит|не\s+продолжай|ничего\s+не\s+делай|просто\s+остановить.*)\s*[.!?…]*$/iu.test(normalized)) {
                             if (pendingBrowserTask.sessionId) {
                                 import('./agents/browserAgent')
                                     .then((m) => m.cancelPausedBrowserSession(pendingBrowserTask.sessionId))
@@ -718,6 +727,8 @@ bot.on("message:text", async (ctx, next) => {
             } catch (timerError) {
                 console.error("Ошибка при обработке сообщения в setTimeout:", timerError);
                 try { await ctx.reply("Что-то пошло не так при обработке... Попробуй ещё раз? 💫"); } catch {}
+            } finally {
+                await flushSessionAfterAsyncWork(ctx, 'message:text delayed processing');
             }
         }, 2000); // Ждем 2 секунды перед обработкой одиночного сообщения
     } catch (error) {
@@ -1568,16 +1579,7 @@ async function startBot() {
         startReflectionModeScheduler(bot);
         startMorningDigestScheduler(bot);
         startChatGroupTracker(bot);
-        await bot.api.setMyCommands([
-            { command: "reflection", description: "Режим рефлексии и накопления знаний" },
-            { command: "reminders", description: "Мои напоминания" },
-            { command: "chats", description: "Список чатов" },
-            { command: "contacts", description: "Список контактов" },
-            { command: "telegram_unread", description: "Непрочитанные сообщения" },
-            { command: "summary", description: "Сводка диалога" },
-            { command: "clear", description: "Очистить историю и сохранить факты" },
-            { command: "help", description: "Мои возможности" },
-        ]);
+        await bot.api.setMyCommands(getTelegramMenuCommands());
         await bot.start();
 
         console.log("✅ Бот успешно запущен и готов к работе!");

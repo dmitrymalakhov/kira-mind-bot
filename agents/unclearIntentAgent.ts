@@ -4,6 +4,19 @@ import { getBotPersona, getCommunicationStyle } from "../persona";
 import { config } from "../config";
 import openai from "../openai";
 
+const INTENT_LABELS: Partial<Record<MessageClassification["intent"], string>> = {
+    "НАПОМИНАНИЕ": "поставить напоминание",
+    "РАЗГОВОР": "ответить как на обычный вопрос или обсудить",
+    "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ": "создать изображение",
+    "КАРТЫ_ЛОКАЦИИ": "найти место или маршрут на карте",
+    "ПРОВЕРКА_СООБЩЕНИЙ": "прочитать или проанализировать переписку",
+    "ВЕБ_ПОИСК": "найти информацию в интернете",
+    "ОТПРАВКА_СООБЩЕНИЯ": "подготовить или отправить сообщение",
+    "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ": "самостоятельно договориться с контактом",
+    "ВОЗМОЖНОСТИ_БОТА": "объяснить возможности бота",
+    "БРАУЗЕР_ЗАДАЧА": "выполнить действие в браузере",
+};
+
 
 /**
  * Агент для обработки сообщений с неопределенным намерением
@@ -63,6 +76,26 @@ export async function unclearIntentAgent(
             }
         }
 
+        const rankedIntents = (classification.intentScores ?? [])
+            .filter((candidate) => candidate.intent !== "НЕОПРЕДЕЛЕНО")
+            .slice(0, 3);
+        const ambiguityHints = rankedIntents.length
+            ? "\nВозможные варианты, между которыми нужно уточнить:\n" +
+                rankedIntents
+                    .map((candidate, index) => {
+                        const label = INTENT_LABELS[candidate.intent] ?? candidate.intent;
+                        const reason = candidate.reason ? ` — ${candidate.reason}` : "";
+                        return `${index + 1}. ${label} (score ${candidate.score.toFixed(2)})${reason}`;
+                    })
+                    .join("\n")
+            : "";
+        const preferredQuestion = classification.clarificationQuestion
+            ? `\nПредложенный вопрос для уточнения: ${classification.clarificationQuestion}`
+            : "";
+        const ambiguityReason = classification.ambiguityReason
+            ? `\nПричина неоднозначности: ${classification.ambiguityReason}`
+            : "";
+
         // Подготовка промпта для генерации ответа с уточнением
         const prompt = `
         Текущая дата и время: ${formattedDateTime}
@@ -74,20 +107,24 @@ export async function unclearIntentAgent(
         ${memoryContext ? `Контекст из долговременной памяти:\n${memoryContext}` : ''}
 
         Дополнительный контекст: ${contextHints}
+        ${ambiguityReason}
+        ${ambiguityHints}
+        ${preferredQuestion}
         
         Я не могу точно определить, чего хочет пользователь. Это может быть:
-        1. Запрос на создание напоминания
-        2. Обычный разговор или вопрос
-        3. Что-то другое
+        ${rankedIntents.length
+            ? rankedIntents.map((candidate, index) => `${index + 1}. ${INTENT_LABELS[candidate.intent] ?? candidate.intent}`).join("\n")
+            : "1. Запрос на создание напоминания\n        2. Обычный разговор или вопрос\n        3. Что-то другое"}
         
         Твоя задача - создать ЕСТЕСТВЕННЫЙ ответ, который:
         1. Выразит понимание темы сообщения пользователя
         2. Деликатно уточнит его намерения
-        3. Предложит варианты дальнейшего взаимодействия (например, напоминание или обсуждение)
+        3. Предложит 2-3 конкретных варианта дальнейшего взаимодействия из списка выше
         
         Важно:
         - Не говори прямо, что "я не понимаю, чего вы хотите"
         - Не используй технический язык вроде "намерение сообщения" или "классификация"
+        - Не упоминай scores, агентов, интенты и внутреннюю маршрутизацию
         - Ответ должен быть естественным, как от настоящего человека
         - Используй 1-2 уместных эмоджи для создания дружелюбной атмосферы
 

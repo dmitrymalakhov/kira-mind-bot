@@ -80,6 +80,35 @@ export interface ExtractedFactAboutUser {
     contactName?: string;
 }
 
+export type StudyChatAnalysisProgress =
+    | {
+        stage: 'chunks_ready';
+        chunksTotal: number;
+        charactersTotal: number;
+    }
+    | {
+        stage: 'batch_done';
+        chunksDone: number;
+        chunksTotal: number;
+        rawFactsCount: number;
+    }
+    | {
+        stage: 'raw_facts_ready';
+        rawFactsCount: number;
+    }
+    | {
+        stage: 'synthesis_start';
+        rawFactsCount: number;
+    }
+    | {
+        stage: 'synthesis_done';
+        factsCount: number;
+    };
+
+export type StudyChatAnalysisProgressHandler = (
+    progress: StudyChatAnalysisProgress
+) => void | Promise<void>;
+
 // ─── Константы ────────────────────────────────────────────────────────────────
 
 const CHUNK_MAX_CHARS = 12000;  // ~150–200 сообщений на чанк, чтобы не превышать контекст gpt-5.4-nano
@@ -413,12 +442,27 @@ export async function extractFactsAboutUserFromConversation(
     conversationText: string,
     contactName: string,
     startDate?: Date,
-    endDate?: Date
+    endDate?: Date,
+    onProgress?: StudyChatAnalysisProgressHandler
 ): Promise<ExtractedFactAboutUser[]> {
     if (!conversationText.trim()) return [];
 
+    const emitProgress = async (progress: StudyChatAnalysisProgress): Promise<void> => {
+        if (!onProgress) return;
+        try {
+            await onProgress(progress);
+        } catch (e) {
+            console.error('[studyChatFlow] progress callback failed:', e);
+        }
+    };
+
     const chunks = splitIntoChunks(conversationText);
     console.log(`[studyChatFlow] Анализ переписки: ${chunks.length} чанк(ов), ${conversationText.length} символов`);
+    await emitProgress({
+        stage: 'chunks_ready',
+        chunksTotal: chunks.length,
+        charactersTotal: conversationText.length,
+    });
 
     // Формируем метку периода для промптов
     const periodLabel = startDate && endDate
@@ -427,12 +471,22 @@ export async function extractFactsAboutUserFromConversation(
 
     // Извлечение чанков батчами — не более CHUNK_CONCURRENCY параллельных пар запросов
     const chunkResults: PromiseSettledResult<ExtractedFactAboutUser[]>[] = [];
+    let rawFactsCountSoFar = 0;
     for (let i = 0; i < chunks.length; i += CHUNK_CONCURRENCY) {
         const batch = chunks.slice(i, i + CHUNK_CONCURRENCY);
         const batchResults = await Promise.allSettled(
             batch.map(chunk => extractRawFactsFromChunk(chunk, contactName, periodLabel))
         );
         chunkResults.push(...batchResults);
+        for (const result of batchResults) {
+            if (result.status === 'fulfilled') rawFactsCountSoFar += result.value.length;
+        }
+        await emitProgress({
+            stage: 'batch_done',
+            chunksDone: Math.min(i + batch.length, chunks.length),
+            chunksTotal: chunks.length,
+            rawFactsCount: rawFactsCountSoFar,
+        });
     }
 
     const rawFacts: ExtractedFactAboutUser[] = [];
@@ -453,10 +507,13 @@ export async function extractFactsAboutUserFromConversation(
     }
 
     console.log(`[studyChatFlow] Сырых фактов извлечено: ${rawFacts.length}`);
+    await emitProgress({ stage: 'raw_facts_ready', rawFactsCount: rawFacts.length });
 
     // Синтез: консолидация + умная дедупликация
+    await emitProgress({ stage: 'synthesis_start', rawFactsCount: rawFacts.length });
     const finalFacts = await synthesizeFacts(rawFacts, contactName);
     console.log(`[studyChatFlow] Финальных фактов после синтеза: ${finalFacts.length}`);
+    await emitProgress({ stage: 'synthesis_done', factsCount: finalFacts.length });
 
     // Проставляем contactName для фактов о собеседнике
     return finalFacts.map(f =>

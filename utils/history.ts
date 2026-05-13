@@ -26,6 +26,13 @@ function pushRecentFact(ctx: BotContext, content: string): void {
     }
 }
 
+function shouldSkipFactExtractionForBrowserTask(ctx: BotContext, content: string): boolean {
+    if (ctx.session.activeBrowserTask || ctx.session.pendingBrowserTask) return true;
+
+    return /(?:https?:\/\/|www\.|\b(?:lamoda|ламода|quizium|квизиум)\b|(?:открой|зайди|перейди|найди|посмотри|запиши|забронируй|зарегистрируй|нажми|кликни)[\s\S]{0,80}(?:сайт|браузер|страниц|форм|lamoda|ламода|quizium|квизиум|\.ru|\.com))/iu
+        .test(content);
+}
+
 export async function addToHistory(ctx: BotContext, role: string, content: string) {
     ctx.session.messageHistory.unshift({
         role,
@@ -37,6 +44,8 @@ export async function addToHistory(ctx: BotContext, role: string, content: strin
     if (role === 'user') {
         if (ctx.session.pendingContactMemory || ctx.session.pendingContactLookup) {
             devLog('Skip fact extraction: message is pending contact-memory clarification/lookup');
+        } else if (shouldSkipFactExtractionForBrowserTask(ctx, content)) {
+            devLog('Skip fact extraction: browser task or active browser session');
         } else {
             factAnalysisManager.scheduleAnalysis(ctx);
             devLog('Scheduled delayed fact analysis');

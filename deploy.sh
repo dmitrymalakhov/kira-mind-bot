@@ -3,29 +3,32 @@
 # Требования на локальной машине: Node.js, npm, ssh, scp.
 
 show_help() {
-    echo "Usage: $0 [--kira-mind-bot] [--sergey-brain-bot] [--server-ip <ip>]"
+    echo "Usage: $0 [--kira-mind-bot] [--sergey-brain-bot] [--admin-panel] [--server-ip <ip>]"
     echo
     echo "Options:"
     echo "  --kira-mind-bot              Deploy the Kira-Mind bot"
     echo "  --sergey-brain-bot           Deploy the Sergey-Brain bot"
+    echo "  --admin-panel                Deploy the admin panel"
     echo "  --server-ip <ip>             Target server IP address"
     exit 1
 }
 
 DEPLOY_KIRA_MIND_BOT=false
 DEPLOY_SERGEY_BRAIN_BOT=false
+DEPLOY_ADMIN_PANEL=false
 SERVER_IP="165.232.120.123"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --kira-mind-bot)    DEPLOY_KIRA_MIND_BOT=true; shift ;;
         --sergey-brain-bot) DEPLOY_SERGEY_BRAIN_BOT=true; shift ;;
+        --admin-panel)      DEPLOY_ADMIN_PANEL=true; shift ;;
         --server-ip)        SERVER_IP="$2"; shift 2 ;;
         *)                  show_help ;;
     esac
 done
 
-if [ "$DEPLOY_KIRA_MIND_BOT" = false ] && [ "$DEPLOY_SERGEY_BRAIN_BOT" = false ]; then
+if [ "$DEPLOY_KIRA_MIND_BOT" = false ] && [ "$DEPLOY_SERGEY_BRAIN_BOT" = false ] && [ "$DEPLOY_ADMIN_PANEL" = false ]; then
     show_help
 fi
 
@@ -40,7 +43,7 @@ echo "📍 Сервер: ${SERVER_IP}"
 echo "📦 Проекты:"
 [ "$DEPLOY_KIRA_MIND_BOT" = true ]    && echo "  • kira-mind-bot"
 [ "$DEPLOY_SERGEY_BRAIN_BOT" = true ] && echo "  • sergey-brain-bot"
-echo "  • admin-panel"
+[ "$DEPLOY_ADMIN_PANEL" = true ]      && echo "  • admin-panel"
 echo "=============================================="
 echo ""
 
@@ -90,9 +93,17 @@ echo "📁 --- Подготовка архива ---"
 cp docker-compose.yml _deploy/
 cp personality.json.template _deploy/
 
-if [ -d "admin-panel" ]; then
+if [ "$DEPLOY_ADMIN_PANEL" = true ] && [ -d "admin-panel" ]; then
     rsync -a --exclude='node_modules' --exclude='dist' admin-panel/ _deploy/admin-panel/
     echo "✅ Скопирована admin-panel"
+
+    if [ -f ".env.production" ]; then
+        mkdir -p _deploy/kira-mind-bot
+        cp .env.production _deploy/kira-mind-bot/
+        echo "✅ Скопирован .env.production для admin-panel"
+    else
+        echo "⚠️  .env.production не найден"
+    fi
 fi
 
 # .env для docker-compose (DB_* переменные из .env.production)
@@ -138,7 +149,7 @@ ssh root@${SERVER_IP} << EOF
   }
   if [ "$DEPLOY_KIRA_MIND_BOT" = true ];    then stop_and_remove kira-mind-bot; fi
   if [ "$DEPLOY_SERGEY_BRAIN_BOT" = true ]; then stop_and_remove sergey-brain-bot; fi
-  stop_and_remove admin-panel
+  if [ "$DEPLOY_ADMIN_PANEL" = true ];      then stop_and_remove admin-panel; fi
   echo ""
 
   echo "🗑️  Очистка Docker..."
@@ -167,29 +178,31 @@ ssh root@${SERVER_IP} << EOF
     echo "✅ personality.json уже существует — настройки сохранены"
   fi
 
-  # Учётные данные admin-panel
-  ADMIN_STATE_FILE="/root/.kira-admin-state"
-  if [ -f "\$ADMIN_STATE_FILE" ]; then
-    set -a; source "\$ADMIN_STATE_FILE"; set +a
+  if [ "$DEPLOY_ADMIN_PANEL" = true ]; then
+    # Учётные данные admin-panel
+    ADMIN_STATE_FILE="/root/.kira-admin-state"
+    if [ -f "\$ADMIN_STATE_FILE" ]; then
+      set -a; source "\$ADMIN_STATE_FILE"; set +a
+    fi
+    if [ -z "\$ADMIN_PORT" ]; then
+      ADMIN_PORT=\$(( (RANDOM % 2000) + 7000 ))
+      echo "ADMIN_PORT=\$ADMIN_PORT" >> "\$ADMIN_STATE_FILE"
+      echo "🔒 Сгенерирован порт admin-panel: \$ADMIN_PORT"
+    fi
+    if [ -z "\$ADMIN_PASSWORD" ]; then
+      ADMIN_PASSWORD=\$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 20 2>/dev/null || openssl rand -hex 10)
+      echo "ADMIN_PASSWORD=\$ADMIN_PASSWORD" >> "\$ADMIN_STATE_FILE"
+      echo "🔒 Сгенерирован пароль admin-panel"
+    fi
+    if [ -z "\$ADMIN_USERNAME" ]; then
+      ADMIN_USERNAME="admin"
+      echo "ADMIN_USERNAME=\$ADMIN_USERNAME" >> "\$ADMIN_STATE_FILE"
+    fi
+    echo "ADMIN_PORT=\$ADMIN_PORT"         >> .env
+    echo "ADMIN_USERNAME=\$ADMIN_USERNAME" >> .env
+    echo "ADMIN_PASSWORD=\$ADMIN_PASSWORD" >> .env
+    echo ""
   fi
-  if [ -z "\$ADMIN_PORT" ]; then
-    ADMIN_PORT=\$(( (RANDOM % 2000) + 7000 ))
-    echo "ADMIN_PORT=\$ADMIN_PORT" >> "\$ADMIN_STATE_FILE"
-    echo "🔒 Сгенерирован порт admin-panel: \$ADMIN_PORT"
-  fi
-  if [ -z "\$ADMIN_PASSWORD" ]; then
-    ADMIN_PASSWORD=\$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 20 2>/dev/null || openssl rand -hex 10)
-    echo "ADMIN_PASSWORD=\$ADMIN_PASSWORD" >> "\$ADMIN_STATE_FILE"
-    echo "🔒 Сгенерирован пароль admin-panel"
-  fi
-  if [ -z "\$ADMIN_USERNAME" ]; then
-    ADMIN_USERNAME="admin"
-    echo "ADMIN_USERNAME=\$ADMIN_USERNAME" >> "\$ADMIN_STATE_FILE"
-  fi
-  echo "ADMIN_PORT=\$ADMIN_PORT"         >> .env
-  echo "ADMIN_USERNAME=\$ADMIN_USERNAME" >> .env
-  echo "ADMIN_PASSWORD=\$ADMIN_PASSWORD" >> .env
-  echo ""
 
   export NODE_ENV=production
   DEPLOYED_SERVICES=""
@@ -206,7 +219,13 @@ ssh root@${SERVER_IP} << EOF
 
   if [ "$DEPLOY_KIRA_MIND_BOT" = true ];    then deploy_service kira-mind-bot; fi
   if [ "$DEPLOY_SERGEY_BRAIN_BOT" = true ]; then deploy_service sergey-brain-bot; fi
-  deploy_service admin-panel
+  if [ "$DEPLOY_ADMIN_PANEL" = true ];      then deploy_service admin-panel; fi
+
+  echo ""
+  echo "🧹 Очистка Docker build cache после сборки..."
+  docker builder prune -af 2>/dev/null || true
+  docker image prune -f 2>/dev/null || true
+  docker system df 2>/dev/null || true
 
   echo ""
   echo "✔️  === Проверка сервисов ==="
@@ -221,14 +240,16 @@ ssh root@${SERVER_IP} << EOF
     fi
   done
 
-  echo ""
-  echo "╔══════════════════════════════════════════╗"
-  echo "║        🌐 ПАНЕЛЬ УПРАВЛЕНИЯ              ║"
-  echo "╠══════════════════════════════════════════╣"
-  echo "║  URL:     http://${SERVER_IP}:\$ADMIN_PORT"
-  echo "║  Логин:   \$ADMIN_USERNAME"
-  echo "║  Пароль:  \$ADMIN_PASSWORD"
-  echo "╚══════════════════════════════════════════╝"
+  if [ "$DEPLOY_ADMIN_PANEL" = true ]; then
+    echo ""
+    echo "╔══════════════════════════════════════════╗"
+    echo "║        🌐 ПАНЕЛЬ УПРАВЛЕНИЯ              ║"
+    echo "╠══════════════════════════════════════════╣"
+    echo "║  URL:     http://${SERVER_IP}:\$ADMIN_PORT"
+    echo "║  Логин:   \$ADMIN_USERNAME"
+    echo "║  Пароль:  \$ADMIN_PASSWORD"
+    echo "╚══════════════════════════════════════════╝"
+  fi
   echo ""
   echo "🖥️  Деплой завершён: \$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 EOF

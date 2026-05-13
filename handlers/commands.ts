@@ -10,7 +10,7 @@ import { addToHistory } from "../utils/history";
 import { registerMemoryCommands } from "./memoryCommands";
 import { registerChatGroupCommands } from "./chatGroupCommands";
 import { USER_TIMEZONE } from "../constants";
-import { getCapabilitiesMessage } from "../capabilities";
+import { answerCapabilitiesQuestion } from "../capabilities";
 import { getAllChats, isChatPublicMode, setChatPublicMode } from "../services/chatRegistry";
 import { isReflectionModeEnabled, setReflectionModeEnabled, getReflectionStats } from "../services/reflectionModeService";
 import { factAnalysisManager } from "../utils/factAnalysisTimer";
@@ -317,9 +317,19 @@ bot.command("public_mode", async (ctx) => {
     }
 });
 
-// Команда /help - показать справку (то же описание возможностей, что и на вопрос «что ты умеешь»)
+// Команда /help - ответить на вопрос о возможностях, если после команды есть тема
 bot.command("help", async (ctx) => {
-    await ctx.reply(getCapabilitiesMessage(), { parse_mode: "Markdown" });
+    const rawText = ctx.message?.text || "";
+    const topic = rawText.replace(/^\/help(?:@\w+)?/i, "").trim();
+    const question = topic
+        ? `Пользователь просит помощь по теме: ${topic}`
+        : "Кратко расскажи, чем ты умеешь помогать и как тебя просить.";
+
+    await ctx.api.sendChatAction(ctx.chat.id, "typing").catch(() => {});
+    const response = await answerCapabilitiesQuestion(question, {
+        publicMode: ctx.chat?.type !== "private" && !ctx.session?.isAllowedUser,
+    });
+    await ctx.reply(response);
 });
 
 // ── Команда /reflection — режим рефлексии и накопления знаний ────────────────

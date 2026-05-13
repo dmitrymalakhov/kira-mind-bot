@@ -33,6 +33,124 @@ function buildFallbackResponse(): ProcessingResult {
     };
 }
 
+const TEMPORAL_REFERENCE_RE = /(\d{1,2}[:.]\d{2}|(?:^|\s)(?:в|к)\s+\d{1,2}(?=\s|$|[,.!?;:])|сегодня|завтра|послезавтра|через\s+\d+|утром|вечером|ночью|дн[её]м|выходн|понедельник|вторник|сред[ау]|четверг|пятниц[ау]|суббот[ау]|воскресенье|январ|феврал|март|апрел|ма[йяе]|июн|июл|август|сентябр|октябр|ноябр|декабр|\d{1,2}[./-]\d{1,2}|после\s+\S+|перед\s+\S+|до\s+\S+|когда\s+\S+)/iu;
+
+function hasTemporalReference(text: string): boolean {
+    return TEMPORAL_REFERENCE_RE.test(text);
+}
+
+function getZonedParts(date: Date, timeZone: string): {
+    year: number;
+    month: number;
+    day: number;
+    hour: number;
+    minute: number;
+    second: number;
+} {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+    }).formatToParts(date);
+    const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+    return {
+        year: get("year"),
+        month: get("month"),
+        day: get("day"),
+        hour: get("hour"),
+        minute: get("minute"),
+        second: get("second"),
+    };
+}
+
+function getTimeZoneOffsetMs(date: Date, timeZone: string): number {
+    const p = getZonedParts(date, timeZone);
+    const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second, 0);
+    return asUtc - date.getTime();
+}
+
+function zonedDateTimeToDate(
+    year: number,
+    month: number,
+    day: number,
+    hour: number,
+    minute: number,
+    timeZone: string
+): Date {
+    let utcMs = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+    for (let i = 0; i < 3; i++) {
+        utcMs = Date.UTC(year, month - 1, day, hour, minute, 0, 0) - getTimeZoneOffsetMs(new Date(utcMs), timeZone);
+    }
+    return new Date(utcMs);
+}
+
+function getDefaultReminderDueDate(currentDate: Date, userTimezone: string): Date {
+    const today = getZonedParts(currentDate, userTimezone);
+    const tomorrow = new Date(Date.UTC(today.year, today.month - 1, today.day + 1, 0, 0, 0, 0));
+    return zonedDateTimeToDate(
+        tomorrow.getUTCFullYear(),
+        tomorrow.getUTCMonth() + 1,
+        tomorrow.getUTCDate(),
+        10,
+        0,
+        userTimezone
+    );
+}
+
+function formatReminderDueDate(dueDate: Date, userTimezone: string): string {
+    return dueDate.toLocaleString("ru-RU", {
+        timeZone: userTimezone,
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+        hour: "numeric",
+        minute: "numeric",
+    });
+}
+
+function extractFallbackReminderText(message: string): string {
+    const sourceMatch = message.match(/Исходный запрос:\s*([\s\S]+)$/im);
+    const source = (sourceMatch?.[1] ?? message).split(/\r?\n/)[0].trim();
+    const cleaned = source
+        .replace(/^(да,\s*)?(пожалуйста,\s*)?(напомни|напоминай)\s+(мне\s+)?(о\s+том,\s+что\s+|об\s+этом\s*)?/iu, "")
+        .replace(/^(не\s+дай\s+забыть|не\s+забудь)\s+(мне\s+)?/iu, "")
+        .replace(/^(создай|поставь|добавь)(?:\s+\S+){0,3}\s+напоминание\s+(о\s+|про\s+)?/iu, "")
+        .trim();
+    return cleaned || source || "напоминание";
+}
+
+function buildFallbackReminderResponse(message: string, currentDate: Date, userTimezone: string): ProcessingResult {
+    if (hasTemporalReference(message)) return buildFallbackResponse();
+
+    const dueDate = getDefaultReminderDueDate(currentDate, userTimezone);
+    const text = extractFallbackReminderText(message);
+    const displayTime = formatReminderDueDate(dueDate, userTimezone);
+    const id = `${Date.now()}-fallback-${Math.floor(Math.random() * 1_000_000)}`;
+    return {
+        responseText: `✅ Напомню: ${text} — ${displayTime}.`,
+        reminderCreated: true,
+        reminderDetails: {
+            id,
+            text,
+            reminderMessage: `Напоминаю: ${text}`,
+            dueDate,
+        },
+        reminderDetailsList: [
+            {
+                id,
+                text,
+                reminderMessage: `Напоминаю: ${text}`,
+                dueDate,
+            },
+        ],
+    };
+}
+
 export async function reminderAgent(
     message: string,
     isForwarded: boolean = false,
@@ -51,6 +169,9 @@ export async function reminderAgent(
         }
 
         const currentDate = new Date();
+        const noTemporalReference = !hasTemporalReference(message);
+        const defaultDueDate = getDefaultReminderDueDate(currentDate, userTimezone);
+        const defaultDueText = formatReminderDueDate(defaultDueDate, userTimezone);
         const formattedDateTime = currentDate.toLocaleString('ru-RU', {
             timeZone: userTimezone,
             day: 'numeric',
@@ -88,7 +209,7 @@ export async function reminderAgent(
         - Если указано относительное время (например, "через час"), рассчитай точное время
         - Если время привязано к событию из памяти ("после отпуска", "когда вернусь", "после поездки") — найди даты этого события в контексте памяти и вычисли конкретную дату (например, день после окончания отпуска в 10:00)
         - Если время не указано явно, используй контекст для определения
-        - Если нельзя определить время, используй значение по умолчанию - через 30 минут
+        - Если пользователь явно просит напомнить, но не указывает дату/время, НЕ задавай уточняющий вопрос и НЕ используй "через 30 минут". Используй дефолт: ${defaultDueDate.toISOString()} (${defaultDueText} в ${userTimezone})
         - Формат времени должен быть строго ISO и включать таймзону (например, 2026-05-20T15:00:00+03:00)
 
         6. Если пользователь просит напоминать РЕГУЛЯРНО ("каждый день", "каждую неделю", "каждый понедельник", "раз в месяц", "каждые 2 дня" и т.п.) — укажи recurrence:
@@ -141,28 +262,31 @@ export async function reminderAgent(
 
         const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
         if (!jsonMatch) {
-            return buildFallbackResponse();
+            return buildFallbackReminderResponse(message, currentDate, userTimezone);
         }
 
         let analysis: MultiReminderAnalysis;
         try {
             analysis = JSON.parse(jsonMatch[0]);
         } catch (_error) {
-            return buildFallbackResponse();
+            return buildFallbackReminderResponse(message, currentDate, userTimezone);
         }
 
         if (!analysis?.reminders || !Array.isArray(analysis.reminders) || analysis.reminders.length === 0) {
-            return buildFallbackResponse();
+            return buildFallbackReminderResponse(message, currentDate, userTimezone);
         }
 
         const validReminders = analysis.reminders.filter((r) => {
-            if (!r?.reminderText || !r?.reminderMessage || !r?.reminderTime) return false;
+            if (!r?.reminderText) return false;
+            if (!r.reminderMessage) r.reminderMessage = r.reminderText;
+            if (noTemporalReference && !r.reminderTime) return true;
+            if (!r.reminderTime) return false;
             const parsed = new Date(processReminderTime(r.reminderTime));
             return !isNaN(parsed.getTime());
         });
 
         if (validReminders.length === 0) {
-            return buildFallbackResponse();
+            return buildFallbackReminderResponse(message, currentDate, userTimezone);
         }
 
         const normalizeTargetChat = (t: ReminderAnalysis["targetChat"]): ReminderTargetChat | undefined => {
@@ -188,7 +312,9 @@ export async function reminderAgent(
         };
 
         const detailsList = validReminders.map((r, idx) => {
-            const due = new Date(processReminderTime(r.reminderTime));
+            const due = noTemporalReference
+                ? new Date(defaultDueDate)
+                : new Date(processReminderTime(r.reminderTime));
             return {
                 id: `${Date.now()}-${idx}-${Math.floor(Math.random() * 1_000_000)}`,
                 text: r.reminderText,
@@ -200,14 +326,13 @@ export async function reminderAgent(
         });
 
         const responseText = validReminders.map((r) => {
-            const displayTime = new Date(processReminderTime(r.reminderTime)).toLocaleString('ru-RU', {
-                timeZone: userTimezone,
-                day: 'numeric',
-                month: 'long',
-                year: 'numeric',
-                hour: 'numeric',
-                minute: 'numeric'
-            });
+            const due = noTemporalReference
+                ? new Date(defaultDueDate)
+                : new Date(processReminderTime(r.reminderTime));
+            const displayTime = formatReminderDueDate(due, userTimezone);
+            if (noTemporalReference) {
+                return `✅ Напомню: ${r.reminderText} — ${displayTime}.`;
+            }
             return r.confirmationMessage || `✅ Отлично! Я напомню тебе о "${r.reminderText}" ${displayTime}`;
         }).join('\n');
 

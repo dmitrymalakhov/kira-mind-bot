@@ -17,6 +17,7 @@ import { Plan } from "./orchestration/types";
 import { ChatGroupRepository } from "./services/ChatGroupRepository";
 import { handlePendingContactMemoryText } from "./utils/contactMemory";
 import { handlePendingContactLookupText, maybeStartContactMemoryLookup } from "./utils/contactMemoryLookup";
+import { hasActiveBrowserRunForContext } from "./agents/browserAgent";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -27,6 +28,20 @@ dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
 export interface MessageClassification {
     intent: "НАПОМИНАНИЕ" | "РАЗГОВОР" | "НЕОПРЕДЕЛЕНО" | "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ" |
     "КАРТЫ_ЛОКАЦИИ" | "ПРОВЕРКА_СООБЩЕНИЙ" | "ВЕБ_ПОИСК" | "ОТПРАВКА_СООБЩЕНИЯ" | "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ" | "ВОЗМОЖНОСТИ_БОТА" | "БРАУЗЕР_ЗАДАЧА";
+    /**
+     * Ранжированные кандидаты интента от классификатора.
+     * Используются как "second opinion" перед запуском агента: если лидеры близко,
+     * оркестратор спрашивает уточнение вместо рискованного выбора.
+     */
+    intentScores?: Array<{
+        intent: MessageClassification["intent"];
+        score: number;
+        reason?: string;
+    }>;
+    /** Краткое объяснение, почему классификатор считает запрос неоднозначным. */
+    ambiguityReason?: string;
+    /** Вопрос, который можно задать пользователю при близких scores. */
+    clarificationQuestion?: string;
     /**
      * Дополнительные намерения, если запрос составной (два явных независимых действия).
      * Пример: «напомни завтра и напиши маме сейчас» →
@@ -134,8 +149,97 @@ const INTENT_DEDUP_WINDOW_MS = 3 * 60 * 1000;
 const INTENT_DEDUP_MIN_CONFIDENCE = 0.8;
 const NON_DEDUP_INTENTS = new Set(["РАЗГОВОР", "ОТПРАВКА_СООБЩЕНИЯ", "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ", "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ", "ПРОВЕРКА_СООБЩЕНИЙ", "ВЕБ_ПОИСК", "БРАУЗЕР_ЗАДАЧА"]);
 const BROWSER_CONTINUATION_RE = /^Продолжи задачу в браузере через Playwright\.|browserSessionId:/i;
-const BROWSER_TASK_FORCE_RE = /\b(открой\s+браузер|зайди\s+на\s+сайт|на\s+сайте|через\s+сайт|заполни\s+форму|отправь\s+форму|забронируй|забронь|зарегистрируй(?:ся)?|купи\s+(?:билет|билеты)|оформи\s+заказ|checkout|запишись|запиши\s+меня|нажми\s+(?:кнопку|на))/iu;
-const REMINDER_EXPLICIT_RE = /\b(напомни|создай\s+напоминание|поставь\s+напоминание|добавь\s+напоминание)\b/iu;
+const CYRILLIC_PHRASE_START = String.raw`(?:^|[\s,.!?;:])`;
+const CYRILLIC_PHRASE_END = String.raw`(?=$|[\s,.!?;:])`;
+const BROWSER_BOOKING_PHRASE_RE = /запиши\s+(?:меня|нас|нам)?\s*на|записать\s+(?:меня|нас|нам)?\s*на|запишись|зарегистрируй(?:ся)?|зарегистрируй\s+(?:меня|нас|нам)|забронируй|забронь/iu;
+const BROWSER_TASK_FORCE_RE = new RegExp(
+    `${CYRILLIC_PHRASE_START}(?:открой\\s+браузер|зайди\\s+на\\s+сайт|на\\s+сайте|через\\s+сайт|заполни\\s+форму|отправь\\s+форму|${BROWSER_BOOKING_PHRASE_RE.source}|купи\\s+(?:билет|билеты)|оформи\\s+заказ|checkout|нажми\\s+(?:кнопку|на))${CYRILLIC_PHRASE_END}`,
+    'iu'
+);
+const BROWSER_FOLLOW_UP_RE = new RegExp(
+    `${CYRILLIC_PHRASE_START}(?:${BROWSER_BOOKING_PHRASE_RE.source}|купи\\s+билет|оформи|перейди|нажми|выбери|заполни|отправь\\s+форму)${CYRILLIC_PHRASE_END}`,
+    'iu'
+);
+const BROWSER_CANCEL_COMMAND_RE = /^\s*(?:отмена|отмени(?:ть)?|cancel|stop|стоп|(?:просто\s+)?останови\p{L}*(?:\s+вс[её].*)?|остановить(?:\s+вс[её].*)?|прекрати|хватит|не\s+продолжай|ничего\s+не\s+делай|просто\s+остановить.*)\s*[.!?…]*\s*$/iu;
+const EXPLICIT_REMINDER_RE = /(^|\s)(напомни|напоминай|не\s+дай\s+забыть|не\s+забудь|(?:создай|поставь|добавь)(?:\s+\S+){0,3}\s+напоминание)(?=\s|$|[,.!?;:])/iu;
+const INTENT_SCORE_CLOSE_DELTA = 0.12;
+const INTENT_SCORE_VERY_CLOSE_DELTA = 0.06;
+const INTENT_SCORE_CLEAR_WINNER_MIN = 0.82;
+const INTENT_SCORE_MIN_RUNNER_UP = 0.35;
+const VALID_CLASSIFICATION_INTENTS = new Set<MessageClassification["intent"]>([
+    "НАПОМИНАНИЕ",
+    "РАЗГОВОР",
+    "НЕОПРЕДЕЛЕНО",
+    "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ",
+    "КАРТЫ_ЛОКАЦИИ",
+    "ПРОВЕРКА_СООБЩЕНИЙ",
+    "ВЕБ_ПОИСК",
+    "ОТПРАВКА_СООБЩЕНИЯ",
+    "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ",
+    "ВОЗМОЖНОСТИ_БОТА",
+    "БРАУЗЕР_ЗАДАЧА",
+]);
+
+function buildExplicitReminderClassification(message: string): MessageClassification | null {
+    if (!EXPLICIT_REMINDER_RE.test(message)) return null;
+
+    return {
+        intent: "НАПОМИНАНИЕ",
+        confidenceLevel: "ВЫСОКИЙ",
+        intentScores: [
+            {
+                intent: "НАПОМИНАНИЕ",
+                score: 1,
+                reason: "В сообщении есть явная просьба создать напоминание.",
+            },
+        ],
+        details: {
+            reminderAction: "create",
+            keywords: [message.slice(0, 160)],
+        },
+    };
+}
+
+function buildBrowserFollowUpMessage(ctx: any, message: string): string | null {
+    if (BROWSER_CONTINUATION_RE.test(message)) return null;
+    const lastBrowserTask = ctx?.session?.lastBrowserTask;
+    if (!lastBrowserTask || Date.now() > Number(lastBrowserTask.expiresAt || 0)) return null;
+    if (!BROWSER_FOLLOW_UP_RE.test(message)) return null;
+
+    const previousContext = [
+        lastBrowserTask.summary ? `Итог: ${lastBrowserTask.summary}` : '',
+        Array.isArray(lastBrowserTask.notes) && lastBrowserTask.notes.length
+            ? `Рабочие заметки:\n${lastBrowserTask.notes.slice(-8).map((note: string, index: number) => `${index + 1}. ${note}`).join('\n')}`
+            : '',
+        lastBrowserTask.pageText ? `Видимый текст последней страницы:\n${String(lastBrowserTask.pageText).slice(0, 1800)}` : '',
+    ].filter(Boolean).join('\n\n');
+
+    return [
+        'Продолжи задачу в браузере через Playwright.',
+        'browserSessionId: none',
+        `Исходная задача пользователя: ${lastBrowserTask.originalTask}`,
+        `Контекст предыдущей завершённой браузерной задачи: ${previousContext || lastBrowserTask.summary}`,
+        lastBrowserTask.url ? `Последняя страница: ${lastBrowserTask.url}` : '',
+        lastBrowserTask.title ? `Заголовок последней страницы: ${lastBrowserTask.title}` : '',
+        `Ответ пользователя: ${message}`,
+        'Используй ответ как follow-up к найденным вариантам: сначала восстанови последнюю страницу, выбери подходящий вариант на ней и продолжи действие в браузере. Не придумывай отдельный сайт по названию варианта.',
+    ].filter(Boolean).join('\n');
+}
+
+function hasActivePendingBrowserTask(ctx: any): boolean {
+    const pending = ctx?.session?.pendingBrowserTask;
+    return Boolean(pending?.sessionId && Date.now() <= Number(pending.expiresAt || 0));
+}
+
+function hasActiveRunningBrowserTask(ctx: any): boolean {
+    const active = ctx?.session?.activeBrowserTask;
+    return Boolean(active?.sessionId && Date.now() <= Number(active.expiresAt || 0));
+}
+
+function looksLikeBrowserTaskText(message: string): boolean {
+    return /(?:https?:\/\/|www\.|\b(?:lamoda|ламода|quizium|квизиум)\b|(?:открой|зайди|перейди|найди|посмотри|запиши|забронируй|зарегистрируй|нажми|кликни)[\s\S]{0,90}(?:сайт|браузер|страниц|форм|lamoda|ламода|quizium|квизиум|\.ru|\.com))/iu
+        .test(message);
+}
 
 function normalizeForDedup(text: string): string {
     return text
@@ -169,6 +273,63 @@ function isPotentialDuplicateCandidate(currentMessage: string, previousMessage: 
     if (shorter / longer < 0.6) return false;
 
     return jaccardTokenOverlap(current, previous) >= 0.35;
+}
+
+function normalizeIntentScores(classification: MessageClassification): MessageClassification {
+    const seen = new Set<MessageClassification["intent"]>();
+    const intentScores = (classification.intentScores ?? [])
+        .map((candidate) => ({
+            intent: String(candidate?.intent ?? "").trim() as MessageClassification["intent"],
+            score: Number(candidate?.score),
+            reason: candidate?.reason ? String(candidate.reason).slice(0, 180) : undefined,
+        }))
+        .filter((candidate) =>
+            VALID_CLASSIFICATION_INTENTS.has(candidate.intent) &&
+            Number.isFinite(candidate.score)
+        )
+        .map((candidate) => ({
+            ...candidate,
+            score: Math.max(0, Math.min(1, candidate.score)),
+        }))
+        .sort((a, b) => b.score - a.score)
+        .filter((candidate) => {
+            if (seen.has(candidate.intent)) return false;
+            seen.add(candidate.intent);
+            return true;
+        })
+        .slice(0, 5);
+
+    const rawIntent = VALID_CLASSIFICATION_INTENTS.has(classification.intent)
+        ? classification.intent
+        : "НЕОПРЕДЕЛЕНО";
+    const intent = intentScores[0]?.intent && intentScores[0].intent !== "НЕОПРЕДЕЛЕНО"
+        ? intentScores[0].intent
+        : rawIntent;
+
+    return { ...classification, intent, details: classification.details ?? {}, intentScores };
+}
+
+function detectIntentAmbiguity(classification: MessageClassification): {
+    top: NonNullable<MessageClassification["intentScores"]>[number];
+    runnerUp: NonNullable<MessageClassification["intentScores"]>[number];
+    delta: number;
+} | null {
+    if (classification.intent === "НЕОПРЕДЕЛЕНО") return null;
+    if (classification.subIntents?.length) return null;
+
+    const scores = classification.intentScores ?? [];
+    if (scores.length < 2) return null;
+
+    const [top, runnerUp] = scores;
+    if (runnerUp.score < INTENT_SCORE_MIN_RUNNER_UP) return null;
+
+    const delta = top.score - runnerUp.score;
+    const veryClose = delta <= INTENT_SCORE_VERY_CLOSE_DELTA;
+    const closeAndUnclear =
+        delta <= INTENT_SCORE_CLOSE_DELTA &&
+        (top.score < INTENT_SCORE_CLEAR_WINNER_MIN || classification.confidenceLevel !== "ВЫСОКИЙ");
+
+    return veryClose || closeAndUnclear ? { top, runnerUp, delta } : null;
 }
 
 function buildDedupReuseResult(previous: ProcessingResult): ProcessingResult {
@@ -335,6 +496,10 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
 
         Твоя задача: однозначно определить намерение пользователя и вернуть одну из категорий ниже.
         Выбирай конкретный интент (не НЕОПРЕДЕЛЕНО), если сообщение хотя бы примерно подходит под категорию. НЕОПРЕДЕЛЕНО — только если сообщение действительно непонятно или не подходит ни под одну категорию. Для ясных просьб всегда указывай confidenceLevel: ВЫСОКИЙ.
+        Кроме основного intent, всегда верни intentScores: 2-4 наиболее вероятных интента с score от 0 до 1.
+        score — твоя внутренняя уверенность, не обязан суммироваться до 1. intent должен совпадать с кандидатом с самым высоким score.
+        Если два лучших intentScores близки (разница примерно 0.12 или меньше), ставь confidenceLevel: СРЕДНИЙ или НИЗКИЙ, заполни ambiguityReason и clarificationQuestion.
+        clarificationQuestion — короткий естественный вопрос пользователю без технических слов, который помогает выбрать между вариантами.
         
         Категории (выбери одну):
         
@@ -371,8 +536,10 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
            визуальная сцена, которую нужно создать - это ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ.
            
         4. КАРТЫ_ЛОКАЦИИ - пользователь запрашивает информацию о местоположении, маршрутах,
-           адресах, поиске мест на карте. Используются фразы типа "как добраться", "найди на карте",
+           адресах, поиске физических мест на карте. Используются фразы типа "как добраться", "найди на карте",
            "где находится", "проложи маршрут", "покажи на карте" и т.п.
+           ВАЖНО: расписание событий, афиша, ближайшие игры/квизы/концерты/мероприятия в городе — это ВЕБ_ПОИСК, а не карты.
+           "Ближайшие игры Квизум в Москве" означает ближайшие по времени события, НЕ заведения рядом.
            
         5. ПРОВЕРКА_СООБЩЕНИЙ - пользователь ЯВНО просит прочитать, проверить, изучить или
             проанализировать СООБЩЕНИЯ или ПЕРЕПИСКУ в Telegram.
@@ -395,6 +562,7 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
            Используются фразы "найди в интернете", "посмотри в сети", "поищи", 
            "узнай", а также явные запросы о поиске фактов, новостей или информации,
            которую нельзя знать без обращения к внешним источникам.
+           Сюда относятся афиша, расписание, ближайшие игры/квизы/мероприятия, билеты и регистрация, если пользователь пока просит найти варианты.
 
         7. ОТПРАВКА_СООБЩЕНИЯ - пользователь просит отправить или написать сообщение определенному контакту.
             Примеры: "напиши сообщение моей жене о том что я хочу бургеры" → ОТПРАВКА_СООБЩЕНИЯ; "напиши ей сообщение"; "отправь сообщение маме", "передай коллеге".
@@ -402,10 +570,15 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
         8. ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ - пользователь просит самому договориться с кем-то, провести переговоры, решить вопрос с контактом (переписка от имени пользователя с возможными уточнениями).
             Примеры: "договорись с Цыеты о доставке цветов для жены" → ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ; "проведи переговоры с поставщиком", "свяжись с контактом X и уточни время", "реши с мамой вопрос о встрече".
 
-        9. ВОЗМОЖНОСТИ_БОТА - пользователь спрашивает, что умеет бот, какие у него функции, чем может помочь, просит рассказать о себе / о возможностях. Примеры: "что ты умеешь", "чем можешь помочь", "расскажи о себе", "твои возможности", "what can you do", "your capabilities".
+        9. ВОЗМОЖНОСТИ_БОТА - пользователь спрашивает, что умеет бот, какие у него функции, чем может помочь, просит рассказать о себе / о возможностях, спрашивает умеет ли бот конкретную вещь или как правильно попросить бота что-то сделать.
+           Примеры: "что ты умеешь", "чем можешь помочь", "расскажи о себе", "твои возможности", "what can you do", "your capabilities",
+           "ты умеешь анализировать переписки?", "можешь ли ты отправлять сообщения?", "как попросить тебя поставить напоминание?",
+           "что мне написать, чтобы ты изучила чат?".
+           Важно: если пользователь спрашивает о возможности или формулировке, НЕ выполняй само действие — выбери ВОЗМОЖНОСТИ_БОТА.
+           Если пользователь прямо просит выполнить действие сейчас с конкретным содержанием/адресатом/временем — выбирай соответствующий рабочий интент.
 
         10. БРАУЗЕР_ЗАДАЧА - пользователь просит выполнить действие в браузере / в интернете в автоматическом режиме: записаться куда-то, заполнить форму, сделать что-то на сайте, забронировать, зарегистрироваться, купить, отправить форму, нажать кнопку, проверить что-то на конкретном сайте — что требует реального браузера (не просто поиска).
-           Ключевые маркеры: "запишись", "запиши меня", "заполни форму", "забронируй", "зарегистрируйся", "купи билет", "зайди на сайт и ...", "на сайте X сделай ...", "открой браузер", "запись к врачу онлайн", "сделай это через браузер".
+           Ключевые маркеры: "запишись", "запиши меня", "заполни форму", "забронируй", "зарегистрируйся", "купи билет", "зайди на сайт и ...", "на сайте X сделай ...", "открой браузер", "используй браузер", "через браузер", "запись к врачу онлайн", "сделай это через браузер".
            ОТЛИЧИЕ от ВЕБ_ПОИСК: ВЕБ_ПОИСК — найти и прочитать информацию. БРАУЗЕР_ЗАДАЧА — совершить действие (клик, заполнение, отправка формы) на конкретном сайте.
 
         11. НЕОПРЕДЕЛЕНО - только если сообщение действительно не подходит ни под одну категорию выше (неясный или общий текст без явной просьбы).
@@ -421,10 +594,14 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
         - Запрос на информацию или совет = РАЗГОВОР
         - Только явная просьба о напоминании или планировании = НАПОМИНАНИЕ
         - Просьба создать изображение или визуальный контент = ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ
-        - Запросы о местоположении, маршрутах, локациях = КАРТЫ_ЛОКАЦИИ
+        - Запросы о местоположении, маршрутах, адресах и физических местах на карте = КАРТЫ_ЛОКАЦИИ
         - Запросы, требующие поиска информации в интернете или внешних источниках = ВЕБ_ПОИСК
         - Явное упоминание поиска в интернете или сети = ВЕБ_ПОИСК
         - Запросы о актуальных событиях, новостях или специфической информации = ВЕБ_ПОИСК
+        - Афиша, расписание, ближайшие игры/квизы/концерты/мероприятия в городе = ВЕБ_ПОИСК, НЕ КАРТЫ_ЛОКАЦИИ
+        - "найди ближайшие игры Квизум в Москве" = ВЕБ_ПОИСК
+        - Вопросы о том, умеет ли бот что-то делать или как правильно попросить бота сделать X = ВОЗМОЖНОСТИ_БОТА
+        - "можешь ли ты X?", "ты умеешь X?", "как попросить тебя X?", "что написать, чтобы ты X?" = ВОЗМОЖНОСТИ_БОТА, если пользователь не просит выполнить X прямо сейчас
         - Просьба отправить сообщение конкретному человеку = ОТПРАВКА_СООБЩЕНИЯ
         - Просьба связаться с кем-то = ОТПРАВКА_СООБЩЕНИЯ
         - Упоминание имени человека и просьба написать/передать = ОТПРАВКА_СООБЩЕНИЯ
@@ -458,6 +635,15 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
         {
           "intent": "НАПОМИНАНИЕ | РАЗГОВОР | ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ | КАРТЫ_ЛОКАЦИИ | НЕОПРЕДЕЛЕНО | ПРОВЕРКА_СООБЩЕНИЙ | ВЕБ_ПОИСК | ОТПРАВКА_СООБЩЕНИЯ | ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ | ВОЗМОЖНОСТИ_БОТА | БРАУЗЕР_ЗАДАЧА",
           "confidenceLevel": "ВЫСОКИЙ | СРЕДНИЙ | НИЗКИЙ",
+          "intentScores": [
+            {
+              "intent": "один из допустимых intent",
+              "score": 0.0,
+              "reason": "почему этот вариант подходит, кратко"
+            }
+          ],
+          "ambiguityReason": "кратко, только если лучшие варианты близки; иначе опустить",
+          "clarificationQuestion": "естественный вопрос пользователю, только если лучшие варианты близки; иначе опустить",
           "subIntents": [
             {
               "intent": "второй интент (только если запрос явно составной, иначе опустить поле)",
@@ -496,7 +682,7 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
         const cached = llmCache.get<MessageClassification>(cacheKey);
         if (cached) {
             devLog('classifyMessage: cache hit');
-            return cached;
+            return normalizeIntentScores(cached);
         }
 
         // Отправка запроса к API OpenAI (gpt-5.2 — для максимально точного определения интента)
@@ -507,7 +693,11 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
                     role: "system",
                     content: `Ты — классификатор намерений для универсального оркестратора. Твоя задача: по сообщению пользователя выбрать ОДИН конкретный интент из списка (НАПОМИНАНИЕ, РАЗГОВОР, ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ, КАРТЫ_ЛОКАЦИИ, ПРОВЕРКА_СООБЩЕНИЙ, ВЕБ_ПОИСК, ОТПРАВКА_СООБЩЕНИЯ, ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ, ВОЗМОЖНОСТИ_БОТА, БРАУЗЕР_ЗАДАЧА).
                     Выбирай тот интент, который лучше всего соответствует запросу. Для явных просьб (напомни, напиши сообщение, нарисуй, найди на карте, отправь маме, запишись на сайте, заполни форму и т.п.) всегда указывай соответствующий интент и confidenceLevel: ВЫСОКИЙ.
-                    БРАУЗЕР_ЗАДАЧА — когда пользователь просит реально что-то сделать в браузере: записаться, заполнить форму, забронировать, нажать кнопку на конкретном сайте (не просто найти информацию).
+                    Всегда возвращай intentScores — ранжированный top-2/top-4 вероятных интентов со score 0..1. Если лучшие варианты близки, понижай confidenceLevel и добавляй короткий clarificationQuestion.
+                    Если пользователь спрашивает, умеет ли бот что-то делать, может ли бот выполнить класс задач, или как правильно попросить бота о действии — это ВОЗМОЖНОСТИ_БОТА. Не превращай такие meta-вопросы в выполнение действия.
+                    БРАУЗЕР_ЗАДАЧА — когда пользователь просит реально что-то сделать в браузере: записаться, заполнить форму, забронировать, нажать кнопку на конкретном сайте, или явно просит "используй браузер".
+                    ВЕБ_ПОИСК — для афиши, расписания, ближайших игр/квизов/мероприятий и билетов, если пользователь пока просит найти варианты.
+                    КАРТЫ_ЛОКАЦИИ не используй для расписания событий: "ближайшие игры Квизум в Москве" — это ВЕБ_ПОИСК.
                     НЕОПРЕДЕЛЕНО возвращай только если сообщение действительно непонятно или не подходит ни под одну категорию. Не используй НЕОПРЕДЕЛЕНО для ясных просьб.`
                 },
                 {
@@ -526,8 +716,9 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
         if (!classification) {
             throw new Error("Could not parse JSON from AI response");
         }
-        llmCache.set(cacheKey, classification, LLM_CACHE_TTL.CLASSIFY);
-        return classification;
+        const normalizedClassification = normalizeIntentScores(classification);
+        llmCache.set(cacheKey, normalizedClassification, LLM_CACHE_TTL.CLASSIFY);
+        return normalizedClassification;
 
     } catch (error) {
         console.error("Error classifying message:", error);
@@ -555,8 +746,20 @@ export async function processMessage(
     lastLocation?: { latitude: number; longitude: number; address?: string; }
 ): Promise<ProcessingResult> {
     try {
+        const browserFollowUpMessage = buildBrowserFollowUpMessage(ctx, message);
+        if (browserFollowUpMessage) {
+            devLog("Browser follow-up detected, routing to browserTask");
+            console.log("[ORCH] browser follow-up detected:", message.slice(0, 80));
+            message = browserFollowUpMessage;
+        }
+        const isBrowserTaskLike = Boolean(browserFollowUpMessage) || looksLikeBrowserTaskText(message);
+        if (isBrowserTaskLike && ctx.session?.pendingContactMemory) {
+            devLog("Clearing pending contact memory before browser task routing");
+            ctx.session.pendingContactMemory = undefined;
+        }
+
         const explicitRemember = extractExplicitRememberFact(message);
-        if (!explicitRemember) {
+        if (!explicitRemember && !isBrowserTaskLike) {
             const contactMemoryResolution = await handlePendingContactMemoryText(ctx, message);
             if (contactMemoryResolution) {
                 return { responseText: contactMemoryResolution };
@@ -569,7 +772,7 @@ export async function processMessage(
             if (contactLookup) {
                 return contactLookup;
             }
-        } else if (explicitRemember.contactName && ctx.session?.pendingContactMemory) {
+        } else if (explicitRemember?.contactName && ctx.session?.pendingContactMemory) {
             return { responseText: 'Выбери контакт в сообщении выше — сохраню факт после уточнения.' };
         }
 
@@ -627,26 +830,79 @@ export async function processMessage(
             enrichedContextFromMemory += `Сохранённые группы чатов пользователя: ${groupsLine}.\n\n`;
         }
 
-        // Шаг 2: Оркестратор определяет, куда направить запрос (классификация + план)
-        let classification = await classifyMessage(message, isForwarded, forwardFrom, messageHistory, knownChatGroups);
+        // Шаг 2: Оркестратор определяет, куда направить запрос (классификация + план).
+        // Явные "напомни..." ведём коротким путём без LLM-классификатора: это дешевле, быстрее и не даёт ambiguity-flow мучить пользователя вопросами.
+        const deterministicReminderClassification =
+            !BROWSER_CONTINUATION_RE.test(message) && !explicitRemember
+                ? buildExplicitReminderClassification(message)
+                : null;
+        let classification = deterministicReminderClassification
+            ?? await classifyMessage(message, isForwarded, forwardFrom, messageHistory, knownChatGroups);
+        let deterministicOverrideApplied = Boolean(deterministicReminderClassification);
+        if (deterministicReminderClassification) {
+            devLog("Explicit reminder fast-path: routing to НАПОМИНАНИЕ");
+        }
 
         if (BROWSER_CONTINUATION_RE.test(message)) {
             classification = { ...classification, intent: "БРАУЗЕР_ЗАДАЧА", confidenceLevel: "ВЫСОКИЙ" };
+            deterministicOverrideApplied = true;
             devLog("Browser continuation detected, routing to browserTask");
         }
 
         if (
-            classification.intent !== "БРАУЗЕР_ЗАДАЧА" &&
-            BROWSER_TASK_FORCE_RE.test(message) &&
-            !REMINDER_EXPLICIT_RE.test(message)
+            !deterministicOverrideApplied &&
+            (hasActiveRunningBrowserTask(ctx) || hasActiveBrowserRunForContext(ctx)) &&
+            BROWSER_CANCEL_COMMAND_RE.test(message) &&
+            !explicitRemember
         ) {
             classification = { ...classification, intent: "БРАУЗЕР_ЗАДАЧА", confidenceLevel: "ВЫСОКИЙ" };
-            devLog("Browser action override: routing to browserTask");
-            console.log("[ORCH] browser override: action verb matched, routing to browserTask");
+            deterministicOverrideApplied = true;
+            devLog("Active browser task cancellation detected, routing to browserTask");
+        }
+
+        if (
+            !deterministicOverrideApplied &&
+            hasActivePendingBrowserTask(ctx) &&
+            !explicitRemember
+        ) {
+            classification = { ...classification, intent: "БРАУЗЕР_ЗАДАЧА", confidenceLevel: "ВЫСОКИЙ" };
+            deterministicOverrideApplied = true;
+            devLog("Pending browser task answer detected, routing to browserTask");
+        }
+
+        if (
+            !deterministicOverrideApplied &&
+            EXPLICIT_REMINDER_RE.test(message)
+        ) {
+            devLog("Explicit reminder phrase override: forcing НАПОМИНАНИЕ");
+            classification = {
+                ...classification,
+                intent: "НАПОМИНАНИЕ",
+                confidenceLevel: "ВЫСОКИЙ",
+                ambiguityReason: undefined,
+                clarificationQuestion: undefined,
+                details: {
+                    ...classification.details,
+                    reminderAction: classification.details?.reminderAction ?? "create",
+                },
+            };
+            deterministicOverrideApplied = true;
+        }
+
+        if (
+            !deterministicOverrideApplied &&
+            classification.intent !== "БРАУЗЕР_ЗАДАЧА" &&
+            !explicitRemember &&
+            BROWSER_TASK_FORCE_RE.test(message)
+        ) {
+            classification = { ...classification, intent: "БРАУЗЕР_ЗАДАЧА", confidenceLevel: "ВЫСОКИЙ" };
+            deterministicOverrideApplied = true;
+            devLog("Browser task keyword override: forcing БРАУЗЕР_ЗАДАЧА");
         }
 
         if (explicitRemember && classification.intent !== "ПРОВЕРКА_СООБЩЕНИЙ") {
             classification = { ...classification, intent: "РАЗГОВОР", confidenceLevel: "ВЫСОКИЙ" };
+            deterministicOverrideApplied = true;
             devLog("Explicit remember detected, routing to conversation");
         }
 
@@ -662,16 +918,20 @@ export async function processMessage(
             classification = { ...classification, intent: "РАЗГОВОР", confidenceLevel: "СРЕДНИЙ" };
         }
 
-        // Если сообщение явно содержит "напомни" + временной маркер — форсируем НАПОМИНАНИЕ.
-        // Защита от случаев, когда расширенное описание ПРОВЕРКА_СООБЩЕНИЙ поглощает фразы типа
-        // "напомни написать в чат с X", или когда РАЗГОВОР выдаётся с низкой уверенностью.
-        const REMINDER_FORCE_RE = /\bнапомни\b.*\b(в\s+\d{1,2}[:.h]\d{2}|завтра|послезавтра|через\s+\d+|утром|вечером|ночью|днём|сегодня|понедельник|вторник|сред[ау]|четверг|пятниц[ую]|суббот[ую]|воскресенье|на\s+неделе|на\s+следующей)\b|\b(создай|поставь|добавь)\s+напоминание\b/iu;
-        if (
-            classification.intent !== "НАПОМИНАНИЕ" &&
-            REMINDER_FORCE_RE.test(message)
-        ) {
-            devLog("Reminder keyword+time override: forcing НАПОМИНАНИЕ");
-            classification = { ...classification, intent: "НАПОМИНАНИЕ", confidenceLevel: "ВЫСОКИЙ" };
+        const intentAmbiguity = deterministicOverrideApplied ? null : detectIntentAmbiguity(classification);
+        if (intentAmbiguity) {
+            const { top, runnerUp, delta } = intentAmbiguity;
+            classification = {
+                ...classification,
+                intent: "НЕОПРЕДЕЛЕНО",
+                confidenceLevel: "НИЗКИЙ",
+                ambiguityReason: classification.ambiguityReason ||
+                    `Близкие варианты: ${top.intent} (${top.score.toFixed(2)}) и ${runnerUp.intent} (${runnerUp.score.toFixed(2)}), delta=${delta.toFixed(2)}.`,
+                clarificationQuestion: classification.clarificationQuestion ||
+                    "Уточни, пожалуйста: нужно найти информацию, выполнить действие или просто обсудить это?",
+            };
+            devLog("Intent ambiguity detected, routing to unclearIntent", classification.ambiguityReason);
+            console.log("[ORCH] ambiguity:", top.intent, top.score.toFixed(2), "vs", runnerUp.intent, runnerUp.score.toFixed(2));
         }
 
         devLog("Message classified as:", classification.intent, "with confidence:", classification.confidenceLevel);
