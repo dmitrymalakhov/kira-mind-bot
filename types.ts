@@ -147,6 +147,7 @@ export interface SessionData {
         choices: Array<{
             label: string;
             message: string;
+            action?: 'cancel_browser_task';
         }>;
         createdAt: number;
         expiresAt: number;

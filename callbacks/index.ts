@@ -164,6 +164,19 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 }
 
                 await sendChoiceReceipt(ctx, selection.choice.label);
+                if (selection.choice.action === "cancel_browser_task") {
+                    await addToHistory(ctx, "user", selection.choice.message);
+                    const cancelled = await import("../agents/browserAgent")
+                        .then((m) => m.cancelBrowserRunForContext(ctx))
+                        .catch(() => false);
+                    const responseText = cancelled
+                        ? "Ок, запись через браузер остановила."
+                        : "Ок, не буду запускать запись.";
+                    await addToHistory(ctx, "bot", responseText);
+                    await sendMessage(ctx, responseText);
+                    return;
+                }
+
                 await addToHistory(ctx, "user", selection.choice.message);
                 await ctx.api.sendChatAction(ctx.chat!.id, "typing");
                 const result = await processMessage(

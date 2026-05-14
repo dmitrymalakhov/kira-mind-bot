@@ -11,6 +11,7 @@ import { devLog, parseLLMJson } from '../utils';
 import { fetchAgentMemoryContext, buildMemoryContextBlock } from '../utils/agentMemoryContext';
 import { BrowserSessionStore } from '../services/BrowserSessionStore';
 import { BrowserCredentialService } from '../services/BrowserCredentialService';
+import { looksLikeBrowserTaskCancellation } from '../utils/browserTaskCancellation';
 
 const MAX_ITERATIONS = 35;
 const MAX_MEMORY_LOOKUPS = 6;
@@ -2176,7 +2177,7 @@ export function hasActiveBrowserRunForContext(ctx: BotContext): boolean {
 }
 
 function isBrowserCancellationText(text: string): boolean {
-    return /^(?:отмена|отмени(?:ть)?|cancel|stop|стоп|(?:просто\s+)?останови\p{L}*(?:\s+вс[её].*)?|остановить(?:\s+вс[её].*)?|прекрати|хватит|не\s+продолжай|ничего\s+не\s+делай|просто\s+остановить.*)\s*[.!?…]*$/iu.test(cleanWhitespace(text));
+    return looksLikeBrowserTaskCancellation(text);
 }
 
 function compactBrowserChoiceLabel(label: string): string {
@@ -2288,6 +2289,46 @@ export async function cancelPausedBrowserSession(sessionId?: string): Promise<vo
             return closeBrowserRunState(state, 'cancelled');
         }),
     ]);
+}
+
+export async function cancelBrowserRunForContext(ctx: BotContext): Promise<boolean> {
+    const userId = ctx.from?.id ?? 0;
+    const chatId = ctx.chat?.id;
+    const sessionIds = new Set<string>();
+    if (ctx.session.pendingBrowserTask?.sessionId) sessionIds.add(ctx.session.pendingBrowserTask.sessionId);
+    if (ctx.session.activeBrowserTask?.sessionId) sessionIds.add(ctx.session.activeBrowserTask.sessionId);
+
+    let cancelled = Boolean(ctx.session.pendingBrowserTask || ctx.session.activeBrowserTask);
+
+    for (const sessionId of sessionIds) {
+        const paused = pausedBrowserSessions.get(sessionId);
+        if (paused && paused.userId === userId && paused.chatId === chatId) {
+            await closeBrowserRunState(paused, 'cancelled').catch(() => {});
+            cancelled = true;
+        }
+
+        const active = [...activeBrowserSessions.values()].find(
+            (item) => item.id === sessionId && item.userId === userId && item.chatId === chatId
+        );
+        if (active) {
+            active.cancelRequested = true;
+            active.cancelAcknowledged = true;
+            await closeBrowserRunState(active, 'cancelled').catch(() => {});
+            cancelled = true;
+        }
+    }
+
+    const activeForContext = getActiveBrowserSession(ctx);
+    if (activeForContext && !sessionIds.has(activeForContext.id)) {
+        activeForContext.cancelRequested = true;
+        activeForContext.cancelAcknowledged = true;
+        await closeBrowserRunState(activeForContext, 'cancelled').catch(() => {});
+        cancelled = true;
+    }
+
+    ctx.session.pendingBrowserTask = undefined;
+    ctx.session.activeBrowserTask = undefined;
+    return cancelled;
 }
 
 function buildMemoryPrompt(memoryContext?: string): string {

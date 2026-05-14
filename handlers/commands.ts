@@ -15,6 +15,8 @@ import { getAllChats, isChatPublicMode, setChatPublicMode } from "../services/ch
 import { isReflectionModeEnabled, setReflectionModeEnabled, getReflectionStats } from "../services/reflectionModeService";
 import { factAnalysisManager } from "../utils/factAnalysisTimer";
 import { extractAndSaveFactsFromConversation } from "../utils/enhancedFactExtraction";
+import { formatSelfStudyReport, runKiraSelfStudy } from "../services/selfStudyService";
+import { getRecentKiraSelfStudyReports } from "../utils/kiraSelfMemory";
 
 export function registerCommandHandlers(bot: Bot<BotContext>) {
     registerMemoryCommands(bot);
@@ -330,6 +332,30 @@ bot.command("help", async (ctx) => {
         publicMode: ctx.chat?.type !== "private" && !ctx.session?.isAllowedUser,
     });
     await ctx.reply(response);
+});
+
+// Команда /self_study — самоизучение возможностей, ограничений и потребностей
+bot.command("self_study", async (ctx) => {
+    if (ctx.chat?.type !== "private") {
+        await ctx.reply("Самоизучение лучше запускать в личном чате: там я могу безопасно учитывать память, статистику и недавний контекст.");
+        return;
+    }
+
+    const rawText = ctx.message?.text || "/self_study";
+    const arg = rawText.replace(/^\/self_study(?:@\w+)?/i, "").trim().toLowerCase();
+
+    if (/^(last|latest|последн|прошл)/i.test(arg)) {
+        const [latest] = await getRecentKiraSelfStudyReports(1);
+        await ctx.reply(latest ? formatSelfStudyReport(latest) : "Пока нет сохранённых отчётов самоизучения.");
+        return;
+    }
+
+    await ctx.api.sendChatAction(ctx.chat.id, "typing").catch(() => {});
+    const report = await runKiraSelfStudy({
+        triggerMessage: rawText,
+        messageHistory: ctx.session.messageHistory.slice().reverse(),
+    });
+    await ctx.reply(formatSelfStudyReport(report));
 });
 
 // ── Команда /reflection — режим рефлексии и накопления знаний ────────────────

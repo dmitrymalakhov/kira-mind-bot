@@ -15,6 +15,7 @@ import { unclearIntentAgent } from '../agents/unclearIntentAgent';
 import { resolveRelationshipFromMemory, detectRelationshipInMessage } from '../utils/resolveRelationshipFromMemory';
 import { answerCapabilitiesQuestion, getCapabilitiesMessage } from '../capabilities';
 import { browserAgent } from '../agents/browserAgent';
+import { selfStudyAgent } from '../agents/selfStudyAgent';
 import { ReminderRegistry } from '../stores/ReminderRegistry';
 import { cancelReminder, rescheduleReminder } from '../reminder';
 import { ReminderRepository } from '../services/ReminderRepository';
@@ -359,6 +360,7 @@ const STEP_LABELS: Record<string, string> = {
     maps: '🗺️ Ищу на карте…',
     unclearIntent: '🤔 Уточняю запрос…',
     capabilities: '📋 Готовлю информацию…',
+    selfStudy: '🧭 Изучаю свои возможности и ограничения…',
     browserTask: '🌐 Выполняю задачу в браузере…',
 };
 
@@ -651,6 +653,16 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
                     responseText: capabilitiesText ?? getCapabilitiesMessage(),
                     botReaction: classification.details?.botReaction,
                 };
+            }
+
+            case 'selfStudy': {
+                await notifyProgress('selfStudy');
+                const selfStudyRes = await safeStep('selfStudy', () => selfStudyAgent(
+                    ctx, message, messageHistory, enrichedContextFromMemory || ''
+                ));
+                if (selfStudyRes === null) return { responseText: 'Не удалось провести самоизучение. Попробуй ещё раз 🙏', botReaction: classification.details?.botReaction };
+                selfStudyRes.botReaction = classification.details?.botReaction;
+                return selfStudyRes;
             }
 
             case 'browserTask': {

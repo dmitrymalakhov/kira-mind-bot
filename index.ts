@@ -36,6 +36,7 @@ import { initReflectionMode } from "./services/reflectionModeService";
 import { maybeProactiveHint } from "./utils/proactiveMemory";
 import { maybeAskMemoryGap } from "./utils/memoryGapDetector";
 import { maybeDetectImplicitReminder } from "./utils/implicitReminderDetector";
+import { looksLikeBrowserTaskCancellation } from "./utils/browserTaskCancellation";
 import { AppDataSource } from "./data-source";
 import { ReminderRepository } from "./services/ReminderRepository";
 import { getTelegramMenuCommands } from "./capabilities";
@@ -594,8 +595,7 @@ bot.on("message:text", async (ctx, next) => {
                         }
                         ctx.session.pendingBrowserTask = undefined;
                     } else {
-                        const normalized = message.trim().toLowerCase();
-                        if (/^(?:отмена|отмени(?:ть)?|cancel|stop|стоп|(?:просто\s+)?останови\p{L}*(?:\s+вс[её].*)?|остановить(?:\s+вс[её].*)?|прекрати|хватит|не\s+продолжай|ничего\s+не\s+делай|просто\s+остановить.*)\s*[.!?…]*$/iu.test(normalized)) {
+                        if (looksLikeBrowserTaskCancellation(message)) {
                             if (pendingBrowserTask.sessionId) {
                                 import('./agents/browserAgent')
                                     .then((m) => m.cancelPausedBrowserSession(pendingBrowserTask.sessionId))

@@ -18,6 +18,7 @@ import { ChatGroupRepository } from "./services/ChatGroupRepository";
 import { handlePendingContactMemoryText } from "./utils/contactMemory";
 import { handlePendingContactLookupText, maybeStartContactMemoryLookup } from "./utils/contactMemoryLookup";
 import { hasActiveBrowserRunForContext } from "./agents/browserAgent";
+import { looksLikeBrowserTaskCancellation, looksLikeNegatedBookingRequest } from "./utils/browserTaskCancellation";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -27,7 +28,7 @@ dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
 // Расширенный интерфейс для результата классификации сообщения
 export interface MessageClassification {
     intent: "НАПОМИНАНИЕ" | "РАЗГОВОР" | "НЕОПРЕДЕЛЕНО" | "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ" |
-    "КАРТЫ_ЛОКАЦИИ" | "ПРОВЕРКА_СООБЩЕНИЙ" | "ВЕБ_ПОИСК" | "ОТПРАВКА_СООБЩЕНИЯ" | "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ" | "ВОЗМОЖНОСТИ_БОТА" | "БРАУЗЕР_ЗАДАЧА";
+    "КАРТЫ_ЛОКАЦИИ" | "ПРОВЕРКА_СООБЩЕНИЙ" | "ВЕБ_ПОИСК" | "ОТПРАВКА_СООБЩЕНИЯ" | "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ" | "ВОЗМОЖНОСТИ_БОТА" | "САМОИЗУЧЕНИЕ" | "БРАУЗЕР_ЗАДАЧА";
     /**
      * Ранжированные кандидаты интента от классификатора.
      * Используются как "second opinion" перед запуском агента: если лидеры близко,
@@ -147,21 +148,21 @@ interface IntentDedupCheckResult {
 
 const INTENT_DEDUP_WINDOW_MS = 3 * 60 * 1000;
 const INTENT_DEDUP_MIN_CONFIDENCE = 0.8;
-const NON_DEDUP_INTENTS = new Set(["РАЗГОВОР", "ОТПРАВКА_СООБЩЕНИЯ", "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ", "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ", "ПРОВЕРКА_СООБЩЕНИЙ", "ВЕБ_ПОИСК", "БРАУЗЕР_ЗАДАЧА"]);
+const NON_DEDUP_INTENTS = new Set(["РАЗГОВОР", "ОТПРАВКА_СООБЩЕНИЯ", "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ", "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ", "ПРОВЕРКА_СООБЩЕНИЙ", "ВЕБ_ПОИСК", "САМОИЗУЧЕНИЕ", "БРАУЗЕР_ЗАДАЧА"]);
 const BROWSER_CONTINUATION_RE = /^Продолжи задачу в браузере через Playwright\.|browserSessionId:/i;
 const CYRILLIC_PHRASE_START = String.raw`(?:^|[\s,.!?;:])`;
 const CYRILLIC_PHRASE_END = String.raw`(?=$|[\s,.!?;:])`;
 const BROWSER_BOOKING_PHRASE_RE = /запиши\s+(?:меня|нас|нам)?\s*на|записать\s+(?:меня|нас|нам)?\s*на|запишись|зарегистрируй(?:ся)?|зарегистрируй\s+(?:меня|нас|нам)|забронируй|забронь/iu;
 const BROWSER_TASK_FORCE_RE = new RegExp(
-    `${CYRILLIC_PHRASE_START}(?:открой\\s+браузер|зайди\\s+на\\s+сайт|на\\s+сайте|через\\s+сайт|заполни\\s+форму|отправь\\s+форму|${BROWSER_BOOKING_PHRASE_RE.source}|купи\\s+(?:билет|билеты)|оформи\\s+заказ|checkout|нажми\\s+(?:кнопку|на))${CYRILLIC_PHRASE_END}`,
+    `${CYRILLIC_PHRASE_START}(?:открой\\s+браузер|зайди\\s+на\\s+сайт|найди\\s+(?:на\\s+)?сайт|найди\\s+на\\s+(?:lamoda|ламод[аеу]|quizium|квизиум)|на\\s+сайте|через\\s+сайт|заполни\\s+форму|отправь\\s+форму|${BROWSER_BOOKING_PHRASE_RE.source}|купи\\s+(?:билет|билеты)|оформи\\s+заказ|checkout|нажми\\s+(?:кнопку|на))${CYRILLIC_PHRASE_END}`,
     'iu'
 );
 const BROWSER_FOLLOW_UP_RE = new RegExp(
     `${CYRILLIC_PHRASE_START}(?:${BROWSER_BOOKING_PHRASE_RE.source}|купи\\s+билет|оформи|перейди|нажми|выбери|заполни|отправь\\s+форму)${CYRILLIC_PHRASE_END}`,
     'iu'
 );
-const BROWSER_CANCEL_COMMAND_RE = /^\s*(?:отмена|отмени(?:ть)?|cancel|stop|стоп|(?:просто\s+)?останови\p{L}*(?:\s+вс[её].*)?|остановить(?:\s+вс[её].*)?|прекрати|хватит|не\s+продолжай|ничего\s+не\s+делай|просто\s+остановить.*)\s*[.!?…]*\s*$/iu;
 const EXPLICIT_REMINDER_RE = /(^|\s)(напомни|напоминай|не\s+дай\s+забыть|не\s+забудь|(?:создай|поставь|добавь)(?:\s+\S+){0,3}\s+напоминание)(?=\s|$|[,.!?;:])/iu;
+const SELF_STUDY_TASK_RE = /(?:^|[\s,.!?;:])(?:(?:изучи|исследуй|проанализируй|оцени|проведи|сделай|запусти)[\s\S]{0,100}(?:себя|свои\s+(?:возможности|ограничения|потребности)|самоанализ|самоизучение)|(?:пойми|выясни)[\s\S]{0,80}чего\s+тебе\s+не\s+хватает|самоанализ|самоизучение)(?=$|[\s,.!?;:])/iu;
 const INTENT_SCORE_CLOSE_DELTA = 0.12;
 const INTENT_SCORE_VERY_CLOSE_DELTA = 0.06;
 const INTENT_SCORE_CLEAR_WINNER_MIN = 0.82;
@@ -177,6 +178,7 @@ const VALID_CLASSIFICATION_INTENTS = new Set<MessageClassification["intent"]>([
     "ОТПРАВКА_СООБЩЕНИЯ",
     "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ",
     "ВОЗМОЖНОСТИ_БОТА",
+    "САМОИЗУЧЕНИЕ",
     "БРАУЗЕР_ЗАДАЧА",
 ]);
 
@@ -577,11 +579,15 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
            Важно: если пользователь спрашивает о возможности или формулировке, НЕ выполняй само действие — выбери ВОЗМОЖНОСТИ_БОТА.
            Если пользователь прямо просит выполнить действие сейчас с конкретным содержанием/адресатом/временем — выбирай соответствующий рабочий интент.
 
-        10. БРАУЗЕР_ЗАДАЧА - пользователь просит выполнить действие в браузере / в интернете в автоматическом режиме: записаться куда-то, заполнить форму, сделать что-то на сайте, забронировать, зарегистрироваться, купить, отправить форму, нажать кнопку, проверить что-то на конкретном сайте — что требует реального браузера (не просто поиска).
+        10. САМОИЗУЧЕНИЕ - пользователь просит бота активно изучить самого себя: проанализировать собственные возможности, ограничения, потребности, состояние, пробелы, что улучшить, чему научиться, чего не хватает для лучшей помощи.
+           Примеры: "изучи себя", "проанализируй свои возможности и потребности", "пойми чего тебе не хватает", "сделай самоанализ", "изучи свои ограничения", "сохрани выводы о себе".
+           Отличие от ВОЗМОЖНОСТИ_БОТА: ВОЗМОЖНОСТИ_БОТА просто отвечает на вопрос о функциях; САМОИЗУЧЕНИЕ запускает анализ и сохраняет отчёт в самопамять.
+
+        11. БРАУЗЕР_ЗАДАЧА - пользователь просит выполнить действие в браузере / в интернете в автоматическом режиме: записаться куда-то, заполнить форму, сделать что-то на сайте, забронировать, зарегистрироваться, купить, отправить форму, нажать кнопку, проверить что-то на конкретном сайте — что требует реального браузера (не просто поиска).
            Ключевые маркеры: "запишись", "запиши меня", "заполни форму", "забронируй", "зарегистрируйся", "купи билет", "зайди на сайт и ...", "на сайте X сделай ...", "открой браузер", "используй браузер", "через браузер", "запись к врачу онлайн", "сделай это через браузер".
            ОТЛИЧИЕ от ВЕБ_ПОИСК: ВЕБ_ПОИСК — найти и прочитать информацию. БРАУЗЕР_ЗАДАЧА — совершить действие (клик, заполнение, отправка формы) на конкретном сайте.
 
-        11. НЕОПРЕДЕЛЕНО - только если сообщение действительно не подходит ни под одну категорию выше (неясный или общий текст без явной просьбы).
+        12. НЕОПРЕДЕЛЕНО - только если сообщение действительно не подходит ни под одну категорию выше (неясный или общий текст без явной просьбы).
 
         Дополнительные факторы для анализа:
         - Просьба о планировании встречи, совещания, мероприятия = НАПОМИНАНИЕ
@@ -602,6 +608,8 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
         - "найди ближайшие игры Квизум в Москве" = ВЕБ_ПОИСК
         - Вопросы о том, умеет ли бот что-то делать или как правильно попросить бота сделать X = ВОЗМОЖНОСТИ_БОТА
         - "можешь ли ты X?", "ты умеешь X?", "как попросить тебя X?", "что написать, чтобы ты X?" = ВОЗМОЖНОСТИ_БОТА, если пользователь не просит выполнить X прямо сейчас
+        - "изучи себя", "проанализируй свои возможности и потребности", "сделай самоанализ", "пойми чего тебе не хватает" = САМОИЗУЧЕНИЕ
+        - Если пользователь просто спрашивает "что ты умеешь?" без просьбы анализа/самоизучения — это ВОЗМОЖНОСТИ_БОТА, НЕ САМОИЗУЧЕНИЕ
         - Просьба отправить сообщение конкретному человеку = ОТПРАВКА_СООБЩЕНИЯ
         - Просьба связаться с кем-то = ОТПРАВКА_СООБЩЕНИЯ
         - Упоминание имени человека и просьба написать/передать = ОТПРАВКА_СООБЩЕНИЯ
@@ -633,7 +641,7 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
 
         Ответ предоставь в формате JSON:
         {
-          "intent": "НАПОМИНАНИЕ | РАЗГОВОР | ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ | КАРТЫ_ЛОКАЦИИ | НЕОПРЕДЕЛЕНО | ПРОВЕРКА_СООБЩЕНИЙ | ВЕБ_ПОИСК | ОТПРАВКА_СООБЩЕНИЯ | ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ | ВОЗМОЖНОСТИ_БОТА | БРАУЗЕР_ЗАДАЧА",
+          "intent": "НАПОМИНАНИЕ | РАЗГОВОР | ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ | КАРТЫ_ЛОКАЦИИ | НЕОПРЕДЕЛЕНО | ПРОВЕРКА_СООБЩЕНИЙ | ВЕБ_ПОИСК | ОТПРАВКА_СООБЩЕНИЯ | ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ | ВОЗМОЖНОСТИ_БОТА | САМОИЗУЧЕНИЕ | БРАУЗЕР_ЗАДАЧА",
           "confidenceLevel": "ВЫСОКИЙ | СРЕДНИЙ | НИЗКИЙ",
           "intentScores": [
             {
@@ -691,10 +699,11 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
             messages: [
                 {
                     role: "system",
-                    content: `Ты — классификатор намерений для универсального оркестратора. Твоя задача: по сообщению пользователя выбрать ОДИН конкретный интент из списка (НАПОМИНАНИЕ, РАЗГОВОР, ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ, КАРТЫ_ЛОКАЦИИ, ПРОВЕРКА_СООБЩЕНИЙ, ВЕБ_ПОИСК, ОТПРАВКА_СООБЩЕНИЯ, ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ, ВОЗМОЖНОСТИ_БОТА, БРАУЗЕР_ЗАДАЧА).
+                    content: `Ты — классификатор намерений для универсального оркестратора. Твоя задача: по сообщению пользователя выбрать ОДИН конкретный интент из списка (НАПОМИНАНИЕ, РАЗГОВОР, ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ, КАРТЫ_ЛОКАЦИИ, ПРОВЕРКА_СООБЩЕНИЙ, ВЕБ_ПОИСК, ОТПРАВКА_СООБЩЕНИЯ, ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ, ВОЗМОЖНОСТИ_БОТА, САМОИЗУЧЕНИЕ, БРАУЗЕР_ЗАДАЧА).
                     Выбирай тот интент, который лучше всего соответствует запросу. Для явных просьб (напомни, напиши сообщение, нарисуй, найди на карте, отправь маме, запишись на сайте, заполни форму и т.п.) всегда указывай соответствующий интент и confidenceLevel: ВЫСОКИЙ.
                     Всегда возвращай intentScores — ранжированный top-2/top-4 вероятных интентов со score 0..1. Если лучшие варианты близки, понижай confidenceLevel и добавляй короткий clarificationQuestion.
                     Если пользователь спрашивает, умеет ли бот что-то делать, может ли бот выполнить класс задач, или как правильно попросить бота о действии — это ВОЗМОЖНОСТИ_БОТА. Не превращай такие meta-вопросы в выполнение действия.
+                    Если пользователь просит провести самоизучение/самоанализ бота, его возможностей, ограничений или потребностей — это САМОИЗУЧЕНИЕ.
                     БРАУЗЕР_ЗАДАЧА — когда пользователь просит реально что-то сделать в браузере: записаться, заполнить форму, забронировать, нажать кнопку на конкретном сайте, или явно просит "используй браузер".
                     ВЕБ_ПОИСК — для афиши, расписания, ближайших игр/квизов/мероприятий и билетов, если пользователь пока просит найти варианты.
                     КАРТЫ_ЛОКАЦИИ не используй для расписания событий: "ближайшие игры Квизум в Москве" — это ВЕБ_ПОИСК.
@@ -746,6 +755,16 @@ export async function processMessage(
     lastLocation?: { latitude: number; longitude: number; address?: string; }
 ): Promise<ProcessingResult> {
     try {
+        const originalMessage = message;
+        const originalLooksLikeNewBrowserTask =
+            !BROWSER_CONTINUATION_RE.test(originalMessage) &&
+            looksLikeBrowserTaskText(originalMessage);
+        if (originalLooksLikeNewBrowserTask && hasActivePendingBrowserTask(ctx)) {
+            devLog("New browser task detected while another browser task is paused; clearing pending browser task");
+            console.log("[ORCH] clearing pending browser task for new request:", originalMessage.slice(0, 100));
+            ctx.session.pendingBrowserTask = undefined;
+        }
+
         const browserFollowUpMessage = buildBrowserFollowUpMessage(ctx, message);
         if (browserFollowUpMessage) {
             devLog("Browser follow-up detected, routing to browserTask");
@@ -852,7 +871,7 @@ export async function processMessage(
         if (
             !deterministicOverrideApplied &&
             (hasActiveRunningBrowserTask(ctx) || hasActiveBrowserRunForContext(ctx)) &&
-            BROWSER_CANCEL_COMMAND_RE.test(message) &&
+            looksLikeBrowserTaskCancellation(message) &&
             !explicitRemember
         ) {
             classification = { ...classification, intent: "БРАУЗЕР_ЗАДАЧА", confidenceLevel: "ВЫСОКИЙ" };
@@ -868,6 +887,22 @@ export async function processMessage(
             classification = { ...classification, intent: "БРАУЗЕР_ЗАДАЧА", confidenceLevel: "ВЫСОКИЙ" };
             deterministicOverrideApplied = true;
             devLog("Pending browser task answer detected, routing to browserTask");
+        }
+
+        if (
+            !deterministicOverrideApplied &&
+            looksLikeNegatedBookingRequest(message) &&
+            !explicitRemember
+        ) {
+            classification = {
+                ...classification,
+                intent: "РАЗГОВОР",
+                confidenceLevel: "ВЫСОКИЙ",
+                ambiguityReason: undefined,
+                clarificationQuestion: undefined,
+            };
+            deterministicOverrideApplied = true;
+            devLog("Negated booking request without active browser task, routing to conversation");
         }
 
         if (
@@ -904,6 +939,22 @@ export async function processMessage(
             classification = { ...classification, intent: "РАЗГОВОР", confidenceLevel: "ВЫСОКИЙ" };
             deterministicOverrideApplied = true;
             devLog("Explicit remember detected, routing to conversation");
+        }
+
+        if (
+            !deterministicOverrideApplied &&
+            SELF_STUDY_TASK_RE.test(message) &&
+            !explicitRemember
+        ) {
+            classification = {
+                ...classification,
+                intent: "САМОИЗУЧЕНИЕ",
+                confidenceLevel: "ВЫСОКИЙ",
+                ambiguityReason: undefined,
+                clarificationQuestion: undefined,
+            };
+            deterministicOverrideApplied = true;
+            devLog("Self-study keyword override: forcing САМОИЗУЧЕНИЕ");
         }
 
         // ПРОВЕРКА_СООБЩЕНИЙ с низкой уверенностью (СРЕДНИЙ/НИЗКИЙ) без явного contactQuery — скорее всего ложное срабатывание, переключаем на РАЗГОВОР

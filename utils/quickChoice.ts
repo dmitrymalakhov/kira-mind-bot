@@ -1,6 +1,7 @@
 import { InlineKeyboard } from "grammy";
 import type { BotContext } from "../types";
 import type { MessageClassification } from "../orchestrator";
+import { isBrowserTaskCancellationChoice } from "./browserTaskCancellation";
 
 const CALLBACK_PREFIX = "qch";
 const QUICK_CHOICE_TTL_MS = 10 * 60 * 1000;
@@ -36,6 +37,7 @@ const INTENT_PROMPTS: Partial<Record<MessageClassification["intent"], string>> =
 type QuickChoice = {
     label: string;
     message: string;
+    action?: 'cancel_browser_task';
 };
 
 export function isQuickChoiceCallback(callbackData: string): boolean {
@@ -125,14 +127,18 @@ function extractChoicesFromResponse(originalMessage: string, responseText: strin
         .map((option, index) => option.replace(/[;.]$/u, "").trim())
         .filter((option) => option.length > 0)
         .slice(0, MAX_CHOICES)
-        .map((option, index) => ({
-            label: compactLabel(toUserAnswerLabel(option)),
-            message: [
-                `${toUserAnswerLabel(option)}.`,
-                `Выбранный вариант ${index + 1}: ${option}.`,
-                `Исходный запрос: ${originalMessage}`,
-            ].join("\n"),
-        }));
+        .map((option, index) => {
+            const answerLabel = toUserAnswerLabel(option);
+            return {
+                label: compactLabel(answerLabel),
+                message: [
+                    `${answerLabel}.`,
+                    `Выбранный вариант ${index + 1}: ${option}.`,
+                    `Исходный запрос: ${originalMessage}`,
+                ].join("\n"),
+                action: isBrowserTaskCancellationChoice(option) ? 'cancel_browser_task' as const : undefined,
+            };
+        });
 }
 
 function toUserAnswerLabel(option: string): string {
