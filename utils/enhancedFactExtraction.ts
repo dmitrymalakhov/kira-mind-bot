@@ -5,6 +5,7 @@ import { devLog, parseLLMJson } from '../utils';
 import { rememberFact } from './domainMemory';
 import openai from '../openai';
 import { saveContactMemoryFactOrAsk } from './contactMemory';
+import { createMemoryEpisode, updateWorkingMemoryFromMessages } from '../services/MemoryEpisodeService';
 
 interface QuickFact {
     content: string;
@@ -14,6 +15,17 @@ interface QuickFact {
 }
 
 const factService = new FactExtractionService();
+
+function sourceMessageIds(messages: any[]): string[] {
+    return messages
+        .map((m, index) => {
+            const ts = m.timestamp instanceof Date
+                ? m.timestamp.getTime()
+                : new Date(m.timestamp ?? Date.now()).getTime();
+            return `${m.role || 'message'}:${ts}:${index}`;
+        })
+        .slice(-12);
+}
 
 /** Паттерны явной просьбы запомнить — при совпадении факт сразу сохраняется в векторную БД (долговременная память). */
 const EXPLICIT_REMEMBER_PATTERNS: RegExp[] = [
@@ -199,6 +211,9 @@ export async function extractAndSaveFactsFromConversation(
             return 0;
         }
 
+        const episode = await createMemoryEpisode(ctx, conversation, ['delayed-fact-analysis']);
+        await updateWorkingMemoryFromMessages(ctx, conversation, episode);
+
         const facts = await factService.extractFactsFromDialogue(dialoguePairs);
 
         devLog(`Извлечено фактов: ${facts.length}`);
@@ -207,6 +222,7 @@ export async function extractAndSaveFactsFromConversation(
         }
 
         let savedCount = 0;
+        const messageIds = sourceMessageIds(conversation);
         // Список фактов, уже сохранённых quickFactCheck — пропускаем похожие
         const alreadySaved = ctx.session.quickFactContents ?? [];
         for (const fact of facts) {
@@ -235,6 +251,15 @@ export async function extractAndSaveFactsFromConversation(
                         domain: fact.domain,
                         importance: fact.importance,
                         tags: fact.tags,
+                        memoryMetadata: {
+                            sourceEpisodeId: episode?.id,
+                            sourceContext: fact.sourceContext,
+                            sourceMessageIds: messageIds,
+                            extractionMethod: 'delayed',
+                            subject: 'contact',
+                            predicate: fact.factType,
+                            object: fact.content,
+                        },
                     });
                     if (result.status !== 'saved') {
                         devLog(`Факт о контакте ожидает уточнения: [${fact.contactName}] ${fact.content}`);
@@ -242,7 +267,15 @@ export async function extractAndSaveFactsFromConversation(
                     }
                     devLog(`Сохранен факт о контакте [${fact.contactName}]: ${fact.content}`);
                 } else {
-                    const saved = await saveMemory(ctx, fact.domain, fact.content, fact.importance, fact.tags);
+                    const saved = await saveMemory(ctx, fact.domain, fact.content, fact.importance, fact.tags, false, {
+                        sourceEpisodeId: episode?.id,
+                        sourceContext: fact.sourceContext,
+                        sourceMessageIds: messageIds,
+                        extractionMethod: 'delayed',
+                        subject: 'user',
+                        predicate: fact.factType,
+                        object: fact.content,
+                    });
                     if (!saved) continue;
                     rememberFact(ctx, fact.domain, fact.content);
                     devLog(`Сохранен факт о пользователе: ${fact.content}`);

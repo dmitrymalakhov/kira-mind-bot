@@ -1,5 +1,5 @@
 import { BotContext } from '../types';
-import { saveMemory } from '../utils/enhancedDomainMemory';
+import { MemorySaveMetadata, saveMemory } from '../utils/enhancedDomainMemory';
 import { devLog } from '../utils';
 import type { ExtractedFactAboutUser } from '../utils/studyChatFlow';
 import { saveContactMemoryFactOrAsk } from '../utils/contactMemory';
@@ -14,6 +14,9 @@ const SAVE_CONCURRENCY = 1;
 export interface MemoryUpdateOptions {
     source?: string;
     sourceContactName?: string;
+    sourceContext?: string;
+    sourceMessageIds?: string[];
+    askOnAmbiguous?: boolean;
 }
 
 export interface MemoryUpdateDetailedResult {
@@ -92,8 +95,16 @@ export async function runUpdateLongTermMemoryAgentDetailed(
             batch.map(async (fact) => {
                 const isContactFact = fact.subject === 'contact';
                 const contactName = fact.contactName ?? 'Собеседник';
-                const expectedSubject = isContactFact ? 'contact' : 'user';
+                const expectedSubject: 'contact' | 'user' = isContactFact ? 'contact' : 'user';
                 const tags = buildFactTags(fact, expectedSubject, options);
+                const memoryMetadata: MemorySaveMetadata = {
+                    extractionMethod: 'study_chat' as const,
+                    subject: expectedSubject,
+                    sourceContext: options.sourceContext,
+                    sourceMessageIds: options.sourceMessageIds,
+                    predicate: fact.domain,
+                    object: fact.content,
+                };
 
                 if (isContactFact) {
                     const result = await saveContactMemoryFactOrAsk(ctx, {
@@ -102,6 +113,9 @@ export async function runUpdateLongTermMemoryAgentDetailed(
                         domain: fact.domain,
                         importance: fact.importance,
                         tags,
+                        memoryMetadata,
+                    }, {
+                        askOnAmbiguous: options.askOnAmbiguous ?? true,
                     });
                     if (result.status === 'pending') return { status: 'pending' as const, fact };
                     if (result.status !== 'saved') return { status: 'skipped' as const, fact };
@@ -109,7 +123,7 @@ export async function runUpdateLongTermMemoryAgentDetailed(
                     return { status: 'saved' as const, fact: { ...fact, tags } };
                 }
 
-                const saved = await saveMemory(ctx, fact.domain, fact.content, fact.importance, tags);
+                const saved = await saveMemory(ctx, fact.domain, fact.content, fact.importance, tags, false, memoryMetadata);
                 if (!saved) return { status: 'skipped' as const, fact };
                 devLog(`UpdateLongTermMemoryAgent: saved [${fact.subject}]`, fact.content.slice(0, 60));
                 return { status: 'saved' as const, fact: { ...fact, tags } };

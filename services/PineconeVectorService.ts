@@ -20,7 +20,7 @@ export class PineconeVectorService implements IDomainVectorService {
     async updateImportance(memoryId: string, importance: number): Promise<void> {
         // TODO: implement update
     }
-    async updateMemoryAccess(memoryId: string, domain: string, confidence?: number): Promise<void> {
+    async updateMemoryAccess(memoryId: string, domain: string, confidence?: number, retrievalCue?: string): Promise<void> {
         // TODO: implement when Pinecone is used
     }
     async getMemoriesForCompression(userId: string, domain: string, olderThanDays: number): Promise<import('../types').MemoryEntry[]> {
@@ -34,6 +34,12 @@ export class PineconeVectorService implements IDomainVectorService {
     }
     async fetchMemoryById(memoryId: string, domain: string): Promise<import('../types').SearchResult | null> {
         return null;
+    }
+    async fetchMemoriesByIds(userId: string, memoryIds: string[], limit = 10): Promise<SearchResult[]> {
+        return [];
+    }
+    async getMemoriesBySourceEpisodeId(userId: string, sourceEpisodeId: string, limit = 10): Promise<SearchResult[]> {
+        return [];
     }
     async deleteMemory(memoryId: string, domain: string): Promise<void> {
         // TODO: implement delete

@@ -42,6 +42,10 @@ export async function addToHistory(ctx: BotContext, role: string, content: strin
     devLog('Added message to history:', { role, content });
 
     if (role === 'user') {
+        const currentHistoryItem = ctx.session.messageHistory[0];
+        const sourceMessageIds = currentHistoryItem
+            ? [`${currentHistoryItem.role}:${currentHistoryItem.timestamp.getTime()}:0`]
+            : undefined;
         if (ctx.session.pendingContactMemory || ctx.session.pendingContactLookup) {
             devLog('Skip fact extraction: message is pending contact-memory clarification/lookup');
         } else if (shouldSkipFactExtractionForBrowserTask(ctx, content)) {
@@ -71,10 +75,21 @@ export async function addToHistory(ctx: BotContext, role: string, content: strin
                             importance: explicitFact.importance,
                             tags: [],
                             isAnchor: true,
+                            memoryMetadata: {
+                                sourceContext: factContent,
+                                sourceMessageIds,
+                                extractionMethod: 'explicit',
+                                subject: 'contact',
+                            },
                         });
                     } else {
                         devLog(`Explicit remember: saving to vector DB (long-term, anchor): "${explicitFact.content}"`);
-                        const saved = await saveMemory(ctx, explicitFact.domain, explicitFact.content, explicitFact.importance, [], true);
+                        const saved = await saveMemory(ctx, explicitFact.domain, explicitFact.content, explicitFact.importance, [], true, {
+                            sourceContext: content,
+                            sourceMessageIds,
+                            extractionMethod: 'explicit',
+                            subject: 'user',
+                        });
                         if (saved) {
                             rememberFact(ctx, explicitFact.domain, explicitFact.content);
                             pushRecentFact(ctx, explicitFact.content);
@@ -89,7 +104,12 @@ export async function addToHistory(ctx: BotContext, role: string, content: strin
                     // Сохраняем контент quick-фактов в session, чтобы delayed analysis мог их пропустить
                     if (!ctx.session.quickFactContents) ctx.session.quickFactContents = [];
                     for (const fact of quickFacts) {
-                        const saved = await saveMemory(ctx, fact.domain, fact.content, fact.importance, fact.tags);
+                        const saved = await saveMemory(ctx, fact.domain, fact.content, fact.importance, fact.tags, false, {
+                            sourceContext: content,
+                            sourceMessageIds,
+                            extractionMethod: 'quick',
+                            subject: 'user',
+                        });
                         if (saved) {
                             rememberFact(ctx, fact.domain, fact.content);
                             pushRecentFact(ctx, fact.content);

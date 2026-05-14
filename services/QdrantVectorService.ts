@@ -108,20 +108,52 @@ export class QdrantVectorService implements IDomainVectorService {
             expiresAt,
             confidence: memory.confidence ?? existingPayload?.confidence ?? 0.6,
             lastAccessedAt: lastAccessedAt.toISOString(),
+            retrievalCount: memory.retrievalCount ?? existingPayload?.retrievalCount,
+            lastRetrievedAt: this.serializeDate(memory.lastRetrievedAt) ?? this.serializeDate(existingPayload?.lastRetrievedAt),
+            retrievalCues: memory.retrievalCues ?? existingPayload?.retrievalCues,
             previousVersions: this.serializePreviousVersions(memory, existingPayload, contentChanged, existingContent),
             relatedIds: memory.relatedIds ?? existingPayload?.relatedIds,
             emotionalTag: memory.emotionalTag ?? existingPayload?.emotionalTag,
             isAnchor: memory.isAnchor ?? existingPayload?.isAnchor,
+            sourceEpisodeId: memory.sourceEpisodeId ?? existingPayload?.sourceEpisodeId,
+            sourceContext: memory.sourceContext ?? existingPayload?.sourceContext,
+            sourceMessageIds: memory.sourceMessageIds ?? existingPayload?.sourceMessageIds,
+            sourceMemoryIds: memory.sourceMemoryIds ?? existingPayload?.sourceMemoryIds,
+            extractionMethod: memory.extractionMethod ?? existingPayload?.extractionMethod,
+            subject: memory.subject ?? existingPayload?.subject,
+            predicate: memory.predicate ?? existingPayload?.predicate,
+            object: memory.object ?? existingPayload?.object,
+            validFrom: this.serializeDate(memory.validFrom) ?? this.serializeDate(existingPayload?.validFrom),
+            validTo: this.serializeDate(memory.validTo) ?? this.serializeDate(existingPayload?.validTo),
+            status: memory.status ?? existingPayload?.status,
+            confirmationCount: memory.confirmationCount ?? existingPayload?.confirmationCount,
+            lastConfirmedAt: this.serializeDate(memory.lastConfirmedAt) ?? this.serializeDate(existingPayload?.lastConfirmedAt),
             id,
             botId: this.botId,
             characterName: config.characterName,
         };
 
         if (payload.expiresAt === undefined) delete payload.expiresAt;
+        if (payload.retrievalCount === undefined) delete payload.retrievalCount;
+        if (payload.lastRetrievedAt === undefined) delete payload.lastRetrievedAt;
+        if (payload.retrievalCues === undefined) delete payload.retrievalCues;
         if (payload.previousVersions === undefined) delete payload.previousVersions;
         if (payload.relatedIds === undefined) delete payload.relatedIds;
         if (payload.emotionalTag === undefined) delete payload.emotionalTag;
         if (payload.isAnchor === undefined) delete payload.isAnchor;
+        if (payload.sourceEpisodeId === undefined) delete payload.sourceEpisodeId;
+        if (payload.sourceContext === undefined) delete payload.sourceContext;
+        if (payload.sourceMessageIds === undefined) delete payload.sourceMessageIds;
+        if (payload.sourceMemoryIds === undefined) delete payload.sourceMemoryIds;
+        if (payload.extractionMethod === undefined) delete payload.extractionMethod;
+        if (payload.subject === undefined) delete payload.subject;
+        if (payload.predicate === undefined) delete payload.predicate;
+        if (payload.object === undefined) delete payload.object;
+        if (payload.validFrom === undefined) delete payload.validFrom;
+        if (payload.validTo === undefined) delete payload.validTo;
+        if (payload.status === undefined) delete payload.status;
+        if (payload.confirmationCount === undefined) delete payload.confirmationCount;
+        if (payload.lastConfirmedAt === undefined) delete payload.lastConfirmedAt;
         return payload;
     }
 
@@ -161,6 +193,11 @@ export class QdrantVectorService implements IDomainVectorService {
             lastAccessedAt: payload.lastAccessedAt
                 ? new Date(payload.lastAccessedAt)
                 : undefined,
+            retrievalCount: typeof payload.retrievalCount === 'number' ? payload.retrievalCount : undefined,
+            lastRetrievedAt: payload.lastRetrievedAt ? new Date(payload.lastRetrievedAt) : undefined,
+            retrievalCues: Array.isArray(payload.retrievalCues)
+                ? payload.retrievalCues.map(String)
+                : undefined,
             previousVersions: Array.isArray(payload.previousVersions)
                 ? (payload.previousVersions as any[]).map((v: any) => ({
                     content: String(v.content ?? ''),
@@ -174,12 +211,29 @@ export class QdrantVectorService implements IDomainVectorService {
                 ? (payload.relatedIds as Array<{ id: string; domain: string }>)
                 : undefined,
             emotionalTag,
+            sourceEpisodeId: payload.sourceEpisodeId ? String(payload.sourceEpisodeId) : undefined,
+            sourceContext: payload.sourceContext ? String(payload.sourceContext) : undefined,
+            sourceMessageIds: Array.isArray(payload.sourceMessageIds)
+                ? payload.sourceMessageIds.map(String)
+                : undefined,
+            sourceMemoryIds: Array.isArray(payload.sourceMemoryIds)
+                ? payload.sourceMemoryIds.map(String)
+                : undefined,
+            extractionMethod: payload.extractionMethod ? String(payload.extractionMethod) as any : undefined,
+            subject: payload.subject ? String(payload.subject) as any : undefined,
+            predicate: payload.predicate ? String(payload.predicate) : undefined,
+            object: payload.object ? String(payload.object) : undefined,
+            validFrom: payload.validFrom ? new Date(payload.validFrom) : undefined,
+            validTo: payload.validTo ? new Date(payload.validTo) : undefined,
+            status: payload.status ? String(payload.status) as any : undefined,
+            confirmationCount: typeof payload.confirmationCount === 'number' ? payload.confirmationCount : undefined,
+            lastConfirmedAt: payload.lastConfirmedAt ? new Date(payload.lastConfirmedAt) : undefined,
         };
     }
 
     /**
-     * Ранжирование с учётом важности, давности, достоверности, кривой забывания
-     * и эмоциональной интенсивности (arousal).
+     * Ранжирование с учётом важности, давности, достоверности, кривой забывания,
+     * эмоциональной интенсивности (arousal) и familiarity от предыдущих retrieval.
      *
      * Кривая забывания (Эббингауз): факты, к которым давно не обращались,
      * получают штраф к эффективной важности. Сброс происходит при каждом retrieval
@@ -192,11 +246,12 @@ export class QdrantVectorService implements IDomainVectorService {
      * Важно: наружу возвращаем исходный cosine score. Он используется для порогов
      * дедупликации/противоречий; rankScore ниже влияет только на порядок выдачи.
      *
-     * Формула ранжирования: score * importanceBoost * recencyFactor * emotionalBoost
+     * Формула ранжирования: score * importanceBoost * recencyFactor * emotionalBoost * familiarityBoost
      *   importanceBoost = 0.6 + 0.2 * effectiveImportance + 0.1 * confidence
      *   effectiveImportance = importance * forgettingDecay  (floor 0.5)
      *   forgettingDecay = max(0.3, 0.97 ^ daysSinceAccess)
      *   emotionalBoost = 1 + 0.1 * arousal  (1.0 для нейтральных, 1.1 для максимально эмоциональных)
+     *   familiarityBoost = 1 + min(0.12, log1p(retrievalCount) * 0.025)
      */
     private applyImportanceRecencyRanking(results: SearchResult[]): SearchResult[] {
         const now = Date.now();
@@ -221,8 +276,10 @@ export class QdrantVectorService implements IDomainVectorService {
                 // Эмоциональный буст: чем ярче воспоминание, тем легче всплывает
                 const arousal = r.emotionalTag?.arousal ?? 0;
                 const emotionalBoost = 1 + 0.1 * arousal;
+                const retrievalCount = Math.max(0, r.retrievalCount ?? 0);
+                const familiarityBoost = 1 + Math.min(0.12, Math.log1p(retrievalCount) * 0.025);
 
-                const rankScore = r.score * importanceBoost * recencyFactor * emotionalBoost;
+                const rankScore = r.score * importanceBoost * recencyFactor * emotionalBoost * familiarityBoost;
                 return { ...r, _rankScore: rankScore };
             })
             .sort((a, b) => b._rankScore - a._rankScore)
@@ -358,12 +415,26 @@ export class QdrantVectorService implements IDomainVectorService {
         devLog(`✅ Память обновлена (дедупликация) ID: ${memoryId}`);
     }
 
-    /** Обновляет lastAccessedAt (сброс кривой забывания) и опционально confidence без перевложения */
-    async updateMemoryAccess(memoryId: string, domain: string, confidence?: number): Promise<void> {
+    /** Обновляет retrieval-след: сброс кривой забывания, счётчик вспоминаний и последние cues. */
+    async updateMemoryAccess(memoryId: string, domain: string, confidence?: number, retrievalCue?: string): Promise<void> {
         const collection = this.collectionFor(domain);
-        const patch: Record<string, unknown> = { lastAccessedAt: new Date().toISOString() };
-        if (confidence !== undefined) patch.confidence = confidence;
         try {
+            const now = new Date().toISOString();
+            const existing = await this.fetchPayload(memoryId, domain);
+            const previousCount = typeof existing?.retrievalCount === 'number' ? existing.retrievalCount : 0;
+            const patch: Record<string, unknown> = {
+                lastAccessedAt: now,
+                lastRetrievedAt: now,
+                retrievalCount: previousCount + 1,
+            };
+            const cue = retrievalCue?.replace(/\s+/g, ' ').trim().slice(0, 180);
+            if (cue) {
+                const previousCues = Array.isArray(existing?.retrievalCues)
+                    ? existing!.retrievalCues.map(String)
+                    : [];
+                patch.retrievalCues = [cue, ...previousCues.filter((c) => c !== cue)].slice(0, 8);
+            }
+            if (confidence !== undefined) patch.confidence = confidence;
             await this.client.setPayload(collection, {
                 points: [memoryId],
                 payload: patch,
@@ -563,6 +634,78 @@ export class QdrantVectorService implements IDomainVectorService {
         }
     }
 
+    async fetchMemoriesByIds(userId: string, memoryIds: string[], limit = 10): Promise<SearchResult[]> {
+        const ids = [...new Set(memoryIds.map(String).filter(Boolean))].slice(0, 80);
+        if (ids.length === 0) return [];
+
+        const results: SearchResult[] = [];
+        for (const domainKey of Object.values(PREDEFINED_DOMAINS)) {
+            try {
+                const points = await this.client.retrieve(this.collectionFor(domainKey), {
+                    ids: ids as any[],
+                    with_payload: true,
+                    with_vector: false,
+                });
+
+                for (const point of points || []) {
+                    const payload = point.payload as Partial<MemoryEntry> | undefined;
+                    if (!payload || this.isExpiredPayload(payload)) continue;
+                    if (String(payload.botId || this.botId) !== this.botId) continue;
+                    if (String(payload.userId || '') !== userId) continue;
+                    results.push(this.mapSearchPoint({ ...point, score: 1 }));
+                }
+            } catch {
+                // Коллекция может не существовать — пропускаем
+            }
+        }
+
+        const order = new Map(ids.map((id, index) => [id, index]));
+        return results
+            .sort((a, b) => (order.get(a.id) ?? 9999) - (order.get(b.id) ?? 9999))
+            .slice(0, limit);
+    }
+
+    async getMemoriesBySourceEpisodeId(userId: string, sourceEpisodeId: string, limit = 10): Promise<SearchResult[]> {
+        const results: SearchResult[] = [];
+        const sourceId = String(sourceEpisodeId || '').trim();
+        if (!sourceId) return results;
+
+        for (const domainKey of Object.values(PREDEFINED_DOMAINS)) {
+            const collection = this.collectionFor(domainKey);
+            try {
+                const scroll = await this.client.scroll(collection, {
+                    filter: {
+                        must: [
+                            { key: 'botId', match: { value: this.botId } },
+                            { key: 'userId', match: { value: userId } },
+                            { key: 'sourceEpisodeId', match: { value: sourceId } },
+                        ],
+                        must_not: this.activeMustNotFilter(),
+                    },
+                    limit,
+                    with_payload: true,
+                    with_vector: false,
+                });
+
+                for (const point of scroll.points || []) {
+                    if (this.isExpiredPayload(point.payload)) continue;
+                    results.push(this.mapSearchPoint(point, 1));
+                }
+            } catch {
+                // Коллекция может не существовать — пропускаем
+            }
+        }
+
+        return results
+            .sort((a, b) => {
+                const aEpisode = a.tags?.includes('memory-episode') ? 1 : 0;
+                const bEpisode = b.tags?.includes('memory-episode') ? 1 : 0;
+                if (aEpisode !== bEpisode) return bEpisode - aEpisode;
+                return (b.importance ?? 0.5) - (a.importance ?? 0.5);
+            })
+            .slice(0, limit);
+    }
+
     async getMemoriesForCompression(userId: string, domain: string, olderThanDays: number): Promise<MemoryEntry[]> {
         const threshold = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
         const collection = this.collectionFor(domain);
@@ -598,8 +741,25 @@ export class QdrantVectorService implements IDomainVectorService {
                     tags: Array.isArray(p.tags) ? p.tags.map(String) : [],
                     userId: String(p.userId || userId),
                     confidence: typeof p.confidence === 'number' ? p.confidence : 0.6,
+                    lastAccessedAt: p.lastAccessedAt ? new Date(p.lastAccessedAt) : undefined,
+                    retrievalCount: typeof p.retrievalCount === 'number' ? p.retrievalCount : undefined,
+                    lastRetrievedAt: p.lastRetrievedAt ? new Date(p.lastRetrievedAt as Date | string) : undefined,
+                    retrievalCues: Array.isArray(p.retrievalCues) ? p.retrievalCues.map(String) : undefined,
                     isAnchor: Boolean(p.isAnchor),
                     expiresAt: p.expiresAt ? new Date(p.expiresAt as Date | string) : undefined,
+                    sourceEpisodeId: p.sourceEpisodeId ? String(p.sourceEpisodeId) : undefined,
+                    sourceContext: p.sourceContext ? String(p.sourceContext) : undefined,
+                    sourceMessageIds: Array.isArray(p.sourceMessageIds) ? p.sourceMessageIds.map(String) : undefined,
+                    sourceMemoryIds: Array.isArray(p.sourceMemoryIds) ? p.sourceMemoryIds.map(String) : undefined,
+                    extractionMethod: p.extractionMethod,
+                    subject: p.subject,
+                    predicate: p.predicate,
+                    object: p.object,
+                    validFrom: p.validFrom ? new Date(p.validFrom as Date | string) : undefined,
+                    validTo: p.validTo ? new Date(p.validTo as Date | string) : undefined,
+                    status: p.status,
+                    confirmationCount: typeof p.confirmationCount === 'number' ? p.confirmationCount : undefined,
+                    lastConfirmedAt: p.lastConfirmedAt ? new Date(p.lastConfirmedAt as Date | string) : undefined,
                 } as MemoryEntry;
             })
             .filter((m): m is MemoryEntry => m !== null);
@@ -728,6 +888,11 @@ export class QdrantVectorService implements IDomainVectorService {
                     userId: String(payload.userId || userId),
                     confidence: typeof payload.confidence === 'number' ? payload.confidence : 0.6,
                     lastAccessedAt: payload.lastAccessedAt ? new Date(payload.lastAccessedAt) : undefined,
+                    retrievalCount: typeof payload.retrievalCount === 'number' ? payload.retrievalCount : undefined,
+                    lastRetrievedAt: payload.lastRetrievedAt ? new Date(payload.lastRetrievedAt as Date | string) : undefined,
+                    retrievalCues: Array.isArray(payload.retrievalCues)
+                        ? payload.retrievalCues.map(String)
+                        : undefined,
                     previousVersions: Array.isArray(payload.previousVersions)
                         ? (payload.previousVersions as any[]).map((v: any) => ({
                             content: String(v.content ?? ''),
@@ -741,6 +906,23 @@ export class QdrantVectorService implements IDomainVectorService {
                         ? (payload.relatedIds as Array<{ id: string; domain: string }>)
                         : undefined,
                     emotionalTag: payload.emotionalTag,
+                    sourceEpisodeId: payload.sourceEpisodeId ? String(payload.sourceEpisodeId) : undefined,
+                    sourceContext: payload.sourceContext ? String(payload.sourceContext) : undefined,
+                    sourceMessageIds: Array.isArray(payload.sourceMessageIds)
+                        ? payload.sourceMessageIds.map(String)
+                        : undefined,
+                    sourceMemoryIds: Array.isArray(payload.sourceMemoryIds)
+                        ? payload.sourceMemoryIds.map(String)
+                        : undefined,
+                    extractionMethod: payload.extractionMethod,
+                    subject: payload.subject,
+                    predicate: payload.predicate,
+                    object: payload.object,
+                    validFrom: payload.validFrom ? new Date(payload.validFrom as Date | string) : undefined,
+                    validTo: payload.validTo ? new Date(payload.validTo as Date | string) : undefined,
+                    status: payload.status,
+                    confirmationCount: typeof payload.confirmationCount === 'number' ? payload.confirmationCount : undefined,
+                    lastConfirmedAt: payload.lastConfirmedAt ? new Date(payload.lastConfirmedAt as Date | string) : undefined,
                 });
             }
         }

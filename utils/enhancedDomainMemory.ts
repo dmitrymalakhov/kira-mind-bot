@@ -1,5 +1,5 @@
 import { getVectorService } from '../services/VectorServiceFactory';
-import { MemoryEntry, SearchOptions } from '../types';
+import { MemoryEntry, MemoryExtractionMethod, MemoryStatus, MemorySubject, SearchOptions } from '../types';
 import { BotContext } from '../types';
 import { devLog, parseLLMJson } from '../utils';
 import openai from '../openai';
@@ -17,6 +17,20 @@ let lastSaveError: string | null = null;
 
 export function getLastSaveError(): string | null {
     return lastSaveError;
+}
+
+export interface MemorySaveMetadata {
+    sourceEpisodeId?: string;
+    sourceContext?: string;
+    sourceMessageIds?: string[];
+    sourceMemoryIds?: string[];
+    extractionMethod?: MemoryExtractionMethod;
+    subject?: MemorySubject;
+    predicate?: string;
+    object?: string;
+    validFrom?: Date;
+    validTo?: Date;
+    status?: MemoryStatus;
 }
 
 // Нижний порог для поиска устаревших планировочных фактов при смене состояния
@@ -60,6 +74,32 @@ function normalizeMemoryDomain(domain: string | undefined): string {
         : PREDEFINED_DOMAINS.GENERAL;
 }
 
+function inferMemoryStatus(content: string, expiresAt?: Date): MemoryStatus {
+    const lc = content.toLowerCase();
+    if (expiresAt && expiresAt.getTime() < Date.now()) return 'expired';
+    if (/планир|собира[ею]тся|хоч[уе]т|намерен|предстоит|будет|должен|нужно\s+будет|запланирован/.test(lc)) {
+        return 'planned';
+    }
+    if (/уже\s+(сделал|сделала|сделано|купил|купила|забронировал|забронировала|оплатил|оплатила|вернул[ас]ь|прилетел|прилетела)|готово|завершил|завершила/.test(lc)) {
+        return 'done';
+    }
+    return 'active';
+}
+
+function mergeSourceMessageIds(existing: string[] | undefined, incoming: string[] | undefined): string[] | undefined {
+    const merged = [...(existing ?? []), ...(incoming ?? [])]
+        .map(String)
+        .filter(Boolean);
+    return merged.length > 0 ? [...new Set(merged)].slice(-20) : undefined;
+}
+
+function mergeSourceMemoryIds(existing: string[] | undefined, incoming: string[] | undefined): string[] | undefined {
+    const merged = [...(existing ?? []), ...(incoming ?? [])]
+        .map(String)
+        .filter(Boolean);
+    return merged.length > 0 ? [...new Set(merged)].slice(-80) : undefined;
+}
+
 function contactIdFromTags(tags: string[] | undefined): string | null {
     const tag = (tags ?? []).find(t => String(t).startsWith('contact_id:'));
     return tag ? String(tag).replace('contact_id:', '').trim() : null;
@@ -98,6 +138,20 @@ function isContactLikeMemory(memory: Pick<MemoryEntry, 'content' | 'tags'>): boo
             String(t).startsWith('contact_id:') ||
             String(t).startsWith('contact_key:')
         );
+}
+
+function isEpisodeMemory(memory: Pick<MemoryEntry, 'content' | 'tags'>): boolean {
+    return (memory.tags ?? []).includes('memory-episode') ||
+        memory.content.startsWith('[ЭПИЗОД ПАМЯТИ:');
+}
+
+function isChapterMemory(memory: Pick<MemoryEntry, 'content' | 'tags'>): boolean {
+    return (memory.tags ?? []).includes('memory-chapter') ||
+        memory.content.startsWith('[ГЛАВА ПАМЯТИ:');
+}
+
+function isSyntheticMemory(memory: Pick<MemoryEntry, 'content' | 'tags'>): boolean {
+    return isEpisodeMemory(memory) || isChapterMemory(memory);
 }
 
 function normalizeMemoryTags(tags: string[]): string[] {
@@ -492,6 +546,7 @@ async function invalidatePlanningFacts(
         const candidates = await svc.searchAllDomains(newContent, userId, 12);
         for (const candidate of candidates) {
             if (candidate.id === newFactId) continue;
+            if (isSyntheticMemory(candidate)) continue;
             if (!isSameContactScope(newTags, candidate.tags)) continue;
             // Обрабатываем только зону ниже обычного contradiction-check
             if (candidate.score >= DEFAULT_CONTRADICTION_THRESHOLD) continue;
@@ -537,7 +592,8 @@ export async function saveMemory(
     content: string,
     importance: number,
     tags: string[] = [],
-    isAnchor = false
+    isAnchor = false,
+    metadata: MemorySaveMetadata = {}
 ): Promise<boolean> {
     const userId = ctx.from?.id;
     const normalizedDomain = normalizeMemoryDomain(domain);
@@ -585,10 +641,12 @@ export async function saveMemory(
             limit: 5,
             minScore: dedupThreshold,
         });
-        let dedupCandidate = nearIdenticalInDomain.find(existing => isSameContactScope(tags, existing.tags));
+        let dedupCandidate = nearIdenticalInDomain.find(existing =>
+            !isSyntheticMemory(existing) && isSameContactScope(tags, existing.tags)
+        );
         if (!dedupCandidate) {
             dedupCandidate = (await svc.searchAllDomains(content, String(userId), DEDUP_CROSS_DOMAIN_LIMIT))
-                .filter(r => r.score >= dedupThreshold)
+                .filter(r => r.score >= dedupThreshold && !isSyntheticMemory(r))
                 .find(existing => isSameContactScope(tags, existing.tags));
         }
 
@@ -598,6 +656,7 @@ export async function saveMemory(
             // Каждое подтверждение того же факта повышает достоверность (+0.1, cap 1.0)
             const boostedConfidence = Math.min(1.0, (existing.confidence ?? 0.6) + 0.1);
             const mergedImportance = Math.max(importance, existing.importance);
+            const confirmationCount = (existing.confirmationCount ?? 1) + 1;
             // Авто-продвижение в anchors: высокая достоверность + высокая важность = ключевой факт о пользователе
             const shouldAutoAnchor = boostedConfidence >= 0.9 && mergedImportance >= 0.8;
             if (shouldAutoAnchor) devLog('⚓ Авто-продвижение в anchor:', content.slice(0, 60));
@@ -611,6 +670,19 @@ export async function saveMemory(
                 botId,
                 isAnchor: isAnchor || shouldAutoAnchor || undefined,
                 confidence: boostedConfidence,
+                sourceEpisodeId: metadata.sourceEpisodeId ?? existing.sourceEpisodeId,
+                sourceContext: metadata.sourceContext ?? existing.sourceContext,
+                sourceMessageIds: mergeSourceMessageIds(existing.sourceMessageIds, metadata.sourceMessageIds),
+                sourceMemoryIds: mergeSourceMemoryIds(existing.sourceMemoryIds, metadata.sourceMemoryIds),
+                extractionMethod: metadata.extractionMethod ?? existing.extractionMethod,
+                subject: metadata.subject ?? existing.subject,
+                predicate: metadata.predicate ?? existing.predicate,
+                object: metadata.object ?? existing.object,
+                validFrom: metadata.validFrom ?? existing.validFrom,
+                validTo: metadata.validTo ?? existing.validTo,
+                status: metadata.status ?? existing.status ?? inferMemoryStatus(canonicalContent),
+                confirmationCount,
+                lastConfirmedAt: new Date(),
             });
             devLog('✅ Факт обновлён (дедупликация) ID:', existing.id, '| confidence:', boostedConfidence);
             lastSaveError = null;
@@ -629,9 +701,10 @@ export async function saveMemory(
         const relatedAllDomains = await svc.searchAllDomains(content, String(userId), CONTRADICTION_CROSS_DOMAIN_LIMIT);
 
         // Объединяем результаты, дедуплицируем по id, фильтруем по порогу
-        const related = relatedInDomain.filter(r => isSameContactScope(tags, r.tags));
+        const related = relatedInDomain.filter(r => !isSyntheticMemory(r) && isSameContactScope(tags, r.tags));
         const seenIds = new Set(related.map(r => r.id));
         for (const r of relatedAllDomains) {
+            if (isSyntheticMemory(r)) continue;
             if (!seenIds.has(r.id) && r.score >= contradictionThreshold && r.score < dedupThreshold) {
                 if (!isSameContactScope(tags, r.tags)) continue;
                 seenIds.add(r.id);
@@ -646,6 +719,7 @@ export async function saveMemory(
             for (const catQuery of STATE_CATEGORY_QUERIES[stateCategory]) {
                 const catResults = await svc.searchAllDomains(catQuery, String(userId), 3);
                 for (const r of catResults) {
+                    if (isSyntheticMemory(r)) continue;
                     if (seenIds.has(r.id)) continue;
                     if (!isSameContactScope(tags, r.tags)) continue;
                     if (r.score < 0.55 || r.score >= dedupThreshold) continue;
@@ -752,6 +826,7 @@ export async function saveMemory(
         // ── Шаг 4: Сохраняем как новый факт ──────────────────────────────────
         const expiresAt = await detectTemporalExpiry(content);
         const now = new Date();
+        const status = metadata.status ?? inferMemoryStatus(content, expiresAt);
         const result = await svc.saveMemory({
             content,
             domain,
@@ -765,6 +840,19 @@ export async function saveMemory(
             confidence: 0.6,
             lastAccessedAt: now,
             emotionalTag,
+            sourceEpisodeId: metadata.sourceEpisodeId,
+            sourceContext: metadata.sourceContext,
+            sourceMessageIds: metadata.sourceMessageIds,
+            sourceMemoryIds: metadata.sourceMemoryIds,
+            extractionMethod: metadata.extractionMethod ?? 'unknown',
+            subject: metadata.subject ?? (tags.includes('subject:contact') ? 'contact' : 'user'),
+            predicate: metadata.predicate,
+            object: metadata.object,
+            validFrom: metadata.validFrom,
+            validTo: metadata.validTo,
+            status,
+            confirmationCount: 1,
+            lastConfirmedAt: now,
         });
         devLog('✅ Факт успешно сохранён с ID:', result);
 
@@ -995,8 +1083,9 @@ export async function generateMemoryBiography(ctx: BotContext): Promise<string> 
     const portraitFacts = all.filter(f =>
         f.domain === 'contacts' && f.tags?.some(t => String(t).startsWith('portrait:'))
     );
+    const chapterFacts = all.filter(isChapterMemory);
     const userFacts = all.filter(f =>
-        !isContactLikeMemory(f) && f.domain !== 'contacts'
+        !isContactLikeMemory(f) && !isSyntheticMemory(f) && f.domain !== 'contacts'
     );
     const contactFacts = all.filter(f =>
         f.domain !== 'contacts' && isContactLikeMemory(f)
@@ -1010,6 +1099,20 @@ export async function generateMemoryBiography(ctx: BotContext): Promise<string> 
     }
 
     const lines: string[] = ['Вот что я о тебе знаю:\n'];
+
+    if (chapterFacts.length > 0) {
+        lines.push('🧭 Сводные главы памяти');
+        for (const chapter of chapterFacts.slice(0, 6)) {
+            const summary = chapter.content
+                .replace(/^\[ГЛАВА ПАМЯТИ:[^\]]+\]\s*/u, '')
+                .split('\n')
+                .filter(line => /^(Кратко|Текущее состояние|Открытые линии):/i.test(line))
+                .slice(0, 3)
+                .join(' ');
+            lines.push(`• ${summary || chapter.content.slice(0, 240)}`);
+        }
+        lines.push('');
+    }
 
     for (const [domain, facts] of Object.entries(byDomain)) {
         if (facts.length === 0) continue;
@@ -1179,7 +1282,7 @@ export async function compressOldMemories(
 
     const userId = String(ctx.from?.id);
     const old = (await svc.getMemoriesForCompression(userId, domain, olderThanDays))
-        .filter(memory => !isContactLikeMemory(memory));
+        .filter(memory => !isContactLikeMemory(memory) && !isSyntheticMemory(memory));
 
     if (old.length < 5) {
         devLog(`compressOldMemories [${domain}]: only ${old.length} facts, skipping`);
@@ -1274,6 +1377,9 @@ export async function getMemoryHealthReport(ctx: BotContext): Promise<string> {
     let contactFactsWithoutStableIdentity = 0;
     let contactFactsWithoutSubjectTag = 0;
     let factsWithHistory = 0;
+    let neverRetrieved = 0;
+    let frequentlyRetrieved = 0;
+    let totalRetrievals = 0;
     const domainCounts: Record<string, number> = {};
     const duplicateGroups = new Map<string, MemoryEntry[]>();
 
@@ -1281,6 +1387,10 @@ export async function getMemoryHealthReport(ctx: BotContext): Promise<string> {
         const conf = m.confidence ?? 0.6;
         if (conf < 0.4) lowConfidence++;
         if ((m.previousVersions?.length ?? 0) > 0) factsWithHistory++;
+        const retrievalCount = m.retrievalCount ?? 0;
+        totalRetrievals += retrievalCount;
+        if (retrievalCount === 0) neverRetrieved++;
+        if (retrievalCount >= 5) frequentlyRetrieved++;
 
         const accessed = m.lastAccessedAt ?? m.timestamp;
         const daysSinceAccess = (now - new Date(accessed).getTime()) / day;
@@ -1321,6 +1431,9 @@ export async function getMemoryHealthReport(ctx: BotContext): Promise<string> {
         `🕸️  Давно не всплывали (> 60 дней): ${stale}`,
         `⏳ Скоро истекут (< 7 дней): ${expiringSoon}`,
         `🧬 Факты с историей изменений: ${factsWithHistory}`,
+        `🧠 Никогда не всплывали в ответах: ${neverRetrieved}`,
+        `💪 Часто вспоминались (>=5): ${frequentlyRetrieved}`,
+        `🔁 Всего retrieval-укреплений: ${totalRetrievals}`,
         `♻️  Вероятные точные дубли: ${likelyDuplicateGroups.length} групп`,
         `👥 Контактные факты без Telegram contact_id: ${contactFactsWithoutTelegramId}`,
         `👥 Контактные факты без stable identity: ${contactFactsWithoutStableIdentity}`,

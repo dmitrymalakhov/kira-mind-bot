@@ -25,6 +25,18 @@ const GRAPH_EXPANSION_TOP_N = 3;
 const GRAPH_EXPANSION_DISCOUNT = 0.6;
 /** Максимум новых фактов из 2-hop expansion */
 const GRAPH_EXPANSION_HOP2_MAX = 5;
+/** Contextual reinstatement: сколько исходных эпизодов восстанавливать по найденным фактам */
+const EPISODE_CONTEXT_TOP_N = 5;
+/** Сколько соседних воспоминаний из одного эпизода добавлять */
+const EPISODE_CONTEXT_MAX_PER_EPISODE = 6;
+/** Дисконт для соседних фактов из того же эпизода */
+const EPISODE_CONTEXT_DISCOUNT = 0.72;
+/** Сколько сводных глав раскрывать до исходных фактов */
+const CHAPTER_SOURCE_TOP_N = 4;
+/** Сколько исходных воспоминаний брать из одной сводной главы */
+const CHAPTER_SOURCE_MAX_PER_CHAPTER = 8;
+/** Дисконт для исходников, подтянутых из сводной главы */
+const CHAPTER_SOURCE_DISCOUNT = 0.68;
 /** Бонус для anchor-фактов при ранжировании (вместо отдельной загрузки) */
 const ANCHOR_SCORE_BOOST = 1.15;
 /** Базовый score для явно закреплённых фактов, когда они не нашлись embedding-поиском */
@@ -91,6 +103,16 @@ interface GeneratedQueries {
     answerQueries: string[];
     /** Запросы для фонового контекста (люди, места, отношения) */
     contextQueries: string[];
+}
+
+function isEpisodeMemoryLike(memory: Pick<SearchResultLike, 'content' | 'tags'>): boolean {
+    return (memory.tags ?? []).includes('memory-episode') ||
+        memory.content.startsWith('[ЭПИЗОД ПАМЯТИ:');
+}
+
+function isChapterMemoryLike(memory: Pick<SearchResultLike, 'content' | 'tags'>): boolean {
+    return (memory.tags ?? []).includes('memory-chapter') ||
+        memory.content.startsWith('[ГЛАВА ПАМЯТИ:');
 }
 
 interface RecentMessage {
@@ -334,6 +356,14 @@ export interface SearchResultLike {
     tags?: string[];
     previousVersions?: Array<{ content: string; timestamp: Date; confidence: number }>;
     isAnchor?: boolean;
+    sourceEpisodeId?: string;
+    sourceContext?: string;
+    sourceMemoryIds?: string[];
+    status?: string;
+    confirmationCount?: number;
+    retrievalCount?: number;
+    lastRetrievedAt?: Date;
+    retrievalCues?: string[];
 }
 
 function addCandidate(
@@ -354,6 +384,98 @@ function addCandidate(
     if (!existing || normalized.score > existing.score) {
         seen.set(candidate.id, normalized);
     }
+}
+
+async function addEpisodeContextCandidates(
+    userId: string,
+    seedCandidates: SearchResultLike[],
+    seen: Map<string, SearchResultLike>,
+    addScopedCandidate: (candidate: SearchResultLike, scoreOverride?: number) => void
+): Promise<number> {
+    const svc = getVectorService();
+    if (!svc) return 0;
+
+    const episodeSeeds = new Map<string, SearchResultLike>();
+    for (const candidate of seedCandidates) {
+        const sourceEpisodeId = candidate.sourceEpisodeId?.trim();
+        if (!sourceEpisodeId) continue;
+        if (!episodeSeeds.has(sourceEpisodeId)) {
+            episodeSeeds.set(sourceEpisodeId, candidate);
+        }
+        if (episodeSeeds.size >= EPISODE_CONTEXT_TOP_N) break;
+    }
+
+    let added = 0;
+    await Promise.all(
+        [...episodeSeeds.entries()].map(async ([episodeId, seed]) => {
+            try {
+                const related = await svc.getMemoriesBySourceEpisodeId(userId, episodeId, EPISODE_CONTEXT_MAX_PER_EPISODE);
+                const contextualScore = Math.max(0.55, seed.score * EPISODE_CONTEXT_DISCOUNT);
+                for (const memory of related) {
+                    if (memory.id === seed.id || seen.has(memory.id)) continue;
+                    addScopedCandidate({
+                        ...memory,
+                        score: isEpisodeMemoryLike(memory)
+                            ? Math.max(0.58, contextualScore)
+                            : contextualScore,
+                        importance: memory.importance ?? 0.5,
+                        confidence: memory.confidence ?? 0.6,
+                        domain: memory.domain,
+                    });
+                    added++;
+                }
+            } catch {
+                // contextual reinstatement is best-effort
+            }
+        })
+    );
+
+    if (added > 0) devLog('Episode context expansion added memories:', added);
+    return added;
+}
+
+async function addChapterSourceCandidates(
+    userId: string,
+    seedCandidates: SearchResultLike[],
+    seen: Map<string, SearchResultLike>,
+    addScopedCandidate: (candidate: SearchResultLike, scoreOverride?: number) => void
+): Promise<number> {
+    const svc = getVectorService();
+    if (!svc) return 0;
+
+    const chapterSeeds = seedCandidates
+        .filter((candidate) => isChapterMemoryLike(candidate) && (candidate.sourceMemoryIds?.length ?? 0) > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, CHAPTER_SOURCE_TOP_N);
+
+    let added = 0;
+    await Promise.all(
+        chapterSeeds.map(async (chapter) => {
+            try {
+                const ids = chapter.sourceMemoryIds ?? [];
+                const sources = await svc.fetchMemoriesByIds(userId, ids, CHAPTER_SOURCE_MAX_PER_CHAPTER);
+                const sourceScore = Math.max(0.52, chapter.score * CHAPTER_SOURCE_DISCOUNT);
+                for (const source of sources) {
+                    if (source.id === chapter.id || seen.has(source.id)) continue;
+                    addScopedCandidate({
+                        ...source,
+                        score: isEpisodeMemoryLike(source)
+                            ? sourceScore * 0.9
+                            : sourceScore,
+                        importance: source.importance ?? 0.5,
+                        confidence: source.confidence ?? 0.6,
+                        domain: source.domain,
+                    });
+                    added++;
+                }
+            } catch {
+                // source expansion is best-effort
+            }
+        })
+    );
+
+    if (added > 0) devLog('Chapter source expansion added memories:', added);
+    return added;
 }
 
 /**
@@ -384,8 +506,19 @@ function formatFactWithHistory(r: SearchResultLike): string {
     const history = previous.length > 0
         ? ` (история изменений, не текущее состояние: ${previous.join(' -> ')})`
         : '';
+    const status = r.status && r.status !== 'active' ? ` [статус: ${r.status}]` : '';
+    const confirmations = (r.confirmationCount ?? 0) > 1 ? ` [подтверждений: ${r.confirmationCount}]` : '';
+    const retrievals = (r.retrievalCount ?? 0) >= 3 ? ` [часто всплывает: ${r.retrievalCount}]` : '';
+    const source = r.sourceContext && r.sourceContext.trim() && r.sourceContext.trim() !== r.content.trim()
+        ? ` (источник: ${r.sourceContext.trim().slice(0, 140)})`
+        : '';
+    const kindMarker = isEpisodeMemoryLike(r)
+        ? '[эпизодический контекст] '
+        : isChapterMemoryLike(r)
+            ? '[сводная глава] '
+            : '';
 
-    return `${confidenceMarker}${r.content}${history}`;
+    return `${confidenceMarker}${kindMarker}${r.content}${status}${confirmations}${retrievals}${history}${source}`;
 }
 
 /**
@@ -576,6 +709,9 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
         try {
             const recentMemories = await getRecentMemories(ctx, MEMORY_INVENTORY_LIMIT);
             for (const memory of recentMemories) {
+                if (memory.tags?.includes('memory-episode') || memory.content.startsWith('[ЭПИЗОД ПАМЯТИ:')) {
+                    continue;
+                }
                 addScopedCandidate({
                     id: memory.id,
                     content: memory.content,
@@ -587,6 +723,14 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
                     tags: memory.tags,
                     previousVersions: memory.previousVersions,
                     isAnchor: memory.isAnchor,
+                    sourceEpisodeId: memory.sourceEpisodeId,
+                    sourceContext: memory.sourceContext,
+                    sourceMemoryIds: memory.sourceMemoryIds,
+                    status: memory.status,
+                    confirmationCount: memory.confirmationCount,
+                    retrievalCount: memory.retrievalCount,
+                    lastRetrievedAt: memory.lastRetrievedAt,
+                    retrievalCues: memory.retrievalCues,
                 }, memory.isAnchor ? ANCHOR_DIRECT_SCORE : MEMORY_INVENTORY_SCORE);
             }
         } catch {
@@ -679,6 +823,30 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
         }
     }
 
+    // Contextual reinstatement: если факт пришёл из конкретного эпизода,
+    // восстанавливаем сцену и несколько соседних фактов из того же разговора.
+    if (need === 'full' && ctx.from?.id) {
+        const episodeSeeds = Array.from(seen.values())
+            .filter((fact) => Boolean(fact.sourceEpisodeId))
+            .sort((a, b) => b.score - a.score)
+            .slice(0, EPISODE_CONTEXT_TOP_N);
+        if (episodeSeeds.length > 0) {
+            await addEpisodeContextCandidates(String(ctx.from.id), episodeSeeds, seen, addScopedCandidate);
+        }
+    }
+
+    // Schema-to-evidence expansion: если нашлась сводная глава памяти,
+    // подтягиваем несколько исходных воспоминаний, чтобы ответ был конкретным и проверяемым.
+    if (need === 'full' && ctx.from?.id) {
+        const chapterSeeds = Array.from(seen.values())
+            .filter((fact) => isChapterMemoryLike(fact) && (fact.sourceMemoryIds?.length ?? 0) > 0)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, CHAPTER_SOURCE_TOP_N);
+        if (chapterSeeds.length > 0) {
+            await addChapterSourceCandidates(String(ctx.from.id), chapterSeeds, seen, addScopedCandidate);
+        }
+    }
+
     // Первичное ранжирование (vector score + importance + confidence + anchor boost)
     const sorted = Array.from(seen.values())
         .map((r) => {
@@ -686,7 +854,8 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
             const baseScore = r.score * (0.6 + 0.2 * (r.importance ?? 0.5) + 0.1 * conf);
             // Anchor-факты получают буст при ранжировании (но не включаются безусловно)
             const anchorMul = anchorIds.has(r.id) ? ANCHOR_SCORE_BOOST : 1.0;
-            return { ...r, _finalScore: baseScore * anchorMul };
+            const familiarityMul = 1 + Math.min(0.10, Math.log1p(Math.max(0, r.retrievalCount ?? 0)) * 0.02);
+            return { ...r, _finalScore: baseScore * anchorMul * familiarityMul };
         })
         .filter((r) => r._finalScore >= MIN_FINAL_SCORE_THRESHOLD)
         .sort((a, b) => b._finalScore - a._finalScore);
@@ -711,7 +880,7 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
                 svc.updateImportance(fact.id, boosted).catch(() => { });
             }
             if (fact.domain) {
-                svc.updateMemoryAccess(fact.id, fact.domain).catch(() => { });
+                svc.updateMemoryAccess(fact.id, fact.domain, undefined, userMessage).catch(() => { });
             }
         }
     }

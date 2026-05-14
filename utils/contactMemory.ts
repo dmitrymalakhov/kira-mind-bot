@@ -3,7 +3,7 @@ import { get as levenshtein } from 'fast-levenshtein';
 import { transliterate as toLatin } from 'transliteration';
 import { BotContext } from '../types';
 import { Contact, ContactsStore } from '../stores/ContactsStore';
-import { saveMemory } from './enhancedDomainMemory';
+import { MemorySaveMetadata, saveMemory } from './enhancedDomainMemory';
 import { rememberFact } from './domainMemory';
 import { devLog } from '../utils';
 
@@ -17,6 +17,7 @@ export interface ContactMemoryFact {
     importance: number;
     tags?: string[];
     isAnchor?: boolean;
+    memoryMetadata?: MemorySaveMetadata;
 }
 
 export interface ContactMemorySaveResult {
@@ -186,7 +187,11 @@ async function persistContactFact(ctx: BotContext, fact: ContactMemoryFact, cont
         ...contactIdentityTags(fact.contactName, contact),
     ];
 
-    const saved = await saveMemory(ctx, fact.domain, memoryContent, fact.importance, [...new Set(tags)], fact.isAnchor);
+    const saved = await saveMemory(ctx, fact.domain, memoryContent, fact.importance, [...new Set(tags)], fact.isAnchor, {
+        ...fact.memoryMetadata,
+        subject: 'contact',
+        sourceContext: fact.memoryMetadata?.sourceContext ?? fact.content,
+    });
     if (!saved) return null;
     rememberFact(ctx, fact.domain, memoryContent);
     pushRecentFact(ctx, memoryContent);
@@ -201,6 +206,7 @@ function setPendingContactMemory(ctx: BotContext, fact: ContactMemoryFact, candi
         importance: fact.importance,
         tags: fact.tags ?? [],
         isAnchor: fact.isAnchor,
+        memoryMetadata: fact.memoryMetadata,
         candidateIds: candidates.map(c => c.id),
         createdAt: Date.now(),
     };
@@ -253,6 +259,7 @@ export async function saveContactMemoryFactOrAsk(
         importance: fact.importance,
         tags: fact.tags ?? [],
         isAnchor: fact.isAnchor,
+        memoryMetadata: fact.memoryMetadata,
         candidateIds: [],
         createdAt: Date.now(),
     };

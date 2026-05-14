@@ -1,5 +1,6 @@
 import { BotContext } from '../types';
 import { extractAndSaveFactsFromConversation } from './enhancedFactExtraction';
+import { persistSessionNow } from '../services/SessionStorage';
 
 interface PendingAnalysis {
     /** Контекст нужен для доступа к ctx.session при отложенном анализе (session обновляется по ссылке при MemorySessionStorage) */
@@ -84,6 +85,7 @@ class FactAnalysisManager {
                 analysis.ctx,
                 analysis.conversationStart
             );
+            await persistSessionNow(analysis.ctx);
         } catch (error) {
             console.error('Error in delayed fact analysis:', error);
         } finally {

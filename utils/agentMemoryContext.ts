@@ -32,12 +32,29 @@ export async function fetchAgentMemoryContext(ctx: BotContext, message: string):
     }
 
     const context = await getMultiQueryMemoryContext(ctx, trimmed, memoryNeed);
+    const working = formatWorkingMemory(ctx);
+    const enrichedContext = [working, context].filter(Boolean).join('\n\n');
     devLog('Fetched memory context (enrichment)', {
         memoryNeed,
-        hasContext: Boolean(context),
-        contextLength: context.length,
+        hasContext: Boolean(enrichedContext),
+        contextLength: enrichedContext.length,
     });
-    return { domain: 'personal', context };
+    return { domain: 'personal', context: enrichedContext };
+}
+
+function formatWorkingMemory(ctx: BotContext): string {
+    const wm = ctx.session?.workingMemory;
+    if (!wm?.summary?.trim()) return '';
+    const lines = [
+        'Текущая рабочая память разговора:',
+        `- Ситуация: ${wm.summary}`,
+        wm.activeTopics?.length ? `- Активные темы: ${wm.activeTopics.join(', ')}` : '',
+        wm.activeEntities?.length ? `- Активные люди/объекты: ${wm.activeEntities.join(', ')}` : '',
+        wm.openLoops?.length ? `- Открытые вопросы/ожидания: ${wm.openLoops.join('; ')}` : '',
+        wm.userMood ? `- Настроение пользователя: ${wm.userMood}` : '',
+        wm.lastUserIntent ? `- Последнее намерение: ${wm.lastUserIntent}` : '',
+    ].filter(Boolean);
+    return lines.join('\n');
 }
 
 export function buildMemoryContextBlock(memoryContext: AgentMemoryContext): string {

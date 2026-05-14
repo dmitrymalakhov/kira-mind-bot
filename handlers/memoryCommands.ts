@@ -6,6 +6,8 @@ import { factAnalysisManager } from '../utils/factAnalysisTimer';
 import { config } from '../config';
 import { repairLegacyContactIdentities } from '../utils/contactMemoryRepair';
 import { contactOptionLabel, resolveContactIdentity } from '../utils/contactMemory';
+import { runMemoryConsolidationForContext } from '../services/MemoryConsolidationService';
+import { getPersonalChatMemoryIndexStatus, runPersonalChatMemoryIndexingCycle } from '../services/personalChatMemoryIndexer';
 
 function isAdmin(ctx: BotContext): boolean {
     return ctx.from?.id === config.adminUserId;
@@ -18,6 +20,9 @@ function getMemoryAdminKeyboard() {
         .row()
         .text('/debug_facts')
         .text('/admin_menu')
+        .row()
+        .text('/memory_consolidate')
+        .text('/personal_chat_memory_status')
         .resized();
 }
 
@@ -58,6 +63,9 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
                 '/memory_stats — статистика + последние 5 сохраненных фактов',
                 '/memory_search <запрос> — ручная проверка векторного поиска',
                 '/memory_cleanup — очистка старых фактов',
+                '/memory_consolidate [домен] — собрать сводные главы памяти',
+                '/personal_chat_memory_status — статус фонового изучения личных переписок',
+                '/personal_chat_memory_run — запустить один цикл изучения личных переписок',
                 '/debug_facts — диагностика извлечения фактов',
                 '/memory_repair_contacts — проставить contact_id старым контактным фактам',
                 '/chats — список чатов, в которых присутствует бот',
@@ -140,6 +148,68 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
     bot.command('memory_cleanup', async (ctx) => {
         const removed = await cleanupOldMemories(ctx, 30);
         await ctx.reply(`Удалено старых воспоминаний: ${removed}`);
+    });
+
+    bot.command('memory_consolidate', async (ctx) => {
+        if (!isAdmin(ctx)) {
+            await ctx.reply('⛔️ Доступ только для администратора.');
+            return;
+        }
+
+        const rawText = ctx.message?.text || '';
+        const domain = rawText.replace('/memory_consolidate', '').trim();
+        await ctx.reply(domain
+            ? `Собираю сводные главы памяти для домена "${domain}"...`
+            : 'Собираю сводные главы памяти по самым насыщенным доменам...');
+
+        const result = await runMemoryConsolidationForContext(ctx, {
+            domain: domain || undefined,
+            minFacts: domain ? 4 : 6,
+            limit: 700,
+            periodDays: 180,
+            maxDomains: 8,
+        });
+
+        const lines = [
+            '✅ Консолидация памяти завершена.',
+            `Создано глав: ${result.created}`,
+            `Заменено старых глав: ${result.replaced}`,
+            `Использовано источников: ${result.sourceCount}`,
+            result.domains.length ? `Домены: ${result.domains.join(', ')}` : undefined,
+            result.skipped.length ? `Пропущено: ${result.skipped.join('; ')}` : undefined,
+        ].filter(Boolean);
+
+        await ctx.reply(lines.join('\n'));
+    });
+
+    bot.command('personal_chat_memory_status', async (ctx) => {
+        if (!isAdmin(ctx)) {
+            await ctx.reply('⛔️ Доступ только для администратора.');
+            return;
+        }
+
+        const status = await getPersonalChatMemoryIndexStatus();
+        await ctx.reply(status);
+    });
+
+    bot.command('personal_chat_memory_run', async (ctx) => {
+        if (!isAdmin(ctx)) {
+            await ctx.reply('⛔️ Доступ только для администратора.');
+            return;
+        }
+
+        await ctx.reply('Запускаю один цикл фонового изучения личных переписок...');
+        const result = await runPersonalChatMemoryIndexingCycle({ force: true });
+        await ctx.reply([
+            '✅ Цикл завершён.',
+            `Просмотрено личных диалогов: ${result.scannedDialogs}`,
+            `Обработано чатов: ${result.processedChats}`,
+            `Пропущено чатов: ${result.skippedChats}`,
+            `Сообщений проанализировано: ${result.messagesAnalyzed}`,
+            `Фактов найдено: ${result.factsFound}`,
+            `Фактов сохранено: ${result.factsSaved}`,
+            result.errors.length ? `Ошибки: ${result.errors.slice(0, 5).join('; ')}` : undefined,
+        ].filter(Boolean).join('\n'));
     });
 
     bot.command('debug_facts', async (ctx) => {

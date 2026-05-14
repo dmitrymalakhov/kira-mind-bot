@@ -93,6 +93,26 @@ interface AssistantConfig {
   memoryInsightEnabled: boolean;
   /** Интервал проверки памяти в мс (по умолчанию 3 часа) */
   memoryInsightIntervalMs: number;
+  /** Фоновая консолидация памяти: синтез автобиографических глав из фактов и эпизодов */
+  memoryConsolidationEnabled: boolean;
+  /** Интервал консолидации памяти в мс (по умолчанию сутки) */
+  memoryConsolidationIntervalMs: number;
+  /** Минимум исходных воспоминаний в домене для консолидации */
+  memoryConsolidationMinFacts: number;
+  /** Фоновое изучение личных Telegram-переписок для сохранения фактов */
+  personalChatMemoryEnabled: boolean;
+  /** Интервал фонового изучения личных переписок */
+  personalChatMemoryIntervalMs: number;
+  /** Сколько последних дней брать при первом изучении чата без watermark */
+  personalChatMemoryInitialLookbackDays: number;
+  /** Максимум личных чатов за один цикл */
+  personalChatMemoryMaxChatsPerRun: number;
+  /** Максимум новых сообщений из одного чата за цикл */
+  personalChatMemoryMaxMessagesPerChat: number;
+  /** Минимум новых текстовых сообщений для запуска LLM-извлечения */
+  personalChatMemoryMinNewMessages: number;
+  /** Сколько диалогов Telegram просматривать при поиске личных чатов */
+  personalChatMemoryDialogLimit: number;
   /** Фоновые сообщения отправляются только в личный чат (DM), а не в групповые */
   proactiveOnlyPrivateChat: boolean;
   /** Режим публичных групп: бот отвечает другим пользователям (не владельцу) в групповых чатах */
@@ -191,6 +211,16 @@ function assistants(activeAssistant: string): AssistantConfig {
       dmReportQuietHoursEnabled: toBoolean(process.env.DM_REPORT_QUIET_HOURS_ENABLED, true),
       memoryInsightEnabled: toBoolean(process.env.MEMORY_INSIGHT_ENABLED, true),
       memoryInsightIntervalMs: toNumber(process.env.MEMORY_INSIGHT_INTERVAL_MS, 3 * 60 * 60 * 1000),
+      memoryConsolidationEnabled: toBoolean(process.env.MEMORY_CONSOLIDATION_ENABLED, true),
+      memoryConsolidationIntervalMs: toNumber(process.env.MEMORY_CONSOLIDATION_INTERVAL_MS, 24 * 60 * 60 * 1000),
+      memoryConsolidationMinFacts: toNumber(process.env.MEMORY_CONSOLIDATION_MIN_FACTS, 8),
+      personalChatMemoryEnabled: toBoolean(process.env.PERSONAL_CHAT_MEMORY_ENABLED, true),
+      personalChatMemoryIntervalMs: toNumber(process.env.PERSONAL_CHAT_MEMORY_INTERVAL_MS, 6 * 60 * 60 * 1000),
+      personalChatMemoryInitialLookbackDays: toNumber(process.env.PERSONAL_CHAT_MEMORY_INITIAL_LOOKBACK_DAYS, 7),
+      personalChatMemoryMaxChatsPerRun: toNumber(process.env.PERSONAL_CHAT_MEMORY_MAX_CHATS_PER_RUN, 5),
+      personalChatMemoryMaxMessagesPerChat: toNumber(process.env.PERSONAL_CHAT_MEMORY_MAX_MESSAGES_PER_CHAT, 120),
+      personalChatMemoryMinNewMessages: toNumber(process.env.PERSONAL_CHAT_MEMORY_MIN_NEW_MESSAGES, 6),
+      personalChatMemoryDialogLimit: toNumber(process.env.PERSONAL_CHAT_MEMORY_DIALOG_LIMIT, 120),
       proactiveOnlyPrivateChat: toBoolean(process.env.PROACTIVE_ONLY_PRIVATE_CHAT, true),
       groupPublicMode: toBoolean(process.env.GROUP_PUBLIC_MODE, false),
       morningDigestEnabled: toBoolean(process.env.MORNING_DIGEST_ENABLED, true),
@@ -249,6 +279,16 @@ function assistants(activeAssistant: string): AssistantConfig {
       dmReportQuietHoursEnabled: false,
       memoryInsightEnabled: toBoolean(process.env.MEMORY_INSIGHT_ENABLED, false),
       memoryInsightIntervalMs: toNumber(process.env.MEMORY_INSIGHT_INTERVAL_MS, 3 * 60 * 60 * 1000),
+      memoryConsolidationEnabled: toBoolean(process.env.MEMORY_CONSOLIDATION_ENABLED, false),
+      memoryConsolidationIntervalMs: toNumber(process.env.MEMORY_CONSOLIDATION_INTERVAL_MS, 24 * 60 * 60 * 1000),
+      memoryConsolidationMinFacts: toNumber(process.env.MEMORY_CONSOLIDATION_MIN_FACTS, 8),
+      personalChatMemoryEnabled: toBoolean(process.env.PERSONAL_CHAT_MEMORY_ENABLED, false),
+      personalChatMemoryIntervalMs: toNumber(process.env.PERSONAL_CHAT_MEMORY_INTERVAL_MS, 6 * 60 * 60 * 1000),
+      personalChatMemoryInitialLookbackDays: toNumber(process.env.PERSONAL_CHAT_MEMORY_INITIAL_LOOKBACK_DAYS, 7),
+      personalChatMemoryMaxChatsPerRun: toNumber(process.env.PERSONAL_CHAT_MEMORY_MAX_CHATS_PER_RUN, 5),
+      personalChatMemoryMaxMessagesPerChat: toNumber(process.env.PERSONAL_CHAT_MEMORY_MAX_MESSAGES_PER_CHAT, 120),
+      personalChatMemoryMinNewMessages: toNumber(process.env.PERSONAL_CHAT_MEMORY_MIN_NEW_MESSAGES, 6),
+      personalChatMemoryDialogLimit: toNumber(process.env.PERSONAL_CHAT_MEMORY_DIALOG_LIMIT, 120),
       proactiveOnlyPrivateChat: toBoolean(process.env.PROACTIVE_ONLY_PRIVATE_CHAT, true),
       groupPublicMode: toBoolean(process.env.GROUP_PUBLIC_MODE, false),
       morningDigestEnabled: false,

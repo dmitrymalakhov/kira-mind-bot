@@ -65,6 +65,12 @@ export interface SessionData {
     /** Сопоставление идентификаторов отправленных сообщений и их текста */
     sentMessages?: Record<number, string>;
     domains: Record<string, DomainMemory>;
+    /**
+     * Компактная модель текущей ситуации в разговоре.
+     * Это не долговременная память, а "рабочий стол": активные люди, темы,
+     * открытые вопросы и краткое состояние последних реплик.
+     */
+    workingMemory?: WorkingMemoryState;
     lastFactAnalysisIndex?: number; // Индекс последнего анализа фактов
     /** Контент фактов, уже сохранённых quickFactCheck — delayed analysis пропускает похожие */
     quickFactContents?: string[];
@@ -99,6 +105,18 @@ export interface SessionData {
         importance: number;
         tags: string[];
         isAnchor?: boolean;
+        memoryMetadata?: {
+            sourceEpisodeId?: string;
+            sourceContext?: string;
+            sourceMessageIds?: string[];
+            extractionMethod?: MemoryExtractionMethod;
+            subject?: MemorySubject;
+            predicate?: string;
+            object?: string;
+            validFrom?: Date;
+            validTo?: Date;
+            status?: MemoryStatus;
+        };
         candidateIds: number[];
         createdAt: number;
     };
@@ -245,6 +263,16 @@ export interface DomainMemory {
     facts: string[];
 }
 
+export interface WorkingMemoryState {
+    summary: string;
+    activeTopics: string[];
+    activeEntities: string[];
+    openLoops: string[];
+    userMood?: string;
+    lastUserIntent?: string;
+    lastUpdatedAt: Date;
+}
+
 // Интерфейс для описания наряда (из другого файла agent.ts)
 export interface OutfitDescription {
     name: string;
@@ -280,6 +308,46 @@ export interface EmotionalTag {
     isFlashbulb: boolean;
 }
 
+export type MemorySubject = 'user' | 'contact' | 'bot' | 'system';
+export type MemoryStatus = 'active' | 'planned' | 'done' | 'superseded' | 'expired' | 'unknown';
+export type MemoryExtractionMethod =
+    | 'explicit'
+    | 'quick'
+    | 'delayed'
+    | 'study_chat'
+    | 'reflection'
+    | 'portrait'
+    | 'episode'
+    | 'consolidation'
+    | 'compression'
+    | 'manual'
+    | 'unknown';
+
+export interface MemorySourceMessage {
+    role: string;
+    content: string;
+    timestamp: Date;
+}
+
+export interface MemoryEpisode {
+    id: string;
+    userId: string;
+    botId: string;
+    chatId?: string;
+    summary: string;
+    startTime: Date;
+    endTime: Date;
+    timestamp: Date;
+    participants: string[];
+    entities: string[];
+    domains: string[];
+    emotion?: string;
+    salience: number;
+    sourceMessages: MemorySourceMessage[];
+    derivedFactIds?: string[];
+    tags?: string[];
+}
+
 export interface MemoryEntry {
     id: string;
     content: string;
@@ -305,6 +373,12 @@ export interface MemoryEntry {
      * получают штраф к эффективной важности при ранжировании.
      */
     lastAccessedAt?: Date;
+    /** Сколько раз воспоминание реально попадало в контекст ответа. */
+    retrievalCount?: number;
+    /** Когда воспоминание последний раз было использовано в контексте ответа. */
+    lastRetrievedAt?: Date;
+    /** Последние пользовательские cues/запросы, по которым это воспоминание всплывало. */
+    retrievalCues?: string[];
     /**
      * История предыдущих версий факта.
      * Заполняется при обнаружении противоречия или обновления (contradicts/updates).
@@ -321,6 +395,32 @@ export interface MemoryEntry {
      * Используется при retrieval для 1-hop expansion контекста.
      */
     relatedIds?: Array<{ id: string; domain: string }>;
+    /** ID эпизода разговора, из которого получен факт. */
+    sourceEpisodeId?: string;
+    /** Короткая цитата или фрагмент контекста, откуда извлечён факт. */
+    sourceContext?: string;
+    /** ID/ключи исходных сообщений, если доступны. */
+    sourceMessageIds?: string[];
+    /** ID исходных воспоминаний, из которых синтезирована эта запись. */
+    sourceMemoryIds?: string[];
+    /** Как факт попал в память: явная команда, quick extraction, delayed extraction и т.п. */
+    extractionMethod?: MemoryExtractionMethod;
+    /** О ком факт: пользователь, контакт, бот или системный объект. */
+    subject?: MemorySubject;
+    /** Структурированная часть утверждения: отношение/свойство. */
+    predicate?: string;
+    /** Структурированная часть утверждения: значение/объект. */
+    object?: string;
+    /** С какого момента утверждение считается актуальным. */
+    validFrom?: Date;
+    /** До какого момента утверждение считается актуальным. */
+    validTo?: Date;
+    /** Текущий статус факта во временной линии. */
+    status?: MemoryStatus;
+    /** Сколько раз факт подтверждался похожими утверждениями. */
+    confirmationCount?: number;
+    /** Когда факт последний раз подтверждался. */
+    lastConfirmedAt?: Date;
 }
 
 export interface SearchOptions {
@@ -340,6 +440,9 @@ export interface SearchResult {
     domain: string;
     confidence?: number;
     lastAccessedAt?: Date;
+    retrievalCount?: number;
+    lastRetrievedAt?: Date;
+    retrievalCues?: string[];
     previousVersions?: Array<{
         content: string;
         timestamp: Date;
@@ -349,6 +452,19 @@ export interface SearchResult {
     expiresAt?: Date;
     relatedIds?: Array<{ id: string; domain: string }>;
     emotionalTag?: EmotionalTag;
+    sourceEpisodeId?: string;
+    sourceContext?: string;
+    sourceMessageIds?: string[];
+    sourceMemoryIds?: string[];
+    extractionMethod?: MemoryExtractionMethod;
+    subject?: MemorySubject;
+    predicate?: string;
+    object?: string;
+    validFrom?: Date;
+    validTo?: Date;
+    status?: MemoryStatus;
+    confirmationCount?: number;
+    lastConfirmedAt?: Date;
 }
 
 export interface MemoryStats {

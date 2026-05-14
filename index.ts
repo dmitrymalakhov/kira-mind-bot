@@ -29,6 +29,8 @@ import { config } from "./config";
 import { startKiraLifeScheduler } from "./services/kiraLifeScheduler";
 import { startDmReportScheduler } from "./services/dmReportScheduler";
 import { startMemoryInsightScheduler } from "./services/memoryInsightScheduler";
+import { startMemoryConsolidationScheduler } from "./services/memoryConsolidationScheduler";
+import { startPersonalChatMemoryIndexer } from "./services/personalChatMemoryIndexer";
 import { startReflectionModeScheduler } from "./services/reflectionModeScheduler";
 import { startMorningDigestScheduler } from "./services/morningDigestScheduler";
 import { startChatGroupTracker } from "./services/chatGroupTracker";
@@ -1575,6 +1577,8 @@ async function startBot() {
         startKiraLifeScheduler(bot);
         startDmReportScheduler(bot);
         startMemoryInsightScheduler(bot);
+        startMemoryConsolidationScheduler();
+        startPersonalChatMemoryIndexer();
         await initReflectionMode();
         startReflectionModeScheduler(bot);
         startMorningDigestScheduler(bot);

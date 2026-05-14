@@ -13,6 +13,7 @@ interface PersistedSession {
     dialogueSummary: SessionData['dialogueSummary'];
     lastSummarizedIndex: SessionData['lastSummarizedIndex'];
     domains: SessionData['domains'];
+    workingMemory?: SessionData['workingMemory'];
     recentlySavedFacts?: SessionData['recentlySavedFacts'];
     pendingContactMemory?: SessionData['pendingContactMemory'];
     pendingContactLookup?: SessionData['pendingContactLookup'];
@@ -31,6 +32,7 @@ function extract(data: SessionData): PersistedSession {
         dialogueSummary: data.dialogueSummary ?? '',
         lastSummarizedIndex: data.lastSummarizedIndex ?? -1,
         domains: data.domains ?? {},
+        workingMemory: data.workingMemory,
         recentlySavedFacts: (data.recentlySavedFacts ?? []).filter(
             (f) => now - f.savedAt < RECENT_FACTS_TTL_MS
         ),
@@ -57,6 +59,7 @@ function merge(initial: SessionData, persisted: PersistedSession): SessionData {
         dialogueSummary: persisted.dialogueSummary ?? initial.dialogueSummary,
         lastSummarizedIndex: persisted.lastSummarizedIndex ?? initial.lastSummarizedIndex,
         domains: persisted.domains ?? initial.domains,
+        workingMemory: persisted.workingMemory ?? initial.workingMemory,
         recentlySavedFacts: persisted.recentlySavedFacts ?? initial.recentlySavedFacts,
         pendingContactMemory: persisted.pendingContactMemory ?? initial.pendingContactMemory,
         pendingContactLookup: persisted.pendingContactLookup ?? initial.pendingContactLookup,
@@ -114,6 +117,12 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
                     ...m,
                     timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
                 }));
+            }
+            if (persisted.workingMemory?.lastUpdatedAt) {
+                persisted.workingMemory = {
+                    ...persisted.workingMemory,
+                    lastUpdatedAt: new Date(persisted.workingMemory.lastUpdatedAt),
+                };
             }
             if (persisted.pendingBrowserTask?.expiresAt && persisted.pendingBrowserTask.expiresAt <= now) {
                 persisted.pendingBrowserTask = undefined;
@@ -185,6 +194,7 @@ export async function appendPersistedHistory(
             dialogueSummary: persisted.dialogueSummary ?? '',
             lastSummarizedIndex: persisted.lastSummarizedIndex ?? -1,
             domains: persisted.domains ?? {},
+            workingMemory: persisted.workingMemory,
             recentlySavedFacts: persisted.recentlySavedFacts,
             pendingContactMemory: persisted.pendingContactMemory,
             pendingContactLookup: persisted.pendingContactLookup,
