@@ -14,10 +14,12 @@ import { HealthLogKind, HealthLogRecord, HealthLogRepository, HealthTimeOfDay } 
 const PENDING_HEALTH_LOG_TTL_MS = 30 * 60 * 1000;
 const PENDING_HEALTH_DISCOMFORT_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_EXPORT_DAYS = 7;
+const DEFAULT_ANALYSIS_DAYS = 7;
 const MAX_EXPORT_DAYS = 180;
+const MAX_ANALYSIS_DAYS = 30;
 
 interface HealthRequestAnalysis {
-    action: 'menu' | 'log' | 'export' | 'recent' | 'help' | 'cancel' | 'none';
+    action: 'menu' | 'log' | 'export' | 'analysis' | 'recent' | 'help' | 'cancel' | 'none';
     kind?: HealthLogKind;
     periodDays?: number;
     event?: {
@@ -120,6 +122,11 @@ export function buildHealthMenuKeyboard(): InlineKeyboard {
         .text('Активность', 'health:log:activity')
         .text('Заметка', 'health:log:note')
         .row()
+        .text('Анализ день', 'health:analyze:1')
+        .text('Анализ неделя', 'health:analyze:7')
+        .row()
+        .text('Анализ месяц', 'health:analyze:30')
+        .row()
         .text('Экспорт 7 дней', 'health:export:7')
         .text('Экспорт 30 дней', 'health:export:30');
 }
@@ -130,6 +137,7 @@ export function buildHealthMenuResult(): ProcessingResult {
             'Открыла дневник здоровья.',
             '',
             'Выбери, что зафиксировать, или напиши сразу обычным сообщением: что ел, что пил, что делал, давление, какие симптомы, что принял и когда. Для еды, кожи и тонометра можно прислать фото, я сохраню описание вместе с записью.',
+            'Можно попросить анализ за день, неделю или месяц: я соберу паттерны по симптомам, еде, активности, давлению и времени суток.',
             '',
             'Это дневник наблюдений, не медицинский диагноз.',
         ].join('\n'),
@@ -167,6 +175,11 @@ export async function handleHealthCallback(ctx: BotContext, callbackData: string
     if (action === 'export') {
         const days = normalizeExportDays(Number(value) || DEFAULT_EXPORT_DAYS);
         return createHealthExportResult(ctx, days);
+    }
+
+    if (action === 'analyze') {
+        const days = normalizeAnalysisDays(Number(value) || DEFAULT_ANALYSIS_DAYS);
+        return createHealthAnalysisResult(ctx, days);
     }
 
     if (action === 'discomfort' && value && extra) {
@@ -213,6 +226,10 @@ export async function healthAgent(
 
     if (analysis.action === 'export') {
         return createHealthExportResult(ctx, normalizeExportDays(analysis.periodDays ?? DEFAULT_EXPORT_DAYS));
+    }
+
+    if (analysis.action === 'analysis') {
+        return createHealthAnalysisResult(ctx, normalizeAnalysisDays(analysis.periodDays ?? DEFAULT_ANALYSIS_DAYS));
     }
 
     if (analysis.action === 'recent') {
@@ -303,6 +320,36 @@ export async function createHealthExportResult(ctx: BotContext, days = DEFAULT_E
         documentFilePath: exportFile.filePath,
         documentFilename: exportFile.filename,
         documentCaption: 'Дневник здоровья для личных наблюдений или врача.',
+    };
+}
+
+export async function createHealthAnalysisResult(ctx: BotContext, days = DEFAULT_ANALYSIS_DAYS): Promise<ProcessingResult> {
+    const userId = ctx.from?.id;
+    if (!userId) {
+        return { responseText: 'Не могу определить пользователя для анализа дневника.' };
+    }
+
+    const normalizedDays = normalizeAnalysisDays(days);
+    const to = new Date();
+    const from = new Date(to.getTime() - normalizedDays * 24 * 60 * 60 * 1000);
+    const records = await HealthLogRepository.findByPeriod(userId, from, to);
+
+    if (!records.length) {
+        return {
+            responseText: `За ${formatPeriodLabel(normalizedDays)} в дневнике здоровья нет записей для анализа.`,
+            keyboard: buildHealthMenuKeyboard(),
+        };
+    }
+
+    const aiAnalysis = await buildAIHealthAnalysis(records, from, to, normalizedDays);
+    return {
+        responseText: aiAnalysis ?? buildLocalHealthAnalysis(records, from, to, normalizedDays),
+        keyboard: new InlineKeyboard()
+            .text('Анализ день', 'health:analyze:1')
+            .text('Анализ неделя', 'health:analyze:7')
+            .row()
+            .text('Анализ месяц', 'health:analyze:30')
+            .text('Экспорт', `health:export:${normalizedDays}`),
     };
 }
 
@@ -480,6 +527,14 @@ async function analyzeHealthRequest(
         .map((item, index) => `${index + 1}. ${item.role === 'user' ? 'Пользователь' : 'Бот'}: ${item.content}`)
         .join('\n');
 
+    const requestedAnalysisDays = parseHealthAnalysisDays(message);
+    if (requestedAnalysisDays) {
+        return {
+            action: 'analysis',
+            periodDays: requestedAnalysisDays,
+        };
+    }
+
     const localPressure = extractBloodPressureReading(message);
     if (pendingKind === 'blood_pressure') {
         if (/^\s*(отмена|cancel|стоп)\s*$/iu.test(message)) {
@@ -519,7 +574,7 @@ async function analyzeHealthRequest(
                     content: [
                         `Текущие дата и время: ${now.toLocaleString('ru-RU', { timeZone: USER_TIMEZONE, day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: 'numeric', weekday: 'long' })}. Таймзона: ${USER_TIMEZONE}.`,
                         'Ты управляешь личным дневником здоровья пользователя. Не ставь диагнозы и не назначай лечение.',
-                        'Определи, что пользователь хочет сделать: открыть меню, сохранить запись, экспортировать дневник, показать недавние записи, отменить ввод или получить подсказку.',
+                        'Определи, что пользователь хочет сделать: открыть меню, сохранить запись, экспортировать дневник, проанализировать дневник за период, показать недавние записи, отменить ввод или получить подсказку.',
                         'Если активен pendingKind, обычное сообщение пользователя почти всегда является содержимым записи этого типа.',
                         'Для записи извлекай наблюдаемые факты: еда, напитки, симптомы, зоны тела, давление/пульс, лекарства, активности, контакты/триггеры, субъективную силу 0-10, время события.',
                         'Для давления сохраняй систолическое и диастолическое в мм рт. ст. и пульс, если пользователь его указал. Не интерпретируй норму/опасность, только фиксируй измерение.',
@@ -536,7 +591,7 @@ async function analyzeHealthRequest(
                         '',
                         'Формат JSON:',
                         '{',
-                        '  "action": "menu | log | export | recent | help | cancel | none",',
+                        '  "action": "menu | log | export | analysis | recent | help | cancel | none",',
                         '  "kind": "food | drink | symptom | medication | activity | skin | blood_pressure | note",',
                         '  "periodDays": 7,',
                         '  "event": {',
@@ -812,6 +867,158 @@ async function buildRecentHealthLogsResult(ctx: BotContext): Promise<ProcessingR
     };
 }
 
+async function buildAIHealthAnalysis(
+    records: HealthLogRecord[],
+    from: Date,
+    to: Date,
+    days: number
+): Promise<string | null> {
+    const local = buildHealthAnalysisSnapshot(records, from, to, days);
+    const compactRecords = records.slice(-80).map((record) => ({
+        time: formatDateTime(record.occurredAt),
+        timeOfDay: record.timeOfDay || getHealthTimeOfDay(record.occurredAt),
+        kind: record.kind,
+        summary: record.summary || record.rawText,
+        severity: record.severity ?? null,
+        structured: compactStructuredForAnalysis(record.structured),
+    }));
+
+    try {
+        const response = await openai.chat.completions.create({
+            model: 'gpt-5.4-nano',
+            messages: [
+                {
+                    role: 'system',
+                    content: [
+                        'Ты анализируешь личный дневник здоровья пользователя. Не ставь диагнозы, не назначай лечение и не делай медицинских утверждений.',
+                        'Ищи только наблюдательные паттерны: что совпадало по времени, какие симптомы/еда/активности/давление чаще встречались, где данных мало.',
+                        'Отвечай по-русски, кратко, с конкретными пунктами. Если есть потенциально тревожные признаки, советуй обратиться к врачу/скорой без драматизации.',
+                    ].join('\n'),
+                },
+                {
+                    role: 'user',
+                    content: [
+                        `Период: ${formatDateTime(from)} - ${formatDateTime(to)} (${formatPeriodLabel(days)}).`,
+                        `Локальная сводка:\n${local}`,
+                        '',
+                        'Записи JSON:',
+                        JSON.stringify(compactRecords),
+                        '',
+                        'Сформируй анализ в формате:',
+                        '1. Краткий итог',
+                        '2. Что повторяется/возможные связи',
+                        '3. Давление и симптомы, если есть данные',
+                        '4. Что стоит фиксировать дальше',
+                        '5. Когда стоит обратиться к врачу',
+                    ].join('\n'),
+                },
+            ],
+            temperature: 0.6,
+        });
+        const text = response.choices[0]?.message?.content?.trim();
+        if (!text) return null;
+        return [
+            `Анализ дневника здоровья за ${formatPeriodLabel(days)}`,
+            '',
+            text,
+            '',
+            'Это анализ наблюдений из дневника, не диагноз.',
+        ].join('\n');
+    } catch (error) {
+        console.error('[health] analysis failed:', error);
+        return null;
+    }
+}
+
+function buildLocalHealthAnalysis(
+    records: HealthLogRecord[],
+    from: Date,
+    to: Date,
+    days: number
+): string {
+    return [
+        `Анализ дневника здоровья за ${formatPeriodLabel(days)}`,
+        `Период: ${formatDateTime(from)} - ${formatDateTime(to)}`,
+        '',
+        buildHealthAnalysisSnapshot(records, from, to, days),
+        '',
+        'Это анализ наблюдений из дневника, не диагноз.',
+    ].join('\n');
+}
+
+function buildHealthAnalysisSnapshot(
+    records: HealthLogRecord[],
+    _from: Date,
+    _to: Date,
+    _days: number
+): string {
+    const byKind = new Map<string, number>();
+    const byTimeOfDay = new Map<string, number>();
+    const foods = new Map<string, number>();
+    const drinks = new Map<string, number>();
+    const symptoms = new Map<string, number>();
+    const areas = new Map<string, number>();
+    const triggers = new Map<string, number>();
+    const medications = new Map<string, number>();
+    const activities = new Map<string, number>();
+    const symptomScores: number[] = [];
+    const discomfortScores: number[] = [];
+    const pressureReadings: BloodPressureReading[] = [];
+
+    for (const record of records) {
+        incrementCounter(byKind, KIND_LABELS[record.kind] || record.kind);
+        incrementCounter(byTimeOfDay, record.timeOfDay || getHealthTimeOfDay(record.occurredAt));
+
+        const structured = record.structured ?? {};
+        for (const item of ensureStringArray(structured.foods)) incrementCounter(foods, item);
+        for (const item of ensureStringArray(structured.drinks)) incrementCounter(drinks, item);
+        for (const item of ensureStringArray(structured.symptoms)) incrementCounter(symptoms, item);
+        for (const item of ensureStringArray(structured.bodyAreas)) incrementCounter(areas, item);
+        for (const item of ensureStringArray(structured.suspectedTriggers)) incrementCounter(triggers, item);
+        for (const item of ensureStringArray(structured.medications)) incrementCounter(medications, item);
+        for (const item of ensureStringArray(structured.activities)) incrementCounter(activities, item);
+
+        if (record.severity != null && (record.kind === 'skin' || record.kind === 'symptom')) {
+            symptomScores.push(record.severity);
+        }
+        if (typeof structured.subjectiveDiscomfortLevel === 'number') {
+            discomfortScores.push(structured.subjectiveDiscomfortLevel);
+        }
+        const pressure = normalizeBloodPressureReading(structured.bloodPressure);
+        if (pressure) pressureReadings.push(pressure);
+    }
+
+    const lines = [
+        `Записей: ${records.length}. По типам: ${formatCounter(byKind) || 'нет разбивки'}.`,
+        `По времени суток: ${formatCounter(byTimeOfDay) || 'нет данных'}.`,
+    ];
+
+    if (foods.size || drinks.size) {
+        lines.push(`Еда/напитки чаще всего: ${[formatTopCounter(foods, 6), formatTopCounter(drinks, 4)].filter(Boolean).join('; ') || 'нет данных'}.`);
+    }
+    if (symptoms.size || areas.size) {
+        lines.push(`Симптомы и зоны: ${[formatTopCounter(symptoms, 6), formatTopCounter(areas, 5)].filter(Boolean).join('; ') || 'нет данных'}.`);
+    }
+    if (symptomScores.length || discomfortScores.length) {
+        lines.push(`Выраженность: ${formatScoreSummary('визуальная/симптомы', symptomScores)}${symptomScores.length && discomfortScores.length ? '; ' : ''}${formatScoreSummary('зуд/дискомфорт', discomfortScores)}.`);
+    }
+    if (pressureReadings.length) {
+        lines.push(`Давление: ${formatPressureSummary(pressureReadings)}.`);
+    }
+    if (triggers.size || activities.size || medications.size) {
+        lines.push(`Контекст: ${[
+            formatTopCounter(triggers, 5) ? `возможные триггеры: ${formatTopCounter(triggers, 5)}` : '',
+            formatTopCounter(activities, 5) ? `активности: ${formatTopCounter(activities, 5)}` : '',
+            formatTopCounter(medications, 5) ? `лекарства: ${formatTopCounter(medications, 5)}` : '',
+        ].filter(Boolean).join('; ')}.`);
+    }
+
+    const gaps = buildHealthAnalysisGaps(records);
+    if (gaps.length) lines.push(`Что стоит фиксировать точнее: ${gaps.join('; ')}.`);
+    lines.push('Если симптомы быстро усиливаются, есть отёк лица/горла, затруднение дыхания, сильная слабость или необычно высокое/низкое давление с плохим самочувствием, лучше обратиться за медицинской помощью.');
+    return lines.join('\n');
+}
+
 function formatSavedHealthLog(record: HealthLogRecord): string {
     const structured = record.structured ?? {};
     const severity = record.severity == null ? '' : `\nВизуальная выраженность: ${record.severity}/10`;
@@ -953,6 +1160,32 @@ function normalizeExportDays(days: number): number {
     return Math.min(MAX_EXPORT_DAYS, Math.max(1, Math.round(days)));
 }
 
+function normalizeAnalysisDays(days: number): number {
+    if (!Number.isFinite(days) || days <= 0) return DEFAULT_ANALYSIS_DAYS;
+    if (days <= 1) return 1;
+    if (days <= 7) return 7;
+    return MAX_ANALYSIS_DAYS;
+}
+
+function formatPeriodLabel(days: number): string {
+    const normalized = normalizeAnalysisDays(days);
+    if (normalized === 1) return 'день';
+    if (normalized === 7) return 'неделю';
+    if (normalized === 30) return 'месяц';
+    return `${normalized} дней`;
+}
+
+function parseHealthAnalysisDays(message: string): number | undefined {
+    const text = message.toLowerCase();
+    if (!/(анализ|проанализ|разбер|сводк|итог|динамик|паттерн|статистик|что\s+видно|что\s+по\s+здоров)/iu.test(text)) {
+        return undefined;
+    }
+    if (/(месяц|30\s*д|тридцат)/iu.test(text)) return 30;
+    if (/(недел|7\s*д|семь\s+д)/iu.test(text)) return 7;
+    if (/(день|сутк|сегодня|за\s+1\s*д)/iu.test(text)) return 1;
+    return DEFAULT_ANALYSIS_DAYS;
+}
+
 function buildDiscomfortKeyboard(recordId: string): InlineKeyboard {
     const keyboard = new InlineKeyboard();
     for (let level = 0; level <= 10; level++) {
@@ -990,6 +1223,83 @@ function buildPhotoSummary(
         if (pressure) return `Давление: ${pressure}`;
     }
     return fallback;
+}
+
+function compactStructuredForAnalysis(structured: Record<string, unknown> | undefined): Record<string, unknown> {
+    if (!structured) return {};
+    return {
+        foods: ensureStringArray(structured.foods).slice(0, 8),
+        drinks: ensureStringArray(structured.drinks).slice(0, 8),
+        symptoms: ensureStringArray(structured.symptoms).slice(0, 8),
+        bodyAreas: ensureStringArray(structured.bodyAreas).slice(0, 8),
+        medications: ensureStringArray(structured.medications).slice(0, 8),
+        activities: ensureStringArray(structured.activities).slice(0, 8),
+        exposures: ensureStringArray(structured.exposures).slice(0, 8),
+        suspectedTriggers: ensureStringArray(structured.suspectedTriggers).slice(0, 8),
+        visibleFindings: ensureStringArray(structured.visibleFindings).slice(0, 8),
+        bloodPressure: normalizeBloodPressureReading(structured.bloodPressure),
+        subjectiveDiscomfortLevel: typeof structured.subjectiveDiscomfortLevel === 'number' ? structured.subjectiveDiscomfortLevel : undefined,
+        notes: ensureStringArray(structured.notes).slice(0, 5),
+    };
+}
+
+function incrementCounter(counter: Map<string, number>, value: string): void {
+    const key = value.trim().toLowerCase();
+    if (!key) return;
+    counter.set(key, (counter.get(key) ?? 0) + 1);
+}
+
+function formatCounter(counter: Map<string, number>): string {
+    return formatTopCounter(counter, 12);
+}
+
+function formatTopCounter(counter: Map<string, number>, limit: number): string {
+    return Array.from(counter.entries())
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ru'))
+        .slice(0, limit)
+        .map(([key, count]) => `${key} (${count})`)
+        .join(', ');
+}
+
+function formatScoreSummary(label: string, values: number[]): string {
+    if (!values.length) return '';
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const avg = values.reduce((sum, value) => sum + value, 0) / values.length;
+    return `${label}: среднее ${avg.toFixed(1)}/10, диапазон ${min}-${max}/10`;
+}
+
+function formatPressureSummary(readings: BloodPressureReading[]): string {
+    const systolic = readings.map((item) => item.systolicMmHg).filter((value): value is number => typeof value === 'number');
+    const diastolic = readings.map((item) => item.diastolicMmHg).filter((value): value is number => typeof value === 'number');
+    const pulse = readings.map((item) => item.pulseBpm).filter((value): value is number => typeof value === 'number');
+    const last = readings[readings.length - 1];
+    return [
+        `${readings.length} измерений`,
+        systolic.length && diastolic.length ? `среднее ${average(systolic).toFixed(0)}/${average(diastolic).toFixed(0)} мм рт. ст.` : '',
+        systolic.length && diastolic.length ? `диапазон ${Math.min(...systolic)}-${Math.max(...systolic)}/${Math.min(...diastolic)}-${Math.max(...diastolic)}` : '',
+        pulse.length ? `пульс средний ${average(pulse).toFixed(0)}` : '',
+        last ? `последнее ${formatBloodPressureValue(last)}` : '',
+    ].filter(Boolean).join(', ');
+}
+
+function average(values: number[]): number {
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function buildHealthAnalysisGaps(records: HealthLogRecord[]): string[] {
+    const gaps = new Set<string>();
+    const skinOrSymptoms = records.filter((record) => record.kind === 'skin' || record.kind === 'symptom');
+    if (skinOrSymptoms.some((record) => typeof record.structured?.subjectiveDiscomfortLevel !== 'number')) {
+        gaps.add('для кожных симптомов указывать зуд/дискомфорт 0-10');
+    }
+    if (records.some((record) => record.kind === 'blood_pressure' && !normalizeBloodPressureReading(record.structured?.bloodPressure)?.context)) {
+        gaps.add('для давления добавлять контекст: сидя/после нагрузки/после лекарства/самочувствие');
+    }
+    if (records.some((record) => (record.kind === 'food' || record.kind === 'drink') && !ensureStringArray(record.structured?.suspectedTriggers).length)) {
+        gaps.add('для еды отмечать время появления симптомов после приёма');
+    }
+    return Array.from(gaps);
 }
 
 function inferPhotoKindFromCaption(caption: string): HealthLogKind | undefined {
