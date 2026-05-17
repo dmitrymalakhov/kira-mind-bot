@@ -96,6 +96,21 @@ async function sendProcessingResult(ctx: BotContext, result: ProcessingResult) {
         }
     }
 
+    if (result.documentFilePath) {
+        try {
+            await ctx.api.sendChatAction(ctx.chat!.id, "upload_document");
+            const fileStream = fs.createReadStream(result.documentFilePath);
+            const filename = result.documentFilename || path.basename(result.documentFilePath);
+            await ctx.replyWithDocument(new InputFile(fileStream, filename), result.documentCaption ? {
+                caption: result.documentCaption,
+            } : undefined);
+            fs.unlinkSync(result.documentFilePath);
+        } catch (fileError) {
+            console.error("Ошибка при отправке документа:", fileError);
+            await ctx.reply("Не удалось отправить документ. Попробуй запросить экспорт ещё раз.");
+        }
+    }
+
     if (result.imageGenerated && result.generatedImageUrl) {
         try {
             await ctx.api.sendChatAction(ctx.chat!.id, "upload_photo");

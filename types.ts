@@ -81,6 +81,14 @@ export interface SessionData {
     lastFactSaveError?: string;
     /** Unix-timestamp последней проактивной подсказки из памяти (для cooldown) */
     lastProactiveHintAt?: number;
+    /** Последняя проактивная подсказка и факты памяти, на которых она была основана */
+    lastProactiveInsight?: {
+        message: string;
+        sourceMemories: string[];
+        createdAt: number;
+        messageId?: number;
+        kind: 'memoryInsight' | 'contextHint';
+    };
     /** Unix-timestamp последнего вопроса о пробеле в памяти (для cooldown) */
     lastMemoryGapAt?: number;
     /** Unix-timestamp последнего предложения создать implicit reminder (для cooldown) */
@@ -138,6 +146,20 @@ export interface SessionData {
             label: string;
             answer: string;
         }>;
+        createdAt: number;
+        expiresAt: number;
+    };
+    /** Ожидает текст/голос для записи в дневник здоровья */
+    pendingHealthLog?: {
+        mode: 'food' | 'drink' | 'symptom' | 'medication' | 'activity' | 'skin' | 'blood_pressure' | 'note';
+        prompt: string;
+        createdAt: number;
+        expiresAt: number;
+    };
+    /** Ожидает субъективную оценку зуда/дискомфорта для фото-записи здоровья */
+    pendingHealthDiscomfort?: {
+        recordId: string;
+        question: string;
         createdAt: number;
         expiresAt: number;
     };

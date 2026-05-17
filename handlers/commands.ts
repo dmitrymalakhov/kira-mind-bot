@@ -9,6 +9,7 @@ import { sendMessage } from "../utils";
 import { addToHistory } from "../utils/history";
 import { registerMemoryCommands } from "./memoryCommands";
 import { registerChatGroupCommands } from "./chatGroupCommands";
+import { registerHealthCommands } from "./healthCommands";
 import { USER_TIMEZONE } from "../constants";
 import { answerCapabilitiesQuestion } from "../capabilities";
 import { getAllChats, isChatPublicMode, setChatPublicMode } from "../services/chatRegistry";
@@ -21,6 +22,7 @@ import { getRecentKiraSelfStudyReports } from "../utils/kiraSelfMemory";
 export function registerCommandHandlers(bot: Bot<BotContext>) {
     registerMemoryCommands(bot);
     registerChatGroupCommands(bot);
+    registerHealthCommands(bot);
     bot.command("telegram_reset", async (ctx) => {
     try {
         // Вызываем функцию сброса сообщений

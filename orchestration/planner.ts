@@ -19,6 +19,7 @@ const AVAILABLE_STEPS = `
 - capabilities — ответить нейросетью по каталогу возможностей бота: что умеет, умеет ли конкретное действие, как правильно попросить. Использовать, когда пользователь спрашивает «что ты умеешь», «можешь ли ты X», «как попросить тебя X», «твои возможности» и т.п.
 - selfStudy — провести самоизучение ассистента: проанализировать собственные возможности, ограничения, операционные потребности, недавнее состояние и сохранить отчёт в самопамять. Использовать, когда пользователь просит «изучи себя», «проанализируй свои возможности и потребности», «пойми чего тебе не хватает».
 - browserTask — выполнить задачу в браузере через Playwright: записаться, заполнить форму, забронировать, нажать кнопку на сайте или выполнить явную просьбу «используй браузер».
+- health — личный дневник здоровья: открыть мониторинг, сохранить запись о еде/напитке/симптомах/лекарстве/самочувствии/коже/давлении/активности, показать или экспортировать записи.
 `.trim();
 
 const BROWSER_CONTINUATION_RE = /^Продолжи задачу в браузере через Playwright\.|browserSessionId:/i;
@@ -35,6 +36,10 @@ function postProcessPlan(plan: Plan, classification: PlanningInput['classificati
 
     if (intent === 'БРАУЗЕР_ЗАДАЧА') {
         return { steps: [{ agentId: 'browserTask' }] };
+    }
+
+    if (intent === 'ЗДОРОВЬЕ') {
+        return { steps: [{ agentId: 'health' }] };
     }
 
     if (intent === 'НЕОПРЕДЕЛЕНО') {
@@ -67,6 +72,10 @@ export async function createPlan(input: PlanningInput): Promise<Plan> {
 
     if (intent === 'БРАУЗЕР_ЗАДАЧА') {
         return { steps: [{ agentId: 'browserTask' }] };
+    }
+
+    if (intent === 'ЗДОРОВЬЕ') {
+        return { steps: [{ agentId: 'health' }] };
     }
 
     if (intent === 'НЕОПРЕДЕЛЕНО') {
@@ -115,6 +124,7 @@ ${AVAILABLE_STEPS}
 - Для запроса о возможностях бота («что умеешь», «можешь ли ты X», «как попросить тебя X», «твои функции») — один шаг capabilities.
 - Для просьбы провести самоизучение («изучи себя», «проанализируй свои возможности/ограничения/потребности», «пойми чего тебе не хватает») — один шаг selfStudy.
 - Для задачи в браузере (записаться, заполнить форму, забронировать, нажать кнопку на сайте или «используй браузер») — browserTask.
+- Для дневника здоровья, мониторинга самочувствия, записи еды/симптомов/лекарств/кожи/давления или экспорта дневника — health.
 - Минимум один шаг. params можно опустить или передать пустой объект.`;
 
     try {
@@ -123,7 +133,7 @@ ${AVAILABLE_STEPS}
             messages: [
                 {
                     role: 'system',
-                    content: 'Ты планировщик. Строишь цепочку агентов по смыслу запроса: шаги выполняются по порядку, контекст (память, результат поиска и т.д.) передаётся по конвейеру следующему агенту. Память подтягивается автоматически — НЕ включай шаг memory. Отвечай только валидным JSON с полем steps (массив объектов с agentId и опционально params). agentId только из списка: resolveContact, webSearch, conversation, reminder, readMessages, sendMessage, negotiateOnBehalf, imageGeneration, maps, unclearIntent, capabilities, selfStudy, browserTask.',
+                    content: 'Ты планировщик. Строишь цепочку агентов по смыслу запроса: шаги выполняются по порядку, контекст (память, результат поиска и т.д.) передаётся по конвейеру следующему агенту. Память подтягивается автоматически — НЕ включай шаг memory. Отвечай только валидным JSON с полем steps (массив объектов с agentId и опционально params). agentId только из списка: resolveContact, webSearch, conversation, reminder, readMessages, sendMessage, negotiateOnBehalf, imageGeneration, maps, unclearIntent, capabilities, selfStudy, browserTask, health.',
                 },
                 { role: 'user', content: prompt },
             ],
@@ -160,7 +170,7 @@ ${AVAILABLE_STEPS}
             return fallbackPlan(intent, message);
         }
         // Шаги, которые дают ответ пользователю. Если план содержит только memory/resolveContact — ответа не будет.
-        const respondingAgentIds = new Set(['conversation', 'reminder', 'readMessages', 'sendMessage', 'negotiateOnBehalf', 'imageGeneration', 'maps', 'unclearIntent', 'capabilities', 'selfStudy', 'browserTask']);
+        const respondingAgentIds = new Set(['conversation', 'reminder', 'readMessages', 'sendMessage', 'negotiateOnBehalf', 'imageGeneration', 'maps', 'unclearIntent', 'capabilities', 'selfStudy', 'browserTask', 'health']);
         const hasRespondingStep = steps.some((s) => respondingAgentIds.has(s.agentId));
         if (intent === 'РАЗГОВОР' && !hasRespondingStep) {
             devLog('Planner: intent РАЗГОВОР but no responding step in plan, appending conversation');
@@ -179,7 +189,7 @@ ${AVAILABLE_STEPS}
 
 const VALID_IDS = new Set<string>([
     'memory', 'resolveContact', 'webSearch', 'conversation', 'reminder',
-    'readMessages', 'sendMessage', 'negotiateOnBehalf', 'imageGeneration', 'maps', 'unclearIntent', 'capabilities', 'selfStudy', 'browserTask',
+    'readMessages', 'sendMessage', 'negotiateOnBehalf', 'imageGeneration', 'maps', 'unclearIntent', 'capabilities', 'selfStudy', 'browserTask', 'health',
 ]);
 
 function normalizeAgentId(id: string): PlanStep['agentId'] {
@@ -229,6 +239,8 @@ function fallbackPlan(intent: string, message: string): Plan {
             return { steps: [{ agentId: 'selfStudy' }] };
         case 'БРАУЗЕР_ЗАДАЧА':
             return { steps: [{ agentId: 'browserTask' }] };
+        case 'ЗДОРОВЬЕ':
+            return { steps: [{ agentId: 'health' }] };
         case 'РАЗГОВОР':
             return { steps: [{ agentId: 'conversation' }] };
         default:

@@ -15,9 +15,13 @@ interface PersistedSession {
     domains: SessionData['domains'];
     workingMemory?: SessionData['workingMemory'];
     recentlySavedFacts?: SessionData['recentlySavedFacts'];
+    lastProactiveHintAt?: SessionData['lastProactiveHintAt'];
+    lastProactiveInsight?: SessionData['lastProactiveInsight'];
     pendingContactMemory?: SessionData['pendingContactMemory'];
     pendingContactLookup?: SessionData['pendingContactLookup'];
     pendingBrowserTask?: SessionData['pendingBrowserTask'];
+    pendingHealthLog?: SessionData['pendingHealthLog'];
+    pendingHealthDiscomfort?: SessionData['pendingHealthDiscomfort'];
     activeBrowserTask?: SessionData['activeBrowserTask'];
     lastBrowserTask?: SessionData['lastBrowserTask'];
     pendingQuickChoices?: SessionData['pendingQuickChoices'];
@@ -36,10 +40,18 @@ function extract(data: SessionData): PersistedSession {
         recentlySavedFacts: (data.recentlySavedFacts ?? []).filter(
             (f) => now - f.savedAt < RECENT_FACTS_TTL_MS
         ),
+        lastProactiveHintAt: data.lastProactiveHintAt,
+        lastProactiveInsight: pruneLastProactiveInsight(data.lastProactiveInsight, now),
         pendingContactMemory: data.pendingContactMemory,
         pendingContactLookup: data.pendingContactLookup,
         pendingBrowserTask: data.pendingBrowserTask && data.pendingBrowserTask.expiresAt > now
             ? data.pendingBrowserTask
+            : undefined,
+        pendingHealthLog: data.pendingHealthLog && data.pendingHealthLog.expiresAt > now
+            ? data.pendingHealthLog
+            : undefined,
+        pendingHealthDiscomfort: data.pendingHealthDiscomfort && data.pendingHealthDiscomfort.expiresAt > now
+            ? data.pendingHealthDiscomfort
             : undefined,
         activeBrowserTask: data.activeBrowserTask && data.activeBrowserTask.expiresAt > now
             ? data.activeBrowserTask
@@ -61,14 +73,29 @@ function merge(initial: SessionData, persisted: PersistedSession): SessionData {
         domains: persisted.domains ?? initial.domains,
         workingMemory: persisted.workingMemory ?? initial.workingMemory,
         recentlySavedFacts: persisted.recentlySavedFacts ?? initial.recentlySavedFacts,
+        lastProactiveHintAt: persisted.lastProactiveHintAt ?? initial.lastProactiveHintAt,
+        lastProactiveInsight: persisted.lastProactiveInsight ?? initial.lastProactiveInsight,
         pendingContactMemory: persisted.pendingContactMemory ?? initial.pendingContactMemory,
         pendingContactLookup: persisted.pendingContactLookup ?? initial.pendingContactLookup,
         pendingBrowserTask: persisted.pendingBrowserTask ?? initial.pendingBrowserTask,
+        pendingHealthLog: persisted.pendingHealthLog ?? initial.pendingHealthLog,
+        pendingHealthDiscomfort: persisted.pendingHealthDiscomfort ?? initial.pendingHealthDiscomfort,
         activeBrowserTask: persisted.activeBrowserTask ?? initial.activeBrowserTask,
         lastBrowserTask: persisted.lastBrowserTask ?? initial.lastBrowserTask,
         pendingQuickChoices: persisted.pendingQuickChoices ?? initial.pendingQuickChoices,
         studyChatRequest: persisted.studyChatRequest ?? initial.studyChatRequest,
     };
+}
+
+function pruneLastProactiveInsight(
+    insight: SessionData['lastProactiveInsight'],
+    now: number
+): SessionData['lastProactiveInsight'] {
+    if (!insight) return undefined;
+    const ttlMs = 3 * 24 * 60 * 60 * 1000;
+    if (!insight.createdAt || now - insight.createdAt > ttlMs) return undefined;
+    if (!Array.isArray(insight.sourceMemories) || insight.sourceMemories.length === 0) return undefined;
+    return insight;
 }
 
 function prunePendingQuickChoices(
@@ -127,6 +154,12 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
             if (persisted.pendingBrowserTask?.expiresAt && persisted.pendingBrowserTask.expiresAt <= now) {
                 persisted.pendingBrowserTask = undefined;
             }
+            if (persisted.pendingHealthLog?.expiresAt && persisted.pendingHealthLog.expiresAt <= now) {
+                persisted.pendingHealthLog = undefined;
+            }
+            if (persisted.pendingHealthDiscomfort?.expiresAt && persisted.pendingHealthDiscomfort.expiresAt <= now) {
+                persisted.pendingHealthDiscomfort = undefined;
+            }
             if (persisted.activeBrowserTask?.expiresAt && persisted.activeBrowserTask.expiresAt <= now) {
                 persisted.activeBrowserTask = undefined;
             }
@@ -135,6 +168,7 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
             }
             persisted.pendingQuickChoices = prunePendingQuickChoices(persisted.pendingQuickChoices, now);
             persisted.studyChatRequest = pruneStudyChatRequest(persisted.studyChatRequest, now);
+            persisted.lastProactiveInsight = pruneLastProactiveInsight(persisted.lastProactiveInsight, now);
             // Возвращаем PersistedSession — Grammy session.initial() объединится с ним через Object.assign
             return persisted as unknown as SessionData;
         } catch (e) {
@@ -196,11 +230,19 @@ export async function appendPersistedHistory(
             domains: persisted.domains ?? {},
             workingMemory: persisted.workingMemory,
             recentlySavedFacts: persisted.recentlySavedFacts,
+            lastProactiveHintAt: persisted.lastProactiveHintAt,
+            lastProactiveInsight: pruneLastProactiveInsight(persisted.lastProactiveInsight, now),
             pendingContactMemory: persisted.pendingContactMemory,
             pendingContactLookup: persisted.pendingContactLookup,
             pendingBrowserTask: persisted.pendingBrowserTask?.expiresAt && persisted.pendingBrowserTask.expiresAt <= now
                 ? undefined
                 : persisted.pendingBrowserTask,
+            pendingHealthLog: persisted.pendingHealthLog?.expiresAt && persisted.pendingHealthLog.expiresAt <= now
+                ? undefined
+                : persisted.pendingHealthLog,
+            pendingHealthDiscomfort: persisted.pendingHealthDiscomfort?.expiresAt && persisted.pendingHealthDiscomfort.expiresAt <= now
+                ? undefined
+                : persisted.pendingHealthDiscomfort,
             activeBrowserTask: persisted.activeBrowserTask?.expiresAt && persisted.activeBrowserTask.expiresAt <= now
                 ? undefined
                 : persisted.activeBrowserTask,
@@ -214,5 +256,52 @@ export async function appendPersistedHistory(
         await repo.upsert({ key, data: JSON.stringify(next) }, ['key']);
     } catch (e) {
         console.error('[SessionStorage] append history failed:', e);
+    }
+}
+
+export async function saveProactiveInsight(
+    chatId: number,
+    insight: NonNullable<SessionData['lastProactiveInsight']>
+): Promise<void> {
+    try {
+        const repo = AppDataSource.getRepository(SessionEntity);
+        const key = String(chatId);
+        const row = await repo.findOne({ where: { key } });
+        const persisted: Partial<PersistedSession> = row ? JSON.parse(row.data) : {};
+        const now = Date.now();
+
+        const next: PersistedSession = {
+            messageHistory: Array.isArray(persisted.messageHistory) ? persisted.messageHistory : [],
+            dialogueSummary: persisted.dialogueSummary ?? '',
+            lastSummarizedIndex: persisted.lastSummarizedIndex ?? -1,
+            domains: persisted.domains ?? {},
+            workingMemory: persisted.workingMemory,
+            recentlySavedFacts: persisted.recentlySavedFacts,
+            lastProactiveHintAt: now,
+            lastProactiveInsight: insight,
+            pendingContactMemory: persisted.pendingContactMemory,
+            pendingContactLookup: persisted.pendingContactLookup,
+            pendingBrowserTask: persisted.pendingBrowserTask?.expiresAt && persisted.pendingBrowserTask.expiresAt <= now
+                ? undefined
+                : persisted.pendingBrowserTask,
+            pendingHealthLog: persisted.pendingHealthLog?.expiresAt && persisted.pendingHealthLog.expiresAt <= now
+                ? undefined
+                : persisted.pendingHealthLog,
+            pendingHealthDiscomfort: persisted.pendingHealthDiscomfort?.expiresAt && persisted.pendingHealthDiscomfort.expiresAt <= now
+                ? undefined
+                : persisted.pendingHealthDiscomfort,
+            activeBrowserTask: persisted.activeBrowserTask?.expiresAt && persisted.activeBrowserTask.expiresAt <= now
+                ? undefined
+                : persisted.activeBrowserTask,
+            lastBrowserTask: persisted.lastBrowserTask?.expiresAt && persisted.lastBrowserTask.expiresAt <= now
+                ? undefined
+                : persisted.lastBrowserTask,
+            pendingQuickChoices: prunePendingQuickChoices(persisted.pendingQuickChoices, now),
+            studyChatRequest: pruneStudyChatRequest(persisted.studyChatRequest, now),
+        };
+
+        await repo.upsert({ key, data: JSON.stringify(next) }, ['key']);
+    } catch (e) {
+        console.error('[SessionStorage] save proactive insight failed:', e);
     }
 }

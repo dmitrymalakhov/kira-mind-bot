@@ -3,6 +3,8 @@ import { getVectorService } from '../services/VectorServiceFactory';
 import openai from '../openai';
 import { devLog, parseLLMJson } from '../utils';
 import { config } from '../config';
+import { addToHistory } from './history';
+import { persistSessionNow } from '../services/SessionStorage';
 
 /** Минимальный интервал между проактивными подсказками (20 минут) */
 const HINT_COOLDOWN_MS = 20 * 60 * 1000;
@@ -136,7 +138,18 @@ ${factsText}
 
         // Небольшая задержка для естественности — бот "вспомнил" после паузы
         await new Promise((res) => setTimeout(res, 1500));
-        await ctx.reply(hint);
+        const sent = await ctx.reply(hint);
+        await addToHistory(ctx, 'bot', hint);
+        ctx.session.lastProactiveInsight = {
+            message: hint,
+            sourceMemories: usedFact ? [usedFact.content] : candidates.map((c) => c.content).slice(0, 3),
+            createdAt: Date.now(),
+            messageId: sent.message_id,
+            kind: 'contextHint',
+        };
+        if (!ctx.session.sentMessages) ctx.session.sentMessages = {};
+        ctx.session.sentMessages[sent.message_id] = hint;
+        await persistSessionNow(ctx);
         devLog('🔔 Proactive hint sent:', hint.slice(0, 80));
         }, HINT_COMPUTE_TIMEOUT_MS);
     } catch (e: any) {

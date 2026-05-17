@@ -16,6 +16,7 @@ import { resolveRelationshipFromMemory, detectRelationshipInMessage } from '../u
 import { answerCapabilitiesQuestion, getCapabilitiesMessage } from '../capabilities';
 import { browserAgent } from '../agents/browserAgent';
 import { selfStudyAgent } from '../agents/selfStudyAgent';
+import { healthAgent } from '../agents/healthAgent';
 import { ReminderRegistry } from '../stores/ReminderRegistry';
 import { cancelReminder, rescheduleReminder } from '../reminder';
 import { ReminderRepository } from '../services/ReminderRepository';
@@ -326,6 +327,11 @@ function mergeProcessingResults(results: ProcessingResult[], botReaction?: strin
             merged.imageGenerated = true;
             merged.generatedImageUrl = r.generatedImageUrl;
         }
+        if (r.documentFilePath) {
+            merged.documentFilePath = r.documentFilePath;
+            merged.documentFilename = r.documentFilename;
+            merged.documentCaption = r.documentCaption;
+        }
     }
     return merged;
 }
@@ -362,6 +368,7 @@ const STEP_LABELS: Record<string, string> = {
     capabilities: '📋 Готовлю информацию…',
     selfStudy: '🧭 Изучаю свои возможности и ограничения…',
     browserTask: '🌐 Выполняю задачу в браузере…',
+    health: '🩺 Открываю дневник здоровья…',
 };
 
 /** Шаги, которые не видны пользователю (нет полезного действия для отображения) */
@@ -674,6 +681,16 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
                 if (browserRes === null) return { responseText: 'Не удалось выполнить задачу в браузере. Попробуй ещё раз 🙏', botReaction: classification.details?.botReaction };
                 browserRes.botReaction = classification.details?.botReaction;
                 return browserRes;
+            }
+
+            case 'health': {
+                await notifyProgress('health');
+                const healthRes = await safeStep('health', () => healthAgent(
+                    ctx, message, isForwarded, forwardFrom, messageHistory
+                ));
+                if (healthRes === null) return { responseText: 'Не удалось обработать дневник здоровья. Попробуй ещё раз 🙏', botReaction: classification.details?.botReaction };
+                healthRes.botReaction = classification.details?.botReaction;
+                return healthRes;
             }
 
             default:

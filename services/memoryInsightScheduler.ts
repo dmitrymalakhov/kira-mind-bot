@@ -25,6 +25,7 @@ import { getProactiveChatId } from '../utils/allowedUserChatStore';
 import openai from '../openai';
 import { parseLLMJson } from '../utils';
 import { getBotPersona, getCommunicationStyle } from '../persona';
+import { appendPersistedHistory, saveProactiveInsight } from './SessionStorage';
 
 /** Интервал проверки — берётся из конфига, дефолт 3 часа */
 const INTERVAL_MS = config.memoryInsightIntervalMs ?? 3 * 60 * 60 * 1000;
@@ -170,6 +171,7 @@ async function gatherRelevantMemories(userId: string): Promise<{ plans: string[]
 interface InsightDecision {
     shouldSend: boolean;
     message: string;
+    sourceIndexes?: number[];
 }
 
 async function decideInsight(memories: { plans: string[]; done: string[] }, dayCtx: DayContext): Promise<InsightDecision> {
@@ -207,7 +209,7 @@ ${doneText}
 - Не упоминай что ты ИИ, не используй "напоминаю", "уведомляю" и т.п.
 
 Ответь только JSON:
-{"shouldSend": true/false, "message": "текст сообщения для пользователя или пустая строка"}`;
+{"shouldSend": true/false, "message": "текст сообщения для пользователя или пустая строка", "sourceIndexes": [номера пунктов из списка планов, на которых основано сообщение]}`;
 
     const resp = await openai.chat.completions.create({
         model: 'gpt-5.4',
@@ -224,7 +226,11 @@ ${doneText}
     if (!data || !data.shouldSend || !data.message?.trim()) {
         return { shouldSend: false, message: '' };
     }
-    return { shouldSend: true, message: data.message.trim() };
+    return {
+        shouldSend: true,
+        message: data.message.trim(),
+        sourceIndexes: Array.isArray(data.sourceIndexes) ? data.sourceIndexes : [],
+    };
 }
 
 async function runCycle(bot: Bot<BotContext>): Promise<void> {
@@ -249,8 +255,20 @@ async function runCycle(bot: Bot<BotContext>): Promise<void> {
         }
 
         const chatId = await getProactiveChatId();
-        await bot.api.sendMessage(chatId, decision.message);
+        const sent = await bot.api.sendMessage(chatId, decision.message);
         lastSentAt = Date.now();
+        const sourceMemories = (decision.sourceIndexes ?? [])
+            .map((index) => memories.plans[index - 1])
+            .filter((memory): memory is string => Boolean(memory))
+            .slice(0, 5);
+        await appendPersistedHistory(chatId, 'bot', decision.message);
+        await saveProactiveInsight(chatId, {
+            message: decision.message,
+            sourceMemories: sourceMemories.length ? sourceMemories : memories.plans.slice(0, 3),
+            createdAt: Date.now(),
+            messageId: sent.message_id,
+            kind: 'memoryInsight',
+        });
         console.log('[memory-insight] Sent proactive insight:', decision.message.slice(0, 80));
     } catch (error) {
         console.error('[memory-insight] cycle failed:', error);

@@ -43,6 +43,7 @@ import { AppDataSource } from "./data-source";
 import { ReminderRepository } from "./services/ReminderRepository";
 import { getTelegramMenuCommands } from "./capabilities";
 import { persistSessionNow } from "./services/SessionStorage";
+import { healthPhotoAgent, shouldRouteHealthPhoto } from "./agents/healthAgent";
 
 
 // Загрузка переменных окружения
@@ -178,6 +179,24 @@ async function saveRemindersFromResult(ctx: BotContext, result: ProcessingResult
         }
     }
 }
+
+async function sendDocumentFromResult(ctx: BotContext, result: ProcessingResult): Promise<void> {
+    if (!result.documentFilePath) return;
+
+    try {
+        await ctx.api.sendChatAction(ctx.chat!.id, "upload_document");
+        const fileStream = fs.createReadStream(result.documentFilePath);
+        const filename = result.documentFilename || path.basename(result.documentFilePath);
+        const inputFile = new InputFile(fileStream, filename);
+        await ctx.replyWithDocument(inputFile, result.documentCaption ? {
+            caption: result.documentCaption,
+        } : undefined);
+        fs.unlinkSync(result.documentFilePath);
+    } catch (fileError) {
+        console.error("Ошибка при отправке документа:", fileError);
+        await ctx.reply("Не удалось отправить документ. Попробуй запросить экспорт ещё раз.");
+    }
+}
 // Расширяем тип Message для поддержки пересланных сообщений
 declare module "grammy/types" {
     interface Message {
@@ -242,13 +261,23 @@ async function processMediaGroup(ctx: BotContext, mediaGroupId: string) {
             return;
         }
 
-        // Обрабатываем группу изображений
-        const result = await processImageGroup(
-            ctx,
-            buffers,
-            caption,
-            ctx.session.messageHistory.slice().reverse() // Передаем историю в хронологическом порядке
-        );
+        const history = ctx.session.messageHistory.slice().reverse();
+        const result = shouldRouteHealthPhoto(ctx, caption)
+            ? await healthPhotoAgent(
+                ctx,
+                buffers[0],
+                caption,
+                fileIds[0],
+                history,
+                buffers.slice(1),
+                fileIds
+            )
+            : await processImageGroup(
+                ctx,
+                buffers,
+                caption,
+                history // Передаем историю в хронологическом порядке
+            );
 
         // Обработка результата аналогично обработке одиночного изображения
         await saveRemindersFromResult(ctx, result);
@@ -265,7 +294,16 @@ async function processMediaGroup(ctx: BotContext, mediaGroupId: string) {
         await addToHistory(ctx, 'bot', result.responseText);
 
         // Проверяем, было ли сгенерировано изображение
-        if (result.imageGenerated && result.generatedImageUrl) {
+        if (result.documentFilePath) {
+            if (result.keyboard) {
+                await ctx.reply(result.responseText, {
+                    reply_markup: result.keyboard
+                });
+            } else {
+                await ctx.reply(result.responseText);
+            }
+            await sendDocumentFromResult(ctx, result);
+        } else if (result.imageGenerated && result.generatedImageUrl) {
             // Отправляем сначала текстовый ответ
             if (result.keyboard) {
                 await ctx.reply(result.responseText, {
@@ -678,6 +716,16 @@ bot.on("message:text", async (ctx, next) => {
                         await ctx.reply("К сожалению, не удалось отправить файл календаря. Но я всё равно напомню тебе о событии в назначенное время.");
                     }
                 }
+                else if (result.documentFilePath) {
+                    if (result.keyboard) {
+                        await replyAndStore(ctx, result.responseText, {
+                            reply_markup: result.keyboard
+                        });
+                    } else {
+                        await replyAndStore(ctx, result.responseText);
+                    }
+                    await sendDocumentFromResult(ctx, result);
+                }
                 // Если было сгенерировано изображение
                 else if (result.imageGenerated && result.generatedImageUrl) {
                     // Сначала отправляем текстовый ответ
@@ -865,6 +913,15 @@ async function processForwardedGroup(ctx: BotContext, forwardKey: string) {
                 console.error("Ошибка при отправке ICS файла:", fileError);
                 await ctx.reply("К сожалению, не удалось отправить файл календаря. Но я всё равно напомню тебе о событии в назначенное время.");
             }
+        } else if (result.documentFilePath) {
+            if (result.keyboard) {
+                await ctx.reply(result.responseText, {
+                    reply_markup: result.keyboard
+                });
+            } else {
+                await ctx.reply(result.responseText);
+            }
+            await sendDocumentFromResult(ctx, result);
         } else if (result.imageGenerated && result.generatedImageUrl) {
             if (result.keyboard) {
                 await ctx.reply(result.responseText, {
@@ -1032,13 +1089,23 @@ bot.on("message:photo", async (ctx) => {
                 const tempFilePath = path.join(TEMP_DIR, `${fileId}.jpg`);
                 fs.writeFileSync(tempFilePath, buffer);
 
-                // Обрабатываем изображение через новый оркестратор processImage
-                const result = await processImage(
-                    ctx,
-                    buffer,
-                    caption,
-                    ctx.session.messageHistory.slice().reverse() // Передаем историю в хронологическом порядке
-                );
+                const history = ctx.session.messageHistory.slice().reverse();
+                const result = shouldRouteHealthPhoto(ctx, caption)
+                    ? await healthPhotoAgent(
+                        ctx,
+                        buffer,
+                        caption,
+                        fileId,
+                        history,
+                        [],
+                        [fileId]
+                    )
+                    : await processImage(
+                        ctx,
+                        buffer,
+                        caption,
+                        history // Передаем историю в хронологическом порядке
+                    );
 
                 // Если было создано напоминание, сохраняем его
                 await saveRemindersFromResult(ctx, result);
@@ -1055,7 +1122,16 @@ bot.on("message:photo", async (ctx) => {
                 await addToHistory(ctx, 'bot', result.responseText);
 
                 // Проверяем, было ли сгенерировано изображение
-                if (result.imageGenerated && result.generatedImageUrl) {
+                if (result.documentFilePath) {
+                    if (result.keyboard) {
+                        await ctx.reply(result.responseText, {
+                            reply_markup: result.keyboard
+                        });
+                    } else {
+                        await ctx.reply(result.responseText);
+                    }
+                    await sendDocumentFromResult(ctx, result);
+                } else if (result.imageGenerated && result.generatedImageUrl) {
                     // Отправляем сначала текстовый ответ
                     if (result.keyboard) {
                         await ctx.reply(result.responseText, {
@@ -1389,6 +1465,15 @@ bot.on("message:voice", async (ctx) => {
                                 console.error("Ошибка при отправке ICS файла:", fileError);
                                 await ctx.reply("К сожалению, не удалось отправить файл календаря. Но я всё равно напомню тебе о событии в назначенное время.");
                             }
+                        } else if (result.documentFilePath) {
+                            if (result.keyboard) {
+                                await ctx.reply(result.responseText, {
+                                    reply_markup: result.keyboard
+                                });
+                            } else {
+                                await ctx.reply(result.responseText);
+                            }
+                            await sendDocumentFromResult(ctx, result);
                         } else if (result.imageGenerated && result.generatedImageUrl) {
                             // Отправляем текстовый ответ
                             if (result.keyboard) {

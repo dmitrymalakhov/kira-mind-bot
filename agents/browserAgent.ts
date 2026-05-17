@@ -256,6 +256,7 @@ interface PageObservation {
     a11yText: string;
     interactiveText: string;
     structureText: string;
+    productCardsText: string;
     affordanceGraphText: string;
     formText: string;
     modalText: string;
@@ -709,6 +710,142 @@ async function getStructuredPageText(page: Page): Promise<string> {
         return limitText(lines.join('\n'), 8500);
     } catch (e) {
         devLog('browserAgent: structured page snapshot failed:', e);
+        return '';
+    }
+}
+
+async function getProductCardsText(page: Page): Promise<string> {
+    try {
+        const products = await page.evaluate(() => {
+            const compact = (value: string | null | undefined) =>
+                String(value ?? '').replace(/\s+/g, ' ').trim();
+            const isVisible = (el: Element) => {
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+            };
+            const classText = (el: Element) =>
+                compact(`${el.getAttribute('class') || ''} ${el.getAttribute('data-testid') || ''} ${el.getAttribute('data-test') || ''}`);
+            const looksProductHref = (href: string) => {
+                try {
+                    const url = new URL(href, window.location.href);
+                    const path = url.pathname.toLowerCase();
+                    return /(?:^|\/)(?:p|product|products|item)(?:\/|$)/iu.test(path) ||
+                        /\/p\//iu.test(path);
+                } catch {
+                    return false;
+                }
+            };
+            const hasPrice = (text: string) =>
+                /(?:\b\d[\d\s\u00a0]{1,9}\s*(?:₽|руб\.?|р\.?|₸|\$|€)|(?:₽|руб\.?|₸|\$|€)\s*\d)/iu.test(text);
+            const lineLooksMeta = (line: string) =>
+                !line ||
+                hasPrice(line) ||
+                /^(?:-\d+%|\d+(?:[.,]\d+)?|\(\d+\)|до\s+конца|доставка|новинка|скидка|распродажа|premium|favorite|избранное|one size|размер|xs|s|m|l|xl)$/iu.test(line);
+            const priceLineOf = (lines: string[], text: string) => {
+                const line = lines.find((item) => hasPrice(item));
+                if (line) return line.slice(0, 120);
+                const match = text.match(/\b\d[\d\s\u00a0]{1,9}\s*(?:₽|руб\.?|р\.?|₸|\$|€)/iu);
+                return match?.[0] ? compact(match[0]).slice(0, 120) : '';
+            };
+
+            const anchors = Array.from(document.querySelectorAll('a[href]'))
+                .filter((el, index, arr) => arr.indexOf(el) === index)
+                .filter((el) => isVisible(el) || looksProductHref((el as HTMLAnchorElement).href)) as HTMLAnchorElement[];
+
+            const candidates: Array<{
+                href: string;
+                brand: string;
+                name: string;
+                price: string;
+                text: string;
+                top: number;
+                score: number;
+            }> = [];
+
+            for (const anchor of anchors.slice(0, 260)) {
+                const href = compact(anchor.href || anchor.getAttribute('href'));
+                if (!href || !looksProductHref(href)) continue;
+
+                let parent: HTMLElement | null = anchor;
+                let best: HTMLElement | null = null;
+                let bestScore = Number.NEGATIVE_INFINITY;
+                for (let depth = 0; parent && depth < 9; depth += 1, parent = parent.parentElement) {
+                    const text = compact(parent.innerText || parent.textContent);
+                    if (!text || text.length < 8 || text.length > 1400) continue;
+
+                    const rect = parent.getBoundingClientRect();
+                    const linkCount = parent.querySelectorAll('a[href]').length;
+                    const tooBroad =
+                        parent === document.body ||
+                        rect.width > window.innerWidth * 1.25 ||
+                        rect.height > window.innerHeight * 2.6 ||
+                        linkCount > 16;
+                    if (tooBroad) continue;
+
+                    const productClass = /(product|catalog|sku|card|tile|goods|item|x-product|products-list|grid)/iu.test(classText(parent));
+                    const score =
+                        (productClass ? 42 : 0) +
+                        (hasPrice(text) ? 36 : 0) +
+                        Math.max(0, 34 - depth * 5) +
+                        Math.max(0, 14 - linkCount) -
+                        Math.max(0, Math.floor(text.length / 220) - 1) * 4;
+                    if (score > bestScore) {
+                        best = parent;
+                        bestScore = score;
+                    }
+                }
+
+                const root = best || anchor;
+                const text = compact(root.innerText || root.textContent || anchor.getAttribute('aria-label') || anchor.getAttribute('title'));
+                const lines = text
+                    .split(/\n+/u)
+                    .map((line) => compact(line))
+                    .filter(Boolean);
+                const titleLines = lines
+                    .filter((line) => !lineLooksMeta(line))
+                    .filter((line, index, arr) => arr.indexOf(line) === index)
+                    .slice(0, 3);
+                const rect = root.getBoundingClientRect();
+                candidates.push({
+                    href,
+                    brand: titleLines[0] || compact(anchor.getAttribute('aria-label') || anchor.getAttribute('title') || ''),
+                    name: titleLines.slice(1).join(' ').slice(0, 160),
+                    price: priceLineOf(lines, text),
+                    text: text.slice(0, 700),
+                    top: Math.round(rect.top + window.scrollY),
+                    score: bestScore,
+                });
+            }
+
+            const seen = new Set<string>();
+            return candidates
+                .sort((a, b) => a.top - b.top || b.score - a.score)
+                .filter((item) => {
+                    if (seen.has(item.href)) return false;
+                    seen.add(item.href);
+                    return true;
+                })
+                .slice(0, 24);
+        });
+
+        if (!products.length) return '';
+        const lines = products.map((product, index) => {
+            const parts = [
+                `product#${index + 1}`,
+                product.brand ? `brand="${product.brand.slice(0, 90)}"` : '',
+                product.name ? `name="${product.name.slice(0, 140)}"` : '',
+                product.price ? `price="${product.price.slice(0, 80)}"` : '',
+                `href=${product.href.slice(0, 220)}`,
+            ].filter(Boolean);
+            return [
+                `  ${parts.join(' ')}`,
+                product.text ? `    text=${product.text.slice(0, 520)}` : '',
+            ].filter(Boolean).join('\n');
+        });
+        return limitText(lines.join('\n'), 9000);
+    } catch (e) {
+        devLog('browserAgent: product card snapshot failed:', e);
         return '';
     }
 }
@@ -1253,7 +1390,7 @@ function collectBlockerSignals(parts: string[]): string {
 }
 
 async function getPageObservation(page: Page, pageEvents: string[] = []): Promise<PageObservation> {
-    const [screenshotBuf, pageState, a11yText, interactiveText, structureText, affordanceGraphText, formText, modalText, frameText, pageText, selectOptions] = await Promise.all([
+    const [screenshotBuf, pageState, a11yText, interactiveText, structureText, productCardsText, affordanceGraphText, formText, modalText, frameText, pageText, selectOptions] = await Promise.all([
         takeJpeg(page).catch((err) => {
             browserLog('observation_screenshot_failed', {
                 url: safeLogUrl(page.url()),
@@ -1265,6 +1402,7 @@ async function getPageObservation(page: Page, pageEvents: string[] = []): Promis
         getAccessibilityText(page),
         getInteractiveElementsText(page),
         getStructuredPageText(page),
+        getProductCardsText(page),
         getAffordanceGraphText(page),
         getFormDiagnosticsText(page),
         getModalDiagnosticsText(page),
@@ -1278,6 +1416,7 @@ async function getPageObservation(page: Page, pageEvents: string[] = []): Promis
         a11yText,
         interactiveText,
         structureText,
+        productCardsText,
         affordanceGraphText,
         formText,
         modalText,
@@ -1293,6 +1432,7 @@ async function getPageObservation(page: Page, pageEvents: string[] = []): Promis
         a11yText,
         interactiveText,
         structureText,
+        productCardsText,
         affordanceGraphText,
         formText,
         modalText,
@@ -3555,6 +3695,8 @@ async function understandPageStateWithLlm(
         'phase выбери из: unknown, listing, detail_page, booking_form, confirmation_modal, success, validation_error, blocked, stuck.',
         'Если видна модалка/попап с вопросом и кнопками, phase=confirmation_modal, даже если исходная карточка/товар не рядом.',
         'Если форма отправлена и видно подтверждение/успешная бронь/заявка принята, phase=success и successEvidence заполни видимым доказательством.',
+        'Для задач подбора/поиска товаров каталог, категория, брендовая страница или фраза "visible products" НЕ являются success. phase=success только если уже есть итоговая подборка конкретных товаров; если пользователь просит сайт/ссылки/заказ, в доказательстве должны быть прямые URL карточек товаров.',
+        'Для товарного подбора без явной просьбы купить/оформить корзина и checkout не являются обязательными pending-шагами; pending должен быть про find/select/report_links.',
         'Если видны ошибки обязательных полей/валидации, phase=validation_error и missingData заполни конкретными полями.',
         'ledger.pending должен отражать следующие оставшиеся шаги процесса, например submit, site_confirmation_modal, wait_for_success.',
         'taskPlan верни как стабильный чеклист процесса: шаги open/find/open_form/fill/confirm_submit/handle_site_modal/verify_success или доменно подходящие аналоги. Сохраняй уже выполненные шаги done.',
@@ -3574,6 +3716,8 @@ async function understandPageStateWithLlm(
         `Формы:\n${redactSecrets(observation.formText || '').slice(0, 1800)}`,
         '',
         `Структура:\n${redactSecrets(observation.structureText || '').slice(0, 2200)}`,
+        '',
+        `Товарные карточки и прямые ссылки:\n${redactSecrets(observation.productCardsText || '').slice(0, 2600)}`,
         '',
         `Affordance graph:\n${redactSecrets(observation.affordanceGraphText || '').slice(0, 2600)}`,
         '',
@@ -3764,6 +3908,7 @@ async function verifyActionOutcomeWithLlm(
         'Ты проверяешь результат последнего браузерного действия. Верни только JSON.',
         'Оцени, изменилась ли страница смыслово, какой прогресс произошёл, есть ли риск повторить тот же шаг.',
         'Если появился popup/modal, progress должен это явно сказать. Если виден успех/подтверждение, укажи это.',
+        'Для задач подбора товаров переход на страницу бренда/категории или видимость карточек — это listing/browse progress, НЕ success. success только если уже собраны конкретные выбранные товары и нужные ссылки.',
         '',
         `Задача:\n${redactSecrets(task).slice(0, 1400)}`,
         '',
@@ -3771,9 +3916,9 @@ async function verifyActionOutcomeWithLlm(
         '',
         `Предыдущее понимание:\n${pageUnderstandingSummary(previousUnderstanding)}`,
         '',
-        `Before modal/form/text:\n${redactSecrets([before.modalText, before.formText, before.pageText].filter(Boolean).join('\n')).slice(0, 2400)}`,
+        `Before modal/form/products/text:\n${redactSecrets([before.modalText, before.formText, before.productCardsText, before.pageText].filter(Boolean).join('\n')).slice(0, 2600)}`,
         '',
-        `After modal/form/text:\n${redactSecrets([after.modalText, after.formText, after.pageText].filter(Boolean).join('\n')).slice(0, 2600)}`,
+        `After modal/form/products/text:\n${redactSecrets([after.modalText, after.formText, after.productCardsText, after.pageText].filter(Boolean).join('\n')).slice(0, 2800)}`,
         '',
         'Формат: {"changed":true,"progress":"modal_opened|form_submitted|success|validation_error|no_visible_change|...","sameLoopRisk":false,"nextExpectedPhase":"...","evidence":["..."],"confidence":0.0}',
     ].join('\n');
@@ -3885,6 +4030,7 @@ async function askNextAction(
    Если selector начинается с "frame=N >>", используй его целиком — это действие внутри iframe/виджета.
    Если есть одинаковые кнопки/ссылки, выбирай по context=... или href=..., а не только по названию кнопки.
 1a. Для сложных интерфейсов с карточками, строками таблиц, списками и модалками сначала найди нужный объект по тексту из задачи, затем нажимай кнопку/ссылку внутри этого же ближайшего блока. Если нужный блок не виден, прокрути страницу и повтори поиск. Не спрашивай пользователя выбирать среди одинаковых кнопок, когда целевой текст уже есть на странице, в DOM или в context.
+1b. В каталогах товаров "#6 link/menuitem ..." — это описание строки, а не selector. Для выбора товара не кликай верхнее меню ("Новинки", "Одежда", "Скидки") и не используй index=N, пока не проверил, что target text/href действительно относится к товарной карточке. Если видны только категории/меню, прокрути до товарных карточек или используй ссылку товара из structure/affordance graph.
 	2. Используй долговременную память для адресов, предпочтений, имён, сохранённых параметров и известных учётных данных.
 	3. Если нужного факта нет в текущем контексте памяти, сначала используй memory_lookup с конкретным запросом. Если память не дала ответа или дала неполные данные — ask_user в контексте текущей формы/страницы, без ухода в общий диалог о сохранении фактов.
 	3a. Если данные для формы взяты из памяти, можно попросить пользователя подтвердить, что найденные значения актуальны, особенно перед отправкой заявки.
@@ -3893,14 +4039,17 @@ async function askNextAction(
 5a. Не выдумывай значения для форм: телефон, email, имя, название команды/организации, количество участников, комментарии и контактные данные можно вводить только из сообщения пользователя, долговременной памяти или сохранённых учётных данных. Если данных нет — ask_user до fill и до отправки формы.
 6. Если страница просит финальное подтверждение покупки/оплаты/бронирования с деньгами или штрафом — ask_user, даже если задача в целом понятна.
 7. done разрешён только когда на странице явно видно, что цель достигнута: подтверждение, созданная запись, отправленная форма, скачанный файл или другая проверяемая фиксация результата.
+7a. Для задач "подбери/найди/выбери" в каталоге товаров цель достигнута, когда собран осмысленный список или комплект с названиями товаров, ценами/причиной выбора и, если задача упоминает сайт/интернет-магазин/заказ/ссылки, прямыми URL карточек. Не продолжай делать note после готового комплекта; верни done. Корзина/checkout нужны только если пользователь явно попросил купить, добавить в корзину или оформить заказ.
+7b. Страница категории, поиска или бренда сама по себе не является результатом товарного подбора. Не возвращай done со словами "перешла на страницу бренда", "видны товары", "visible products" или "successfully navigated". Используй блок "Товарные карточки и прямые ссылки": если там есть href, можно включать эти href в итог без открытия каждой карточки.
 8. Используй note, когда нашёл важный факт на странице или в памяти: выбранный слот, адрес, цену, ограничение, причину ошибки.
 9. Если действие уже повторялось и не помогает — смени стратегию: другой selector, scroll/wait, go_back, memory_lookup или ask_user/fail.
 10. ask_user формулируй как один конкретный вопрос: какой именно факт/код/выбор нужен и почему его нельзя взять из памяти. Если на странице есть явный выбор кнопками (например "Да"/"Нет"), добавь поле choices: [{"label":"понятная кнопка для пользователя","answer":"что именно нажать/ввести"}].
 10a. Если всё же нужно спросить про одинаковые кнопки, варианты должны различаться контекстом блока/строки/карточки. Не предлагай пользователю несколько одинаковых "Выбрать: Записаться" без названия объекта рядом.
+10b. Не спрашивай пользователя, какой UI-блок, DOM-элемент, карточку, ссылку, меню или кнопку нажать, если это можно решить просмотром страницы. Это внутренняя работа браузерного агента: выбери сам по скриншоту/DOM/context, прокрути, открой более общий раздел, вернись назад или смени стратегию. ask_user разрешён только для внешних данных пользователя, captcha/OTP/auth, безопасностного подтверждения или субъективного выбора, который невозможно вывести из задачи.
 11. Если пользователь просит только найти варианты игр/мероприятий/квизов/билетов, собери ближайшие варианты с датами, местами и ссылками, затем done с предложением выбрать вариант для записи. Не начинай регистрацию, пока пользователь явно не попросил записать/зарегистрировать.
 12. Перед каждым click проверь цепочку: цель пользователя -> нужный объект/блок на странице -> действие внутри этого блока. Если можешь назвать только текст кнопки, но не можешь связать её с нужным объектом, не возвращай click: используй scroll, go_back, memory_lookup, note или ask_user.
 12a. Если нейро-классификатор ниже говорит phase=confirmation_modal, текущая модалка/попап является локальным контекстом задачи. Для кнопок этой модалки не требуй, чтобы рядом снова был исходный объект/карточка из задачи.
-12b. Если phase=success и есть successEvidence, возвращай done с кратким подтверждением результата, не продолжай кликать.
+12b. Если phase=success и есть successEvidence, возвращай done с кратким подтверждением результата, не продолжай кликать. Для товарного подбора это правило действует только если successEvidence содержит выбранные товары и нужные ссылки, а не просто страницу каталога/бренда.
 12c. Если lastActionOutcome.sameLoopRisk=true или progress=no_visible_change, не повторяй то же действие: выбери другую стратегию или ask_user.
 13. Отвечай ТОЛЬКО JSON, без markdown-блоков.`;
 
@@ -3953,6 +4102,9 @@ ${observation.interactiveText || '(нет явных интерактивных 
 
 Структура страницы: карточки, строки, повторяющиеся блоки и действия внутри них:
 ${observation.structureText || '(структурные блоки не выделены)'}
+
+Товарные карточки и прямые ссылки:
+${observation.productCardsText || '(товарные карточки с прямыми ссылками не выделены)'}
 
 Affordance graph: смысловые блоки интерфейса, поля и действия внутри них:
 ${observation.affordanceGraphText || '(affordance graph пуст)'}
@@ -4045,11 +4197,20 @@ function normalizeCandidateSelector(selector: string): string {
     const bareIndex = trimmed.match(/^#(\d{1,3})$/);
     if (bareIndex) return `index=${bareIndex[1]}`;
 
-    const candidateIndex = trimmed.match(/^(?:candidate\s*)?#(\d{1,3})\b/i);
-    if (candidateIndex && !trimmed.includes('->')) return `index=${candidateIndex[1]}`;
-
     const copiedCandidate = trimmed.match(/->\s*([\s\S]+)$/);
     if (copiedCandidate) return copiedCandidate[1].trim();
+
+    const describedCandidate = trimmed.match(/^(?:candidate\s*)?#\d{1,3}\s+([a-zA-Z0-9_-]+)(?:\/[a-zA-Z0-9_-]+)?\s+[«"“']([^«»“”"']{1,120})[»"”']\s*$/u);
+    if (describedCandidate) {
+        const role = describedCandidate[1].toLowerCase();
+        const label = cleanWhitespace(unescapeSelectorValue(describedCandidate[2] || ''));
+        const supportedRole = ['button', 'link', 'menuitem', 'checkbox', 'radio', 'tab'].includes(role);
+        if (supportedRole && label) return `role=${role}[name="${cssStringValue(label)}"]`;
+        if (label) return `text=${label}`;
+    }
+
+    const candidateIndex = trimmed.match(/^(?:candidate\s*)?#(\d{1,3})$/i);
+    if (candidateIndex) return `index=${candidateIndex[1]}`;
 
     return trimmed;
 }
@@ -4533,7 +4694,107 @@ function shouldBlockMisdirectedShoppingTarget(task: string, decision: BrowserAct
         ].join(' ');
     }
 
+    const productChoiceIntent =
+        /(выбира[ею]|подбира[ею]|открыва[ею]|смотр[юи]|добавля[ею]|бер[еу]|подходит|подходящ)/iu.test(decisionText) &&
+        /(товар|карточк|комплект|образ|шорт|брюк|джинс|футболк|рубашк|поло|кроссов|кед|ботинк|куртк|ветровк|бомбер|жилет|свитшот|худи|befree|zolla|ostin|oodji|adidas|nike|puma|reebok|lacoste|clothes|shirt|shorts|pants|jeans|sneakers|jacket|hoodie)/iu.test(decisionText) &&
+        !/(категор|раздел|меню|фильтр|сортиров|поиск|перехож|перейти|navigate|category|section|menu|filter|sort|search)/iu.test(decisionText);
+    const targetLooksTopNavigation =
+        /(?:[?&]sitelink=topmenu|\/(?:men|women)-home(?:\/|$)|\/c\/4152\/default-men\/)/iu.test(href) ||
+        /^(?:идеи|новинки|одежда|обувь|аксессуары|бренды|премиум|спорт|красота|дом|скидки|женщинам|мужчинам|детям)$/iu.test(targetText);
+
+    if (productChoiceIntent && targetLooksTopNavigation) {
+        return [
+            'Клик должен выбрать конкретный товар/карточку, но фактическая цель находится в верхнем меню каталога.',
+            'Не используй индексный selector для товара: найди товарную карточку в structure/affordance graph по названию, бренду, цене или href и нажми ссылку внутри этой карточки.',
+        ].join(' ');
+    }
+
     return null;
+}
+
+function isShoppingBrowseTask(task: string): boolean {
+    const text = normalizeSearchText(task);
+    return /(подбери|найди|выбери|посмотри|ищу|комплект|образ|одеж|обув|товар|lamoda|ламод|clothes|shoes|outfit|look|browse|find|pick|choose)/iu.test(text);
+}
+
+function userWantsShoppingCheckout(task: string): boolean {
+    const text = normalizeSearchText(task);
+    return /(купи|купить|покуп|добавь\s+в\s+корзин|корзин|оформи|заказ|оплат|checkout|cart|buy|purchase|order|payment)/iu.test(text);
+}
+
+function taskRequiresProductLinks(task: string): boolean {
+    const text = normalizeSearchText(task);
+    return /(ссылк|url|link|линк|пришли|скинь|дай|заказ|заказать|купить|покуп|на\s+сайте|сайт|интернет[-\s]?магазин|lamoda|ламод|wildberries|вайлдбер|ozon|озон|marketplace|маркетплейс)/iu.test(text);
+}
+
+function textHasUrl(text: string): boolean {
+    return /https?:\/\/[^\s<>)"']{6,}/iu.test(text);
+}
+
+function textHasProductUrl(text: string): boolean {
+    return /https?:\/\/[^\s<>)"']*(?:\/p\/|\/product(?:s)?\/|\/item\/)[^\s<>)"']*/iu.test(text);
+}
+
+function hasConcreteShoppingSelection(text: string): boolean {
+    const normalized = normalizeSearchText(text);
+    const hasClothesTerm = /(костюм|комплект|образ|рубашк|сорочк|поло|футболк|лонгслив|брюк|джинс|чинос|шорт|пиджак|жилет|кардиган|джемпер|свитер|свитшот|худи|куртк|ветровк|бомбер|туфл|лофер|ботинк|кроссов|кед|плать|юбк|блуз|пальто|accessor|shirt|pants|trousers|jacket|cardigan|shoes|sneakers|suit|outfit)/iu.test(normalized);
+    const hasSpecificity = /(?:\b[A-Z][A-Za-z0-9' -]{2,}\b|mango|kids|ostin|o'stin|zara|befree|zolla|oodji|adidas|nike|puma|reebok|lacoste|uniqlo|name=|brand=|\b\d[\d\s\u00a0]{1,9}\s*(?:₽|руб|₸|\$|€))/iu.test(text);
+    const hasChoiceLanguage = /(подобран|выбран|рекоменд|итогов|подойдут|вариант|комплект|образ|сочетан)/iu.test(normalized);
+    return hasClothesTerm && (hasSpecificity || hasChoiceLanguage || textHasProductUrl(text));
+}
+
+function isListingOnlyShoppingSuccessText(text: string): boolean {
+    const normalized = normalizeSearchText(text);
+    return /(successfully\s+navigated|visible\s+products|brand\s+page|listing|category\s+page|catalog|переш[её]л[аи]?\s+на\s+страниц|страниц[аеы]\s+бренд|страниц[аеы]\s+каталог|каталог|видн[ыо]\s+товар|товары\s+видны|открыт[аы]?\s+страниц)/iu.test(normalized);
+}
+
+function shoppingCompletionBlockReason(task: string, summary: string, observation?: PageObservation): string | null {
+    if (!isShoppingBrowseTask(task)) return null;
+    const surface = cleanWhitespace(summary || '');
+    if (!surface) return 'Для товарного подбора нельзя завершать задачу пустым итогом.';
+
+    if (isListingOnlyShoppingSuccessText(surface) && !hasConcreteShoppingSelection(surface)) {
+        return 'Каталог, страница бренда или факт видимых товаров не являются выполненной задачей подбора. Нужно выбрать конкретные товары и вернуть их в итог.';
+    }
+
+    if (!hasConcreteShoppingSelection(surface)) {
+        return 'Итог товарного подбора должен содержать конкретные выбранные товары, а не только навигационный статус страницы.';
+    }
+
+    if (taskRequiresProductLinks(task) && !textHasProductUrl(surface) && !textHasUrl(surface)) {
+        const productHint = observation?.productCardsText
+            ? ` В наблюдении уже есть прямые ссылки на карточки товаров; используй их в done: ${observation.productCardsText.slice(0, 500)}`
+            : ' Открой карточки или извлеки href из товарных карточек, затем верни done со ссылками.';
+        return `Для этой e-commerce задачи итог обязан содержать прямые ссылки на товары.${productHint}`;
+    }
+
+    return null;
+}
+
+function browserTaskPageContextForSession(observation: PageObservation): string | undefined {
+    const parts = [
+        observation.productCardsText ? `Товарные карточки и ссылки:\n${observation.productCardsText.slice(0, 2500)}` : '',
+        observation.pageText ? `Видимый текст:\n${observation.pageText.slice(0, 2000)}` : '',
+    ].filter(Boolean);
+    return parts.length ? parts.join('\n\n') : undefined;
+}
+
+function shouldCompleteShoppingBrowseFromNote(task: string, note: string): boolean {
+    if (!isShoppingBrowseTask(task) || userWantsShoppingCheckout(task)) return false;
+    if (shoppingCompletionBlockReason(task, note)) return false;
+
+    const text = normalizeSearchText(note);
+    const hasFinalSelection = /(подобран|выбран|рекоменд|итогов|комплект|образ|вариант)/iu.test(text);
+    const hasProductTerms = /(футболк|поло|рубашк|шорт|брюк|джинс|чинос|кроссов|кед|лофер|ботинк|куртк|ветровк|бомбер|жилет|свитшот|худи|пиджак|cave|o'stin|ostin|envylab|befree|zolla|oodji|adidas|nike|puma|reebok|lacoste)/iu.test(text);
+    return hasFinalSelection && hasProductTerms;
+}
+
+function isInternalUiAmbiguityQuestion(question: string): boolean {
+    const text = normalizeSearchText(question);
+    const asksUiChoice = /(какой|какую|что|куда|где|выбери|выбрать|нажать|кликнуть|ориентир)/iu.test(text) &&
+        /(ui|dom|блок|кнопк|ссылк|элемент|област|карточк|пункт|селектор|selector|button|link|card|block|element)/iu.test(text);
+    const asksForExternalData = /(код|captcha|капч|sms|смс|otp|парол|логин|телефон|email|почт|адрес|имя|дата|время|размер|подтверди|оплат|платеж|платёж|паспорт|документ)/iu.test(text);
+    return asksUiChoice && !asksForExternalData;
 }
 
 function shouldStayOnVisibleBookingForm(task: string, observation: PageObservation, decision: BrowserAction): string | null {
@@ -5483,11 +5744,7 @@ async function maybeUseTaskScopedAction(page: Page, task: string): Promise<TaskS
                     };
                 }
 
-                return {
-                    status: 'ambiguous',
-                    question: `Нашла несколько блоков для действия «${intent.description}». Какой выбрать?`,
-                    choices: choicesFromTaskScopedCandidates(candidates),
-                };
+                return { status: 'none', reason: 'ambiguous_task_scoped_internal' };
             }
 
             const targetPresentInDom = await documentContainsAnySearchHint(page, hints);
@@ -5664,9 +5921,11 @@ async function maybeUseTargetBlockClick(
     const clickLabel = clickLabelFromDecision(decision);
     if (!clickLabel) return { status: 'none', reason: 'click_label_not_found' };
 
-    const hints = extractContextualClickHints(task, decision, clickLabel);
+    const hints = extractContextualClickHints(task, decision, clickLabel)
+        .filter((hint) => !isRussianDateHint(hint))
+        .filter((hint) => normalizeSearchText(hint) !== normalizeSearchText(clickLabel));
     browserLog('target_block_probe', { clickLabel, hints: hints.join(', ') });
-    if (!hints.some((hint) => !isRussianDateHint(hint))) {
+    if (!hints.length) {
         return { status: 'none', reason: 'target_hint_not_found' };
     }
 
@@ -5690,11 +5949,21 @@ async function maybeUseTargetBlockClick(
                         label: compactContextLabel(best.context, best.label),
                     };
                 }
-                return {
-                    status: 'ambiguous',
-                    question: `Нашла несколько блоков с нужным текстом и кнопкой «${clickLabel}». Какой выбрать?`,
-                    choices: choicesFromContextualCandidates(candidates),
-                };
+                const llmChoice = await chooseContextualCandidateWithLlm(
+                    task,
+                    clickLabel,
+                    hints,
+                    candidates,
+                    'target block candidates have similar scores'
+                );
+                if (llmChoice) {
+                    await clickContextualControlByIndex(page, clickLabel, llmChoice.controlIndex);
+                    return {
+                        status: 'clicked',
+                        label: compactContextLabel(llmChoice.context, llmChoice.label),
+                    };
+                }
+                return { status: 'none', reason: 'ambiguous_target_block_internal' };
             }
 
             const canScroll = await page.evaluate(() => window.scrollY + window.innerHeight < document.body.scrollHeight - 20).catch(() => false);
@@ -5908,6 +6177,75 @@ function choicesFromContextualCandidates(candidates: ContextualClickCandidate[])
     });
 }
 
+async function chooseContextualCandidateWithLlm(
+    task: string,
+    clickLabel: string,
+    hints: string[],
+    candidates: ContextualClickCandidate[],
+    reason: string
+): Promise<ContextualClickCandidate | null> {
+    if (!candidates.length) return null;
+    if (candidates.length === 1) return candidates[0];
+
+    const payload = {
+        task: redactSecrets(task).slice(0, 1800),
+        clickLabel,
+        targetHints: hints.slice(0, 8),
+        ambiguityReason: reason,
+        candidates: candidates.slice(0, 6).map((candidate, index) => ({
+            index,
+            label: candidate.label,
+            matchedHints: candidate.matchedHints,
+            score: candidate.score,
+            context: redactSecrets(candidate.context).slice(0, 900),
+        })),
+    };
+
+    try {
+        const response = await openai.chat.completions.create({
+            model: 'gpt-5.4-nano',
+            max_tokens: 260,
+            temperature: 0,
+            messages: [
+                {
+                    role: 'system',
+                    content: [
+                        'Ты внутренний арбитр браузерного агента.',
+                        'Пользователя нельзя спрашивать про DOM/UI-неоднозначность: нужно либо выбрать лучший кандидат, либо вернуть null, чтобы агент сменил стратегию.',
+                        'Выбирай candidate.index только если контекст явно помогает выполнить исходную задачу.',
+                        'Не выбирай элемент только потому, что совпадает текст кнопки; учитывай цель, соседний текст, хлебные крошки, карточку, категорию и риск зациклиться.',
+                        'Если варианты одинаковые, ведут в меню вместо товара/формы, или выбор не приближает к цели, верни choice=null.',
+                        'Ответ строго JSON: {"choice":0,"confidence":0.0,"reason":"..."}',
+                    ].join(' '),
+                },
+                { role: 'user', content: JSON.stringify(payload) },
+            ],
+        });
+        const parsed = parseLLMJson<{ choice?: number | null; confidence?: number; reason?: string }>(
+            response.choices[0]?.message?.content?.trim() || ''
+        );
+        const choice = parsed?.choice;
+        const confidence = Number(parsed?.confidence ?? 0);
+        const llmReason = cleanWhitespace(parsed?.reason || '');
+        browserLog('contextual_llm_choice', {
+            clickLabel,
+            choice,
+            confidence,
+            reason: llmReason.slice(0, 240),
+        });
+        if (Number.isInteger(choice) && choice! >= 0 && choice! < Math.min(candidates.length, 6) && confidence >= 0.64) {
+            return candidates[choice!];
+        }
+    } catch (err) {
+        browserLog('contextual_llm_choice_failed', {
+            clickLabel,
+            reason: safeErrorMessage(err),
+        });
+    }
+
+    return null;
+}
+
 async function maybeUseContextualClick(
     page: Page,
     task: string,
@@ -5916,7 +6254,8 @@ async function maybeUseContextualClick(
     const clickLabel = clickLabelFromDecision(decision);
     if (!clickLabel) return { status: 'none', reason: 'click_label_not_found' };
 
-    const hints = extractContextualClickHints(task, decision, clickLabel);
+    const hints = extractContextualClickHints(task, decision, clickLabel)
+        .filter((hint) => normalizeSearchText(hint) !== normalizeSearchText(clickLabel));
     browserLog('contextual_probe', { clickLabel, hints: hints.join(', ') });
     if (!hints.length) return { status: 'none', reason: 'context_hints_not_found' };
 
@@ -5941,11 +6280,22 @@ async function maybeUseContextualClick(
         }
 
         if (best.score > 0) {
-            return {
-                status: 'ambiguous',
-                question: `На странице несколько элементов «${clickLabel}», и я не хочу нажимать первый наугад. Какой блок выбрать?`,
-                choices: choicesFromContextualCandidates(candidates.filter((candidate) => candidate.score > 0)),
-            };
+            const scoredCandidates = candidates.filter((candidate) => candidate.score > 0);
+            const llmChoice = await chooseContextualCandidateWithLlm(
+                task,
+                clickLabel,
+                hints,
+                scoredCandidates,
+                'duplicate contextual controls'
+            );
+            if (llmChoice) {
+                await clickContextualControlByIndex(page, clickLabel, llmChoice.controlIndex);
+                return {
+                    status: 'clicked',
+                    label: compactContextLabel(llmChoice.context, llmChoice.label),
+                };
+            }
+            return { status: 'none', reason: 'ambiguous_contextual_click_internal' };
         }
 
         return { status: 'none', reason: 'no_contextual_score' };
@@ -5966,7 +6316,8 @@ async function guardRawClickAgainstTargetContext(
     if (!clickLabel) return { status: 'none', reason: 'no_click_label' };
 
     const hints = extractContextualClickHints(task, decision, clickLabel)
-        .filter((hint) => !isRussianDateHint(hint));
+        .filter((hint) => !isRussianDateHint(hint))
+        .filter((hint) => normalizeSearchText(hint) !== normalizeSearchText(clickLabel));
     if (!hints.length) return { status: 'none', reason: 'no_target_hints' };
 
     const targetPresent = await documentContainsAnySearchHint(page, hints);
@@ -6451,7 +6802,7 @@ function rememberSuccessfulSitePattern(
     });
 }
 
-function detectedSuccessSummary(state: BrowserRunState): string | null {
+function detectedSuccessSummary(state: BrowserRunState, task: string): string | null {
     const hasMeaningfulAction = state.history.some((record) =>
         record.result === 'ok' &&
         !record.label.startsWith('memory_lookup') &&
@@ -6467,7 +6818,17 @@ function detectedSuccessSummary(state: BrowserRunState): string | null {
         (understanding.successEvidence || understanding.evidence.length)
     ) {
         const evidence = understanding.successEvidence || understanding.evidence.join(' ');
-        return `Задача выглядит выполненной: ${understanding.whatIsHappening}. ${evidence}`.slice(0, 700);
+        const summary = `Задача выглядит выполненной: ${understanding.whatIsHappening}. ${evidence}`.slice(0, 700);
+        const shoppingBlockReason = shoppingCompletionBlockReason(task, summary);
+        if (shoppingBlockReason) {
+            browserLog('auto_success_blocked', {
+                reason: shoppingBlockReason.slice(0, 240),
+                phase: understanding.phase,
+                evidence: evidence.slice(0, 260),
+            });
+            return null;
+        }
+        return summary;
     }
 
     const outcome = state.lastActionOutcome;
@@ -6476,7 +6837,17 @@ function detectedSuccessSummary(state: BrowserRunState): string | null {
         outcome.confidence >= 0.76 &&
         /(success|submitted|form_submitted|booking_created|reservation_created|заявк[ауы]?\s+отправ|брон[ьи]?\s+создан|успеш|готов)/iu.test(outcome.progress)
     ) {
-        return `Задача выглядит выполненной после последнего действия: ${outcome.progress}. ${outcome.evidence.join(' ')}`.slice(0, 700);
+        const summary = `Задача выглядит выполненной после последнего действия: ${outcome.progress}. ${outcome.evidence.join(' ')}`.slice(0, 700);
+        const shoppingBlockReason = shoppingCompletionBlockReason(task, summary);
+        if (shoppingBlockReason) {
+            browserLog('auto_success_blocked', {
+                reason: shoppingBlockReason.slice(0, 240),
+                progress: outcome.progress,
+                evidence: outcome.evidence.join(' | ').slice(0, 260),
+            });
+            return null;
+        }
+        return summary;
     }
 
     return null;
@@ -6905,6 +7276,7 @@ export async function browserAgent(
                 title: title.slice(0, 120),
                 interactiveCount: countSnapshotRows(observation.interactiveText, /^\s*#\d+/gmu),
                 blockCount: countSnapshotRows(observation.structureText, /^\s*block#\d+/gmu),
+                productCount: countSnapshotRows(observation.productCardsText, /^\s*product#\d+/gmu),
                 affordanceNodes: countSnapshotRows(observation.affordanceGraphText, /^\s*node#\d+/gmu),
                 formLines: countSnapshotRows(observation.formText, /^\s*field#\d+/gmu),
                 bookingFormVisible,
@@ -6912,7 +7284,7 @@ export async function browserAgent(
             });
 
             await maybeUpdatePageUnderstanding(state, taskForLlm, observation, url, i + 1, sitePatternsText);
-            const autoSuccessSummary = detectedSuccessSummary(state);
+            const autoSuccessSummary = detectedSuccessSummary(state, taskForLlm);
             if (autoSuccessSummary) {
                 await sendScreenshot(ctx, page, `✅ Готово: ${autoSuccessSummary.slice(0, 200)}`);
                 if (domain) {
@@ -6928,7 +7300,7 @@ export async function browserAgent(
                     url: state.page.url(),
                     title,
                     notes: state.notes.slice(-12),
-                    pageText: observation.pageText ? observation.pageText.slice(0, 2000) : undefined,
+                    pageText: browserTaskPageContextForSession(observation),
                     createdAt: Date.now(),
                     expiresAt: Date.now() + LAST_BROWSER_TASK_TTL_MS,
                 };
@@ -7312,13 +7684,14 @@ export async function browserAgent(
                 }
 
                 if (rawClickGuard.question && rawClickGuard.choices?.length) {
-                    pauseBrowserRun(ctx, state, rawClickGuard.question, undefined, rawClickGuard.choices);
-                    shouldClose = false;
-                    await sendScreenshot(ctx, page, `❓ Нужно выбрать блок: ${rawClickGuard.question.slice(0, 180)}`);
-                    return {
-                        responseText: formatBrowserPauseResponse(rawClickGuard.question, rawClickGuard.choices, 'clarification'),
-                        keyboard: buildBrowserPauseKeyboard(state.id, rawClickGuard.choices),
-                    };
+                    state.notes.push([
+                        'Это внутренняя UI-неоднозначность, не вопрос пользователю.',
+                        rawClickGuard.question,
+                        'Смени стратегию: выбери другой selector/context, прокрути, открой детальную страницу, используй видимый текст или верни done/fail по результату.',
+                    ].join(' ').slice(0, 700));
+                    await sendProgress(ctx, '🌐 Вижу несколько похожих элементов; выбираю другую стратегию сама.');
+                    await page.waitForTimeout(200);
+                    continue;
                 }
 
                 const repeatedBlockedClickCount = state.history
@@ -7326,17 +7699,14 @@ export async function browserAgent(
                     .filter((record) => record.label === blockedClickLabel && record.error === 'contextless_click_blocked')
                     .length;
                 if (repeatedBlockedClickCount >= 2) {
-                    const question = [
-                        'Я дважды заблокировала один и тот же общий клик и vision-проверка не дала уверенного выбора.',
-                        'Нужен ручной ориентир: какую видимую кнопку/область нажать дальше?',
-                    ].join(' ');
-                    pauseBrowserRun(ctx, state, question);
-                    shouldClose = false;
-                    await sendScreenshot(ctx, page, `❓ Нужен ручной ориентир: ${question.slice(0, 180)}`);
-                    return {
-                        responseText: formatBrowserPauseResponse(question, [], 'manual_step'),
-                        keyboard: buildBrowserPauseKeyboard(state.id),
-                    };
+                    state.notes.push([
+                        'Один и тот же общий клик дважды заблокирован.',
+                        'Не спрашивай пользователя про кнопку/область: это внутренняя навигационная проблема.',
+                        'Используй другой путь: scroll, go_back, прямой URL категории, поиск на сайте, другой selector, или заверши done/fail по уже найденным данным.',
+                    ].join(' '));
+                    await sendProgress(ctx, '🌐 Повторный общий клик не помогает; перестраиваю маршрут сама.');
+                    await page.waitForTimeout(200);
+                    continue;
                 }
 
                 await sendProgress(ctx, '🌐 Не нажимаю общий элемент без привязки к целевому блоку; меняю стратегию.');
@@ -7387,14 +7757,23 @@ export async function browserAgent(
                     continue;
                 }
 
-                const question = 'Страница не даёт прогресса после повторяющегося действия. Я сохранила браузерную сессию: можно уточнить, что выбрать на текущей странице, или написать «продолжай», чтобы попробовать другую стратегию.';
-                pauseBrowserRun(ctx, state, question);
-                shouldClose = false;
-                await sendScreenshot(ctx, page, '❓ Страница не даёт прогресса после повторяющегося действия.');
-                return {
-                    responseText: formatBrowserPauseResponse(question, [], 'manual_step'),
-                    keyboard: buildBrowserPauseKeyboard(state.id),
-                };
+                const note = [
+                    `Действие "${signature}" повторяется после восстановления и всё ещё не даёт прогресса.`,
+                    'Не спрашивай пользователя про текущую страницу. Самостоятельно смени маршрут: go_back, прямой URL/поиск, другой selector, scroll в другую сторону, done по найденному результату или fail с причиной.',
+                ].join(' ');
+                state.notes.push(note);
+                state.history.push({
+                    step: i + 1,
+                    label: `blocked_repeated_pause ${signature}`.slice(0, 140),
+                    url,
+                    comment: note,
+                    result: 'failed',
+                    error: 'repeated_pause_blocked',
+                });
+                state.iterationCount = i + 1;
+                await sendProgress(ctx, '🌐 Повтор всё ещё не помогает; меняю маршрут без остановки задачи.');
+                await page.waitForTimeout(200);
+                continue;
             }
 
             if (shouldCritiqueDecision(decision, state, observation, repeatedCount)) {
@@ -7408,6 +7787,25 @@ export async function browserAgent(
                     });
                     if (critic.verdict === 'ask_user' && critic.confidence >= 0.65) {
                         const question = critic.question || critic.reason || 'Нужен ручной ориентир для следующего действия.';
+                        if (isInternalUiAmbiguityQuestion(question)) {
+                            const note = [
+                                `Decision critic предложил спросить пользователя про внутренний UI-выбор: ${question}`,
+                                'Это должна решить браузерная система. Смени selector/стратегию или верни done/fail по текущим данным.',
+                            ].join(' ');
+                            state.notes.push(note.slice(0, 700));
+                            state.history.push({
+                                step: i + 1,
+                                label: `blocked_critic_ui_ask_user ${actionSignature(decision)}`.slice(0, 140),
+                                url,
+                                comment: note,
+                                result: 'failed',
+                                error: 'critic_internal_ui_question_blocked',
+                            });
+                            state.iterationCount = i + 1;
+                            await sendProgress(ctx, '🌐 Проверка попросила ручной ориентир, но это внутренний UI-выбор; продолжаю сама.');
+                            await page.waitForTimeout(200);
+                            continue;
+                        }
                         pauseBrowserRun(ctx, state, question);
                         shouldClose = false;
                         await sendScreenshot(ctx, page, `❓ Нужен ручной ориентир: ${question.slice(0, 180)}`);
@@ -7436,6 +7834,23 @@ export async function browserAgent(
             }
 
             if (decision.action === 'done') {
+                const doneSummary = decision.summary ?? 'Задача выполнена.';
+                const shoppingBlockReason = shoppingCompletionBlockReason(taskForLlm, doneSummary, observation);
+                if (shoppingBlockReason) {
+                    state.notes.push(shoppingBlockReason.slice(0, 800));
+                    state.history.push({
+                        step: i + 1,
+                        label: `blocked_shopping_done ${actionSignature(decision)}`.slice(0, 140),
+                        url,
+                        comment: shoppingBlockReason,
+                        result: 'failed',
+                        error: 'shopping_done_missing_evidence',
+                    });
+                    state.iterationCount = i + 1;
+                    await sendProgress(ctx, '🌐 Пока нельзя завершить подбор: нужен конкретный комплект и ссылки на товары. Продолжаю искать карточки и href.');
+                    await page.waitForTimeout(200);
+                    continue;
+                }
                 await sendScreenshot(ctx, page, `✅ Готово: ${decision.summary?.slice(0, 200) ?? ''}`);
                 if (domain && domain !== state.sessionSavedForDomain) {
                     await BrowserSessionStore.save(state.browserCtx, state.userId, domain);
@@ -7448,16 +7863,16 @@ export async function browserAgent(
                 ctx.session.pendingBrowserTask = undefined;
                 ctx.session.lastBrowserTask = {
                     originalTask: state.originalTask,
-                    summary: decision.summary ?? 'Задача выполнена.',
+                    summary: doneSummary,
                     url: state.page.url(),
                     title,
                     notes: state.notes.slice(-12),
-                    pageText: observation.pageText ? observation.pageText.slice(0, 2000) : undefined,
+                    pageText: browserTaskPageContextForSession(observation),
                     createdAt: Date.now(),
                     expiresAt: Date.now() + LAST_BROWSER_TASK_TTL_MS,
                 };
                 const downloadsLine = sentDownloads.length ? `\n\nФайлы: ${sentDownloads.join(', ')}` : '';
-                return { responseText: `✅ Готово!\n\n${decision.summary ?? 'Задача выполнена.'}${downloadsLine}` };
+                return { responseText: `✅ Готово!\n\n${doneSummary}${downloadsLine}` };
             }
 
             if (decision.action === 'fail') {
@@ -7583,11 +7998,50 @@ export async function browserAgent(
                     result: 'ok',
                 });
                 state.iterationCount = i + 1;
+                if (note && shouldCompleteShoppingBrowseFromNote(taskForLlm, note)) {
+                    await sendScreenshot(ctx, page, `✅ Готово: ${note.slice(0, 200)}`);
+                    if (domain) {
+                        await BrowserSessionStore.save(state.browserCtx, state.userId, domain).catch(() => {});
+                        state.sessionSavedForDomain = domain;
+                        rememberSuccessfulSitePattern(domain, state, observation, note);
+                    }
+                    ctx.session.pendingBrowserTask = undefined;
+                    ctx.session.lastBrowserTask = {
+                        originalTask: state.originalTask,
+                        summary: note,
+                        url: state.page.url(),
+                        title,
+                        notes: state.notes.slice(-12),
+                        pageText: browserTaskPageContextForSession(observation),
+                        createdAt: Date.now(),
+                        expiresAt: Date.now() + LAST_BROWSER_TASK_TTL_MS,
+                    };
+                    return { responseText: `✅ Готово!\n\n${note}` };
+                }
                 continue;
             }
 
             if (decision.action === 'ask_user') {
                 const { question, choices } = buildBrowserPausePrompt(decision, observation, taskForLlm);
+                if (isInternalUiAmbiguityQuestion(question)) {
+                    const note = [
+                        `LLM попыталась спросить пользователя про внутренний UI-выбор: ${question}`,
+                        'Не делай этого. Самостоятельно выбери по DOM/скриншоту/context или смени стратегию: scroll, wait, go_back, поиск, прямой URL, другой selector, done/fail.',
+                    ].join(' ');
+                    state.notes.push(note.slice(0, 800));
+                    state.history.push({
+                        step: i + 1,
+                        label: `blocked_internal_ui_ask_user ${actionSignature(decision)}`.slice(0, 140),
+                        url,
+                        comment: note,
+                        result: 'failed',
+                        error: 'internal_ui_question_blocked',
+                    });
+                    state.iterationCount = i + 1;
+                    await sendProgress(ctx, '🌐 Это внутренний выбор на странице; решаю его сама и меняю стратегию.');
+                    await page.waitForTimeout(200);
+                    continue;
+                }
                 pauseBrowserRun(ctx, state, question, undefined, choices);
                 shouldClose = false;
                 await sendScreenshot(ctx, page, `❓ Нужно уточнение: ${question.slice(0, 180)}`);
@@ -7669,7 +8123,7 @@ export async function browserAgent(
                         error: 'shopping_target_blocked',
                     });
                     state.iterationCount = i + 1;
-                    await sendProgress(ctx, '🌐 Этот клик ведёт в корзину/логин, а не к фильтру или товару; ищу правильный элемент на странице.');
+                    await sendProgress(ctx, '🌐 Этот клик не соответствует текущей цели подбора; ищу правильный фильтр, категорию или карточку товара.');
                     await page.waitForTimeout(200);
                     continue;
                 }
