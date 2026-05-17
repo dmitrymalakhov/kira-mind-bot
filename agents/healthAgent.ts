@@ -122,13 +122,31 @@ export function buildHealthMenuKeyboard(): InlineKeyboard {
         .text('Активность', 'health:log:activity')
         .text('Заметка', 'health:log:note')
         .row()
-        .text('Анализ день', 'health:analyze:1')
-        .text('Анализ неделя', 'health:analyze:7')
-        .row()
-        .text('Анализ месяц', 'health:analyze:30')
+        .text('Анализ', 'health:analysis_menu')
         .row()
         .text('Экспорт 7 дней', 'health:export:7')
         .text('Экспорт 30 дней', 'health:export:30');
+}
+
+function buildHealthAnalysisKeyboard(): InlineKeyboard {
+    return new InlineKeyboard()
+        .text('День', 'health:analyze:1')
+        .text('Неделя', 'health:analyze:7')
+        .row()
+        .text('Месяц', 'health:analyze:30')
+        .row()
+        .text('Назад', 'health:menu');
+}
+
+function buildHealthAnalysisMenuResult(): ProcessingResult {
+    return {
+        responseText: [
+            'Выбери период анализа дневника здоровья.',
+            '',
+            'Я соберу паттерны по симптомам, еде, активности, давлению, времени суток и отмечу, где данных не хватает.',
+        ].join('\n'),
+        keyboard: buildHealthAnalysisKeyboard(),
+    };
 }
 
 export function buildHealthMenuResult(): ProcessingResult {
@@ -180,6 +198,10 @@ export async function handleHealthCallback(ctx: BotContext, callbackData: string
     if (action === 'analyze') {
         const days = normalizeAnalysisDays(Number(value) || DEFAULT_ANALYSIS_DAYS);
         return createHealthAnalysisResult(ctx, days);
+    }
+
+    if (action === 'analysis_menu') {
+        return buildHealthAnalysisMenuResult();
     }
 
     if (action === 'discomfort' && value && extra) {
@@ -344,12 +366,9 @@ export async function createHealthAnalysisResult(ctx: BotContext, days = DEFAULT
     const aiAnalysis = await buildAIHealthAnalysis(records, from, to, normalizedDays);
     return {
         responseText: aiAnalysis ?? buildLocalHealthAnalysis(records, from, to, normalizedDays),
-        keyboard: new InlineKeyboard()
-            .text('Анализ день', 'health:analyze:1')
-            .text('Анализ неделя', 'health:analyze:7')
+        keyboard: buildHealthAnalysisKeyboard()
             .row()
-            .text('Анализ месяц', 'health:analyze:30')
-            .text('Экспорт', `health:export:${normalizedDays}`),
+            .text('Экспорт этого периода', `health:export:${normalizedDays}`),
     };
 }
 
