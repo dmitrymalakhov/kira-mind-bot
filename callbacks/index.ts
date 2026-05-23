@@ -681,6 +681,22 @@ export function registerCallback(bot: Bot<BotContext>): void {
                             { reply_markup: buildPostponeKeyboard(reminderId) }
                         );
                     }
+                } else if (action === "edit") {
+                    const msgId = ctx.callbackQuery.message?.message_id;
+                    const cid = ctx.callbackQuery.message?.chat.id ?? ctx.chat!.id;
+                    ctx.session.pendingPostpone = undefined;
+                    ctx.session.pendingReminderEdit = {
+                        reminderId,
+                        messageId: msgId ?? 0,
+                        chatId: cid,
+                        createdAt: Date.now(),
+                        expiresAt: Date.now() + 10 * 60 * 1000,
+                    };
+                    await ctx.answerCallbackQuery({ text: "Жду правку" });
+                    await ctx.reply(
+                        "✏️ Напиши, что изменить в напоминании.\n" +
+                        "Например: «завтра в 11», «через 2 часа» или «текст: позвонить маме»."
+                    );
                 }
             } else if (callbackData.startsWith("postpone_")) {
                 // Обработка выбора времени откладывания
@@ -698,6 +714,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 if (postponeTime === "custom") {
                     const msgId = ctx.callbackQuery.message?.message_id;
                     const cid = ctx.callbackQuery.message?.chat.id ?? ctx.chat!.id;
+                    ctx.session.pendingReminderEdit = undefined;
                     ctx.session.pendingPostpone = {
                         reminderId,
                         messageId: msgId ?? 0,

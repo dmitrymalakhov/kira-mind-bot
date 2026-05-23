@@ -224,6 +224,10 @@ export async function saveOrUpdatePortrait(
             userId,
             isAnchor: true,
             confidence: PORTRAIT_CONFIDENCE,
+            memoryKind: 'portrait',
+            strength: 0.92,
+            vividness: 0.68,
+            specificity: 0.78,
         });
         devLog(`PsychologicalPortraitService: saved portrait for "${contactName}"`);
         return true;

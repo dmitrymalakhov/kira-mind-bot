@@ -364,6 +364,27 @@ export interface SearchResultLike {
     retrievalCount?: number;
     lastRetrievedAt?: Date;
     retrievalCues?: string[];
+    memoryKind?: string;
+    strength?: number;
+    vividness?: number;
+    specificity?: number;
+}
+
+export interface RecalledMemoryRef {
+    id: string;
+    domain: string;
+    content: string;
+    score: number;
+    memoryKind?: string;
+    confidence?: number;
+    status?: string;
+    sourceEpisodeId?: string;
+    sourceMemoryIds?: string[];
+}
+
+export interface MultiQueryMemoryContextResult {
+    context: string;
+    recalledMemories: RecalledMemoryRef[];
 }
 
 function addCandidate(
@@ -509,6 +530,10 @@ function formatFactWithHistory(r: SearchResultLike): string {
     const status = r.status && r.status !== 'active' ? ` [статус: ${r.status}]` : '';
     const confirmations = (r.confirmationCount ?? 0) > 1 ? ` [подтверждений: ${r.confirmationCount}]` : '';
     const retrievals = (r.retrievalCount ?? 0) >= 3 ? ` [часто всплывает: ${r.retrievalCount}]` : '';
+    const kind = r.memoryKind && r.memoryKind !== 'fact' ? ` [тип: ${r.memoryKind}]` : '';
+    const humanSignal = typeof r.strength === 'number' || typeof r.vividness === 'number' || typeof r.specificity === 'number'
+        ? ` [сила:${(r.strength ?? 0).toFixed(2)} vivid:${(r.vividness ?? 0).toFixed(2)} spec:${(r.specificity ?? 0).toFixed(2)}]`
+        : '';
     const source = r.sourceContext && r.sourceContext.trim() && r.sourceContext.trim() !== r.content.trim()
         ? ` (источник: ${r.sourceContext.trim().slice(0, 140)})`
         : '';
@@ -518,7 +543,7 @@ function formatFactWithHistory(r: SearchResultLike): string {
             ? '[сводная глава] '
             : '';
 
-    return `${confidenceMarker}${kindMarker}${r.content}${status}${confirmations}${retrievals}${history}${source}`;
+    return `${confidenceMarker}${kindMarker}${r.content}${kind}${status}${confirmations}${retrievals}${humanSignal}${history}${source}`;
 }
 
 /**
@@ -633,7 +658,7 @@ function trimToTokenBudget(facts: string[], budget: number): string[] {
 /** Количество предыдущих сообщений для резолвинга местоимений */
 const HISTORY_CONTEXT_MESSAGES = 3;
 
-export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: string, memoryNeed?: MemoryNeed): Promise<string> {
+export async function getMultiQueryMemoryContextDetailed(ctx: BotContext, userMessage: string, memoryNeed?: MemoryNeed): Promise<MultiQueryMemoryContextResult> {
     // Если memoryNeed не передан — классифицируем
     const need = memoryNeed ?? await classifyMemoryNeed(userMessage);
 
@@ -647,11 +672,11 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
     if (need === 'none') {
         if (recentSessionFacts.length === 0) {
             devLog('Memory need: none — skipping memory retrieval');
-            return '';
+            return { context: '', recalledMemories: [] };
         }
         // Есть недавние факты — возвращаем только их, без vector search
         devLog('Memory need: none, but injecting recent facts:', recentSessionFacts.length);
-        return '[Только что запомнила]:\n' + recentSessionFacts.join('\n');
+        return { context: '[Только что запомнила]:\n' + recentSessionFacts.join('\n'), recalledMemories: [] };
     }
 
     const inventoryRequest = isMemoryInventoryRequest(userMessage);
@@ -731,6 +756,10 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
                     retrievalCount: memory.retrievalCount,
                     lastRetrievedAt: memory.lastRetrievedAt,
                     retrievalCues: memory.retrievalCues,
+                    memoryKind: memory.memoryKind,
+                    strength: memory.strength,
+                    vividness: memory.vividness,
+                    specificity: memory.specificity,
                 }, memory.isAnchor ? ANCHOR_DIRECT_SCORE : MEMORY_INVENTORY_SCORE);
             }
         } catch {
@@ -932,5 +961,22 @@ export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: s
         afterTokenBudget: trimmed.length,
         recentFactsInjected: newRecentFacts.length,
     });
-    return context;
+    const recalledMemories = reranked
+        .slice(0, trimmed.length)
+        .map((fact) => ({
+            id: fact.id,
+            domain: fact.domain || 'general',
+            content: fact.content,
+            score: fact._finalScore ?? fact.score,
+            memoryKind: fact.memoryKind,
+            confidence: fact.confidence,
+            status: fact.status,
+            sourceEpisodeId: fact.sourceEpisodeId,
+            sourceMemoryIds: fact.sourceMemoryIds,
+        }));
+    return { context, recalledMemories };
+}
+
+export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: string, memoryNeed?: MemoryNeed): Promise<string> {
+    return (await getMultiQueryMemoryContextDetailed(ctx, userMessage, memoryNeed)).context;
 }

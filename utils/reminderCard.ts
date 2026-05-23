@@ -98,6 +98,8 @@ export function buildReminderCard(
         .text('✅ Выполнено', `reminder_complete_${r.id}`)
         .text('⏰ Отложить',  `reminder_postpone_${r.id}`)
         .row()
+        .text('✏️ Изменить', `reminder_edit_${r.id}`)
+        .row()
         .text('❌ Отменить',  `reminder_cancel_${r.id}`)
         .row()
         .text(prevBtn,       prevCb)

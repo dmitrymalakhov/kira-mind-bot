@@ -38,12 +38,14 @@ import { initReflectionMode } from "./services/reflectionModeService";
 import { maybeProactiveHint } from "./utils/proactiveMemory";
 import { maybeAskMemoryGap } from "./utils/memoryGapDetector";
 import { maybeDetectImplicitReminder } from "./utils/implicitReminderDetector";
+import { reconsolidateAfterResponse } from "./services/MemoryReconsolidationService";
 import { looksLikeBrowserTaskCancellation } from "./utils/browserTaskCancellation";
 import { AppDataSource } from "./data-source";
 import { ReminderRepository } from "./services/ReminderRepository";
 import { getTelegramMenuCommands } from "./capabilities";
 import { persistSessionNow } from "./services/SessionStorage";
 import { healthPhotoAgent, shouldRouteHealthPhoto } from "./agents/healthAgent";
+import { applyReminderEditInput } from "./utils/reminderEditor";
 
 
 // Загрузка переменных окружения
@@ -576,6 +578,41 @@ bot.on("message:text", async (ctx, next) => {
 
                 ctx.session.lastUserMessage.processed = true;
 
+                if (ctx.session.pendingReminderEdit) {
+                    const pending = ctx.session.pendingReminderEdit;
+                    const isCancel = /^(отмена|отмени|не надо|стоп|cancel)$/iu.test(message.trim());
+                    if (isCancel) {
+                        ctx.session.pendingReminderEdit = undefined;
+                        await ctx.reply('Ок, редактирование напоминания отменено.');
+                        return;
+                    }
+
+                    if (pending.expiresAt <= Date.now()) {
+                        ctx.session.pendingReminderEdit = undefined;
+                        await ctx.reply('Время редактирования вышло. Открой /reminders и нажми «Изменить» ещё раз.');
+                        return;
+                    }
+
+                    const reminder = ReminderRegistry.getInstance().get(pending.reminderId);
+                    if (!reminder) {
+                        ctx.session.pendingReminderEdit = undefined;
+                        await ctx.reply('Не нашла это напоминание. Возможно, оно уже выполнено или отменено.');
+                        return;
+                    }
+
+                    const editResult = await applyReminderEditInput(reminder, message);
+                    if (!editResult.ok || !editResult.reminder) {
+                        await ctx.reply(editResult.responseText);
+                        return;
+                    }
+
+                    ctx.session.pendingReminderEdit = undefined;
+                    const sessIdx = ctx.session.reminders.findIndex(r => r.id === editResult.reminder!.id);
+                    if (sessIdx >= 0) ctx.session.reminders[sessIdx] = editResult.reminder;
+                    await ctx.reply(editResult.responseText);
+                    return;
+                }
+
                 // Кастомное время для переноса напоминания
                 if (ctx.session.pendingPostpone) {
                     const { reminderId, messageId, chatId } = ctx.session.pendingPostpone;
@@ -768,6 +805,8 @@ bot.on("message:text", async (ctx, next) => {
 
                 // Проактивная память: бот может вспомнить что-то уместное из долговременной памяти
                 maybeProactiveHint(ctx, message, result.responseText).catch(() => {});
+                // Reconsolidation: использованные воспоминания подтверждаются или обновляются после нового обмена.
+                reconsolidateAfterResponse(ctx, message, result.responseText, result.recalledMemories).catch(() => {});
                 // Детекция пробелов: если упомянут незнакомый человек — задать уточняющий вопрос
                 maybeAskMemoryGap(ctx, message).catch(() => {});
                 // Детекция неявных напоминаний: предложить создать напоминание если упомянуто событие со временем

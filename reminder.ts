@@ -86,6 +86,11 @@ export function rescheduleReminder(reminder: Reminder): void {
         clearTimeout(existing);
         remindersTimers.delete(reminder.id);
     }
+    const expiry = expiryTimers.get(reminder.id);
+    if (expiry) {
+        clearTimeout(expiry);
+        expiryTimers.delete(reminder.id);
+    }
     if (_botRef) {
         scheduleReminder(_botRef, reminder);
     } else {
@@ -241,6 +246,7 @@ async function sendReminder(bot: Bot<BotContext>, reminder: Reminder): Promise<v
             .text("✅ Выполнено", `reminder_complete_${reminder.id}`)
             .text("⏰ Напомнить позже", `reminder_postpone_${reminder.id}`)
             .row()
+            .text("✏️ Изменить", `reminder_edit_${reminder.id}`)
             .text("❌ Отменить", `reminder_cancel_${reminder.id}`);
 
         const sentMessage = await bot.api.sendMessage(

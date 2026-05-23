@@ -10,6 +10,7 @@ import { devLog, parseLLMJson } from "./utils";
 import openai from "./openai";
 import { llmCache, LLM_CACHE_TTL } from "./utils/llmCache";
 import { fetchAgentMemoryContext, buildMemoryContextBlock } from "./utils/agentMemoryContext";
+import type { RecalledMemoryRef } from "./utils/multiQueryMemory";
 import { extractExplicitRememberFact } from "./utils/enhancedFactExtraction";
 import { detectRelationshipInMessage, resolveRelationshipFromMemory } from "./utils/resolveRelationshipFromMemory";
 import { createPlan } from "./orchestration/planner";
@@ -142,6 +143,8 @@ export interface ProcessingResult {
     botReaction?: string;
     /** Сводка переговоров уже отправлена отдельным сообщением — не дублировать ответ */
     negotiationSummarySent?: boolean;
+    /** Воспоминания, реально подмешанные в контекст ответа. Используется для reconsolidation. */
+    recalledMemories?: RecalledMemoryRef[];
 }
 
 interface IntentDedupCheckResult {
@@ -1078,6 +1081,7 @@ export async function processMessage(
             lastLocation,
             enrichedContextFromMemory,
         });
+        result.recalledMemories = initialMemory.recalledMemories ?? [];
         saveSessionDedupSnapshot(ctx, { message, classification, plan, result });
         return result;
     } catch (error) {

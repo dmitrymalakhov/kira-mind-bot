@@ -23,6 +23,7 @@ import { ReminderRepository } from '../services/ReminderRepository';
 import { devLog, parseLLMJson } from '../utils';
 import { buildQuickChoiceKeyboard } from '../utils/quickChoice';
 import openai from '../openai';
+import { applyReminderEditInput } from '../utils/reminderEditor';
 
 /**
  * Ищет напоминание по текстовому запросу и отменяет его.
@@ -54,6 +55,9 @@ async function cancelReminderByQuery(
             best = { reminder: r, score };
         }
     }
+    if (!best && active.length === 1) {
+        best = { reminder: active[0], score: 1 };
+    }
 
     if (!best) {
         const list = active.map((r, i) => `${i + 1}. ${r.displayText || r.text}`).join('\n');
@@ -64,6 +68,7 @@ async function cancelReminderByQuery(
 
     const { reminder } = best;
     await cancelReminder(reminder.id);
+    ReminderRegistry.getInstance().remove(reminder.id);
     if (ctx.session?.reminders) {
         ctx.session.reminders = ctx.session.reminders.filter((r) => r.id !== reminder.id);
     }
@@ -105,6 +110,9 @@ async function updateReminderByQuery(
             best = { reminder: r, score };
         }
     }
+    if (!best && active.length === 1) {
+        best = { reminder: active[0], score: 1 };
+    }
 
     if (!best) {
         const list = active.map((r, i) => `${i + 1}. ${r.displayText || r.text}`).join('\n');
@@ -113,67 +121,22 @@ async function updateReminderByQuery(
         };
     }
 
-    const reminder = { ...best.reminder };
-    const now = new Date();
-    const currentDueDateStr = new Date(reminder.dueDate).toLocaleString('ru-RU', {
-        day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: 'numeric', weekday: 'long'
-    });
-
-    try {
-        const extractResp = await openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
-            messages: [
-                {
-                    role: 'system',
-                    content: `Текущая дата и время: ${now.toLocaleString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: 'numeric', weekday: 'long' })}.
-Существующее напоминание: "${reminder.displayText || reminder.text}", текущее время срабатывания: ${currentDueDateStr}.
-Пользователь хочет изменить это напоминание. Извлеки из его запроса новое время и/или новый текст.
-Для нового времени рассчитай абсолютную дату и время относительно текущего момента.
-Верни только JSON: {"newDueDate": "ISO 8601 или null если не меняется", "newText": "новый текст или null если не меняется"}`,
-                },
-                { role: 'user', content: message.slice(0, 500) },
-            ],
-            temperature: 1,
-        });
-
-        const content = extractResp.choices[0]?.message?.content || '';
-        const extracted = parseLLMJson<{ newDueDate?: string | null; newText?: string | null }>(content);
-
-        if (extracted?.newDueDate) {
-            const parsed = new Date(extracted.newDueDate);
-            if (!isNaN(parsed.getTime())) {
-                reminder.dueDate = parsed;
-            }
-        }
-        if (extracted?.newText) {
-            reminder.text = extracted.newText;
-            reminder.displayText = extracted.newText;
-        }
-    } catch (e) {
-        console.error('[ORCH] updateReminderByQuery: LLM extraction failed', e);
+    const editResult = await applyReminderEditInput(best.reminder, message);
+    if (!editResult.ok || !editResult.reminder) {
+        return { responseText: editResult.responseText };
     }
 
-    rescheduleReminder(reminder);
-    ReminderRegistry.getInstance().add(reminder);
+    const reminder = editResult.reminder;
 
     if (ctx.session?.reminders) {
         const idx = ctx.session.reminders.findIndex((r) => r.id === reminder.id);
         if (idx >= 0) ctx.session.reminders[idx] = reminder;
     }
 
-    await ReminderRepository.update(reminder).catch((e) =>
-        console.error('[ORCH] updateReminderByQuery: DB update failed', e)
-    );
-
     devLog('Executor: updated reminder', reminder.id);
     console.log('[ORCH] updateReminderByQuery: updated', reminder.id, '| due:', new Date(reminder.dueDate).toISOString());
 
-    const newDateStr = new Date(reminder.dueDate).toLocaleString('ru-RU', {
-        day: 'numeric', month: 'long', hour: 'numeric', minute: 'numeric'
-    });
-    return {
-        responseText: `✅ Напоминание обновлено: «${reminder.displayText || reminder.text}» → ${newDateStr}`,
-    };
+    return { responseText: editResult.responseText };
 }
 
 /** Фильтрует активные напоминания по периоду (today/tomorrow/week/undefined=все). */
@@ -221,6 +184,7 @@ async function cancelAllReminders(
 
     for (const r of targets) {
         await cancelReminder(r.id);
+        ReminderRegistry.getInstance().remove(r.id);
         if (ctx.session?.reminders) {
             ctx.session.reminders = ctx.session.reminders.filter((s) => s.id !== r.id);
         }

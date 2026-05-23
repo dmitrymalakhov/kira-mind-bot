@@ -1,5 +1,5 @@
 import { IDomainVectorService } from './interfaces/IDomainVectorService';
-import { MemoryEntry, SearchOptions, SearchResult, MemoryStats, DomainConfig, SearchStrategy, DomainStats, DomainTrend } from '../types';
+import { MemoryEntry, SearchOptions, SearchResult, MemoryStats, DomainConfig, SearchStrategy, DomainStats, DomainTrend, MemoryRelation, MemoryRelationType } from '../types';
 export class PineconeVectorService implements IDomainVectorService {
     private botId = process.env.BOT_ID || 'kira-mind-bot';
     async initializeCollection(): Promise<void> {
@@ -26,10 +26,10 @@ export class PineconeVectorService implements IDomainVectorService {
     async getMemoriesForCompression(userId: string, domain: string, olderThanDays: number): Promise<import('../types').MemoryEntry[]> {
         return [];
     }
-    async addRelationship(idA: string, domainA: string, idB: string, domainB: string): Promise<void> {
+    async addRelationship(idA: string, domainA: string, idB: string, domainB: string, type?: MemoryRelationType, weight?: number, cue?: string): Promise<void> {
         // TODO: implement when Pinecone is used
     }
-    async getRelatedFacts(memoryId: string, domain: string): Promise<Array<{ id: string; domain: string }>> {
+    async getRelatedFacts(memoryId: string, domain: string): Promise<MemoryRelation[]> {
         return [];
     }
     async fetchMemoryById(memoryId: string, domain: string): Promise<import('../types').SearchResult | null> {

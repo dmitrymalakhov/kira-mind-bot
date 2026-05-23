@@ -1,7 +1,7 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { v4 as uuidv4 } from 'uuid';
 import { IDomainVectorService } from './interfaces/IDomainVectorService';
-import { MemoryEntry, SearchOptions, SearchResult, MemoryStats, DomainConfig, SearchStrategy, DomainStats, DomainTrend } from '../types';
+import { MemoryEntry, SearchOptions, SearchResult, MemoryStats, DomainConfig, SearchStrategy, DomainStats, DomainTrend, MemoryRelation, MemoryRelationType } from '../types';
 import { PREDEFINED_DOMAINS, DOMAIN_SEARCH_THRESHOLDS } from '../constants/domains';
 import { config } from '../config';
 import openai from '../openai';
@@ -85,6 +85,22 @@ export class QdrantVectorService implements IDomainVectorService {
         return deduplicated.length > 0 ? deduplicated.slice(0, 10) : undefined;
     }
 
+    private serializeRelations(relations: unknown): Array<Record<string, unknown>> | undefined {
+        if (!Array.isArray(relations)) return undefined;
+        const normalized = relations
+            .map((relation: any) => ({
+                id: String(relation?.id ?? ''),
+                domain: String(relation?.domain ?? ''),
+                type: relation?.type ? String(relation.type) : undefined,
+                weight: typeof relation?.weight === 'number' ? Math.min(1, Math.max(0, relation.weight)) : undefined,
+                createdAt: this.serializeDate(relation?.createdAt),
+                cue: relation?.cue ? String(relation.cue).slice(0, 140) : undefined,
+            }))
+            .filter((relation) => relation.id && relation.domain)
+            .slice(0, 8);
+        return normalized.length > 0 ? normalized : undefined;
+    }
+
     private buildPayload(
         id: string,
         memory: Omit<MemoryEntry, 'id'>,
@@ -112,7 +128,11 @@ export class QdrantVectorService implements IDomainVectorService {
             lastRetrievedAt: this.serializeDate(memory.lastRetrievedAt) ?? this.serializeDate(existingPayload?.lastRetrievedAt),
             retrievalCues: memory.retrievalCues ?? existingPayload?.retrievalCues,
             previousVersions: this.serializePreviousVersions(memory, existingPayload, contentChanged, existingContent),
-            relatedIds: memory.relatedIds ?? existingPayload?.relatedIds,
+            relatedIds: this.serializeRelations(memory.relatedIds ?? existingPayload?.relatedIds),
+            memoryKind: memory.memoryKind ?? existingPayload?.memoryKind,
+            strength: memory.strength ?? existingPayload?.strength,
+            vividness: memory.vividness ?? existingPayload?.vividness,
+            specificity: memory.specificity ?? existingPayload?.specificity,
             emotionalTag: memory.emotionalTag ?? existingPayload?.emotionalTag,
             isAnchor: memory.isAnchor ?? existingPayload?.isAnchor,
             sourceEpisodeId: memory.sourceEpisodeId ?? existingPayload?.sourceEpisodeId,
@@ -139,6 +159,10 @@ export class QdrantVectorService implements IDomainVectorService {
         if (payload.retrievalCues === undefined) delete payload.retrievalCues;
         if (payload.previousVersions === undefined) delete payload.previousVersions;
         if (payload.relatedIds === undefined) delete payload.relatedIds;
+        if (payload.memoryKind === undefined) delete payload.memoryKind;
+        if (payload.strength === undefined) delete payload.strength;
+        if (payload.vividness === undefined) delete payload.vividness;
+        if (payload.specificity === undefined) delete payload.specificity;
         if (payload.emotionalTag === undefined) delete payload.emotionalTag;
         if (payload.isAnchor === undefined) delete payload.isAnchor;
         if (payload.sourceEpisodeId === undefined) delete payload.sourceEpisodeId;
@@ -208,8 +232,21 @@ export class QdrantVectorService implements IDomainVectorService {
             isAnchor: Boolean(payload.isAnchor),
             expiresAt: payload.expiresAt ? new Date(payload.expiresAt) : undefined,
             relatedIds: Array.isArray(payload.relatedIds)
-                ? (payload.relatedIds as Array<{ id: string; domain: string }>)
+                ? (payload.relatedIds as any[])
+                    .map((relation: any) => ({
+                        id: String(relation.id ?? ''),
+                        domain: String(relation.domain ?? ''),
+                        type: relation.type ? String(relation.type) as MemoryRelationType : undefined,
+                        weight: typeof relation.weight === 'number' ? relation.weight : undefined,
+                        createdAt: relation.createdAt ? new Date(relation.createdAt) : undefined,
+                        cue: relation.cue ? String(relation.cue) : undefined,
+                    }))
+                    .filter((relation: MemoryRelation) => relation.id && relation.domain)
                 : undefined,
+            memoryKind: payload.memoryKind ? String(payload.memoryKind) as any : undefined,
+            strength: typeof payload.strength === 'number' ? payload.strength : undefined,
+            vividness: typeof payload.vividness === 'number' ? payload.vividness : undefined,
+            specificity: typeof payload.specificity === 'number' ? payload.specificity : undefined,
             emotionalTag,
             sourceEpisodeId: payload.sourceEpisodeId ? String(payload.sourceEpisodeId) : undefined,
             sourceContext: payload.sourceContext ? String(payload.sourceContext) : undefined,
@@ -278,8 +315,11 @@ export class QdrantVectorService implements IDomainVectorService {
                 const emotionalBoost = 1 + 0.1 * arousal;
                 const retrievalCount = Math.max(0, r.retrievalCount ?? 0);
                 const familiarityBoost = 1 + Math.min(0.12, Math.log1p(retrievalCount) * 0.025);
+                const strengthBoost = 1 + Math.min(0.10, Math.max(0, r.strength ?? 0) * 0.10);
+                const vividnessBoost = 1 + Math.min(0.08, Math.max(0, r.vividness ?? 0) * 0.08);
+                const specificityBoost = 1 + Math.min(0.06, Math.max(0, r.specificity ?? 0) * 0.06);
 
-                const rankScore = r.score * importanceBoost * recencyFactor * emotionalBoost * familiarityBoost;
+                const rankScore = r.score * importanceBoost * recencyFactor * emotionalBoost * familiarityBoost * strengthBoost * vividnessBoost * specificityBoost;
                 return { ...r, _rankScore: rankScore };
             })
             .sort((a, b) => b._rankScore - a._rankScore)
@@ -568,15 +608,31 @@ export class QdrantVectorService implements IDomainVectorService {
             .slice(0, limit);
     }
 
-    /** Добавляет двунаправленную связь между двумя фактами (макс 5 связей на факт) */
-    async addRelationship(idA: string, domainA: string, idB: string, domainB: string): Promise<void> {
+    /** Добавляет двунаправленную типизированную связь между двумя фактами. */
+    async addRelationship(
+        idA: string,
+        domainA: string,
+        idB: string,
+        domainB: string,
+        type: MemoryRelationType = 'semantic',
+        weight = 0.65,
+        cue?: string
+    ): Promise<void> {
         await Promise.allSettled([
-            this.appendRelation(idA, domainA, idB, domainB),
-            this.appendRelation(idB, domainB, idA, domainA),
+            this.appendRelation(idA, domainA, idB, domainB, type, weight, cue),
+            this.appendRelation(idB, domainB, idA, domainA, type, weight, cue),
         ]);
     }
 
-    private async appendRelation(memoryId: string, domain: string, relatedId: string, relatedDomain: string): Promise<void> {
+    private async appendRelation(
+        memoryId: string,
+        domain: string,
+        relatedId: string,
+        relatedDomain: string,
+        type: MemoryRelationType,
+        weight: number,
+        cue?: string
+    ): Promise<void> {
         const collection = this.collectionFor(domain);
         try {
             const points = await this.client.retrieve(collection, {
@@ -585,13 +641,40 @@ export class QdrantVectorService implements IDomainVectorService {
                 with_vector: false,
             });
             if (!points[0]) return;
-            const existing: Array<{ id: string; domain: string }> =
-                Array.isArray(points[0].payload?.relatedIds) ? (points[0].payload!.relatedIds as any) : [];
-            if (existing.some(r => r.id === relatedId)) return; // уже связаны
-            if (existing.length >= 5) return;                   // лимит связей
+            const existing: MemoryRelation[] = Array.isArray(points[0].payload?.relatedIds)
+                ? (points[0].payload!.relatedIds as any[])
+                    .map((r: any) => ({
+                        id: String(r.id ?? ''),
+                        domain: String(r.domain ?? ''),
+                        type: r.type ? String(r.type) as MemoryRelationType : undefined,
+                        weight: typeof r.weight === 'number' ? r.weight : undefined,
+                        createdAt: r.createdAt ? new Date(r.createdAt) : undefined,
+                        cue: r.cue ? String(r.cue) : undefined,
+                    }))
+                    .filter((r: MemoryRelation) => r.id && r.domain)
+                : [];
+            const relation: MemoryRelation = {
+                id: relatedId,
+                domain: relatedDomain,
+                type,
+                weight: Math.min(1, Math.max(0, weight)),
+                createdAt: new Date(),
+                cue: cue?.replace(/\s+/g, ' ').trim().slice(0, 140),
+            };
+            const existingIndex = existing.findIndex(r => r.id === relatedId && r.domain === relatedDomain);
+            if (existingIndex >= 0) {
+                const previous = existing[existingIndex];
+                if ((previous.weight ?? 0) >= (relation.weight ?? 0)) return;
+                existing[existingIndex] = { ...previous, ...relation };
+            } else {
+                existing.push(relation);
+            }
+            const nextRelations = existing
+                .sort((a, b) => (b.weight ?? 0.5) - (a.weight ?? 0.5))
+                .slice(0, 8);
             await this.client.setPayload(collection, {
                 points: [memoryId],
-                payload: { relatedIds: [...existing, { id: relatedId, domain: relatedDomain }] },
+                payload: { relatedIds: nextRelations },
             });
         } catch {
             // fire & forget — не критично
@@ -599,7 +682,7 @@ export class QdrantVectorService implements IDomainVectorService {
     }
 
     /** Возвращает список relatedIds из payload без эмбеддинга */
-    async getRelatedFacts(memoryId: string, domain: string): Promise<Array<{ id: string; domain: string }>> {
+    async getRelatedFacts(memoryId: string, domain: string): Promise<MemoryRelation[]> {
         const collection = this.collectionFor(domain);
         try {
             const points = await this.client.retrieve(collection, {
@@ -610,7 +693,16 @@ export class QdrantVectorService implements IDomainVectorService {
             if (!points[0]) return [];
             if (this.isExpiredPayload(points[0].payload)) return [];
             return Array.isArray(points[0].payload?.relatedIds)
-                ? (points[0].payload!.relatedIds as Array<{ id: string; domain: string }>)
+                ? (points[0].payload!.relatedIds as any[])
+                    .map((relation: any) => ({
+                        id: String(relation.id ?? ''),
+                        domain: String(relation.domain ?? ''),
+                        type: relation.type ? String(relation.type) as MemoryRelationType : undefined,
+                        weight: typeof relation.weight === 'number' ? relation.weight : undefined,
+                        createdAt: relation.createdAt ? new Date(relation.createdAt) : undefined,
+                        cue: relation.cue ? String(relation.cue) : undefined,
+                    }))
+                    .filter((relation: MemoryRelation) => relation.id && relation.domain)
                 : [];
         } catch {
             return [];
@@ -747,6 +839,22 @@ export class QdrantVectorService implements IDomainVectorService {
                     retrievalCues: Array.isArray(p.retrievalCues) ? p.retrievalCues.map(String) : undefined,
                     isAnchor: Boolean(p.isAnchor),
                     expiresAt: p.expiresAt ? new Date(p.expiresAt as Date | string) : undefined,
+                    relatedIds: Array.isArray(p.relatedIds)
+                        ? (p.relatedIds as any[])
+                            .map((relation: any) => ({
+                                id: String(relation.id ?? ''),
+                                domain: String(relation.domain ?? ''),
+                                type: relation.type ? String(relation.type) as MemoryRelationType : undefined,
+                                weight: typeof relation.weight === 'number' ? relation.weight : undefined,
+                                createdAt: relation.createdAt ? new Date(relation.createdAt) : undefined,
+                                cue: relation.cue ? String(relation.cue) : undefined,
+                            }))
+                            .filter((relation: MemoryRelation) => relation.id && relation.domain)
+                        : undefined,
+                    memoryKind: p.memoryKind,
+                    strength: typeof p.strength === 'number' ? p.strength : undefined,
+                    vividness: typeof p.vividness === 'number' ? p.vividness : undefined,
+                    specificity: typeof p.specificity === 'number' ? p.specificity : undefined,
                     sourceEpisodeId: p.sourceEpisodeId ? String(p.sourceEpisodeId) : undefined,
                     sourceContext: p.sourceContext ? String(p.sourceContext) : undefined,
                     sourceMessageIds: Array.isArray(p.sourceMessageIds) ? p.sourceMessageIds.map(String) : undefined,
@@ -903,8 +1011,21 @@ export class QdrantVectorService implements IDomainVectorService {
                     isAnchor: Boolean(payload.isAnchor),
                     expiresAt: payload.expiresAt ? new Date(payload.expiresAt as Date | string) : undefined,
                     relatedIds: Array.isArray(payload.relatedIds)
-                        ? (payload.relatedIds as Array<{ id: string; domain: string }>)
+                        ? (payload.relatedIds as any[])
+                            .map((relation: any) => ({
+                                id: String(relation.id ?? ''),
+                                domain: String(relation.domain ?? ''),
+                                type: relation.type ? String(relation.type) as MemoryRelationType : undefined,
+                                weight: typeof relation.weight === 'number' ? relation.weight : undefined,
+                                createdAt: relation.createdAt ? new Date(relation.createdAt) : undefined,
+                                cue: relation.cue ? String(relation.cue) : undefined,
+                            }))
+                            .filter((relation: MemoryRelation) => relation.id && relation.domain)
                         : undefined,
+                    memoryKind: payload.memoryKind,
+                    strength: typeof payload.strength === 'number' ? payload.strength : undefined,
+                    vividness: typeof payload.vividness === 'number' ? payload.vividness : undefined,
+                    specificity: typeof payload.specificity === 'number' ? payload.specificity : undefined,
                     emotionalTag: payload.emotionalTag,
                     sourceEpisodeId: payload.sourceEpisodeId ? String(payload.sourceEpisodeId) : undefined,
                     sourceContext: payload.sourceContext ? String(payload.sourceContext) : undefined,

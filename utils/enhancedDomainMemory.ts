@@ -1,5 +1,5 @@
 import { getVectorService } from '../services/VectorServiceFactory';
-import { MemoryEntry, MemoryExtractionMethod, MemoryStatus, MemorySubject, SearchOptions } from '../types';
+import { EmotionalTag, MemoryEntry, MemoryExtractionMethod, MemoryKind, MemoryRelationType, MemoryStatus, MemorySubject, SearchOptions } from '../types';
 import { BotContext } from '../types';
 import { devLog, parseLLMJson } from '../utils';
 import openai from '../openai';
@@ -31,6 +31,10 @@ export interface MemorySaveMetadata {
     validFrom?: Date;
     validTo?: Date;
     status?: MemoryStatus;
+    memoryKind?: MemoryKind;
+    strength?: number;
+    vividness?: number;
+    specificity?: number;
 }
 
 // Нижний порог для поиска устаревших планировочных фактов при смене состояния
@@ -84,6 +88,72 @@ function inferMemoryStatus(content: string, expiresAt?: Date): MemoryStatus {
         return 'done';
     }
     return 'active';
+}
+
+export function inferMemoryKind(content: string, tags: string[] = [], metadata: Partial<MemorySaveMetadata> = {}): MemoryKind {
+    if (metadata.memoryKind) return metadata.memoryKind;
+    if (tags.includes('memory-episode') || content.startsWith('[ЭПИЗОД ПАМЯТИ:')) return 'episode';
+    if (tags.includes('memory-chapter') || content.startsWith('[ГЛАВА ПАМЯТИ:')) return 'chapter';
+    if (tags.some(tag => String(tag).startsWith('portrait:')) || content.startsWith('[ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ:')) return 'portrait';
+
+    const lc = content.toLowerCase();
+    if (/обещал|обещала|пообещал|пообещала|договорил[аи]сь|договоренность|договорённость/.test(lc)) return 'promise';
+    if (/не хочу чтобы|не надо|не нужно|не люблю когда|границ|нельзя|не спрашивай|не предлагай/.test(lc)) return 'boundary';
+    if (/кажд(ый|ое|ую)|обычно|регулярно|по утрам|по вечерам|привычк|рутин/.test(lc)) return 'routine';
+    if (/люблю|нравится|предпочита|не люблю|терпеть не могу|обожаю|ненавижу|мой любим/.test(lc)) return 'preference';
+    if (/жена|муж|мама|папа|сын|дочь|брат|сестра|коллега|друг|подруга|партн[её]р|отношени/.test(lc)) return 'relationship';
+    if (/жду|ожидаю|надо|нужно|осталось|дедлайн|срок|не забыть|предстоит|открыт(ый|ая|ое) вопрос/.test(lc)) return 'open_loop';
+    if (/планир|собира[ею]тся|хоч[уе]т|цель|мечта|намерен|намерена|будет/.test(lc)) return 'goal';
+    if (/сейчас|теперь|уже|переехал|переехала|работает|жив[её]т|болеет|принимает|находится/.test(lc)) return 'state';
+    if (/\b\d{1,2}[./-]\d{1,2}|\b20\d{2}\b|сегодня|вчера|позавчера|вернулся|вернулась|сходил|сходила|купил|купила|получил|получила/.test(lc)) return 'event';
+    if (/характер|ценит|важно|склонен|склонна|обычно реагирует|стиль общения/.test(lc)) return 'trait';
+    return 'fact';
+}
+
+function clamp01(value: number): number {
+    return Math.min(1, Math.max(0, value));
+}
+
+function estimateSpecificity(content: string, tags: string[] = []): number {
+    let score = 0.25;
+    if (/[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+)?/.test(content)) score += 0.16;
+    if (/\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b|\b20\d{2}\b|сегодня|вчера|завтра|понедельник|вторник|среду|четверг|пятниц|суббот|воскресен/i.test(content)) score += 0.18;
+    if (/\b\d+\b|@\w+/.test(content)) score += 0.10;
+    if (/(?:в|из|на|у)\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+/.test(content)) score += 0.10;
+    if (content.length >= 70) score += 0.10;
+    if (tags.length >= 2) score += 0.06;
+    return clamp01(score);
+}
+
+export function estimateHumanMemoryMetrics(input: {
+    content: string;
+    importance: number;
+    confidence?: number;
+    tags?: string[];
+    isAnchor?: boolean;
+    emotionalTag?: EmotionalTag;
+    memoryKind?: MemoryKind;
+    status?: MemoryStatus;
+    retrievalCount?: number;
+}): { strength: number; vividness: number; specificity: number } {
+    const tags = input.tags ?? [];
+    const specificity = estimateSpecificity(input.content, tags);
+    const emotionalArousal = input.emotionalTag?.arousal ?? 0;
+    const flashbulbBoost = input.emotionalTag?.isFlashbulb ? 0.22 : 0;
+    const kindBoost =
+        input.memoryKind === 'episode' || input.memoryKind === 'event' ? 0.10 :
+        input.memoryKind === 'portrait' || input.memoryKind === 'relationship' ? 0.08 :
+        input.memoryKind === 'goal' || input.memoryKind === 'open_loop' || input.memoryKind === 'prospective' ? 0.06 :
+        0;
+    const retrievalBoost = Math.min(0.10, Math.log1p(Math.max(0, input.retrievalCount ?? 0)) * 0.025);
+    const anchorBoost = input.isAnchor ? 0.12 : 0;
+    const statusPenalty = input.status === 'expired' || input.status === 'superseded' ? 0.18 : 0;
+
+    return {
+        strength: clamp01((input.importance * 0.42) + ((input.confidence ?? 0.6) * 0.30) + specificity * 0.14 + anchorBoost + retrievalBoost - statusPenalty),
+        vividness: clamp01(0.18 + emotionalArousal * 0.48 + specificity * 0.18 + flashbulbBoost + kindBoost),
+        specificity,
+    };
 }
 
 function mergeSourceMessageIds(existing: string[] | undefined, incoming: string[] | undefined): string[] | undefined {
@@ -575,7 +645,12 @@ async function invalidatePlanningFacts(
                     userId,
                     botId,
                     confidence: Math.max(0.3, existingConfidence - 0.1),
+                    memoryKind: candidate.memoryKind ?? inferMemoryKind(check.mergedContent, candidate.tags ?? []),
+                    strength: candidate.strength,
+                    vividness: candidate.vividness,
+                    specificity: candidate.specificity,
                     previousVersions: [newVersion, ...((candidate as any).previousVersions ?? [])].slice(0, 10),
+                    status: check.verdict === 'updates' ? inferMemoryStatus(check.mergedContent) : candidate.status,
                 });
                 devLog(`🔄 [sweep] Устаревший план обновлён:`, check.mergedContent.slice(0, 60));
             }
@@ -659,6 +734,18 @@ export async function saveMemory(
             const confirmationCount = (existing.confirmationCount ?? 1) + 1;
             // Авто-продвижение в anchors: высокая достоверность + высокая важность = ключевой факт о пользователе
             const shouldAutoAnchor = boostedConfidence >= 0.9 && mergedImportance >= 0.8;
+            const memoryKind = inferMemoryKind(canonicalContent, [...new Set([...(tags || []), ...(existing.tags || [])])], metadata);
+            const metrics = estimateHumanMemoryMetrics({
+                content: canonicalContent,
+                importance: mergedImportance,
+                confidence: boostedConfidence,
+                tags: [...new Set([...(tags || []), ...(existing.tags || [])])],
+                isAnchor: isAnchor || shouldAutoAnchor || existing.isAnchor,
+                emotionalTag: existing.emotionalTag,
+                memoryKind,
+                status: metadata.status ?? existing.status ?? inferMemoryStatus(canonicalContent),
+                retrievalCount: existing.retrievalCount,
+            });
             if (shouldAutoAnchor) devLog('⚓ Авто-продвижение в anchor:', content.slice(0, 60));
             await svc.updateMemory(existing.id, existing.domain, {
                 content: canonicalContent,
@@ -668,8 +755,12 @@ export async function saveMemory(
                 tags: [...new Set([...(tags || []), ...(existing.tags || [])])],
                 userId: String(userId),
                 botId,
-                isAnchor: isAnchor || shouldAutoAnchor || undefined,
+                isAnchor: isAnchor || shouldAutoAnchor || existing.isAnchor || undefined,
                 confidence: boostedConfidence,
+                memoryKind,
+                strength: metadata.strength ?? metrics.strength,
+                vividness: metadata.vividness ?? metrics.vividness,
+                specificity: metadata.specificity ?? metrics.specificity,
                 sourceEpisodeId: metadata.sourceEpisodeId ?? existing.sourceEpisodeId,
                 sourceContext: metadata.sourceContext ?? existing.sourceContext,
                 sourceMessageIds: mergeSourceMessageIds(existing.sourceMessageIds, metadata.sourceMessageIds),
@@ -761,18 +852,37 @@ export async function saveMemory(
                     const mergedConfidence = check.verdict === 'contradicts'
                         ? Math.max(0.3, existingConfidence - 0.2)
                         : existingConfidence;
+                    const mergedTags = [...new Set([...(tags || []), ...(candidate.tags || []), mergeTag])];
+                    const memoryKind = inferMemoryKind(check.mergedContent, mergedTags, metadata);
+                    const status = metadata.status ?? inferMemoryStatus(check.mergedContent);
+                    const metrics = estimateHumanMemoryMetrics({
+                        content: check.mergedContent,
+                        importance: Math.max(importance, candidate.importance),
+                        confidence: mergedConfidence,
+                        tags: mergedTags,
+                        isAnchor: isAnchor || candidate.isAnchor,
+                        emotionalTag: candidate.emotionalTag,
+                        memoryKind,
+                        status,
+                        retrievalCount: candidate.retrievalCount,
+                    });
 
                     await svc.updateMemory(candidate.id, candidate.domain, {
                         content: check.mergedContent,
                         domain: candidate.domain,
                         timestamp: new Date(),
                         importance: Math.max(importance, candidate.importance),
-                        tags: [...new Set([...(tags || []), ...(candidate.tags || []), mergeTag])],
+                        tags: mergedTags,
                         userId: String(userId),
                         botId,
-                        isAnchor: isAnchor || candidate.tags?.includes('anchor') || undefined,
+                        isAnchor: isAnchor || candidate.isAnchor || candidate.tags?.includes('anchor') || undefined,
                         confidence: mergedConfidence,
+                        memoryKind,
+                        strength: metadata.strength ?? metrics.strength,
+                        vividness: metadata.vividness ?? metrics.vividness,
+                        specificity: metadata.specificity ?? metrics.specificity,
                         previousVersions,
+                        status,
                     });
                     devLog(`🔄 Факт объединён [${check.verdict}]:`, check.mergedContent.slice(0, 60));
                 } else {
@@ -788,7 +898,12 @@ export async function saveMemory(
                         botId,
                         expiresAt: new Date(),
                         confidence: Math.max(0.3, existingConfidence - 0.1),
+                        memoryKind: candidate.memoryKind ?? inferMemoryKind(candidate.content, candidate.tags ?? []),
+                        strength: candidate.strength,
+                        vividness: candidate.vividness,
+                        specificity: candidate.specificity,
                         previousVersions,
+                        status: 'superseded',
                     });
                     devLog(`⏰ Дополнительный планировочный факт истёк:`, candidate.content.slice(0, 60));
                 }
@@ -827,6 +942,17 @@ export async function saveMemory(
         const expiresAt = await detectTemporalExpiry(content);
         const now = new Date();
         const status = metadata.status ?? inferMemoryStatus(content, expiresAt);
+        const memoryKind = inferMemoryKind(content, tags, metadata);
+        const metrics = estimateHumanMemoryMetrics({
+            content,
+            importance: finalImportance,
+            confidence: 0.6,
+            tags,
+            isAnchor: finalIsAnchor,
+            emotionalTag,
+            memoryKind,
+            status,
+        });
         const result = await svc.saveMemory({
             content,
             domain,
@@ -840,6 +966,10 @@ export async function saveMemory(
             confidence: 0.6,
             lastAccessedAt: now,
             emotionalTag,
+            memoryKind,
+            strength: metadata.strength ?? metrics.strength,
+            vividness: metadata.vividness ?? metrics.vividness,
+            specificity: metadata.specificity ?? metrics.specificity,
             sourceEpisodeId: metadata.sourceEpisodeId,
             sourceContext: metadata.sourceContext,
             sourceMessageIds: metadata.sourceMessageIds,
@@ -903,11 +1033,39 @@ async function buildMemoryRelationships(
             const candidateDomain = normalizeMemoryDomain(candidate.domain || domain);
             const domainDedupThreshold = getDedupThreshold(candidateDomain);
             if (candidate.score >= domainDedupThreshold) continue; // пропускаем дубликаты
-            await svc.addRelationship(newId, domain, candidate.id, candidate.domain);
+            const relation = inferRelation(content, candidate.content, tags, candidate.tags ?? [], candidate.score);
+            await svc.addRelationship(newId, domain, candidate.id, candidate.domain, relation.type, relation.weight, relation.cue);
         }
     } catch (e) {
         devLog('buildMemoryRelationships error (ignored):', e);
     }
+}
+
+function inferRelation(
+    newContent: string,
+    existingContent: string,
+    newTags: string[],
+    existingTags: string[],
+    score: number
+): { type: MemoryRelationType; weight: number; cue: string } {
+    const allTags = new Set([...newTags, ...existingTags]);
+    const lc = `${newContent}\n${existingContent}`.toLowerCase();
+    if (allTags.has('memory-episode') || /эпизод памяти/.test(lc)) {
+        return { type: 'same_episode', weight: Math.max(0.65, score), cue: 'same episode/context' };
+    }
+    if ([...allTags].some(tag => String(tag).startsWith('contact:') || String(tag).startsWith('contact_id:'))) {
+        return { type: 'person_link', weight: Math.max(0.64, score), cue: 'same contact/entity' };
+    }
+    if (/планир|собира|хоч|цель|нужно|надо|шаг|сделать|дедлайн/.test(lc)) {
+        return { type: 'goal_step', weight: Math.max(0.60, score), cue: 'goal/open loop association' };
+    }
+    if (/сегодня|вчера|завтра|\b20\d{2}\b|\d{1,2}[./-]\d{1,2}|после|до |потом|раньше|теперь/.test(lc)) {
+        return { type: 'temporal', weight: Math.max(0.58, score), cue: 'temporal association' };
+    }
+    if (/переехал|уволил|теперь|уже|вернул|стал|стала|изменил/.test(lc)) {
+        return { type: 'updates', weight: Math.max(0.58, score), cue: 'state transition association' };
+    }
+    return { type: 'semantic', weight: Math.max(0.55, score), cue: 'semantic association' };
 }
 
 export async function searchMemories(ctx: BotContext, query: string, options?: SearchOptions, userIdOverride?: string) {

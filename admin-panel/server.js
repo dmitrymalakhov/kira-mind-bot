@@ -9,7 +9,7 @@ const http = require('http');
 const { Pool } = require('pg');
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
 
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'changeme';
@@ -319,6 +319,410 @@ app.patch('/api/chats/:chatId/public-mode', requireAuth, async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: `Ошибка БД: ${err.message}` });
+  } finally {
+    await pool.end();
+  }
+});
+
+// ── Health diary ─────────────────────────────────────────────────────────────
+
+const HEALTH_LOG_KINDS = new Set([
+  'food',
+  'drink',
+  'symptom',
+  'medication',
+  'activity',
+  'skin',
+  'blood_pressure',
+  'note',
+]);
+
+const HEALTH_KIND_LABELS = {
+  food: 'Еда',
+  drink: 'Напиток',
+  symptom: 'Симптомы',
+  medication: 'Лекарство',
+  activity: 'Активность/контакт',
+  skin: 'Кожа',
+  blood_pressure: 'Давление',
+  note: 'Заметка',
+};
+
+const HEALTH_EXPORT_LIMIT = 10000;
+
+function firstQueryValue(value) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function httpInputError(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  return error;
+}
+
+function parseDateQuery(value, endOfDay = false) {
+  const raw = firstQueryValue(value);
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  const trimmed = raw.trim();
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? `${trimmed}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`
+    : trimmed;
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function normalizeIntegerQuery(value, fallback, max) {
+  const raw = firstQueryValue(value);
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.round(parsed), max);
+}
+
+function getUserTimeZone() {
+  const vars = readEnvFile();
+  return vars.USER_TIMEZONE || process.env.USER_TIMEZONE || 'Europe/Moscow';
+}
+
+function formatHealthDateTime(value) {
+  return new Date(value).toLocaleString('ru-RU', {
+    timeZone: getUserTimeZone(),
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatHealthDay(value) {
+  return new Date(value).toLocaleDateString('ru-RU', {
+    timeZone: getUserTimeZone(),
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+    weekday: 'long',
+  });
+}
+
+function formatHealthTime(value) {
+  return new Date(value).toLocaleTimeString('ru-RU', {
+    timeZone: getUserTimeZone(),
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatFileDate(value) {
+  const date = new Date(value);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function ensureStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => typeof item === 'string' ? item.trim() : String(item ?? '').trim())
+    .filter(Boolean);
+}
+
+function formatStructuredValue(value) {
+  if (value == null) return '';
+  if (Array.isArray(value)) return ensureStringArray(value).join(', ');
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function formatHealthList(label, value) {
+  const items = ensureStringArray(value);
+  return items.length ? `${label}: ${items.join(', ')}` : null;
+}
+
+function formatHealthScalar(label, value) {
+  if (value == null || value === '') return null;
+  return `${label}: ${formatStructuredValue(value)}`;
+}
+
+function buildHealthLogFilters(query, options = {}) {
+  const values = [];
+  const clauses = [];
+  const meta = {};
+  const defaultDays = options.defaultDays ?? 30;
+
+  const userId = firstQueryValue(query.userId);
+  if (typeof userId === 'string' && userId.trim()) {
+    if (!/^-?\d+$/.test(userId.trim())) throw httpInputError('userId должен быть числом');
+    values.push(userId.trim());
+    clauses.push(`"userId" = $${values.length}`);
+    meta.userId = userId.trim();
+  }
+
+  const kind = firstQueryValue(query.kind);
+  if (typeof kind === 'string' && kind.trim()) {
+    if (!HEALTH_LOG_KINDS.has(kind.trim())) throw httpInputError('Недопустимый тип записи');
+    values.push(kind.trim());
+    clauses.push(`kind = $${values.length}`);
+    meta.kind = kind.trim();
+  }
+
+  const fromRaw = firstQueryValue(query.from);
+  const toRaw = firstQueryValue(query.to);
+  let from = parseDateQuery(fromRaw, false);
+  let to = parseDateQuery(toRaw, true);
+  if (fromRaw && !from) throw httpInputError('Некорректная дата from');
+  if (toRaw && !to) throw httpInputError('Некорректная дата to');
+
+  const daysRaw = firstQueryValue(query.days);
+  if (!from && !to && daysRaw !== 'all' && defaultDays) {
+    const days = normalizeIntegerQuery(daysRaw, defaultDays, 3650);
+    to = new Date();
+    from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
+    meta.days = days;
+  }
+
+  if (from && to && from.getTime() > to.getTime()) {
+    throw httpInputError('Дата from должна быть раньше to');
+  }
+
+  if (from) {
+    values.push(from);
+    clauses.push(`"occurredAt" >= $${values.length}`);
+    meta.from = from.toISOString();
+  }
+  if (to) {
+    values.push(to);
+    clauses.push(`"occurredAt" <= $${values.length}`);
+    meta.to = to.toISOString();
+  }
+
+  const search = firstQueryValue(query.q);
+  if (typeof search === 'string' && search.trim()) {
+    values.push(`%${search.trim()}%`);
+    clauses.push(`(
+      COALESCE("rawText", '') ILIKE $${values.length}
+      OR COALESCE(summary, '') ILIKE $${values.length}
+      OR COALESCE(tags::text, '') ILIKE $${values.length}
+      OR COALESCE(structured::text, '') ILIKE $${values.length}
+    )`);
+    meta.q = search.trim();
+  }
+
+  return {
+    whereSql: clauses.length ? clauses.join(' AND ') : 'TRUE',
+    values,
+    meta,
+  };
+}
+
+function normalizeHealthLogRow(row) {
+  return {
+    id: row.id,
+    userId: row.userId == null ? null : String(row.userId),
+    chatId: row.chatId == null ? null : String(row.chatId),
+    kind: row.kind,
+    rawText: row.rawText,
+    summary: row.summary,
+    severity: row.severity,
+    occurredAt: row.occurredAt instanceof Date ? row.occurredAt.toISOString() : row.occurredAt,
+    timeOfDay: row.timeOfDay,
+    structured: row.structured,
+    tags: Array.isArray(row.tags) ? row.tags : [],
+    photoFileId: row.photoFileId,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
+  };
+}
+
+function healthBaseSelect() {
+  return 'SELECT id, "userId", "chatId", kind, "rawText", summary, severity, "occurredAt", "timeOfDay", structured, tags, "photoFileId", "createdAt" FROM health_logs';
+}
+
+function healthRecordSummary(record) {
+  return record.summary || record.rawText || '';
+}
+
+function buildHealthTxtExport(records, from, to, truncated) {
+  const lines = [
+    'Дневник здоровья',
+    `Период: ${formatHealthDateTime(from)} - ${formatHealthDateTime(to)}`,
+    `Записей: ${records.length}${truncated ? ` (показаны первые ${HEALTH_EXPORT_LIMIT})` : ''}`,
+    '',
+    'Важно: это личный дневник наблюдений, не медицинское заключение.',
+    '',
+  ];
+
+  let currentDay = '';
+  for (const record of records) {
+    const day = formatHealthDay(record.occurredAt);
+    if (day !== currentDay) {
+      currentDay = day;
+      lines.push(day);
+    }
+
+    const structured = record.structured ?? {};
+    const details = [
+      formatHealthList('Еда', structured.foods),
+      formatHealthList('Напитки', structured.drinks),
+      formatHealthList('Симптомы', structured.symptoms),
+      formatHealthList('Зоны', structured.bodyAreas),
+      formatHealthList('Лекарства', structured.medications),
+      formatHealthList('Активности/контакты', structured.activities),
+      formatHealthList('Вероятные ингредиенты', structured.possibleIngredients),
+      formatHealthList('Пищевые флаги из фото', structured.possibleAllergenFlags),
+      formatHealthList('Видимые признаки кожи', structured.visibleFindings),
+      formatHealthList('Морфология', structured.morphology),
+      formatHealthList('Возможные триггеры', structured.suspectedTriggers),
+      formatHealthList('Заметки', structured.notes),
+      formatHealthScalar('Распределение', structured.distribution),
+      formatHealthScalar('Покраснение', structured.redness),
+      formatHealthScalar('Отёк', structured.swelling),
+      formatHealthScalar('Текстура кожи', structured.skinTexture),
+      formatHealthScalar('Субъективный зуд/дискомфорт', typeof structured.subjectiveDiscomfortLevel === 'number' ? `${structured.subjectiveDiscomfortLevel}/10` : undefined),
+      formatHealthScalar('AI-оценка фото недоступна', structured.analysisUnavailableReason),
+      formatHealthList('Теги', record.tags),
+      record.photoFileId ? `Фото Telegram file_id: ${record.photoFileId}` : null,
+    ].filter(Boolean);
+
+    lines.push(`- ${formatHealthTime(record.occurredAt)} (${record.timeOfDay || 'время суток не указано'}) [${HEALTH_KIND_LABELS[record.kind] ?? record.kind}] ${healthRecordSummary(record)}`);
+    if (record.severity != null) lines.push(`  Выраженность: ${record.severity}/10`);
+    for (const detail of details) lines.push(`  ${detail}`);
+    lines.push(`  Исходный текст: ${record.rawText}`);
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+function csvEscape(value) {
+  const text = value == null ? '' : String(value);
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function buildHealthCsvExport(records) {
+  const headers = [
+    'id',
+    'userId',
+    'chatId',
+    'kind',
+    'kindLabel',
+    'occurredAt',
+    'timeOfDay',
+    'severity',
+    'summary',
+    'rawText',
+    'tags',
+    'structured',
+    'photoFileId',
+    'createdAt',
+  ];
+  const rows = records.map((record) => [
+    record.id,
+    record.userId,
+    record.chatId,
+    record.kind,
+    HEALTH_KIND_LABELS[record.kind] ?? record.kind,
+    record.occurredAt,
+    record.timeOfDay,
+    record.severity,
+    record.summary,
+    record.rawText,
+    Array.isArray(record.tags) ? record.tags.join(', ') : '',
+    record.structured ? JSON.stringify(record.structured) : '',
+    record.photoFileId,
+    record.createdAt,
+  ]);
+  return '\ufeff' + [headers, ...rows].map((row) => row.map(csvEscape).join(',')).join('\n');
+}
+
+app.get('/api/health/logs', requireAuth, async (req, res) => {
+  const pool = createDbPool();
+  try {
+    const filters = buildHealthLogFilters(req.query);
+    const limit = normalizeIntegerQuery(req.query.limit, 100, 500);
+    const offset = Math.max(0, normalizeIntegerQuery(req.query.offset, 0, 100000));
+
+    const [statsResult, byKindResult, rowsResult] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(*)::int AS total, MIN("occurredAt") AS "firstOccurredAt", MAX("occurredAt") AS "lastOccurredAt", AVG(severity)::float AS "avgSeverity" FROM health_logs WHERE ${filters.whereSql}`,
+        filters.values
+      ),
+      pool.query(
+        `SELECT kind, COUNT(*)::int AS count FROM health_logs WHERE ${filters.whereSql} GROUP BY kind ORDER BY count DESC`,
+        filters.values
+      ),
+      pool.query(
+        `${healthBaseSelect()} WHERE ${filters.whereSql} ORDER BY "occurredAt" DESC LIMIT $${filters.values.length + 1} OFFSET $${filters.values.length + 2}`,
+        filters.values.concat([limit, offset])
+      ),
+    ]);
+
+    res.json({
+      records: rowsResult.rows.map(normalizeHealthLogRow),
+      total: statsResult.rows[0]?.total ?? 0,
+      limit,
+      offset,
+      filters: filters.meta,
+      stats: {
+        total: statsResult.rows[0]?.total ?? 0,
+        firstOccurredAt: statsResult.rows[0]?.firstOccurredAt ?? null,
+        lastOccurredAt: statsResult.rows[0]?.lastOccurredAt ?? null,
+        avgSeverity: statsResult.rows[0]?.avgSeverity ?? null,
+        byKind: byKindResult.rows,
+      },
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : `Ошибка БД: ${err.message}` });
+  } finally {
+    await pool.end();
+  }
+});
+
+app.get('/api/health/export', requireAuth, async (req, res) => {
+  const pool = createDbPool();
+  try {
+    const format = (firstQueryValue(req.query.format) || 'txt').toString().toLowerCase();
+    if (!['txt', 'csv', 'json'].includes(format)) {
+      return res.status(400).json({ error: 'format должен быть txt, csv или json' });
+    }
+
+    const filters = buildHealthLogFilters(req.query);
+    const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM health_logs WHERE ${filters.whereSql}`, filters.values);
+    const rowsResult = await pool.query(
+      `${healthBaseSelect()} WHERE ${filters.whereSql} ORDER BY "occurredAt" ASC LIMIT $${filters.values.length + 1}`,
+      filters.values.concat([HEALTH_EXPORT_LIMIT])
+    );
+
+    const records = rowsResult.rows.map(normalizeHealthLogRow);
+    const fallbackDate = new Date().toISOString();
+    const from = filters.meta.from || records[0]?.occurredAt || fallbackDate;
+    const to = filters.meta.to || records[records.length - 1]?.occurredAt || fallbackDate;
+    const filename = `health-diary-${formatFileDate(from)}-${formatFileDate(to)}.${format}`;
+    const truncated = (countResult.rows[0]?.total ?? 0) > records.length;
+
+    let content;
+    let contentType;
+    if (format === 'json') {
+      content = JSON.stringify({
+        period: { from, to },
+        count: records.length,
+        total: countResult.rows[0]?.total ?? records.length,
+        truncated,
+        records,
+      }, null, 2);
+      contentType = 'application/json; charset=utf-8';
+    } else if (format === 'csv') {
+      content = buildHealthCsvExport(records);
+      contentType = 'text/csv; charset=utf-8';
+    } else {
+      content = buildHealthTxtExport(records, from, to, truncated);
+      contentType = 'text/plain; charset=utf-8';
+    }
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(content);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : `Ошибка БД: ${err.message}` });
   } finally {
     await pool.end();
   }

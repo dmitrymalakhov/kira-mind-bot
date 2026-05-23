@@ -99,6 +99,14 @@ export interface SessionData {
         messageId: number;
         chatId: number;
     };
+    /** Ожидание ввода правки для существующего напоминания */
+    pendingReminderEdit?: {
+        reminderId: string;
+        messageId: number;
+        chatId: number;
+        createdAt: number;
+        expiresAt: number;
+    };
     /** Ожидающее подтверждения предложение создать напоминание (TTL 5 минут) */
     pendingImplicitReminder?: {
         originalMessage: string;
@@ -332,6 +340,42 @@ export interface EmotionalTag {
 
 export type MemorySubject = 'user' | 'contact' | 'bot' | 'system';
 export type MemoryStatus = 'active' | 'planned' | 'done' | 'superseded' | 'expired' | 'unknown';
+export type MemoryKind =
+    | 'fact'
+    | 'episode'
+    | 'chapter'
+    | 'trait'
+    | 'preference'
+    | 'goal'
+    | 'open_loop'
+    | 'relationship'
+    | 'routine'
+    | 'boundary'
+    | 'promise'
+    | 'prospective'
+    | 'portrait'
+    | 'event'
+    | 'state'
+    | 'unknown';
+export type MemoryRelationType =
+    | 'semantic'
+    | 'same_episode'
+    | 'same_entity'
+    | 'temporal'
+    | 'updates'
+    | 'supports'
+    | 'contradicts'
+    | 'goal_step'
+    | 'person_link'
+    | 'contextual';
+export interface MemoryRelation {
+    id: string;
+    domain: string;
+    type?: MemoryRelationType;
+    weight?: number;
+    createdAt?: Date;
+    cue?: string;
+}
 export type MemoryExtractionMethod =
     | 'explicit'
     | 'quick'
@@ -416,7 +460,15 @@ export interface MemoryEntry {
      * Строится fire-and-forget после каждого сохранения.
      * Используется при retrieval для 1-hop expansion контекста.
      */
-    relatedIds?: Array<{ id: string; domain: string }>;
+    relatedIds?: MemoryRelation[];
+    /** Human-like memory category: fact, goal, preference, open loop, etc. */
+    memoryKind?: MemoryKind;
+    /** How stable/entrenched the memory is. Retrieval and confirmations increase it. */
+    strength?: number;
+    /** How scene-like or emotionally vivid the memory is. */
+    vividness?: number;
+    /** How concrete the memory is: names, dates, places, numbers, evidence. */
+    specificity?: number;
     /** ID эпизода разговора, из которого получен факт. */
     sourceEpisodeId?: string;
     /** Короткая цитата или фрагмент контекста, откуда извлечён факт. */
@@ -472,7 +524,11 @@ export interface SearchResult {
     }>;
     isAnchor?: boolean;
     expiresAt?: Date;
-    relatedIds?: Array<{ id: string; domain: string }>;
+    relatedIds?: MemoryRelation[];
+    memoryKind?: MemoryKind;
+    strength?: number;
+    vividness?: number;
+    specificity?: number;
     emotionalTag?: EmotionalTag;
     sourceEpisodeId?: string;
     sourceContext?: string;

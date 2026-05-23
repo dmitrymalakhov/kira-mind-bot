@@ -1,4 +1,10 @@
-import type { ConfigResponse, PersonalityConfig } from './types';
+import type {
+  ConfigResponse,
+  HealthExportFormat,
+  HealthLogQuery,
+  HealthLogsResponse,
+  PersonalityConfig,
+} from './types';
 
 export async function login(username: string, password: string) {
   const r = await fetch('/api/login', {
@@ -79,4 +85,30 @@ export async function setChatAllowedDomains(chatId: string, domains: string[]) {
     body: JSON.stringify({ domains }),
   });
   return r.json() as Promise<{ success: boolean; error?: string }>;
+}
+
+function toSearchParams(query: HealthLogQuery = {}) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value == null || value === '') continue;
+    params.set(key, String(value));
+  }
+  return params;
+}
+
+export async function fetchHealthLogs(query: HealthLogQuery = {}): Promise<HealthLogsResponse> {
+  const params = toSearchParams(query);
+  const url = params.toString() ? `/api/health/logs?${params}` : '/api/health/logs';
+  const r = await fetch(url);
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body.error || 'Failed to load health logs');
+  }
+  return r.json();
+}
+
+export function buildHealthExportUrl(format: HealthExportFormat, query: HealthLogQuery = {}) {
+  const params = toSearchParams({ ...query, offset: undefined });
+  params.set('format', format);
+  return `/api/health/export?${params}`;
 }

@@ -1,5 +1,6 @@
 import { config } from '../config';
 import { runMemoryConsolidationForUser } from './MemoryConsolidationService';
+import { runMemorySleepCycleForUser } from './MemorySleepCycleService';
 
 const INTERVAL_MS = config.memoryConsolidationIntervalMs ?? 24 * 60 * 60 * 1000;
 
@@ -18,12 +19,14 @@ async function runCycle(): Promise<void> {
             periodDays: 180,
             maxDomains: 6,
         });
+        const sleep = await runMemorySleepCycleForUser(userId);
 
         console.log('[memory-consolidation] cycle completed:', {
             created: result.created,
             replaced: result.replaced,
             domains: result.domains,
             skipped: result.skipped,
+            sleep,
         });
     } catch (error) {
         console.error('[memory-consolidation] cycle failed:', error);

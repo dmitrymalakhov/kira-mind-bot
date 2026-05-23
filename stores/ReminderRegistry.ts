@@ -58,7 +58,8 @@ export class ReminderRegistry {
         if (!ids) return [];
         return [...ids]
             .map(id => this.byId.get(id))
-            .filter((r): r is Reminder => !!r && isActive(r));
+            .filter((r): r is Reminder => !!r && isActive(r))
+            .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
     }
 
     /**

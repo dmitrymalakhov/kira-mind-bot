@@ -6,6 +6,42 @@ export interface EmotionalTag {
 
 export type MemorySubject = 'user' | 'contact' | 'bot' | 'system';
 export type MemoryStatus = 'active' | 'planned' | 'done' | 'superseded' | 'expired' | 'unknown';
+export type MemoryKind =
+    | 'fact'
+    | 'episode'
+    | 'chapter'
+    | 'trait'
+    | 'preference'
+    | 'goal'
+    | 'open_loop'
+    | 'relationship'
+    | 'routine'
+    | 'boundary'
+    | 'promise'
+    | 'prospective'
+    | 'portrait'
+    | 'event'
+    | 'state'
+    | 'unknown';
+export type MemoryRelationType =
+    | 'semantic'
+    | 'same_episode'
+    | 'same_entity'
+    | 'temporal'
+    | 'updates'
+    | 'supports'
+    | 'contradicts'
+    | 'goal_step'
+    | 'person_link'
+    | 'contextual';
+export interface MemoryRelation {
+    id: string;
+    domain: string;
+    type?: MemoryRelationType;
+    weight?: number;
+    createdAt?: Date;
+    cue?: string;
+}
 export type MemoryExtractionMethod =
     | 'explicit'
     | 'quick'
@@ -40,7 +76,11 @@ export interface MemoryEntry {
         timestamp: Date;
         confidence: number;
     }>;
-    relatedIds?: Array<{ id: string; domain: string }>;
+    relatedIds?: MemoryRelation[];
+    memoryKind?: MemoryKind;
+    strength?: number;
+    vividness?: number;
+    specificity?: number;
     emotionalTag?: EmotionalTag;
     sourceEpisodeId?: string;
     sourceContext?: string;
@@ -84,7 +124,11 @@ export interface SearchResult {
     }>;
     isAnchor?: boolean;
     expiresAt?: Date;
-    relatedIds?: Array<{ id: string; domain: string }>;
+    relatedIds?: MemoryRelation[];
+    memoryKind?: MemoryKind;
+    strength?: number;
+    vividness?: number;
+    specificity?: number;
     emotionalTag?: EmotionalTag;
     sourceEpisodeId?: string;
     sourceContext?: string;
@@ -124,9 +168,9 @@ export abstract class IVectorService {
      */
     abstract getMemoriesForCompression(userId: string, domain: string, olderThanDays: number): Promise<MemoryEntry[]>;
     /** Добавляет двунаправленную связь между двумя фактами */
-    abstract addRelationship(idA: string, domainA: string, idB: string, domainB: string): Promise<void>;
+    abstract addRelationship(idA: string, domainA: string, idB: string, domainB: string, type?: MemoryRelationType, weight?: number, cue?: string): Promise<void>;
     /** Возвращает список связанных фактов для 1-hop graph expansion */
-    abstract getRelatedFacts(memoryId: string, domain: string): Promise<Array<{ id: string; domain: string }>>;
+    abstract getRelatedFacts(memoryId: string, domain: string): Promise<MemoryRelation[]>;
     /** Загружает факт по ID и домену (для graph expansion при retrieval) */
     abstract fetchMemoryById(memoryId: string, domain: string): Promise<SearchResult | null>;
     /** Загружает несколько воспоминаний по ID, когда домены неизвестны. */

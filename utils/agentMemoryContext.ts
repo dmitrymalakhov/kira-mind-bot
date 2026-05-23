@@ -1,10 +1,11 @@
 import { BotContext } from '../types';
-import { getMultiQueryMemoryContext, classifyMemoryNeed } from './multiQueryMemory';
+import { classifyMemoryNeed, getMultiQueryMemoryContextDetailed, RecalledMemoryRef } from './multiQueryMemory';
 import { devLog } from '../utils';
 
 export interface AgentMemoryContext {
     domain: string;
     context: string;
+    recalledMemories?: RecalledMemoryRef[];
 }
 
 /**
@@ -31,15 +32,17 @@ export async function fetchAgentMemoryContext(ctx: BotContext, message: string):
         return { domain: 'personal', context: '' };
     }
 
-    const context = await getMultiQueryMemoryContext(ctx, trimmed, memoryNeed);
+    const memory = await getMultiQueryMemoryContextDetailed(ctx, trimmed, memoryNeed);
+    const context = memory.context;
     const working = formatWorkingMemory(ctx);
     const enrichedContext = [working, context].filter(Boolean).join('\n\n');
     devLog('Fetched memory context (enrichment)', {
         memoryNeed,
         hasContext: Boolean(enrichedContext),
         contextLength: enrichedContext.length,
+        recalledMemories: memory.recalledMemories.length,
     });
-    return { domain: 'personal', context: enrichedContext };
+    return { domain: 'personal', context: enrichedContext, recalledMemories: memory.recalledMemories };
 }
 
 function formatWorkingMemory(ctx: BotContext): string {
