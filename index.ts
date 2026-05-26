@@ -1,5 +1,5 @@
 import { Bot, InlineKeyboard } from "grammy";
-import { markReminderAsCompleted, postponeReminder, Reminder, ReminderStatus, scheduleReminder, setBotRef, resolveTargetChat, rescheduleReminder } from "./reminder";
+import { postponeReminderUntil, Reminder, ReminderStatus, scheduleReminder, setBotRef, resolveTargetChat, restoreReminderAfterRestart } from "./reminder";
 import { Chat, InputFile, User } from "grammy/types";
 import { BotContext } from "./types";
 import * as fs from 'fs';
@@ -46,6 +46,8 @@ import { getTelegramMenuCommands } from "./capabilities";
 import { persistSessionNow } from "./services/SessionStorage";
 import { healthPhotoAgent, shouldRouteHealthPhoto } from "./agents/healthAgent";
 import { applyReminderEditInput } from "./utils/reminderEditor";
+import { generateSpeechFile, getTelegramVoiceReadinessIssue, prepareTelegramVoiceFile } from "./services/elevenLabsTts";
+import { stripVoiceReplyDirective, wantsVoiceReply } from "./utils/voiceReply";
 
 
 // Загрузка переменных окружения
@@ -69,6 +71,8 @@ const bot = createBot();
 setBotRef(bot);
 setBotApi(bot.api);
 console.log('🤖 Бот создан успешно');
+
+const MAX_STORED_SENT_MESSAGES = 50;
 
 registerCommandHandlers(bot);
 console.log('⚙️ Обработчики команд зарегистрированы');
@@ -127,9 +131,81 @@ function maybeReactToUser(ctx: BotContext, emoji?: string) {
 
 async function replyAndStore(ctx: BotContext, text: string, options: any = {}) {
     const msg = await sendMessage(ctx, text, options);
-    if (!ctx.session.sentMessages) ctx.session.sentMessages = {};
-    ctx.session.sentMessages[msg.message_id] = text;
+    storeSentMessageText(ctx, msg.message_id, text);
     return msg;
+}
+
+function storeSentMessageText(ctx: BotContext, messageId: number, text: string): void {
+    if (!ctx.session.sentMessages) ctx.session.sentMessages = {};
+    ctx.session.sentMessages[messageId] = text;
+
+    const storedIds = Object.keys(ctx.session.sentMessages)
+        .map(Number)
+        .filter(Number.isFinite)
+        .sort((a, b) => b - a);
+
+    for (const staleMessageId of storedIds.slice(MAX_STORED_SENT_MESSAGES)) {
+        delete ctx.session.sentMessages[staleMessageId];
+    }
+}
+
+function canSendResultAsVoice(result: ProcessingResult): boolean {
+    return Boolean(result.responseText?.trim()) &&
+        !result.keyboard &&
+        !result.reminderCreated &&
+        !result.icsFilePath &&
+        !result.documentFilePath &&
+        !result.imageGenerated &&
+        !result.generatedImageUrl;
+}
+
+async function replyWithGeneratedVoiceAndStore(ctx: BotContext, text: string) {
+    await ctx.api.sendChatAction(ctx.chat!.id, "record_voice");
+    const speech = await generateSpeechFile(text);
+    let cleanupPaths = [speech.filePath];
+    try {
+        const voice = await prepareTelegramVoiceFile(speech);
+        cleanupPaths = voice.cleanupPaths;
+        const inputFile = new InputFile(voice.filePath, voice.filename);
+        const msg = await ctx.replyWithVoice(inputFile);
+        storeSentMessageText(ctx, msg.message_id, text);
+        return msg;
+    } finally {
+        for (const filePath of cleanupPaths) {
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        }
+    }
+}
+
+async function replyProcessingResult(ctx: BotContext, result: ProcessingResult, voiceRequested: boolean) {
+    if (voiceRequested && canSendResultAsVoice(result)) {
+        const voiceReadinessIssue = await getTelegramVoiceReadinessIssue(result.responseText);
+        if (voiceReadinessIssue) {
+            return replyAndStore(
+                ctx,
+                `${result.responseText}\n\n${voiceReadinessIssue}`
+            );
+        }
+
+        try {
+            return await replyWithGeneratedVoiceAndStore(ctx, result.responseText);
+        } catch (voiceError) {
+            console.error("[voice-reply] failed to generate or send voice:", voiceError);
+            const sent = await replyAndStore(ctx, result.responseText);
+            await ctx.reply("Не смогла отправить голосом, поэтому оставила текстом.");
+            return sent;
+        }
+    }
+
+    if (result.keyboard) {
+        return replyAndStore(ctx, result.responseText, {
+            reply_markup: result.keyboard
+        });
+    }
+
+    return replyAndStore(ctx, result.responseText);
 }
 
 async function flushSessionAfterAsyncWork(ctx: BotContext, label: string) {
@@ -541,7 +617,8 @@ bot.on("message:text", async (ctx, next) => {
             } else if (ctx.message.reply_to_message.photo) {
                 replyToContent = '[Изображение]';
             } else if (ctx.message.reply_to_message.voice) {
-                replyToContent = '[Голосовое сообщение]';
+                const knownVoiceText = ctx.session.sentMessages?.[ctx.message.reply_to_message.message_id];
+                replyToContent = knownVoiceText ? `[Голосовое сообщение: "${knownVoiceText}"]` : '[Голосовое сообщение]';
             } else if (ctx.message.reply_to_message.document) {
                 replyToContent = `[Документ: ${ctx.message.reply_to_message.document.file_name || 'документ'}]`;
             } else {
@@ -645,12 +722,14 @@ bot.on("message:text", async (ctx, next) => {
                         }
 
                         if (newDueDate) {
-                            const updated = { ...reminder, dueDate: newDueDate };
-                            rescheduleReminder(updated);
+                            const updated = await postponeReminderUntil(bot, reminder, newDueDate);
+                            if (!updated) {
+                                await ctx.reply('Не смогла перенести напоминание. Попробуй ещё раз.');
+                                return;
+                            }
                             ReminderRegistry.getInstance().add(updated);
                             const sessIdx = ctx.session.reminders.findIndex(r => r.id === reminderId);
                             if (sessIdx >= 0) ctx.session.reminders[sessIdx] = updated;
-                            await ReminderRepository.save(updated).catch(() => {});
                             const dateStr = newDueDate.toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: 'numeric', minute: 'numeric' });
                             await ctx.reply(`✅ Напоминание перенесено на ${dateStr}`);
                         } else {
@@ -693,6 +772,12 @@ bot.on("message:text", async (ctx, next) => {
                             'Используй ответ как недостающий параметр, подтяни долговременную память как обычно и продолжи выполнение.',
                         ].join('\n');
                     }
+                }
+
+                let voiceReplyRequested = false;
+                if (messageForProcessing === userMessage && wantsVoiceReply(message)) {
+                    voiceReplyRequested = true;
+                    messageForProcessing = stripVoiceReplyDirective(messageForProcessing);
                 }
 
                 // Отправляем индикатор набора текста
@@ -787,13 +872,7 @@ bot.on("message:text", async (ctx, next) => {
                     }
                 } else {
                     // Просто отправляем текстовый ответ, если изображение или ICS не были сгенерированы
-                    if (result.keyboard) {
-                        await replyAndStore(ctx, result.responseText, {
-                            reply_markup: result.keyboard
-                        });
-                    } else {
-                        await replyAndStore(ctx, result.responseText);
-                    }
+                    await replyProcessingResult(ctx, result, voiceReplyRequested);
                 }
 
                 maybeReactToUser(ctx, result.botReaction);
@@ -1084,7 +1163,8 @@ bot.on("message:photo", async (ctx) => {
             } else if (ctx.message.reply_to_message.photo) {
                 replyToContent = '[Изображение]';
             } else if (ctx.message.reply_to_message.voice) {
-                replyToContent = '[Голосовое сообщение]';
+                const knownVoiceText = ctx.session.sentMessages?.[ctx.message.reply_to_message.message_id];
+                replyToContent = knownVoiceText ? `[Голосовое сообщение: "${knownVoiceText}"]` : '[Голосовое сообщение]';
             } else if (ctx.message.reply_to_message.document) {
                 replyToContent = `[Документ: ${ctx.message.reply_to_message.document.file_name || 'документ'}]`;
             } else {
@@ -1374,7 +1454,8 @@ bot.on("message:voice", async (ctx) => {
             } else if (ctx.message.reply_to_message.photo) {
                 replyToContent = '[Изображение]';
             } else if (ctx.message.reply_to_message.voice) {
-                replyToContent = '[Голосовое сообщение]';
+                const knownVoiceText = ctx.session.sentMessages?.[ctx.message.reply_to_message.message_id];
+                replyToContent = knownVoiceText ? `[Голосовое сообщение: "${knownVoiceText}"]` : '[Голосовое сообщение]';
             } else if (ctx.message.reply_to_message.document) {
                 replyToContent = `[Документ: ${ctx.message.reply_to_message.document.file_name || 'документ'}]`;
             } else {
@@ -1459,10 +1540,15 @@ bot.on("message:voice", async (ctx) => {
                     );
 
                     try {
+                        const voiceReplyRequested = wantsVoiceReply(transcribedText);
+                        const textForProcessing = voiceReplyRequested
+                            ? stripVoiceReplyDirective(transcribedText)
+                            : transcribedText;
+
                         // Обрабатываем текст так же, как обычные текстовые сообщения
                         const result = await processMessage(
                             ctx,
-                            transcribedText,
+                            textForProcessing,
                             false,
                             "",
                             ctx.session.messageHistory.slice().reverse()
@@ -1536,13 +1622,7 @@ bot.on("message:voice", async (ctx) => {
                             }
                         } else {
                             // Отправляем ответ БЕЗ указания parse_mode
-                            if (result.keyboard) {
-                                await ctx.reply(result.responseText, {
-                                    reply_markup: result.keyboard
-                                });
-                            } else {
-                                await ctx.reply(result.responseText);
-                            }
+                            await replyProcessingResult(ctx, result, voiceReplyRequested);
                         }
 
                         if (ctx.session.lastFactSaveError) {
@@ -1687,12 +1767,11 @@ async function startBot() {
         console.log("✅ База данных подключена");
 
         console.log("📅 Загрузка активных напоминаний из БД...");
-        const pendingReminders = await ReminderRepository.loadPending();
-        for (const reminder of pendingReminders) {
-            ReminderRegistry.getInstance().add(reminder);
-            scheduleReminder(bot, reminder);
+        const activeReminders = await ReminderRepository.loadActive();
+        for (const reminder of activeReminders) {
+            restoreReminderAfterRestart(bot, reminder);
         }
-        console.log(`✅ Загружено и запланировано ${pendingReminders.length} напоминаний`);
+        console.log(`✅ Загружено активных напоминаний: ${activeReminders.length}`);
 
         console.log("🔗 Инициализация векторного сервиса...");
         await initializeVectorService();

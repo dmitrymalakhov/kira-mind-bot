@@ -8,11 +8,14 @@
     "start:dev": "NODE_ENV=development ts-node index.ts",
     "start:prod": "NODE_ENV=production node ./index.js",
     "build": "tsc",
+    "test": "npm run build && npm run test:voice-reply",
+    "test:voice-reply": "ts-node scripts/testVoiceReply.ts",
     "lint": "eslint . --ext .ts"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@elevenlabs/elevenlabs-js": "^2.49.1",
     "@pinecone-database/pinecone": "^6.1.1",
     "@qdrant/js-client-rest": "^1.14.1",
     "axios": "^1.8.4",

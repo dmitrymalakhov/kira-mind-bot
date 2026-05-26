@@ -3,7 +3,7 @@ import { InputFile } from "grammy/types";
 import * as fs from "fs";
 import * as path from "path";
 import { BotContext } from "../types";
-import { Reminder, ReminderStatus, cancelReminder, markReminderAsCompleted, postponeReminder, resolveTargetChat, scheduleReminder } from "../reminder";
+import { Reminder, ReminderStatus, cancelReminder, markReminderAsCompleted, postponeReminderUntil, resolveTargetChat, scheduleReminder } from "../reminder";
 import { reminderAgent } from "../agents/reminderAgent";
 import { ReminderRepository } from "../services/ReminderRepository";
 import { hasFreshPendingReminder } from "../utils/implicitReminderDetector";
@@ -27,7 +27,79 @@ import { handleContactMemoryLookupCallback } from "../utils/contactMemoryLookup"
 import { processMessage, type ProcessingResult } from "../orchestrator";
 import { addToHistory } from "../utils/history";
 import { consumeQuickChoice, isQuickChoiceCallback } from "../utils/quickChoice";
-import { MAX_MESSAGE_LENGTH } from "../constants";
+import { MAX_MESSAGE_LENGTH, USER_TIMEZONE } from "../constants";
+
+const EVENING_POSTPONE_HOUR = 19;
+
+function getZonedParts(date: Date, timeZone: string): {
+    year: number;
+    month: number;
+    day: number;
+    hour: number;
+    minute: number;
+    second: number;
+} {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+    }).formatToParts(date);
+    const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+    return {
+        year: get("year"),
+        month: get("month"),
+        day: get("day"),
+        hour: get("hour"),
+        minute: get("minute"),
+        second: get("second"),
+    };
+}
+
+function getTimeZoneOffsetMs(date: Date, timeZone: string): number {
+    const p = getZonedParts(date, timeZone);
+    const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second, 0);
+    return asUtc - date.getTime();
+}
+
+function zonedDateTimeToDate(
+    year: number,
+    month: number,
+    day: number,
+    hour: number,
+    minute: number,
+    timeZone: string
+): Date {
+    let utcMs = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+    for (let i = 0; i < 3; i++) {
+        utcMs = Date.UTC(year, month - 1, day, hour, minute, 0, 0) - getTimeZoneOffsetMs(new Date(utcMs), timeZone);
+    }
+    return new Date(utcMs);
+}
+
+function getZonedDateAtOffset(daysAhead: number, hour: number, minute: number, now = new Date()): Date {
+    const current = getZonedParts(now, USER_TIMEZONE);
+    const targetDay = new Date(Date.UTC(current.year, current.month - 1, current.day + daysAhead, 0, 0, 0, 0));
+    return zonedDateTimeToDate(
+        targetDay.getUTCFullYear(),
+        targetDay.getUTCMonth() + 1,
+        targetDay.getUTCDate(),
+        hour,
+        minute,
+        USER_TIMEZONE
+    );
+}
+
+function getNextEveningDueDate(now = new Date()): Date {
+    const todayEvening = getZonedDateAtOffset(0, EVENING_POSTPONE_HOUR, 0, now);
+    return todayEvening.getTime() > now.getTime()
+        ? todayEvening
+        : getZonedDateAtOffset(1, EVENING_POSTPONE_HOUR, 0, now);
+}
 
 async function saveRemindersFromResult(ctx: BotContext, bot: Bot<BotContext>, result: ProcessingResult) {
     if (!result.reminderCreated) return;
@@ -760,31 +832,27 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     return;
                 }
 
-                let minutes: number;
                 let notificationText: string;
                 let newDueDate: Date;
+                const now = new Date();
 
-                if (postponeTime === "tomorrow") {
-                    newDueDate = new Date();
-                    newDueDate.setDate(newDueDate.getDate() + 1);
-                    newDueDate.setHours(9, 0, 0, 0);
-                    minutes = Math.floor((newDueDate.getTime() - new Date().getTime()) / 60000);
+                if (postponeTime === "evening") {
+                    newDueDate = getNextEveningDueDate(now);
+                    notificationText = "Напоминание перенесено на вечер (19:00)";
+                } else if (postponeTime === "tomorrow") {
+                    newDueDate = getZonedDateAtOffset(1, 9, 0, now);
                     notificationText = "Напоминание отложено на завтра (9:00)";
                 } else if (postponeTime === "week") {
-                    newDueDate = new Date();
-                    newDueDate.setDate(newDueDate.getDate() + 7);
-                    newDueDate.setHours(9, 0, 0, 0);
-                    minutes = Math.floor((newDueDate.getTime() - new Date().getTime()) / 60000);
+                    newDueDate = getZonedDateAtOffset(7, 9, 0, now);
                     notificationText = "Напоминание отложено на неделю (9:00)";
                 } else {
-                    minutes = parseInt(postponeTime);
+                    const minutes = parseInt(postponeTime);
                     if (isNaN(minutes)) {
                         console.error(`Invalid postpone time: ${postponeTime}`);
                         await ctx.answerCallbackQuery({ text: "Произошла ошибка при обработке запроса" });
                         return;
                     }
-                    newDueDate = new Date();
-                    newDueDate.setMinutes(newDueDate.getMinutes() + minutes);
+                    newDueDate = new Date(now.getTime() + minutes * 60 * 1000);
                     if (minutes === 60) {
                         notificationText = "Напоминание отложено на 1 час";
                     } else if (minutes === 180) {
@@ -794,7 +862,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     }
                 }
 
-                const updatedReminder = await postponeReminder(bot, reminder, minutes);
+                const updatedReminder = await postponeReminderUntil(bot, reminder, newDueDate);
 
                 if (updatedReminder) {
                     ReminderRegistry.getInstance().add(updatedReminder);
@@ -808,6 +876,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         const messageId = ctx.callbackQuery.message.message_id;
                         const showBackAfterPostpone = !!ctx.session.viewingRemindersInChat;
                         const formattedTime = newDueDate.toLocaleString('ru-RU', {
+                            timeZone: USER_TIMEZONE,
                             day: 'numeric', month: 'long', hour: 'numeric', minute: 'numeric'
                         });
                         const confirmText = `⏰ Напоминание перенесено\n\nСледующий сигнал: ${formattedTime}`;

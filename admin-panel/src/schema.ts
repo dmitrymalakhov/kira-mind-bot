@@ -28,6 +28,51 @@ export const CONFIG_SCHEMA: SectionDef[] = [
     ],
   },
   {
+    id: 'elevenlabs',
+    title: 'ElevenLabs Voice',
+    icon: '🎙️',
+    fields: [
+      {
+        key: 'ELEVENLABS_API_KEY',
+        label: 'ElevenLabs API Key',
+        type: 'password',
+        hint: 'Создай в ElevenLabs Dashboard → API Keys. Хранится в ELEVENLABS_API_KEY.',
+      },
+      {
+        key: 'ELEVENLABS_VOICE_ID',
+        label: 'ElevenLabs Voice ID',
+        type: 'text',
+        hint: 'ID голоса Nastya. Если оставить пустым, бот попробует найти голос по имени ниже.',
+      },
+      {
+        key: 'ELEVENLABS_VOICE_NAME',
+        label: 'ElevenLabs Voice Name',
+        type: 'text',
+        placeholder: 'Nastya',
+        hint: 'Используется только если Voice ID не задан',
+      },
+      {
+        key: 'ELEVENLABS_MODEL_ID',
+        label: 'ElevenLabs Model',
+        type: 'text',
+        placeholder: 'eleven_v3',
+      },
+      {
+        key: 'ELEVENLABS_OUTPUT_FORMAT',
+        label: 'ElevenLabs Output Format',
+        type: 'text',
+        placeholder: 'mp3_44100_128',
+        hint: 'Формат из quickstart и со скрина. Перед отправкой в Telegram бот перекодирует в OGG/Opus voice.',
+      },
+      {
+        key: 'ELEVENLABS_VOICE_STABILITY',
+        label: 'Voice Stability',
+        type: 'text',
+        placeholder: '0.5',
+      },
+    ],
+  },
+  {
     id: 'bots',
     title: 'Telegram Боты',
     icon: '🤖',

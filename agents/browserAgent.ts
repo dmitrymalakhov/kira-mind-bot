@@ -1236,6 +1236,13 @@ async function getStructuredPageText(page: Page): Promise<string> {
         const blocks = await page.evaluate((interactiveSelector) => {
             const compact = (value: string | null | undefined) =>
                 String(value ?? '').replace(/\s+/g, ' ').trim();
+            const textLinesOf = (el: Element) =>
+                String((el as HTMLElement).innerText || el.textContent || '')
+                    .split(/\n+/u)
+                    .map(compact)
+                    .filter(Boolean)
+                    .filter((value, index, arr) => arr.indexOf(value) === index)
+                    .slice(0, 28);
             const isVisible = (el: Element) => {
                 const rect = el.getBoundingClientRect();
                 const style = window.getComputedStyle(el);
@@ -1256,18 +1263,43 @@ async function getStructuredPageText(page: Page): Promise<string> {
                 if (el.querySelector('h1,h2,h3,h4,h5,h6,[role="heading"],strong,b')) score += 14;
                 return score;
             };
+            const dateLikeLine = (line: string) =>
+                /\b\d{1,2}\s*(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря|january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec)\b/iu.test(line) ||
+                /\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b/u.test(line);
+            const weakTitleLine = (line: string) => {
+                const normalized = compact(line).toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
+                if (!normalized) return true;
+                if (/^(?:понедельник|вторник|среда|четверг|пятница|суббота|воскресенье|обычный|тематический|онлайн|online)$/iu.test(normalized)) return true;
+                if (/^(?:расписани[ея]|каталог|список|ближайш|главная|меню|навигаци[яи])\b/iu.test(normalized)) return true;
+                if (/^(?:перейти|подробнее|открыть|выбрать|записаться|купить|book|buy|details|select|open)$/iu.test(normalized)) return true;
+                if (/^(?:сложность|адрес|место|стоимость|цена|начало|окончание|время)\b/iu.test(normalized)) return true;
+                return dateLikeLine(normalized) && normalized.length <= 28;
+            };
             const titleOf = (root: HTMLElement, fullText: string, actionLabels: string[]) => {
                 const titleCandidates = Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6,[role="heading"],strong,b'))
                     .map((el) => compact((el as HTMLElement).innerText || el.textContent))
-                    .filter((text) => text && text.length <= 140 && !actionLabels.includes(text));
+                    .filter((text) => text && text.length <= 140 && !actionLabels.includes(text) && !weakTitleLine(text));
                 if (titleCandidates.length) return titleCandidates[0];
 
-                const lines = fullText
-                    .split(/\n+/u)
-                    .map((line) => compact(line))
+                const lines = textLinesOf(root)
                     .filter(Boolean)
                     .filter((line) => line.length <= 160 && !actionLabels.includes(line));
-                return lines[0] || fullText.slice(0, 120);
+                return lines.find((line) => !weakTitleLine(line)) || lines[0] || fullText.slice(0, 120);
+            };
+            const hasListingSignal = (text: string) =>
+                /\b\d{1,2}\s*(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря|january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec)\b/iu.test(text) ||
+                /\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b/u.test(text) ||
+                /\b([01]?\d|2[0-3])[:.][0-5]\d\b/u.test(text) ||
+                /(?:\b\d[\d\s\u00a0]{0,9}\s*(?:₽|руб\.?|р\.?|₸|\$|€)|(?:₽|руб\.?|₸|\$|€)\s*\d[\d\s\u00a0]{0,9})/iu.test(text) ||
+                /(?:адрес|ул\.|улиц|просп|шоссе|площад|зал|аудитор|онлайн|online|venue|location|address)/iu.test(text);
+            const rootTooBroad = (root: HTMLElement, text: string) => {
+                const rect = root.getBoundingClientRect();
+                const interactiveCount = root.querySelectorAll(interactiveSelector).length;
+                return root === document.body ||
+                    text.length > 2800 ||
+                    interactiveCount > 18 ||
+                    rect.width > window.innerWidth * 1.12 ||
+                    rect.height > window.innerHeight * 3.2;
             };
 
             const controls = Array.from(document.querySelectorAll(interactiveSelector))
@@ -1289,18 +1321,11 @@ async function getStructuredPageText(page: Page): Promise<string> {
                 let bestScore = Number.NEGATIVE_INFINITY;
 
                 for (let depth = 0; parent && depth < 9; depth += 1, parent = parent.parentElement) {
-                    const text = compact(parent.innerText || parent.textContent);
+                    const text = textLinesOf(parent).join(' | ') || compact(parent.innerText || parent.textContent);
                     if (!text || text === label || text.length < 16) continue;
 
-                    const rect = parent.getBoundingClientRect();
                     const interactiveCount = parent.querySelectorAll(interactiveSelector).length;
-                    const tooBroad =
-                        parent === document.body ||
-                        text.length > 2800 ||
-                        interactiveCount > 18 ||
-                        rect.width > window.innerWidth * 1.12 ||
-                        rect.height > window.innerHeight * 3.2;
-                    if (tooBroad) continue;
+                    if (rootTooBroad(parent, text)) continue;
 
                     const score =
                         semanticWeight(parent) +
@@ -1315,7 +1340,8 @@ async function getStructuredPageText(page: Page): Promise<string> {
                 }
 
                 if (!best) continue;
-                const text = compact(best.innerText || best.textContent);
+                const lines = textLinesOf(best);
+                const text = lines.join(' | ') || compact(best.innerText || best.textContent);
                 const actions = Array.from(best.querySelectorAll(interactiveSelector))
                     .filter((el) => isVisible(el))
                     .map((el) => textOf(el))
@@ -1339,6 +1365,70 @@ async function getStructuredPageText(page: Page): Promise<string> {
                     actions,
                     hrefs,
                     score: bestScore,
+                    top: Math.round(rect.top + window.scrollY),
+                });
+            }
+
+            const genericRoots = Array.from(document.querySelectorAll([
+                'article',
+                'li',
+                'tr',
+                '[role="article"]',
+                '[role="listitem"]',
+                '[role="row"]',
+                '[role="gridcell"]',
+                '[role="group"]',
+                '[class*="card" i]',
+                '[class*="item" i]',
+                '[class*="tile" i]',
+                '[class*="event" i]',
+                '[class*="game" i]',
+                '[class*="quest" i]',
+                '[class*="quiz" i]',
+                '[class*="slot" i]',
+                '[class*="listing" i]',
+                '[class*="schedule" i]',
+                '[class*="offer" i]',
+                '[class*="entry" i]',
+            ].join(','))).filter((el, index, arr): el is HTMLElement =>
+                arr.indexOf(el) === index && el instanceof HTMLElement && isVisible(el)
+            );
+            const dateRichRoots = Array.from(document.querySelectorAll('body *'))
+                .filter((el, index, arr): el is HTMLElement => {
+                    if (arr.indexOf(el) !== index || !(el instanceof HTMLElement) || !isVisible(el)) return false;
+                    const text = textLinesOf(el).join(' | ');
+                    return text.length >= 16 && text.length <= 1800 && hasListingSignal(text);
+                })
+                .slice(0, 500);
+
+            for (const root of [...new Set([...genericRoots, ...dateRichRoots])]) {
+                const lines = textLinesOf(root);
+                const text = lines.join(' | ') || compact(root.innerText || root.textContent);
+                if (!text || text.length < 16 || rootTooBroad(root, text)) continue;
+
+                const actions = Array.from(root.querySelectorAll(interactiveSelector))
+                    .filter((el) => isVisible(el))
+                    .map((el) => textOf(el))
+                    .filter(Boolean)
+                    .filter((value, index, arr) => arr.indexOf(value) === index)
+                    .slice(0, 8);
+                const hrefs = Array.from(root.querySelectorAll('a[href]'))
+                    .map((el) => compact((el as HTMLAnchorElement).href))
+                    .filter(Boolean)
+                    .filter((value, index, arr) => arr.indexOf(value) === index)
+                    .slice(0, 4);
+                if (!actions.length && !hrefs.length && !hasListingSignal(text)) continue;
+
+                const rect = root.getBoundingClientRect();
+                const title = titleOf(root, text, actions);
+                const key = `${title}|${actions.join('|')}|${Math.round(rect.top / 25)}|generic`;
+                candidates.push({
+                    key,
+                    text: text.slice(0, 900),
+                    title: title.slice(0, 160),
+                    actions,
+                    hrefs,
+                    score: semanticWeight(root) + (hasListingSignal(text) ? 48 : 0) + Math.max(0, 18 - Math.floor(text.length / 180)),
                     top: Math.round(rect.top + window.scrollY),
                 });
             }
@@ -2593,8 +2683,8 @@ function collectBlockerSignals(parts: string[]): string {
     }
 
     const checks: Array<[RegExp, string]> = [
-        [/(sms|смс|одноразов|otp|2fa|two[-\s]?factor|код\s+(?:из|подтверждения|безопасности))/i, 'one-time code or 2FA required'],
-        [/(банковск\w*\s+карт|card\s+number|cvv|cvc|оплат|payment|checkout|pay\s+now)/i, 'payment/card flow visible'],
+        [/(sms|смс|otp|2fa|two[-\s]?factor|одноразов[а-я\s]{0,40}(?:код|парол)|(?:введите|укажите|enter|input)[^.\n]{0,80}(?:код|code)[^.\n]{0,80}(?:sms|смс|подтвержд|безопасн|2fa|otp)|код\s+(?:из\s+(?:sms|смс)|безопасности))/i, 'one-time code or 2FA required'],
+        [/(банковск\w*\s+карт|данн[ыеых]+\s+карт|номер\s+карт|card\s+number|cvv|cvc|payment\s+form|checkout|pay\s+now)/i, 'payment/card flow visible'],
         [/(паспорт|passport|снилс|snils|инн|inn|document\s+number|номер\s+документа)/i, 'identity document data requested'],
         [/(камера|микрофон|camera|microphone|allow\s+(?:camera|microphone)|camera\s+permission|microphone\s+permission|разрешите\s+доступ)/i, 'camera or microphone permission required'],
         [/(ошибка|error|invalid|required|обязательн|неверн|failed|try\s+again)/i, 'form validation or page error visible'],
@@ -4278,7 +4368,7 @@ function manualBlockerPausePrompt(
         };
     }
 
-    if (/one-time code or 2fa required/i.test(blockers) && !cleanWhitespace(state.lastUserAnswer)) {
+    if (/one-time code or 2fa required/i.test(blockers) && hasVisibleOtpChallenge(observation) && !cleanWhitespace(state.lastUserAnswer)) {
         return {
             kind: 'otp_or_2fa',
             question: 'Сайт просит одноразовый код, SMS или 2FA. Пришли код одним сообщением, и я введу его на этой странице. Я не буду угадывать такие коды.',
@@ -4286,6 +4376,17 @@ function manualBlockerPausePrompt(
     }
 
     return null;
+}
+
+function hasVisibleOtpChallenge(observation: PageObservation): boolean {
+    const focusedSurface = [
+        observation.modalText,
+        observation.formBrainText,
+        observation.formText,
+        observation.a11yText,
+        observation.interactiveText,
+    ].join('\n');
+    return /(sms|смс|otp|2fa|two[-\s]?factor|одноразов[а-я\s]{0,40}(?:код|парол)|(?:введите|укажите|enter|input)[^.\n]{0,120}(?:код|code)[^.\n]{0,120}(?:sms|смс|подтвержд|безопасн|2fa|otp)|код\s+(?:из\s+(?:sms|смс)|безопасности))/iu.test(focusedSurface);
 }
 
 function pushPageEvent(state: BrowserRunState, event: string): void {
@@ -4534,8 +4635,10 @@ function recordEvidenceFromObservation(state: BrowserRunState, observation: Page
     }
 }
 
-function finalSummaryWithEvidence(summary: string, state: BrowserRunState): string {
+function finalSummaryWithEvidence(summary: string, state: BrowserRunState, task = state.originalTask): string {
     const cleanSummary = cleanWhitespace(summary || 'Задача выполнена.');
+    const listingSummary = userReadyListingSummaryFromState(task, state);
+    if (listingSummary) return listingSummary;
     if (summaryLooksUserReady(cleanSummary)) return cleanSummary;
 
     const evidence = state.evidenceStash
@@ -4550,6 +4653,54 @@ function finalSummaryWithEvidence(summary: string, state: BrowserRunState): stri
         .map((item) => `- ${item}`)
         .join('\n');
     return `${cleanSummary}\n\nПроверено на странице:\n${bullets}`;
+}
+
+function userReadyListingSummaryFromState(task: string, state: BrowserRunState): string | null {
+    const taskSurface = listingTaskSurface(task, state);
+    if (!isInformationListingTask(taskSurface) || !state.visibleListingItems.length) return null;
+    const temporal = temporalRequirementFromTask(taskSurface);
+    const candidates = temporal
+        ? state.visibleListingItems.filter((item) => listingItemMatchesTemporalRequirement(item, temporal))
+        : state.visibleListingItems;
+    const items = prepareVisibleListingItemsForAnswer(candidates);
+    if (!items.length) return null;
+
+    const header = temporal
+        ? `Нашла на странице варианты за «${temporal.label}»:`
+        : 'Нашла на странице такие варианты:';
+    return [
+        header,
+        '',
+        formatVisibleListingItemsForAnswer(items.slice(0, 10), { includeDate: !temporal }),
+        items.length > 10 ? `\nИ ещё ${items.length - 10} вариант${russianCountSuffix(items.length - 10, '', 'а', 'ов')} ниже по списку.` : '',
+    ].filter(Boolean).join('\n');
+}
+
+function listingTaskSurface(task: string, state?: BrowserRunState): string {
+    return [
+        task,
+        state?.originalTask,
+        state?.recentUserContext,
+    ].map((part) => cleanWhitespace(part || '')).filter(Boolean).join('\n');
+}
+
+function isUserReadyListingSummary(summary: string): boolean {
+    return /^Нашла на странице (?:варианты|такие варианты)/iu.test(cleanWhitespace(summary));
+}
+
+function formatBrowserDoneResponse(summary: string, downloadsLine = ''): string {
+    if (isUserReadyListingSummary(summary)) {
+        return `${summary}${downloadsLine}`;
+    }
+    return `✅ Готово!\n\n${summary}${downloadsLine}`;
+}
+
+function browserDoneScreenshotCaption(summary: string): string {
+    if (isUserReadyListingSummary(summary)) {
+        const firstLine = cleanWhitespace(summary.split('\n').find((line) => line.trim()) || 'Нашла варианты.');
+        return `🌐 ${firstLine.slice(0, 200)}`;
+    }
+    return `✅ Готово: ${summary.slice(0, 200)}`;
 }
 
 function summaryLooksUserReady(summary: string): boolean {
@@ -4638,6 +4789,30 @@ const LISTING_MONTHS_RU: Record<string, number> = {
     ноябрь: 10,
     декабря: 11,
     декабрь: 11,
+    january: 0,
+    jan: 0,
+    february: 1,
+    feb: 1,
+    march: 2,
+    mar: 2,
+    april: 3,
+    apr: 3,
+    may: 4,
+    june: 5,
+    jun: 5,
+    july: 6,
+    jul: 6,
+    august: 7,
+    aug: 7,
+    september: 8,
+    sep: 8,
+    sept: 8,
+    october: 9,
+    oct: 9,
+    november: 10,
+    nov: 10,
+    december: 11,
+    dec: 11,
 };
 
 function visibleListingFallbackDecision(
@@ -4645,13 +4820,14 @@ function visibleListingFallbackDecision(
     observation: PageObservation,
     state?: BrowserRunState
 ): VisibleListingFallbackResult | null {
-    if (!isInformationListingTask(task)) return null;
+    const taskSurface = listingTaskSurface(task, state);
+    if (!isInformationListingTask(taskSurface)) return null;
     const currentItems = extractVisibleListingItems(observation);
     if (state) rememberVisibleListingItems(state, currentItems);
     const allItems = state?.visibleListingItems?.length ? state.visibleListingItems : currentItems;
     if (!allItems.length) return null;
 
-    const temporal = temporalRequirementFromTask(task);
+    const temporal = temporalRequirementFromTask(taskSurface);
     const matchingItems = temporal
         ? allItems.filter((item) => listingItemMatchesTemporalRequirement(item, temporal))
         : allItems;
@@ -4660,9 +4836,11 @@ function visibleListingFallbackDecision(
         : currentItems;
     const canScrollDown = observationCanScrollDown(observation);
     const scrollAttempts = visibleListingScrollAttempts(state);
-    const asksForBroadList = /(все|всё|список|расписани|какие\s+будут|что\s+будет|вариант[а-я]*|доступн[а-я]*|available|list|schedule)/iu.test(task);
+    const asksForBroadList = /(все|всё|список|расписани|какие\s+(?:будут|есть)|что\s+(?:будет|есть)|вариант[а-я]*|доступн[а-я]*|available|list|schedule)/iu.test(taskSurface);
+    const shouldExhaustTemporalList = Boolean(temporal && asksForBroadList);
+    const maxScrollAttempts = shouldExhaustTemporalList ? 12 : 8;
 
-    if (temporal && !currentMatchingItems.length && canScrollDown && scrollAttempts < 8) {
+    if (temporal && !currentMatchingItems.length && canScrollDown && scrollAttempts < maxScrollAttempts) {
         return {
             action: 'scroll',
             value: 'down',
@@ -4680,11 +4858,20 @@ function visibleListingFallbackDecision(
                     : 'Вижу список, продолжаю прокручивать, чтобы собрать больше подходящих вариантов.',
             };
         }
+        if (visibleListingDoneRecentlyBlocked(state)) return null;
         return {
             action: 'done',
             summary: temporal
-                ? `Я просмотрела видимый список, но не нашла элементов за период «${temporal.label}». Ближайшие видимые варианты:\n${formatVisibleListingItemsForAnswer(allItems.slice(0, 6))}`
-                : `Я просмотрела видимый список и нашла такие варианты:\n${formatVisibleListingItemsForAnswer(allItems.slice(0, 8))}`,
+                ? `Я просмотрела видимый список, но не нашла карточек за «${temporal.label}».`
+                : `Я просмотрела видимый список и нашла такие варианты:\n${formatVisibleListingItemsForAnswer(prepareVisibleListingItemsForAnswer(allItems).slice(0, 8), { includeDate: true })}`,
+        };
+    }
+
+    if (shouldExhaustTemporalList && canScrollDown && scrollAttempts < maxScrollAttempts) {
+        return {
+            action: 'scroll',
+            value: 'down',
+            comment: `Нашла ${matchingItems.length} карточк${russianCountSuffix(matchingItems.length, 'у', 'и', 'ек')} за «${temporal!.label}», продолжаю сканировать ниже, чтобы собрать все варианты за эту дату.`,
         };
     }
 
@@ -4698,14 +4885,24 @@ function visibleListingFallbackDecision(
         };
     }
 
+    if (visibleListingDoneRecentlyBlocked(state)) return null;
     return {
         action: 'done',
         summary: [
             temporal ? `Нашла на странице варианты за период «${temporal.label}»:` : 'Нашла на странице такие варианты:',
-            formatVisibleListingItemsForAnswer(matchingItems.slice(0, 10)),
+            formatVisibleListingItemsForAnswer(prepareVisibleListingItemsForAnswer(matchingItems).slice(0, 10), { includeDate: !temporal }),
             matchingItems.length > 10 ? `И ещё ${matchingItems.length - 10} вариантов ниже по списку.` : '',
         ].filter(Boolean).join('\n'),
     };
+}
+
+function russianCountSuffix(count: number, one: string, few: string, many: string): string {
+    const mod100 = Math.abs(count) % 100;
+    const mod10 = mod100 % 10;
+    if (mod100 >= 11 && mod100 <= 14) return many;
+    if (mod10 === 1) return one;
+    if (mod10 >= 2 && mod10 <= 4) return few;
+    return many;
 }
 
 function isInformationListingTask(task: string): boolean {
@@ -4755,6 +4952,14 @@ function temporalRequirementFromTask(task: string): TemporalRequirement | null {
         return { label: explicitDate.text, startMs: start.getTime(), endMs: addDays(start, 1).getTime() };
     }
     return null;
+}
+
+function visibleListingDoneRecentlyBlocked(state?: BrowserRunState): boolean {
+    if (!state) return false;
+    return state.history.slice(-6).some((record) =>
+        /(?:blocked_universal_done|blocked_shopping_done|completion_review_block)\b/iu.test(record.label) &&
+        /\bdone\b/iu.test(record.label)
+    );
 }
 
 function startOfLocalDay(date: Date): Date {
@@ -4891,14 +5096,16 @@ function cleanUserFacingUrl(rawUrl: string): string {
     }
 }
 
+const LISTING_WEEKDAY_RE = /^(?:понедельник|вторник|среда|четверг|пятница|суббота|воскресенье)$/iu;
+
 function visibleListingItemFromParts(
     source: string,
     title: string,
     body: string,
     url?: string
 ): BrowserVisibleListingItem | null {
-    const cleanTitle = cleanListingText(title);
     const cleanBody = cleanListingText(body);
+    const cleanTitle = chooseVisibleListingTitle(cleanListingText(title), cleanBody);
     const date = parseListingDateFromText([cleanTitle, cleanBody].join(' '));
     const details = buildVisibleListingDetails(cleanTitle, cleanBody);
     const key = normalizeSearchText([cleanTitle, date?.text || '', details, url || ''].join('|')).slice(0, 300);
@@ -4915,6 +5122,59 @@ function visibleListingItemFromParts(
     };
 }
 
+function listingTextSegments(text: string): string[] {
+    return text
+        .split(/\s*(?:\||\n|•|·)\s*/u)
+        .map((part) => cleanWhitespace(part))
+        .filter(Boolean)
+        .filter((part, index, arr) => arr.indexOf(part) === index)
+        .slice(0, 30);
+}
+
+function isWeakListingTitleSegment(segment: string): boolean {
+    const normalized = normalizeSearchText(segment);
+    if (!normalized) return true;
+    if (segment.length > 140) return true;
+    if (LISTING_WEEKDAY_RE.test(normalized)) return true;
+    if (/^(?:обычный|тематический|онлайн|online|offline|офлайн|платно|бесплатно)$/iu.test(normalized)) return true;
+    if (/^(?:расписани[ея]|каталог|список|ближайш|главная|меню|навигаци[яи])\b/iu.test(normalized)) return true;
+    if (/^(?:перейти|подробнее|открыть|выбрать|записаться|купить|book|buy|details|select|open)$/iu.test(normalized)) return true;
+    if (/^(?:сложность|адрес|место|стоимость|цена|начало|окончание|время|дата|скидка)\b/iu.test(normalized)) return true;
+    if (/^\d{1,2}[:.]\d{2}$/u.test(normalized)) return true;
+    if (/^(?:\d[\d\s\u00a0]{0,9}\s*(?:₽|руб\.?|р\.?|₸|\$|€)|(?:₽|руб\.?|₸|\$|€)\s*\d[\d\s\u00a0]{0,9})$/iu.test(segment)) return true;
+
+    const date = parseListingDateFromText(segment);
+    if (date && normalized.length <= normalizeSearchText(date.text).length + 14) return true;
+
+    return false;
+}
+
+function chooseVisibleListingTitle(title: string, body: string): string {
+    const titleSegments = listingTextSegments(title);
+    const bodySegments = listingTextSegments(body);
+    const allSegments = [...titleSegments, ...bodySegments];
+    const numberedTitle = allSegments.find((segment) => /#\d{1,8}\b/u.test(segment) && !isWeakListingTitleSegment(segment));
+    if (numberedTitle) return cleanVisibleListingAnswerTitle(numberedTitle).slice(0, 180);
+
+    const directTitle = titleSegments.find((segment) => !isWeakListingTitleSegment(segment));
+    if (directTitle) return cleanVisibleListingAnswerTitle(directTitle).slice(0, 180);
+
+    const scored = allSegments
+        .filter((segment) => !isWeakListingTitleSegment(segment))
+        .map((segment, index) => {
+            let score = 100 - index;
+            if (/#\d+/u.test(segment)) score += 40;
+            if (/[A-ZА-ЯЁ][a-zа-яё]+/u.test(segment)) score += 16;
+            if (segment.length >= 8 && segment.length <= 90) score += 12;
+            if (/(?:описани|услов|повтор|скидк|предъявлен|документ|вопрос|стоимост|сложност)/iu.test(segment)) score -= 35;
+            return { segment, score };
+        })
+        .sort((a, b) => b.score - a.score);
+    if (scored[0]) return cleanVisibleListingAnswerTitle(scored[0].segment).slice(0, 180);
+
+    return cleanVisibleListingAnswerTitle(titleSegments[0] || bodySegments[0] || 'Вариант').slice(0, 180);
+}
+
 function cleanListingText(text: string): string {
     return cleanWhitespace(redactSecrets(text))
         .replace(/\bimage="[^"]*"/giu, '')
@@ -4928,6 +5188,7 @@ function itemLooksLikeUsefulListing(item: BrowserVisibleListingItem): boolean {
     const text = normalizeSearchText([item.title, item.details, item.url || ''].join(' '));
     if (text.length < 12) return false;
     if (/^(главная|меню|навигация|поиск|фильтр|сброс|подобрать|подробнее|открыть|выбрать|записаться|купить)$/iu.test(text)) return false;
+    if (looksLikeNonListingPageChrome(item)) return false;
     const hasStructuredSignal =
         Boolean(item.dateMs) ||
         /\b\d{1,2}[:.]\d{2}\b/u.test(text) ||
@@ -4936,6 +5197,21 @@ function itemLooksLikeUsefulListing(item: BrowserVisibleListingItem): boolean {
         Boolean(item.url);
     const hasEnoughContent = cleanWhitespace([item.title, item.details].join(' ')).length >= 35;
     return hasStructuredSignal && hasEnoughContent;
+}
+
+function looksLikeNonListingPageChrome(item: BrowserVisibleListingItem): boolean {
+    const title = normalizeSearchText(item.title);
+    const surface = normalizeSearchText([item.title, item.details, item.url || ''].join(' '));
+    if (/^(?:отвечаем\s+на\s+звонки|квизы\s+в\s+барах|квизы\s+онлайн|политика\s+конфиденциальности|условия\s+пользовательского\s+соглашения|подпишись|telegram|vk)$/iu.test(title)) {
+        return true;
+    }
+    if (/(?:info@|vk\.com\/|t\.me\/|agreement\.html|privacy|политика\s+конфиденциальности|пользовательск[а-яё]+\s+соглашени)/iu.test(surface)) {
+        return true;
+    }
+    if (/(?:отвечаем\s+на\s+звонки|подпишись\s+на\s+телеграм|получай\s+уведомления\s+о\s+новых\s+играх)/iu.test(surface)) {
+        return true;
+    }
+    return false;
 }
 
 function buildVisibleListingDetails(title: string, body: string): string {
@@ -4947,13 +5223,17 @@ function buildVisibleListingDetails(title: string, body: string): string {
         .filter((value, index, arr) => arr.indexOf(value) === index)
         .slice(0, 3);
     const prices = extractCurrencyValues(source).slice(0, 2);
+    const titlePattern = title ? new RegExp(escapeRegExp(title), 'giu') : null;
     const remainder = cleanWhitespace(
         source
-            .replace(title, '')
+            .replace(titlePattern ?? /$^/u, '')
             .replace(date, '')
             .replace(/\b([01]?\d|2[0-3])[:.][0-5]\d\b/gu, '')
             .replace(/(?:\b\d[\d\s\u00a0]{0,9}\s*(?:₽|руб\.?|р\.?|₸|\$|€)|(?:₽|руб\.?|₸|\$|€)\s*\d[\d\s\u00a0]{0,9})/giu, '')
             .replace(/\b(?:записаться|купить|подробнее|выбрать|открыть|перейти|book|buy|details|select|open)\b/giu, '')
+            .replace(/\s*\|\s*/gu, ' — ')
+            .replace(/\s*(?:—\s*){2,}/gu, ' — ')
+            .replace(/^(?:—\s*)+|(?:\s*—)+$/gu, '')
     ).slice(0, 180);
     return [date, times.join(', '), prices.join(', '), remainder].filter(Boolean).join(' — ');
 }
@@ -4967,13 +5247,13 @@ function extractCurrencyValues(text: string): string[] {
 
 function parseListingDateFromText(text: string): { text: string; ms: number } | null {
     const today = startOfLocalDay(new Date());
-    const ru = text.match(/\b(\d{1,2})\s*(января|январь|февраля|февраль|марта|март|апреля|апрель|мая|май|июня|июнь|июля|июль|августа|август|сентября|сентябрь|октября|октябрь|ноября|ноябрь|декабря|декабрь)\b/iu);
-    if (ru) {
-        const day = Number(ru[1]);
-        const month = LISTING_MONTHS_RU[normalizeSearchText(ru[2])];
+    const named = text.match(/\b(\d{1,2})\s*(января|январь|февраля|февраль|марта|март|апреля|апрель|мая|май|июня|июнь|июля|июль|августа|август|сентября|сентябрь|октября|октябрь|ноября|ноябрь|декабря|декабрь|january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec)\b/iu);
+    if (named) {
+        const day = Number(named[1]);
+        const month = LISTING_MONTHS_RU[normalizeSearchText(named[2])];
         if (Number.isInteger(day) && month !== undefined) {
             const date = inferListingDateYear(day, month, today);
-            return { text: cleanWhitespace(ru[0]), ms: date.getTime() };
+            return { text: cleanWhitespace(named[0]), ms: date.getTime() };
         }
     }
 
@@ -5000,19 +5280,125 @@ function inferListingDateYear(day: number, month: number, today: Date): Date {
     return candidate;
 }
 
-function formatVisibleListingItemsForAnswer(items: BrowserVisibleListingItem[]): string {
-    return items
-        .map((item, index) => `${index + 1}. ${formatVisibleListingItemForAnswer(item)}`)
-        .join('\n');
+interface VisibleListingAnswerFormatOptions {
+    includeDate?: boolean;
 }
 
-function formatVisibleListingItemForAnswer(item: BrowserVisibleListingItem): string {
-    const title = item.title || 'Вариант';
-    const details = item.details && normalizeSearchText(item.details) !== normalizeSearchText(title)
-        ? ` — ${item.details}`
-        : '';
-    const url = item.url ? ` — ${item.url}` : '';
-    return `${title}${details}${url}`.slice(0, 520);
+function prepareVisibleListingItemsForAnswer(items: BrowserVisibleListingItem[]): BrowserVisibleListingItem[] {
+    const byKey = new Map<string, BrowserVisibleListingItem>();
+    for (const item of items) {
+        const key = visibleListingAnswerDedupeKey(item);
+        const current = byKey.get(key);
+        if (!current || visibleListingAnswerScore(item) > visibleListingAnswerScore(current)) {
+            byKey.set(key, item);
+        }
+    }
+    return [...byKey.values()]
+        .filter((item) => !isWeakListingTitleSegment(item.title))
+        .sort((a, b) => (a.dateMs ?? 0) - (b.dateMs ?? 0) || firstListingTimeMinutes(a) - firstListingTimeMinutes(b) || a.title.localeCompare(b.title, 'ru'));
+}
+
+function visibleListingAnswerDedupeKey(item: BrowserVisibleListingItem): string {
+    if (item.url) return `url:${cleanUserFacingUrl(item.url)}`;
+    const time = firstListingTimeText(item);
+    return normalizeSearchText([item.dateText || '', time, cleanVisibleListingAnswerTitle(item.title)].join('|')).slice(0, 220);
+}
+
+function visibleListingAnswerScore(item: BrowserVisibleListingItem): number {
+    const title = cleanVisibleListingAnswerTitle(item.title);
+    const details = cleanWhitespace(item.details);
+    let score = 0;
+    if (item.dateMs) score += 30;
+    if (firstListingTimeText(item)) score += 18;
+    if (extractCurrencyValues(details).length) score += 8;
+    if (item.url) score += 8;
+    if (/#\d{1,8}\b/u.test(title)) score += 35;
+    if (title.length >= 6 && title.length <= 90) score += 12;
+    if (listingDescriptionForAnswer(item).length >= 30) score += 18;
+    if (/^(?:только\s+наличными|начало\s+игры|с\s+человека)$/iu.test(normalizeSearchText(title))) score -= 35;
+    if (isWeakListingTitleSegment(title)) score -= 80;
+    return score;
+}
+
+function firstListingTimeText(item: BrowserVisibleListingItem): string {
+    return [item.title, item.details].join(' ').match(/\b([01]?\d|2[0-3])[:.][0-5]\d\b/u)?.[0]?.replace('.', ':') || '';
+}
+
+function firstListingTimeMinutes(item: BrowserVisibleListingItem): number {
+    const time = firstListingTimeText(item);
+    const match = time.match(/^(\d{1,2}):(\d{2})$/u);
+    if (!match) return Number.MAX_SAFE_INTEGER;
+    return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function formatVisibleListingItemsForAnswer(
+    items: BrowserVisibleListingItem[],
+    options: VisibleListingAnswerFormatOptions = {}
+): string {
+    return items
+        .map((item, index) => `${index + 1}. ${formatVisibleListingItemForAnswer(item, options)}`)
+        .join('\n\n');
+}
+
+function formatVisibleListingItemForAnswer(
+    item: BrowserVisibleListingItem,
+    options: VisibleListingAnswerFormatOptions = {}
+): string {
+    const title = cleanVisibleListingAnswerTitle(item.title || 'Вариант');
+    const meta = visibleListingMetaForAnswer(item, options);
+    const description = listingDescriptionForAnswer(item);
+    const lines = [
+        title,
+        meta ? `   ${meta}` : '',
+        description ? `   ${description}` : '',
+        item.url ? `   ${cleanUserFacingUrl(item.url)}` : '',
+    ].filter(Boolean);
+    return lines.join('\n').slice(0, 720);
+}
+
+function cleanVisibleListingAnswerTitle(title: string): string {
+    let cleaned = cleanWhitespace(title)
+        .replace(/\s+[-–—]\s*(?:\d{1,2}\s*)?(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря|january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec)\b.*$/iu, '')
+        .replace(/\s+[-–—]\s*\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b.*$/u, '')
+        .replace(/^(?:игра|квиз|мероприятие|событие)\s*[:#-]\s*/iu, '')
+        .replace(/\s*(?:—\s*){2,}/gu, ' — ')
+        .replace(/^[-–—\s]+|[-–—\s]+$/gu, '');
+    if (!cleaned) cleaned = cleanWhitespace(title) || 'Вариант';
+    return cleaned.slice(0, 160);
+}
+
+function visibleListingMetaForAnswer(item: BrowserVisibleListingItem, options: VisibleListingAnswerFormatOptions): string {
+    const surface = [item.title, item.details].join(' ');
+    const date = options.includeDate === false ? '' : item.dateText || parseListingDateFromText(surface)?.text || '';
+    const time = firstListingTimeText(item);
+    const price = extractCurrencyValues(surface)[0] || '';
+    return [date, time, price].filter(Boolean).filter((value, index, arr) => arr.indexOf(value) === index).join(', ');
+}
+
+function listingDescriptionForAnswer(item: BrowserVisibleListingItem): string {
+    const title = cleanVisibleListingAnswerTitle(item.title);
+    const segments = listingTextSegments(item.details)
+        .map((segment) => segment.replace(/\s*(?:—\s*){2,}/gu, ' — ').trim())
+        .filter(Boolean)
+        .filter((segment) => normalizeSearchText(cleanVisibleListingAnswerTitle(segment)) !== normalizeSearchText(title))
+        .filter((segment) => !isListingMetaSegment(segment))
+        .filter((segment, index, arr) => arr.findIndex((other) => normalizeSearchText(other) === normalizeSearchText(segment)) === index);
+    const sentenceLike = segments.filter((segment) => segment.length >= 28 && /[а-яёa-z]/iu.test(segment));
+    const shortTags = segments
+        .filter((segment) => segment.length >= 4 && segment.length <= 32 && !/[.!?]/u.test(segment))
+        .slice(0, 1);
+    const chosen = [...shortTags, ...sentenceLike].slice(0, 3);
+    return cleanWhitespace(chosen.join(' ')).slice(0, 260);
+}
+
+function isListingMetaSegment(segment: string): boolean {
+    const normalized = normalizeSearchText(segment);
+    if (!normalized) return true;
+    if (isWeakListingTitleSegment(segment)) return true;
+    if (/^(?:сложность|стоимость|цена|начало|окончание|место|адрес|скидка|повтор\s+вопросов|с\s+человека)\b/iu.test(normalized)) return true;
+    if (/(?:ул\.|улиц|просп|шоссе|площад|пер\.|бульвар|наб\.|д\.)/iu.test(segment)) return true;
+    if (/^https?:\/\//iu.test(segment)) return true;
+    return false;
 }
 
 function attachPageObserversToPage(state: BrowserRunState, page: Page): void {
@@ -7875,6 +8261,9 @@ function normalizeCandidateSelector(selector: string): string {
     const copiedCandidate = trimmed.match(/->\s*([\s\S]+)$/);
     if (copiedCandidate) return copiedCandidate[1].trim();
 
+    const verboseSnapshotIndex = trimmed.match(/^(?:candidate\s*)?#(\d{1,3})(?:\s|$)/i);
+    if (verboseSnapshotIndex) return `index=${verboseSnapshotIndex[1]}`;
+
     const describedCandidate = trimmed.match(/^(?:candidate\s*)?#\d{1,3}\s+([a-zA-Z0-9_-]+)(?:\/[a-zA-Z0-9_-]+)?\s+[«"“']([^«»“”"']{1,120})[»"”']\s*$/u);
     if (describedCandidate) {
         const role = describedCandidate[1].toLowerCase();
@@ -9801,7 +10190,11 @@ function shouldBlockMisdirectedShoppingTarget(task: string, decision: BrowserAct
 
 function isShoppingBrowseTask(task: string): boolean {
     const text = normalizeSearchText(task);
-    return /(подбери|найди|выбери|посмотри|ищу|комплект|образ|одеж|обув|товар|магазин|каталог|маркетплейс|clothes|shoes|outfit|look|product|store|catalog|marketplace|browse|find|pick|choose)/iu.test(text);
+    const shoppingDomain =
+        /(комплект|образ|лук|одеж|обув|товар|вещ[ьи]|бренд|размер|цвет|материал|магазин|каталог|маркетплейс|корзин|заказ|купить|покуп|clothes|shoes|outfit|look|product|item|store|shop|catalog|marketplace|cart|checkout|buy|purchase|order)/iu.test(text);
+    const browseIntent =
+        /(подбери|найди|выбери|посмотри|ищу|порекомендуй|сравни|browse|find|pick|choose|select|recommend|compare)/iu.test(text);
+    return shoppingDomain && browseIntent;
 }
 
 function isEvidenceDrivenSelectionTask(task: string): boolean {
@@ -9869,7 +10262,7 @@ function universalCompletionBlockReason(
     if (isListingOnlyShoppingSuccessText(surface) || /(переш[её]л[аи]?|открыл[аи]?|вижу|видн[ыо]|страниц[аеы]\s+(?:поиск|каталог|список|результат)|opened|navigated|visible results?)/iu.test(summaryText)) {
         return 'Навигация к списку или факт видимых результатов не выполняют задачу. Нужно выбрать/проверить конкретные варианты или дать проверенный вывод.';
     }
-    if (taskRequiresProductLinks(task) && !textHasUrl(surface)) {
+    if (taskExplicitlyRequestsLinks(task) && !textHasUrl(surface)) {
         return 'Пользователь просит ссылки/URL, но итог не содержит ссылок на источники или карточки.';
     }
     const asksForChoice = /(подбери|выбери|порекомендуй|сравни|вариант|лучши|подходящ|recommend|compare|pick|choose|shortlist|suggest)/iu.test(taskText);
@@ -9888,6 +10281,11 @@ function universalCompletionBlockReason(
         return 'Страница ещё не исследована: есть контент ниже, но агент не использовал поиск, фильтры, скролл или открытие деталей перед итогом.';
     }
     return null;
+}
+
+function taskExplicitlyRequestsLinks(task: string): boolean {
+    const text = normalizeSearchText(task);
+    return /(ссылк|url|link|линк|пришли\s+ссыл|скинь\s+ссыл|дай\s+ссыл|source|источник)/iu.test(text);
 }
 
 function userWantsShoppingCheckout(task: string): boolean {
@@ -12855,7 +13253,7 @@ async function runBrowserAgent(
             recordEvidenceFromObservation(state, observation);
             const autoSuccessSummary = detectedSuccessSummary(state, taskForLlm);
             if (autoSuccessSummary) {
-                const finalAutoSuccessSummary = finalSummaryWithEvidence(autoSuccessSummary, state);
+            const finalAutoSuccessSummary = finalSummaryWithEvidence(autoSuccessSummary, state, taskForLlm);
                 const universalBlockReason = universalCompletionBlockReason(taskForLlm, finalAutoSuccessSummary, state, observation);
                 if (universalBlockReason) {
                     browserLog('auto_success_universal_blocked', {
@@ -12891,7 +13289,7 @@ async function runBrowserAgent(
                     });
                 } else {
                     pushEvidence(state, 'success', finalAutoSuccessSummary, state.page.url());
-                    await sendScreenshot(ctx, page, `✅ Готово: ${finalAutoSuccessSummary.slice(0, 200)}`);
+                    await sendScreenshot(ctx, page, browserDoneScreenshotCaption(finalAutoSuccessSummary));
                     if (domain) {
                         await BrowserSessionStore.save(state.browserCtx, state.userId, domain).catch(() => {});
                         state.sessionSavedForDomain = domain;
@@ -12910,7 +13308,7 @@ async function runBrowserAgent(
                         expiresAt: Date.now() + LAST_BROWSER_TASK_TTL_MS,
                     };
                     const downloadsLine = sentDownloads.length ? `\n\nФайлы: ${sentDownloads.join(', ')}` : '';
-                    return { responseText: `✅ Готово!\n\n${finalAutoSuccessSummary}${downloadsLine}` };
+                    return { responseText: formatBrowserDoneResponse(finalAutoSuccessSummary, downloadsLine) };
                 }
             }
 
@@ -13070,22 +13468,35 @@ async function runBrowserAgent(
                 }
             }
 
-            let decision = await askNextAction(
-                taskForLlm,
-                url,
-                title,
-                observation,
-                state.history,
-                state.notes,
-                getCredentialHint(state.activeCredentials, domain),
-                memoryForLlm,
-                state.pageUnderstanding,
-                state.taskLedger,
-                state.taskPlan,
-                state.lastActionOutcome,
-                sitePatternsText,
-                state
-            );
+            let decision: BrowserAction;
+            const proactiveListingFallback = visibleListingFallbackDecision(taskForLlm, observation, state);
+            if (proactiveListingFallback) {
+                decision = proactiveListingFallback;
+                state.notes.push('На странице есть структурированный список/карточки; применяю общий listing fallback до запроса следующего LLM-действия.'.slice(0, 500));
+                browserLog('visible_listing_fallback_proactive', {
+                    action: decision.action,
+                    summary: decision.summary?.slice(0, 260),
+                    comment: decision.comment?.slice(0, 260),
+                    items: state.visibleListingItems.length,
+                });
+            } else {
+                decision = await askNextAction(
+                    taskForLlm,
+                    url,
+                    title,
+                    observation,
+                    state.history,
+                    state.notes,
+                    getCredentialHint(state.activeCredentials, domain),
+                    memoryForLlm,
+                    state.pageUnderstanding,
+                    state.taskLedger,
+                    state.taskPlan,
+                    state.lastActionOutcome,
+                    sitePatternsText,
+                    state
+                );
+            }
             devLog('browserAgent decision:', sanitizeDecisionForLog(decision));
             console.log(formatDecisionForLog(decision));
             recordBrowserTrajectoryEvent(state, 'decision', {
@@ -13596,7 +14007,7 @@ async function runBrowserAgent(
                     await page.waitForTimeout(200);
                     continue;
                 }
-                const finalDoneSummary = finalSummaryWithEvidence(doneSummary, state);
+                const finalDoneSummary = finalSummaryWithEvidence(doneSummary, state, taskForLlm);
                 const completionReview = await reviewTaskCompletionWithLlm(taskForLlm, finalDoneSummary, observation, state);
                 const completionBlockReason = completionReviewBlockReason(completionReview);
                 if (completionBlockReason) {
@@ -13619,7 +14030,7 @@ async function runBrowserAgent(
                     continue;
                 }
                 pushEvidence(state, 'success', finalDoneSummary, state.page.url());
-                await sendScreenshot(ctx, page, `✅ Готово: ${finalDoneSummary.slice(0, 200)}`);
+                await sendScreenshot(ctx, page, browserDoneScreenshotCaption(finalDoneSummary));
                 if (domain && domain !== state.sessionSavedForDomain) {
                     await BrowserSessionStore.save(state.browserCtx, state.userId, domain);
                     state.sessionSavedForDomain = domain;
@@ -13640,7 +14051,7 @@ async function runBrowserAgent(
                     expiresAt: Date.now() + LAST_BROWSER_TASK_TTL_MS,
                 };
                 const downloadsLine = sentDownloads.length ? `\n\nФайлы: ${sentDownloads.join(', ')}` : '';
-                return { responseText: `✅ Готово!\n\n${finalDoneSummary}${downloadsLine}` };
+                return { responseText: formatBrowserDoneResponse(finalDoneSummary, downloadsLine) };
             }
 
             if (decision.action === 'fail') {

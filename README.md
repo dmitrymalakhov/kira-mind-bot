@@ -377,6 +377,20 @@ git update-index --assume-unchanged personality.json
 
 В Docker Compose поднимаются два профиля из одной кодовой базы: `KiraMindBot` и `SergeyBrainBot`.
 
+### Голосовые ответы ElevenLabs
+
+| Переменная | Описание |
+|------------|----------|
+| `ELEVENLABS_API_KEY` | Ключ ElevenLabs для генерации голосовых ответов |
+| `ELEVENLABS_VOICE_ID` | ID голоса Nastya. Рекомендуемый вариант, чтобы не зависеть от поиска по имени |
+| `ELEVENLABS_VOICE_NAME` | Имя голоса для поиска, если `ELEVENLABS_VOICE_ID` не задан. По умолчанию `Nastya` |
+| `ELEVENLABS_MODEL_ID` | Модель TTS. По умолчанию `eleven_v3` |
+| `ELEVENLABS_OUTPUT_FORMAT` | Формат аудио ElevenLabs. По умолчанию `mp3_44100_128`, как в quickstart и на скрине; для Telegram voice бот перекодирует файл в OGG/Opus |
+| `ELEVENLABS_VOICE_STABILITY` | Stability из настроек голоса, например `0.5` |
+| `ELEVENLABS_MAX_TEXT_CHARS` | Максимальная длина текста для одного голосового ответа, по умолчанию `9500` |
+
+При локальном запуске с MP3-форматом ElevenLabs нужен установленный `ffmpeg`: бот заранее проверит его наличие перед запросом к ElevenLabs и вернёт текстовый ответ, если перекодирование в Telegram voice недоступно. Docker-образ уже устанавливает `ffmpeg`.
+
 ### База и векторная память
 
 | Переменная | Описание |

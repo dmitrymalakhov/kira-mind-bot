@@ -1,7 +1,7 @@
 import { Bot, InlineKeyboard } from "grammy";
 import { BotContext } from "./types";
 import { devLog } from "./utils";
-import { REMINDER_EXPIRY_TIME } from "./constants";
+import { REMINDER_EXPIRY_TIME, USER_TIMEZONE } from "./constants";
 import { initTelegramClient, searchGroupByTitle, sendMessageToChat, sendMessage } from "./services/telegram";
 import { ContactsStore } from "./stores/ContactsStore";
 import { ReminderRepository } from "./services/ReminderRepository";
@@ -104,6 +104,44 @@ const expiryTimers = new Map<string, NodeJS.Timeout>();
 function logReminderEvent(event: string, reminder: Reminder) {
     const chatRef = Math.abs(reminder.chatId) % 10000;
     console.info(`[reminder] event=${event} id=${reminder.id} chatRef=${chatRef} status=${reminder.status || "pending"} due=${new Date(reminder.dueDate).toISOString()}`);
+}
+
+/**
+ * Восстанавливает напоминание из БД после рестарта без повторной отправки уже сработавшего уведомления.
+ */
+export function restoreReminderAfterRestart(bot: Bot<BotContext>, reminder: Reminder): void {
+    try {
+        if (!reminder.createdAt) {
+            reminder.createdAt = new Date();
+        }
+        if (!reminder.status) {
+            reminder.status = ReminderStatus.Pending;
+        }
+
+        ReminderRegistry.getInstance().add(reminder);
+
+        if (reminder.status === ReminderStatus.Sent) {
+            const expiryAt = new Date(reminder.dueDate).getTime() + REMINDER_EXPIRY_TIME;
+            const delayMs = expiryAt - Date.now();
+
+            if (delayMs <= 0) {
+                handleExpiredReminder(bot, reminder).catch(e => console.error("[reminder] restore expiry failed:", e));
+            } else {
+                scheduleExpiryCheck(bot, reminder, delayMs);
+                logReminderEvent("restored_sent", reminder);
+            }
+            return;
+        }
+
+        if (reminder.status === ReminderStatus.Expired) {
+            logReminderEvent("restored_expired", reminder);
+            return;
+        }
+
+        scheduleReminder(bot, reminder);
+    } catch (error) {
+        console.error("Error restoring reminder after restart:", error);
+    }
 }
 
 /**
@@ -298,7 +336,7 @@ async function sendReminder(bot: Bot<BotContext>, reminder: Reminder): Promise<v
  * @param bot Экземпляр бота
  * @param reminder Объект напоминания
  */
-function scheduleExpiryCheck(bot: Bot<BotContext>, reminder: Reminder): void {
+function scheduleExpiryCheck(bot: Bot<BotContext>, reminder: Reminder, delayMs: number = REMINDER_EXPIRY_TIME): void {
     try {
         // Устанавливаем таймер для проверки истечения срока напоминания
         const expiryTimerId = setTimeout(() => {
@@ -309,12 +347,12 @@ function scheduleExpiryCheck(bot: Bot<BotContext>, reminder: Reminder): void {
 
             // Удаляем таймер из хранилища
             expiryTimers.delete(reminder.id);
-        }, REMINDER_EXPIRY_TIME);
+        }, delayMs);
 
         // Сохраняем таймер в хранилище
         expiryTimers.set(reminder.id, expiryTimerId);
 
-        devLog(`Scheduled expiry check for reminder ${reminder.id} in ${REMINDER_EXPIRY_TIME / 60000} minutes`);
+        devLog(`Scheduled expiry check for reminder ${reminder.id} in ${Math.round(delayMs / 60000)} minutes`);
     } catch (error) {
         console.error("Error scheduling expiry check:", error);
     }
@@ -363,6 +401,13 @@ export async function markReminderAsCompleted(bot: Bot<BotContext>, reminder: Re
     try {
         // Обновляем статус напоминания
         reminder.status = ReminderStatus.Completed;
+
+        // Отменяем таймер напоминания, если оно было выполнено до срабатывания
+        const timer = remindersTimers.get(reminder.id);
+        if (timer) {
+            clearTimeout(timer);
+            remindersTimers.delete(reminder.id);
+        }
 
         // Отменяем таймер проверки истечения срока, если он существует
         const expiryTimer = expiryTimers.get(reminder.id);
@@ -422,7 +467,27 @@ export async function postponeReminder(
     reminder: Reminder,
     postponeTime: number = 30 // По умолчанию откладываем на 30 минут
 ): Promise<Reminder | null> {
+    const newDueDate = new Date();
+    newDueDate.setMinutes(newDueDate.getMinutes() + postponeTime);
+    return postponeReminderUntil(bot, reminder, newDueDate);
+}
+
+/**
+ * Откладывает напоминание до конкретной даты.
+ */
+export async function postponeReminderUntil(
+    bot: Bot<BotContext>,
+    reminder: Reminder,
+    newDueDate: Date
+): Promise<Reminder | null> {
     try {
+        // Отменяем старую запланированную отправку, если перенос делается из списка до срабатывания
+        const timer = remindersTimers.get(reminder.id);
+        if (timer) {
+            clearTimeout(timer);
+            remindersTimers.delete(reminder.id);
+        }
+
         // Отменяем таймер проверки истечения срока, если он существует
         const expiryTimer = expiryTimers.get(reminder.id);
         if (expiryTimer) {
@@ -434,9 +499,6 @@ export async function postponeReminder(
         reminder.status = ReminderStatus.Postponed;
         reminder.postponeCount = (reminder.postponeCount ?? 0) + 1;
 
-        // Рассчитываем новое время напоминания
-        const newDueDate = new Date();
-        newDueDate.setMinutes(newDueDate.getMinutes() + postponeTime);
         reminder.dueDate = newDueDate;
         reminder.remindAgainAt = newDueDate;
 
@@ -446,6 +508,7 @@ export async function postponeReminder(
                 // Создаем текст сообщения с информацией об отложенном напоминании
                 let updatedText = reminder.displayText || reminder.text;
                 const formattedTime = newDueDate.toLocaleString('ru-RU', {
+                    timeZone: USER_TIMEZONE,
                     hour: 'numeric',
                     minute: 'numeric'
                 });
@@ -491,7 +554,7 @@ export async function postponeReminder(
         // Планируем отправку отложенного напоминания
         scheduleReminder(bot, reminder);
 
-        devLog(`Reminder ${reminder.id} postponed to ${newDueDate.toLocaleString()}`);
+        devLog(`Reminder ${reminder.id} postponed to ${newDueDate.toLocaleString('ru-RU', { timeZone: USER_TIMEZONE })}`);
         logReminderEvent("postponed", reminder);
         return reminder;
     } catch (error) {

@@ -55,7 +55,20 @@ export const ReminderRepository = {
         await repo().delete(id);
     },
 
-    /** Загружает напоминания, которые нужно пере-запланировать после перезапуска */
+    /** Загружает напоминания, которые должны остаться активными после перезапуска */
+    async loadActive(): Promise<Reminder[]> {
+        const entities = await repo().find({
+            where: [
+                { status: ReminderStatus.Pending },
+                { status: ReminderStatus.Postponed },
+                { status: ReminderStatus.Sent },
+                { status: ReminderStatus.Expired },
+            ],
+        });
+        return entities.map(fromEntity);
+    },
+
+    /** @deprecated Используй loadActive: сработавшие напоминания тоже должны восстанавливаться. */
     async loadPending(): Promise<Reminder[]> {
         const entities = await repo().find({
             where: [

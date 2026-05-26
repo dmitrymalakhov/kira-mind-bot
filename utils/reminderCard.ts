@@ -126,9 +126,10 @@ export function buildPostponeKeyboard(reminderId: string): InlineKeyboard {
         .text('1 час',    `postpone_${reminderId}_60`)
         .text('3 часа',   `postpone_${reminderId}_180`)
         .row()
+        .text('Вечер',    `postpone_${reminderId}_evening`)
         .text('Завтра',   `postpone_${reminderId}_tomorrow`)
-        .text('Неделю',   `postpone_${reminderId}_week`)
         .row()
+        .text('Неделю',   `postpone_${reminderId}_week`)
         .text('✏️ Своё время', `postpone_${reminderId}_custom`)
         .row()
         .text('↩️ Назад', `postpone_${reminderId}_back`);

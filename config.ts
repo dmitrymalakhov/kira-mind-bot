@@ -125,6 +125,17 @@ interface AssistantConfig {
 
 export interface Config extends AssistantConfig {
   openAiApiKey: string;
+  elevenLabsApiKey: string;
+  elevenLabsVoiceId?: string;
+  elevenLabsVoiceName?: string;
+  elevenLabsModelId: string;
+  elevenLabsOutputFormat: string;
+  elevenLabsVoiceStability?: number;
+  elevenLabsVoiceSimilarityBoost?: number;
+  elevenLabsVoiceStyle?: number;
+  elevenLabsVoiceSpeed?: number;
+  elevenLabsVoiceUseSpeakerBoost?: boolean;
+  elevenLabsMaxTextChars: number;
   getDefaultMood?: () => string;
 }
 
@@ -136,6 +147,12 @@ function toBoolean(value: string | undefined, fallback: boolean): boolean {
 function toNumber(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function toOptionalNumber(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function assistants(activeAssistant: string): AssistantConfig {
@@ -367,6 +384,19 @@ function createConfig() {
 
   return {
     openAiApiKey: process.env.OPENAI_API_KEY || "",
+    elevenLabsApiKey: process.env.ELEVENLABS_API_KEY || "",
+    elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID || undefined,
+    elevenLabsVoiceName: process.env.ELEVENLABS_VOICE_NAME || "Nastya",
+    elevenLabsModelId: process.env.ELEVENLABS_MODEL_ID || "eleven_v3",
+    elevenLabsOutputFormat: process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_44100_128",
+    elevenLabsVoiceStability: toOptionalNumber(process.env.ELEVENLABS_VOICE_STABILITY),
+    elevenLabsVoiceSimilarityBoost: toOptionalNumber(process.env.ELEVENLABS_VOICE_SIMILARITY_BOOST),
+    elevenLabsVoiceStyle: toOptionalNumber(process.env.ELEVENLABS_VOICE_STYLE),
+    elevenLabsVoiceSpeed: toOptionalNumber(process.env.ELEVENLABS_VOICE_SPEED),
+    elevenLabsVoiceUseSpeakerBoost: process.env.ELEVENLABS_VOICE_USE_SPEAKER_BOOST === undefined
+      ? undefined
+      : toBoolean(process.env.ELEVENLABS_VOICE_USE_SPEAKER_BOOST, true),
+    elevenLabsMaxTextChars: toNumber(process.env.ELEVENLABS_MAX_TEXT_CHARS, 9500),
     ...selectedConfig,
     getDefaultMood,
   } as Config;

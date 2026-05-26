@@ -149,6 +149,10 @@ echo -e "  ${GREEN}Пароль БД сгенерирован автоматич
 echo -e "\n${BOLD}Опциональные интеграции${NC}"
 prompt_optional GOOGLE_MAPS_API_KEY "Google Maps API Key" "https://console.cloud.google.com → Maps JavaScript API"
 prompt_optional IDEOGRAM_API_KEY "Ideogram API Key" "https://ideogram.ai/manage-api"
+prompt_optional ELEVENLABS_API_KEY "ElevenLabs API Key" "https://elevenlabs.io/app/settings/api-keys"
+if [ -n "${ELEVENLABS_API_KEY:-}" ]; then
+    prompt_optional ELEVENLABS_VOICE_ID "ElevenLabs Voice ID (Nastya)" "Можно оставить пустым: бот найдёт голос по имени Nastya через /v2/voices"
+fi
 
 # Telegram User Client
 echo -e "\n${BOLD}Telegram User Client (чтение входящих сообщений)${NC}"
@@ -212,6 +216,16 @@ if [ -n "${GOOGLE_MAPS_API_KEY:-}" ]; then
 fi
 if [ -n "${IDEOGRAM_API_KEY:-}" ]; then
     echo "IDEOGRAM_API_KEY=${IDEOGRAM_API_KEY}" >> "$ENV_FILE"
+fi
+if [ -n "${ELEVENLABS_API_KEY:-}" ]; then
+    echo "ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}" >> "$ENV_FILE"
+    echo "ELEVENLABS_VOICE_NAME=Nastya" >> "$ENV_FILE"
+    echo "ELEVENLABS_MODEL_ID=eleven_v3" >> "$ENV_FILE"
+    echo "ELEVENLABS_OUTPUT_FORMAT=mp3_44100_128" >> "$ENV_FILE"
+    echo "ELEVENLABS_VOICE_STABILITY=0.5" >> "$ENV_FILE"
+fi
+if [ -n "${ELEVENLABS_VOICE_ID:-}" ]; then
+    echo "ELEVENLABS_VOICE_ID=${ELEVENLABS_VOICE_ID}" >> "$ENV_FILE"
 fi
 if [ -n "${TELEGRAM_API_ID:-}" ]; then
     echo "TELEGRAM_API_ID=${TELEGRAM_API_ID}" >> "$ENV_FILE"

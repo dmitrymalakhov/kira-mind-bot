@@ -47,6 +47,10 @@ export class QdrantVectorService implements IDomainVectorService {
         return value instanceof Date ? value.toISOString() : String(value);
     }
 
+    private clamp01(value: number): number {
+        return Math.min(1, Math.max(0, value));
+    }
+
     private serializePreviousVersions(
         memory: Omit<MemoryEntry, 'id'>,
         existingPayload?: Record<string, any>,
@@ -455,17 +459,18 @@ export class QdrantVectorService implements IDomainVectorService {
         devLog(`✅ Память обновлена (дедупликация) ID: ${memoryId}`);
     }
 
-    /** Обновляет retrieval-след: сброс кривой забывания, счётчик вспоминаний и последние cues. */
+    /** Обновляет retrieval-след: сброс кривой забывания, счётчик вспоминаний, последние cues и силу следа. */
     async updateMemoryAccess(memoryId: string, domain: string, confidence?: number, retrievalCue?: string): Promise<void> {
         const collection = this.collectionFor(domain);
         try {
             const now = new Date().toISOString();
             const existing = await this.fetchPayload(memoryId, domain);
             const previousCount = typeof existing?.retrievalCount === 'number' ? existing.retrievalCount : 0;
+            const nextCount = previousCount + 1;
             const patch: Record<string, unknown> = {
                 lastAccessedAt: now,
                 lastRetrievedAt: now,
-                retrievalCount: previousCount + 1,
+                retrievalCount: nextCount,
             };
             const cue = retrievalCue?.replace(/\s+/g, ' ').trim().slice(0, 180);
             if (cue) {
@@ -473,6 +478,25 @@ export class QdrantVectorService implements IDomainVectorService {
                     ? existing!.retrievalCues.map(String)
                     : [];
                 patch.retrievalCues = [cue, ...previousCues.filter((c) => c !== cue)].slice(0, 8);
+            }
+
+            // Retrieval itself should not prove a fact true, but it does make the
+            // trace easier to access later. Diminishing gain approximates spaced
+            // repetition without inflating old facts too aggressively.
+            const retrievalGain = Math.max(0.004, 0.026 / Math.sqrt(nextCount));
+            const currentStrength = typeof existing?.strength === 'number' ? existing.strength : undefined;
+            const currentVividness = typeof existing?.vividness === 'number' ? existing.vividness : undefined;
+            const currentSpecificity = typeof existing?.specificity === 'number' ? existing.specificity : undefined;
+            if (currentStrength !== undefined) {
+                patch.strength = this.clamp01(currentStrength + retrievalGain);
+            } else if (nextCount >= 3) {
+                patch.strength = this.clamp01(0.48 + Math.min(0.14, Math.log1p(nextCount) * 0.035));
+            }
+            if (currentVividness !== undefined && cue) {
+                patch.vividness = this.clamp01(currentVividness + retrievalGain * 0.35);
+            }
+            if (currentSpecificity !== undefined && cue) {
+                patch.specificity = this.clamp01(currentSpecificity + retrievalGain * 0.25);
             }
             if (confidence !== undefined) patch.confidence = confidence;
             await this.client.setPayload(collection, {
