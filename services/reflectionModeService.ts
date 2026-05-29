@@ -25,16 +25,21 @@
  */
 
 import { Bot } from 'grammy';
+import { v5 as uuidv5 } from 'uuid';
 import { BotContext } from '../types';
 import { config } from '../config';
+import { PREDEFINED_DOMAINS } from '../constants/domains';
 import { runAnalyzeConversationAgent } from '../agents/analyzeConversationAgent';
-import { saveMemory, searchAllDomainsMemories } from '../utils/enhancedDomainMemory';
-import { saveContactMemoryFactOrAsk } from '../utils/contactMemory';
+import { runUpdateLongTermMemoryAgentDetailed } from '../agents/updateLongTermMemoryAgent';
+import { searchAllDomainsMemories } from '../utils/enhancedDomainMemory';
 import { getSetting, setSetting } from './botSettingsService';
 import { devLog, parseLLMJson } from '../utils';
 import openai from '../openai';
 import { getProactiveChatId } from '../utils/allowedUserChatStore';
 import { MessageStore } from '../stores/MessageStore';
+import { getVectorService } from './VectorServiceFactory';
+import { runMemorySchemaConsolidationForUser } from './MemorySchemaConsolidationService';
+import { runMemorySleepCycleForUser } from './MemorySleepCycleService';
 
 // ── Настройки ─────────────────────────────────────────────────────────────────
 
@@ -59,6 +64,8 @@ const MIN_TEXT_LENGTH = 8;
 const MIN_IMPORTANCE = 0.3;
 /** Сколько предыдущих сообщений из MessageStore добавляем как контекст */
 const CONTEXT_MAX_MESSAGES = 15;
+const REFLECTION_EPISODE_NAMESPACE = 'b0a1661e-f470-41f6-a7f8-65741db7f9c7';
+const REFLECTION_EPISODE_TAG = 'reflection-episode';
 /** Пауза между сообщениями, после которой считаем сессию завершённой */
 const SESSION_GAP_MS = 2 * 60 * 60 * 1000; // 2 часа
 /** Fix 6: EMA alpha для yield rate */
@@ -611,8 +618,135 @@ async function updateYieldRate(chatId: string, savedCount: number): Promise<void
 function makeFakeCtx(): BotContext {
     return {
         from: { id: config.allowedUserId },
-        session: {},
+        chat: { id: config.allowedUserId, type: 'private' },
+        session: {
+            reminders: [],
+            messageHistory: [],
+            dialogueSummary: '',
+            lastSummarizedIndex: -1,
+            domains: {},
+            recentlySavedFacts: [],
+        },
     } as unknown as BotContext;
+}
+
+function sourceMessageIds(chatId: string, messages: BufferedMessage[]): string[] {
+    return messages
+        .map((message, index) => `reflection:${chatId}:${message.date.getTime()}:${index}`)
+        .slice(-80);
+}
+
+function safeTagValue(value: string): string {
+    return value
+        .toLowerCase()
+        .replace(/[^a-z0-9_.:-]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 80) || 'unknown';
+}
+
+function normalizeDomain(domain: string): string {
+    const normalized = String(domain || '').trim().toLowerCase();
+    return Object.values(PREDEFINED_DOMAINS).includes(normalized as any)
+        ? normalized
+        : PREDEFINED_DOMAINS.GENERAL;
+}
+
+function formatReflectionEpisodeContent(input: {
+    episodeId: string;
+    chatTitle: string;
+    chatDomain: string;
+    emotion: EmotionTag;
+    messages: BufferedMessage[];
+    startDate: Date;
+    endDate: Date;
+}): string {
+    const sample = input.messages
+        .slice(-12)
+        .map((message) => `${message.senderName}: ${message.text}`)
+        .join(' / ')
+        .replace(/\s+/g, ' ')
+        .slice(0, 900);
+    return [
+        `[ЭПИЗОД ПАМЯТИ: ${input.episodeId}]`,
+        `Источник: фоновая рефлексия чата "${input.chatTitle}"`,
+        `Когда: ${input.startDate.toISOString()} — ${input.endDate.toISOString()}`,
+        `Сообщений: ${input.messages.length}`,
+        `Домен чата: ${input.chatDomain}`,
+        `Эмоциональный фон: ${input.emotion}`,
+        `Кратко: ${sample || `Новый фрагмент переписки в чате "${input.chatTitle}".`}`,
+    ].join('\n');
+}
+
+async function saveReflectionEpisode(input: {
+    chatId: string;
+    chatTitle: string;
+    chatDomain: string;
+    emotion: EmotionTag;
+    messages: BufferedMessage[];
+    startDate: Date;
+    endDate: Date;
+}): Promise<{ episodeId: string; memoryId: string } | undefined> {
+    const svc = getVectorService();
+    if (!svc || input.messages.length === 0) return undefined;
+
+    const firstTs = input.messages[0].date.getTime();
+    const lastTs = input.messages[input.messages.length - 1].date.getTime();
+    const rangeTag = `reflection_episode:${safeTagValue(input.chatId)}:${firstTs}-${lastTs}`;
+    const userId = String(config.allowedUserId);
+    const existing = await svc.getMemoriesByTag(userId, rangeTag).catch(() => []);
+    if (existing.length > 0) {
+        return {
+            episodeId: existing[0].sourceEpisodeId || uuidv5(rangeTag, REFLECTION_EPISODE_NAMESPACE),
+            memoryId: existing[0].id,
+        };
+    }
+
+    const episodeId = uuidv5(rangeTag, REFLECTION_EPISODE_NAMESPACE);
+    const domain = normalizeDomain(input.chatDomain.split('/')[0] || PREDEFINED_DOMAINS.GENERAL);
+    const salience =
+        input.emotion === 'conflict' || input.emotion === 'grief' ? 0.86 :
+        input.emotion === 'stress' || input.emotion === 'anxiety' ? 0.78 :
+        input.emotion === 'joy' ? 0.70 :
+        0.58;
+    const now = new Date();
+    const memoryId = await svc.saveMemory({
+        content: formatReflectionEpisodeContent({ ...input, episodeId }),
+        domain: PREDEFINED_DOMAINS.GENERAL,
+        timestamp: now,
+        importance: salience,
+        tags: [
+            REFLECTION_EPISODE_TAG,
+            'memory-episode',
+            'autobiographical',
+            'source:reflection',
+            `source_chat:${input.chatTitle}`,
+            `episode_domain:${domain}`,
+            rangeTag,
+        ],
+        userId,
+        botId: config.botUsername.toLowerCase(),
+        isAnchor: salience >= 0.86 || undefined,
+        confidence: 0.72,
+        lastAccessedAt: now,
+        memoryKind: 'episode',
+        strength: Math.min(1, 0.50 + salience * 0.34),
+        vividness: Math.min(1, 0.38 + salience * 0.30),
+        specificity: Math.min(1, 0.44 + input.messages.length * 0.006),
+        sourceEpisodeId: episodeId,
+        sourceContext: `Фоновая рефлексия чата "${input.chatTitle}": ${input.startDate.toISOString()} — ${input.endDate.toISOString()}.`,
+        sourceMessageIds: sourceMessageIds(input.chatId, input.messages),
+        extractionMethod: 'episode',
+        subject: 'user',
+        predicate: 'reflection_episode',
+        object: input.chatTitle,
+        validFrom: input.startDate,
+        validTo: input.endDate,
+        status: 'active',
+        confirmationCount: input.messages.length,
+        lastConfirmedAt: now,
+    });
+
+    return { episodeId, memoryId };
 }
 
 /**
@@ -718,6 +852,15 @@ async function analyzeBatch(
 
         const startDate = sessionToAnalyze[0].date;
         const endDate = sessionToAnalyze[sessionToAnalyze.length - 1].date;
+        const episode = await saveReflectionEpisode({
+            chatId,
+            chatTitle: buf.chatTitle,
+            chatDomain,
+            emotion,
+            messages: sessionToAnalyze,
+            startDate,
+            endDate,
+        });
 
         // ── Шаг 4: Извлечение фактов ─────────────────────────────────────────
         const facts = await runAnalyzeConversationAgent(convText, buf.chatTitle, startDate, endDate);
@@ -744,25 +887,27 @@ async function analyzeBatch(
 
         // ── Шаг 5: Сохранение ────────────────────────────────────────────────
         devLog(`[reflection] Saving ${eligible.length} facts from "${buf.chatTitle}"`);
-        let savedCount = 0;
-
-        for (const fact of eligible) {
-            const isContactFact = fact.subject === 'contact';
-            const contactName = fact.contactName ?? buf.chatTitle;
-            if (isContactFact) {
-                const result = await saveContactMemoryFactOrAsk(ctx, {
-                    contactName,
-                    content: fact.content,
-                    domain: fact.domain,
-                    importance: fact.importance,
-                    tags: [...fact.tags, 'reflection'],
-                }, { askOnAmbiguous: false });
-                if (result.status === 'saved') savedCount++;
-                else devLog(`[reflection] Skipped ambiguous contact fact for "${contactName}"`);
-            } else {
-                const saved = await saveMemory(ctx, fact.domain, fact.content, fact.importance, [...fact.tags, 'reflection']);
-                if (saved) savedCount++;
+        const chatNumericId = Number(chatId);
+        const update = await runUpdateLongTermMemoryAgentDetailed(
+            ctx,
+            eligible.map(fact => ({
+                ...fact,
+                tags: [...fact.tags, 'reflection'],
+            })),
+            {
+                source: 'reflection',
+                sourceContactName: buf.chatTitle,
+                sourceContactId: Number.isFinite(chatNumericId) ? chatNumericId : undefined,
+                sourceContext: `Фоновая рефлексия чата "${buf.chatTitle}": ${startDate.toISOString()} — ${endDate.toISOString()}.`,
+                sourceMessageIds: sourceMessageIds(chatId, sessionToAnalyze),
+                sourceEpisodeId: episode?.episodeId,
+                sourceMemoryIds: episode ? [episode.memoryId] : undefined,
+                askOnAmbiguous: false,
             }
+        );
+        const savedCount = update.savedCount;
+        if (update.errors.length > 0) {
+            devLog(`[reflection] Memory update errors for "${buf.chatTitle}":`, update.errors);
         }
 
         // Fix 5: Обновляем счётчики сохранённых фактов
@@ -774,6 +919,17 @@ async function analyzeBatch(
         await updateYieldRate(chatId, savedCount);
 
         devLog(`[reflection] Saved ${savedCount} facts from "${buf.chatTitle}"`);
+
+        if (savedCount > 0 && config.memoryConsolidationEnabled) {
+            Promise.allSettled([
+                runMemorySchemaConsolidationForUser(String(config.allowedUserId), {
+                    minSources: Math.max(config.memoryConsolidationMinFacts, 12),
+                    limit: 800,
+                    periodDays: 240,
+                }),
+                runMemorySleepCycleForUser(String(config.allowedUserId)),
+            ]).catch(() => { /* best-effort */ });
+        }
 
         // ── Шаг 6: Уведомление владельца ─────────────────────────────────────
         const proactiveChatId = await getProactiveChatId();

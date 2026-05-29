@@ -25,6 +25,7 @@ export interface MemorySaveMetadata {
     sourceMessageIds?: string[];
     sourceMemoryIds?: string[];
     extractionMethod?: MemoryExtractionMethod;
+    confidence?: number;
     subject?: MemorySubject;
     predicate?: string;
     object?: string;
@@ -170,6 +171,62 @@ function mergeSourceMemoryIds(existing: string[] | undefined, incoming: string[]
     return merged.length > 0 ? [...new Set(merged)].slice(-80) : undefined;
 }
 
+function overlapCount(a: string[] | undefined, b: string[] | undefined): number {
+    const left = new Set((a ?? []).map(String).filter(Boolean));
+    if (left.size === 0) return 0;
+    let count = 0;
+    for (const value of b ?? []) {
+        if (left.has(String(value))) count++;
+    }
+    return count;
+}
+
+function isIndependentConfirmation(existing: Pick<MemoryEntry, 'sourceEpisodeId' | 'sourceMessageIds' | 'sourceMemoryIds'>, incoming: Partial<MemorySaveMetadata>): boolean {
+    if (existing.sourceEpisodeId && incoming.sourceEpisodeId && existing.sourceEpisodeId === incoming.sourceEpisodeId) {
+        return false;
+    }
+    if (overlapCount(existing.sourceMessageIds, incoming.sourceMessageIds) > 0) return false;
+    if (overlapCount(existing.sourceMemoryIds, incoming.sourceMemoryIds) > 0) return false;
+    return Boolean(
+        incoming.sourceEpisodeId ||
+        (incoming.sourceMessageIds?.length ?? 0) > 0 ||
+        (incoming.sourceMemoryIds?.length ?? 0) > 0
+    );
+}
+
+function hasWeakEvidenceShape(tags: string[]): boolean {
+    return tags.includes('weak-evidence') ||
+        tags.includes('needs-caution') ||
+        tags.includes('inference:ambiguous') ||
+        tags.includes('inference:inferred') ||
+        tags.some(tag => String(tag).startsWith('quality:'));
+}
+
+function calibratedImportanceForEvidence(importance: number, tags: string[], confidence: number): number {
+    const bounded = clamp01(Number.isFinite(importance) ? importance : 0.5);
+    let cap = 1;
+    if (tags.includes('inference:ambiguous')) cap = Math.min(cap, 0.45);
+    if (tags.includes('weak-evidence') || tags.some(tag => String(tag).startsWith('quality:'))) cap = Math.min(cap, 0.58);
+    if (tags.includes('inference:inferred')) cap = Math.min(cap, 0.66);
+    if (tags.includes('needs-caution')) cap = Math.min(cap, 0.68);
+    if (tags.includes('inference:reported')) cap = Math.min(cap, 0.74);
+    if (confidence < 0.45) cap = Math.min(cap, 0.50);
+    if (confidence < 0.55) cap = Math.min(cap, 0.62);
+    return Math.min(bounded, cap);
+}
+
+function canAutoPromoteToAnchor(tags: string[], confidence: number): boolean {
+    return confidence >= 0.78 &&
+        !hasWeakEvidenceShape(tags) &&
+        !tags.includes('importance-capped');
+}
+
+function canKeepRequestedAnchor(tags: string[], confidence: number): boolean {
+    return confidence >= 0.58 &&
+        !hasWeakEvidenceShape(tags) &&
+        !tags.includes('importance-capped');
+}
+
 function contactIdFromTags(tags: string[] | undefined): string | null {
     const tag = (tags ?? []).find(t => String(t).startsWith('contact_id:'));
     return tag ? String(tag).replace('contact_id:', '').trim() : null;
@@ -220,8 +277,21 @@ function isChapterMemory(memory: Pick<MemoryEntry, 'content' | 'tags'>): boolean
         memory.content.startsWith('[ГЛАВА ПАМЯТИ:');
 }
 
+function isSchemaMemory(memory: Pick<MemoryEntry, 'content' | 'tags'>): boolean {
+    return (memory.tags ?? []).includes('memory-schema') ||
+        memory.content.startsWith('[МОДЕЛЬ ПАМЯТИ:');
+}
+
+function isSleepIndexMemory(memory: Pick<MemoryEntry, 'content' | 'tags'>): boolean {
+    const tags = memory.tags ?? [];
+    return tags.includes('sleep_open_loop_index') ||
+        tags.includes('sleep_uncertainty_index') ||
+        memory.content.startsWith('[ИНДЕКС ОТКРЫТЫХ ЛИНИЙ ПАМЯТИ]') ||
+        memory.content.startsWith('[ИНДЕКС СОМНЕНИЙ ПАМЯТИ]');
+}
+
 function isSyntheticMemory(memory: Pick<MemoryEntry, 'content' | 'tags'>): boolean {
-    return isEpisodeMemory(memory) || isChapterMemory(memory);
+    return isEpisodeMemory(memory) || isChapterMemory(memory) || isSchemaMemory(memory) || isSleepIndexMemory(memory);
 }
 
 function normalizeMemoryTags(tags: string[]): string[] {
@@ -344,6 +414,35 @@ function fireAndForget(taskName: string, fn: () => Promise<void>): void {
 
 export function getAsyncTaskErrors(): Readonly<Record<string, number>> {
     return { ..._asyncTaskErrors };
+}
+
+async function linkSourceMemories(
+    memoryId: string,
+    domain: string,
+    userId: string,
+    metadata: Partial<MemorySaveMetadata>,
+    svc: ReturnType<typeof vectorService>
+): Promise<void> {
+    if (!svc || !memoryId || !metadata.sourceMemoryIds?.length) return;
+
+    const sourceIds = [...new Set(metadata.sourceMemoryIds.map(String).filter(Boolean))].slice(0, 8);
+    for (const sourceId of sourceIds) {
+        const source = await svc.fetchMemoriesByIds(userId, [sourceId], 1).catch(() => []);
+        const sourceMemory = source[0];
+        if (!sourceMemory || sourceMemory.id === memoryId) continue;
+        const relationType: MemoryRelationType = sourceMemory.memoryKind === 'episode' || sourceMemory.tags?.includes('memory-episode')
+            ? 'same_episode'
+            : 'contextual';
+        await svc.addRelationship(
+            memoryId,
+            domain,
+            sourceMemory.id,
+            sourceMemory.domain,
+            relationType,
+            relationType === 'same_episode' ? 0.90 : 0.74,
+            metadata.sourceEpisodeId ? `source episode ${metadata.sourceEpisodeId}` : 'source memory'
+        );
+    }
 }
 
 /**
@@ -706,6 +805,21 @@ export async function saveMemory(
         content = normalizedContent;
         tags = normalizeMemoryTags(tags);
 
+        const incomingConfidence = clamp01(
+            typeof metadata.confidence === 'number' && Number.isFinite(metadata.confidence)
+                ? metadata.confidence
+                : 0.6
+        );
+        const originalImportance = clamp01(Number.isFinite(importance) ? importance : 0.5);
+        const calibratedImportance = calibratedImportanceForEvidence(originalImportance, tags, incomingConfidence);
+        if (calibratedImportance < originalImportance) {
+            tags = [...new Set([...tags, 'importance-capped'])];
+        }
+        importance = calibratedImportance;
+        if (isAnchor && !canKeepRequestedAnchor(tags, incomingConfidence)) {
+            tags = [...new Set([...tags, 'anchor-capped'])];
+            isAnchor = false;
+        }
         const dedupThreshold = getDedupThreshold(domain);
         const contradictionThreshold = getContradictionThreshold(domain);
 
@@ -728,19 +842,44 @@ export async function saveMemory(
         if (dedupCandidate) {
             const existing = dedupCandidate;
             const canonicalContent = chooseDedupContent(existing.content, content);
-            // Каждое подтверждение того же факта повышает достоверность (+0.1, cap 1.0)
-            const boostedConfidence = Math.min(1.0, (existing.confidence ?? 0.6) + 0.1);
-            const mergedImportance = Math.max(importance, existing.importance);
-            const confirmationCount = (existing.confirmationCount ?? 1) + 1;
-            // Авто-продвижение в anchors: высокая достоверность + высокая важность = ключевой факт о пользователе
-            const shouldAutoAnchor = boostedConfidence >= 0.9 && mergedImportance >= 0.8;
-            const memoryKind = inferMemoryKind(canonicalContent, [...new Set([...(tags || []), ...(existing.tags || [])])], metadata);
+            const independentConfirmation = isIndependentConfirmation(existing, metadata);
+            // Каждое подтверждение повышает достоверность, но слабые фоновые
+            // извлечения не должны резко укреплять сомнительный факт.
+            const baseConfirmationBoost = incomingConfidence >= 0.78 ? 0.10 : incomingConfidence >= 0.60 ? 0.07 : 0.03;
+            const confirmationBoost = independentConfirmation
+                ? baseConfirmationBoost
+                : Math.min(0.015, baseConfirmationBoost * 0.2);
+            const boostedConfidence = clamp01(Math.max(existing.confidence ?? 0.6, incomingConfidence) + confirmationBoost);
+            const confirmationCount = independentConfirmation
+                ? (existing.confirmationCount ?? 1) + 1
+                : (existing.confirmationCount ?? 1);
+            const existingImportance = calibratedImportanceForEvidence(
+                existing.importance ?? 0.5,
+                existing.tags ?? [],
+                existing.confidence ?? 0.6
+            );
+            const mergedImportance = Math.max(importance, existingImportance);
+            let mergedTags = [...new Set([
+                ...(tags || []),
+                ...(existing.tags || []),
+                independentConfirmation ? 'independent-confirmation' : 'same-source-confirmation',
+            ])];
+            if (existingImportance < (existing.importance ?? 0.5)) {
+                mergedTags = [...new Set([...mergedTags, 'importance-capped'])];
+            }
+            const keepExistingAnchor = Boolean(existing.isAnchor) && canKeepRequestedAnchor(mergedTags, boostedConfidence);
+            // Авто-продвижение в anchors требует независимого подтверждения и чистой доказательной формы.
+            const shouldAutoAnchor = independentConfirmation &&
+                boostedConfidence >= 0.9 &&
+                mergedImportance >= 0.8 &&
+                canAutoPromoteToAnchor(mergedTags, boostedConfidence);
+            const memoryKind = inferMemoryKind(canonicalContent, mergedTags, metadata);
             const metrics = estimateHumanMemoryMetrics({
                 content: canonicalContent,
                 importance: mergedImportance,
                 confidence: boostedConfidence,
-                tags: [...new Set([...(tags || []), ...(existing.tags || [])])],
-                isAnchor: isAnchor || shouldAutoAnchor || existing.isAnchor,
+                tags: mergedTags,
+                isAnchor: isAnchor || shouldAutoAnchor || keepExistingAnchor,
                 emotionalTag: existing.emotionalTag,
                 memoryKind,
                 status: metadata.status ?? existing.status ?? inferMemoryStatus(canonicalContent),
@@ -752,10 +891,10 @@ export async function saveMemory(
                 domain: existing.domain,
                 timestamp: new Date(),
                 importance: mergedImportance,
-                tags: [...new Set([...(tags || []), ...(existing.tags || [])])],
+                tags: mergedTags,
                 userId: String(userId),
                 botId,
-                isAnchor: isAnchor || shouldAutoAnchor || existing.isAnchor || undefined,
+                isAnchor: isAnchor || shouldAutoAnchor || keepExistingAnchor || undefined,
                 confidence: boostedConfidence,
                 memoryKind,
                 strength: metadata.strength ?? metrics.strength,
@@ -775,7 +914,8 @@ export async function saveMemory(
                 confirmationCount,
                 lastConfirmedAt: new Date(),
             });
-            devLog('✅ Факт обновлён (дедупликация) ID:', existing.id, '| confidence:', boostedConfidence);
+            fireAndForget('linkSourceMemories', () => linkSourceMemories(existing.id, existing.domain, String(userId), metadata, svc));
+            devLog('✅ Факт обновлён (дедупликация) ID:', existing.id, '| confidence:', boostedConfidence, '| independent:', independentConfirmation);
             lastSaveError = null;
             if (ctx.session) delete ctx.session.lastFactSaveError;
             return true;
@@ -850,17 +990,28 @@ export async function saveMemory(
                     // - updates:     "переехал из Москвы в Питер" (актуальное состояние)
                     const mergeTag = check.verdict === 'contradicts' ? 'contradicts-merged' : 'updated';
                     const mergedConfidence = check.verdict === 'contradicts'
-                        ? Math.max(0.3, existingConfidence - 0.2)
-                        : existingConfidence;
-                    const mergedTags = [...new Set([...(tags || []), ...(candidate.tags || []), mergeTag])];
+                        ? Math.max(0.3, Math.min(existingConfidence, incomingConfidence) - 0.15)
+                        : Math.max(existingConfidence, incomingConfidence * 0.9);
+                    const candidateImportance = calibratedImportanceForEvidence(
+                        candidate.importance ?? 0.5,
+                        candidate.tags ?? [],
+                        candidate.confidence ?? 0.6
+                    );
+                    const mergedImportance = Math.max(importance, candidateImportance);
+                    let mergedTags = [...new Set([...(tags || []), ...(candidate.tags || []), mergeTag])];
+                    if (candidateImportance < (candidate.importance ?? 0.5)) {
+                        mergedTags = [...new Set([...mergedTags, 'importance-capped'])];
+                    }
+                    const keepCandidateAnchor = Boolean(candidate.isAnchor || candidate.tags?.includes('anchor')) &&
+                        canKeepRequestedAnchor(mergedTags, mergedConfidence);
                     const memoryKind = inferMemoryKind(check.mergedContent, mergedTags, metadata);
                     const status = metadata.status ?? inferMemoryStatus(check.mergedContent);
                     const metrics = estimateHumanMemoryMetrics({
                         content: check.mergedContent,
-                        importance: Math.max(importance, candidate.importance),
+                        importance: mergedImportance,
                         confidence: mergedConfidence,
                         tags: mergedTags,
-                        isAnchor: isAnchor || candidate.isAnchor,
+                        isAnchor: isAnchor || keepCandidateAnchor,
                         emotionalTag: candidate.emotionalTag,
                         memoryKind,
                         status,
@@ -871,11 +1022,11 @@ export async function saveMemory(
                         content: check.mergedContent,
                         domain: candidate.domain,
                         timestamp: new Date(),
-                        importance: Math.max(importance, candidate.importance),
+                        importance: mergedImportance,
                         tags: mergedTags,
                         userId: String(userId),
                         botId,
-                        isAnchor: isAnchor || candidate.isAnchor || candidate.tags?.includes('anchor') || undefined,
+                        isAnchor: isAnchor || keepCandidateAnchor || undefined,
                         confidence: mergedConfidence,
                         memoryKind,
                         strength: metadata.strength ?? metrics.strength,
@@ -929,11 +1080,13 @@ export async function saveMemory(
             const tag = await detectEmotionalTag(content).catch(() => null);
             if (tag) {
                 emotionalTag = tag;
-                if (tag.isFlashbulb) {
+                if (tag.isFlashbulb && canKeepRequestedAnchor(tags, incomingConfidence)) {
                     finalIsAnchor = true;
                     // Буст к важности, но не более 1.0
                     finalImportance = Math.min(1.0, importance + 0.15);
                     devLog('🔥 Flashbulb-факт (эмоциональная память):', content.slice(0, 60), `arousal=${tag.arousal.toFixed(2)}`);
+                } else if (tag.isFlashbulb) {
+                    devLog('🔥 Flashbulb-кандидат не повышен до anchor из-за слабой опоры:', content.slice(0, 60));
                 }
             }
         }
@@ -946,7 +1099,7 @@ export async function saveMemory(
         const metrics = estimateHumanMemoryMetrics({
             content,
             importance: finalImportance,
-            confidence: 0.6,
+            confidence: incomingConfidence,
             tags,
             isAnchor: finalIsAnchor,
             emotionalTag,
@@ -963,7 +1116,7 @@ export async function saveMemory(
             botId,
             isAnchor: finalIsAnchor || undefined,
             expiresAt,
-            confidence: 0.6,
+            confidence: incomingConfidence,
             lastAccessedAt: now,
             emotionalTag,
             memoryKind,
@@ -988,6 +1141,7 @@ export async function saveMemory(
 
         // ── Шаг 5: Строим граф связей (fire & forget) ────────────────────────
         fireAndForget('buildMemoryRelationships', () => buildMemoryRelationships(result, content, String(userId), domain, tags, svc));
+        fireAndForget('linkSourceMemories', () => linkSourceMemories(result, domain, String(userId), metadata, svc));
 
         // ── Шаг 5.5: Аннулируем устаревшие планировочные факты (fire & forget) ─
         // Обрабатывает зону similarity 0.55–0.72 — ниже порога contradiction-check,
@@ -1241,6 +1395,7 @@ export async function generateMemoryBiography(ctx: BotContext): Promise<string> 
     const portraitFacts = all.filter(f =>
         f.domain === 'contacts' && f.tags?.some(t => String(t).startsWith('portrait:'))
     );
+    const schemaFacts = all.filter(isSchemaMemory);
     const chapterFacts = all.filter(isChapterMemory);
     const userFacts = all.filter(f =>
         !isContactLikeMemory(f) && !isSyntheticMemory(f) && f.domain !== 'contacts'
@@ -1268,6 +1423,20 @@ export async function generateMemoryBiography(ctx: BotContext): Promise<string> 
                 .slice(0, 3)
                 .join(' ');
             lines.push(`• ${summary || chapter.content.slice(0, 240)}`);
+        }
+        lines.push('');
+    }
+
+    if (schemaFacts.length > 0) {
+        lines.push('🧩 Устойчивые модели пользователя');
+        for (const schema of schemaFacts.slice(0, 8)) {
+            const summary = schema.content
+                .replace(/^\[МОДЕЛЬ ПАМЯТИ:[^\]]+\]\s*/u, '')
+                .split('\n')
+                .filter(line => /^(Кратко|Как учитывать|Ограничения)/i.test(line))
+                .slice(0, 3)
+                .join(' ');
+            lines.push(`• ${summary || schema.content.slice(0, 240)}`);
         }
         lines.push('');
     }
@@ -1538,11 +1707,54 @@ export async function getMemoryHealthReport(ctx: BotContext): Promise<string> {
     let neverRetrieved = 0;
     let frequentlyRetrieved = 0;
     let totalRetrievals = 0;
+    let atomicFacts = 0;
+    let confidenceSum = 0;
+    let factsWithSourceContext = 0;
+    let factsWithEpisodeLink = 0;
+    let factsWithSourceMemoryLink = 0;
+    let weakEvidenceFacts = 0;
+    let importanceCappedFacts = 0;
+    let anchorCappedFacts = 0;
+    let criticReviewedFacts = 0;
+    let qualityTaggedFacts = 0;
+    let currentStateFacts = 0;
+    let futurePlanFacts = 0;
+    let pastEventFacts = 0;
+    let possiblyStaleFacts = 0;
+    let directFacts = 0;
+    let reportedFacts = 0;
+    let inferredFacts = 0;
+    let ambiguousInferenceFacts = 0;
+    let independentConfirmations = 0;
+    let sameSourceConfirmations = 0;
     const domainCounts: Record<string, number> = {};
     const duplicateGroups = new Map<string, MemoryEntry[]>();
 
     for (const m of all) {
         const conf = m.confidence ?? 0.6;
+        const synthetic = isSyntheticMemory(m) || m.memoryKind === 'portrait';
+        if (!synthetic) {
+            atomicFacts++;
+            confidenceSum += conf;
+            if (m.sourceContext?.trim()) factsWithSourceContext++;
+            if (m.sourceEpisodeId?.trim()) factsWithEpisodeLink++;
+            if ((m.sourceMemoryIds?.length ?? 0) > 0) factsWithSourceMemoryLink++;
+            if (m.tags?.includes('weak-evidence')) weakEvidenceFacts++;
+            if (m.tags?.includes('importance-capped')) importanceCappedFacts++;
+            if (m.tags?.includes('anchor-capped')) anchorCappedFacts++;
+            if (m.tags?.some(tag => ['critic-reviewed', 'critic-rewritten'].includes(String(tag)))) criticReviewedFacts++;
+            if (m.tags?.some(tag => String(tag).startsWith('quality:'))) qualityTaggedFacts++;
+            if (m.tags?.includes('temporal_scope:current_state')) currentStateFacts++;
+            if (m.tags?.includes('temporal_scope:future_plan')) futurePlanFacts++;
+            if (m.tags?.includes('temporal_scope:past_event')) pastEventFacts++;
+            if (m.tags?.includes('possibly-stale')) possiblyStaleFacts++;
+            if (m.tags?.includes('inference:direct')) directFacts++;
+            if (m.tags?.includes('inference:reported')) reportedFacts++;
+            if (m.tags?.includes('inference:inferred')) inferredFacts++;
+            if (m.tags?.includes('inference:ambiguous')) ambiguousInferenceFacts++;
+            if (m.tags?.includes('independent-confirmation')) independentConfirmations++;
+            if (m.tags?.includes('same-source-confirmation')) sameSourceConfirmations++;
+        }
         if (conf < 0.4) lowConfidence++;
         if ((m.previousVersions?.length ?? 0) > 0) factsWithHistory++;
         const retrievalCount = m.retrievalCount ?? 0;
@@ -1592,6 +1804,25 @@ export async function getMemoryHealthReport(ctx: BotContext): Promise<string> {
         `🧠 Никогда не всплывали в ответах: ${neverRetrieved}`,
         `💪 Часто вспоминались (>=5): ${frequentlyRetrieved}`,
         `🔁 Всего retrieval-укреплений: ${totalRetrievals}`,
+        `🎯 Средняя уверенность атомарных фактов: ${atomicFacts ? (confidenceSum / atomicFacts).toFixed(2) : 'n/a'}`,
+        `🧾 Факты с sourceContext: ${factsWithSourceContext}/${atomicFacts}`,
+        `🎞️  Факты с sourceEpisodeId: ${factsWithEpisodeLink}/${atomicFacts}`,
+        `🔗 Факты со ссылкой на sourceMemoryIds: ${factsWithSourceMemoryLink}/${atomicFacts}`,
+        `🧐 Проверено critic-gate: ${criticReviewedFacts}/${atomicFacts}`,
+        `⚙️  Quality-tagged факты: ${qualityTaggedFacts}/${atomicFacts}`,
+        `🟡 Weak-evidence факты: ${weakEvidenceFacts}/${atomicFacts}`,
+        `🧯 Importance-capped факты: ${importanceCappedFacts}/${atomicFacts}`,
+        `⚓ Anchor-capped факты: ${anchorCappedFacts}/${atomicFacts}`,
+        `🕰️  Current-state факты: ${currentStateFacts}/${atomicFacts}`,
+        `📌 Future-plan факты: ${futurePlanFacts}/${atomicFacts}`,
+        `✅ Past-event факты: ${pastEventFacts}/${atomicFacts}`,
+        `🧊 Possibly-stale факты: ${possiblyStaleFacts}/${atomicFacts}`,
+        `👁️  Direct факты: ${directFacts}/${atomicFacts}`,
+        `🗣️  Reported факты: ${reportedFacts}/${atomicFacts}`,
+        `🧩 Inferred факты: ${inferredFacts}/${atomicFacts}`,
+        `❔ Ambiguous inference факты: ${ambiguousInferenceFacts}/${atomicFacts}`,
+        `✅ Независимые подтверждения: ${independentConfirmations}/${atomicFacts}`,
+        `🔂 Повторы из того же источника: ${sameSourceConfirmations}/${atomicFacts}`,
         `♻️  Вероятные точные дубли: ${likelyDuplicateGroups.length} групп`,
         `👥 Контактные факты без Telegram contact_id: ${contactFactsWithoutTelegramId}`,
         `👥 Контактные факты без stable identity: ${contactFactsWithoutStableIdentity}`,
@@ -1608,6 +1839,13 @@ export async function getMemoryHealthReport(ctx: BotContext): Promise<string> {
     if (lowConfidence > 0) {
         lines.push(`\n💡 Совет: запусти /memory_cleanup чтобы очистить устаревшие факты,`);
         lines.push(`  или /memory_compress <домен> чтобы сжать старые воспоминания.`);
+    }
+    if (atomicFacts > 0 && factsWithSourceContext / atomicFacts < 0.5) {
+        lines.push(`\n💡 У многих старых фактов нет sourceContext. Новые фоновые факты уже сохраняются с опорой;`);
+        lines.push(`  для старой памяти лучше постепенно использовать /memory_consolidate.`);
+    }
+    if (weakEvidenceFacts > 0) {
+        lines.push(`\n💡 Weak-evidence факты попадут в индекс сомнений после /memory_consolidate.`);
     }
     if (contactFactsWithoutTelegramId > 0) {
         lines.push(`\n💡 Для старых контактных фактов запусти /memory_repair_contacts.`);

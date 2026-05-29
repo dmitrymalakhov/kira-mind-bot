@@ -224,6 +224,25 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         hint: 'Как часто Кира присылает дайджест непрочитанных',
       },
       { key: 'DM_REPORT_QUIET_HOURS_ENABLED', label: 'Тихие часы для отчётов', type: 'toggle' },
+      { key: 'INBOX_GUARDIAN_ENABLED', label: 'Вечерний Inbox Guardian включён', type: 'toggle' },
+      {
+        key: 'INBOX_GUARDIAN_HOUR',
+        label: 'Час Inbox Guardian (0–23)',
+        type: 'number',
+        placeholder: '21',
+      },
+      {
+        key: 'INBOX_GUARDIAN_LOOKBACK_HOURS',
+        label: 'Период анализа Inbox Guardian, часов',
+        type: 'number',
+        placeholder: '24',
+      },
+      {
+        key: 'INBOX_GUARDIAN_MIN_AGE_MINUTES',
+        label: 'Не тревожить по свежим входящим, минут',
+        type: 'number',
+        placeholder: '60',
+      },
       { key: 'MEMORY_INSIGHT_ENABLED', label: 'Инсайты из памяти включены', type: 'toggle' },
       {
         key: 'MEMORY_INSIGHT_INTERVAL_MS',

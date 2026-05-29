@@ -1,5 +1,6 @@
 import { config } from '../config';
 import { runMemoryConsolidationForUser } from './MemoryConsolidationService';
+import { runMemorySchemaConsolidationForUser } from './MemorySchemaConsolidationService';
 import { runMemorySleepCycleForUser } from './MemorySleepCycleService';
 
 const INTERVAL_MS = config.memoryConsolidationIntervalMs ?? 24 * 60 * 60 * 1000;
@@ -20,6 +21,11 @@ async function runCycle(): Promise<void> {
             maxDomains: 6,
         });
         const sleep = await runMemorySleepCycleForUser(userId);
+        const schemas = await runMemorySchemaConsolidationForUser(userId, {
+            minSources: Math.max(config.memoryConsolidationMinFacts, 12),
+            limit: 800,
+            periodDays: 240,
+        });
 
         console.log('[memory-consolidation] cycle completed:', {
             created: result.created,
@@ -27,6 +33,7 @@ async function runCycle(): Promise<void> {
             domains: result.domains,
             skipped: result.skipped,
             sleep,
+            schemas,
         });
     } catch (error) {
         console.error('[memory-consolidation] cycle failed:', error);

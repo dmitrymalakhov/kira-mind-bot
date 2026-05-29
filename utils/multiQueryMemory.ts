@@ -43,6 +43,13 @@ const CHAPTER_SOURCE_TOP_N = 4;
 const CHAPTER_SOURCE_MAX_PER_CHAPTER = 8;
 /** Дисконт для исходников, подтянутых из сводной главы */
 const CHAPTER_SOURCE_DISCOUNT = 0.68;
+/** Устойчивые модели пользователя, синтезированные консолидацией памяти */
+const MEMORY_SCHEMA_TAG = 'memory-schema';
+const MAX_SCHEMA_MEMORIES = 6;
+const SCHEMA_DIRECT_SCORE = 0.78;
+/** Метапамять: где сведения слабые, мутные или могут устареть */
+const MEMORY_UNCERTAINTY_TAG = 'sleep_uncertainty_index';
+const UNCERTAINTY_DIRECT_SCORE = 0.70;
 /** Бонус для anchor-фактов при ранжировании (вместо отдельной загрузки) */
 const ANCHOR_SCORE_BOOST = 1.15;
 /** Базовый score для явно закреплённых фактов, когда они не нашлись embedding-поиском */
@@ -126,6 +133,16 @@ function isEpisodeMemoryLike(memory: Pick<SearchResultLike, 'content' | 'tags'>)
 function isChapterMemoryLike(memory: Pick<SearchResultLike, 'content' | 'tags'>): boolean {
     return (memory.tags ?? []).includes('memory-chapter') ||
         memory.content.startsWith('[ГЛАВА ПАМЯТИ:');
+}
+
+function isSchemaMemoryLike(memory: Pick<SearchResultLike, 'content' | 'tags'>): boolean {
+    return (memory.tags ?? []).includes(MEMORY_SCHEMA_TAG) ||
+        memory.content.startsWith('[МОДЕЛЬ ПАМЯТИ:');
+}
+
+function isUncertaintyIndexLike(memory: Pick<SearchResultLike, 'content' | 'tags'>): boolean {
+    return (memory.tags ?? []).includes(MEMORY_UNCERTAINTY_TAG) ||
+        memory.content.startsWith('[ИНДЕКС СОМНЕНИЙ ПАМЯТИ]');
 }
 
 interface RecentMessage {
@@ -437,6 +454,45 @@ function relationPathLabel(relation: MemoryRelation, depth: 1 | 2): string {
     return `${depth}-hop ${type}; weight=${weight}${cue}`;
 }
 
+function observedAgeDays(memory: SearchResultLike): number | undefined {
+    return ageDays(memory.validTo ?? memory.validFrom ?? memory.timestamp);
+}
+
+function isPossiblyStaleCurrentState(memory: SearchResultLike): boolean {
+    const tags = memory.tags ?? [];
+    if (tags.includes('possibly-stale')) return true;
+    if (!tags.includes('temporal_scope:current_state')) return false;
+    const observedAge = observedAgeDays(memory);
+    return observedAge !== undefined && observedAge > 120 && memory.status !== 'done';
+}
+
+function inferenceLevelFromTags(memory: SearchResultLike): 'direct' | 'reported' | 'inferred' | 'ambiguous' | undefined {
+    const tag = (memory.tags ?? []).find((value) => String(value).startsWith('inference:'));
+    const level = String(tag ?? '').replace('inference:', '');
+    return ['direct', 'reported', 'inferred', 'ambiguous'].includes(level)
+        ? level as 'direct' | 'reported' | 'inferred' | 'ambiguous'
+        : undefined;
+}
+
+function hasEvidenceRisk(memory: Pick<SearchResultLike, 'tags'>): boolean {
+    return (memory.tags ?? []).some((tag) =>
+        String(tag) === 'weak-evidence' ||
+        String(tag) === 'needs-caution' ||
+        String(tag) === 'importance-capped' ||
+        String(tag) === 'anchor-capped' ||
+        String(tag).startsWith('quality:')
+    );
+}
+
+function evidenceRiskMultiplier(memory: Pick<SearchResultLike, 'tags'>): number {
+    const tags = memory.tags ?? [];
+    let multiplier = 1;
+    if (tags.includes('weak-evidence') || tags.some(tag => String(tag).startsWith('quality:'))) multiplier *= 0.88;
+    if (tags.includes('needs-caution')) multiplier *= 0.90;
+    if (tags.includes('importance-capped') || tags.includes('anchor-capped')) multiplier *= 0.82;
+    return multiplier;
+}
+
 function humanRecallMultiplier(memory: SearchResultLike, userMessage: string, activeCues: string[] = []): number {
     let multiplier = 1;
     const strength = boundedMetric(memory.strength);
@@ -464,6 +520,24 @@ function humanRecallMultiplier(memory: SearchResultLike, userMessage: string, ac
         multiplier *= 1.08;
     }
 
+    if (isPossiblyStaleCurrentState(memory) && !isHistoricalRecallRequest(userMessage)) {
+        multiplier *= /актуальн|сейчас|теперь|ещ[её]|до сих пор/i.test(userMessage) ? 0.72 : 0.86;
+    }
+    if (memory.validTo && new Date(memory.validTo).getTime() < Date.now() && !isHistoricalRecallRequest(userMessage)) {
+        multiplier *= 0.70;
+    }
+
+    const inferenceLevel = inferenceLevelFromTags(memory);
+    if (inferenceLevel === 'reported') {
+        multiplier *= 0.96;
+    } else if (inferenceLevel === 'inferred') {
+        multiplier *= 0.88;
+    } else if (inferenceLevel === 'ambiguous') {
+        multiplier *= 0.70;
+    }
+
+    multiplier *= evidenceRiskMultiplier(memory);
+
     const savedAge = ageDays(memory.timestamp);
     if (savedAge !== undefined) {
         if (savedAge <= 2) multiplier *= 1.05;
@@ -484,6 +558,43 @@ function humanRecallMultiplier(memory: SearchResultLike, userMessage: string, ac
     return multiplier;
 }
 
+function schemaRecallScore(memory: SearchResultLike, userMessage: string, activeCues: string[]): number {
+    const activeTokens = tokenizeCue([userMessage, ...activeCues].join(' '));
+    const schemaTokens = tokenizeCue([
+        memory.content,
+        ...(memory.tags ?? []).filter((tag) => String(tag).startsWith('schema_')),
+        memory.sourceContext ?? '',
+    ].join(' '));
+    const overlap = tokenOverlapRatio(activeTokens, schemaTokens);
+    const importance = memory.importance ?? 0.78;
+    const confidence = memory.confidence ?? 0.72;
+    const strength = boundedMetric(memory.strength) ?? 0.68;
+    const inventoryBoost = isMemoryInventoryRequest(userMessage) ? 0.08 : 0;
+    const boundaryBoost = memory.memoryKind === 'boundary' ? 0.06 : 0;
+    return clamp01(
+        SCHEMA_DIRECT_SCORE +
+        overlap * 0.14 +
+        (importance - 0.78) * 0.08 +
+        (confidence - 0.72) * 0.08 +
+        strength * 0.04 +
+        inventoryBoost +
+        boundaryBoost
+    );
+}
+
+function uncertaintyRecallScore(memory: SearchResultLike, userMessage: string, activeCues: string[]): number {
+    const activeTokens = tokenizeCue([userMessage, ...activeCues].join(' '));
+    const uncertaintyTokens = tokenizeCue([
+        memory.content,
+        memory.sourceContext ?? '',
+    ].join(' '));
+    const overlap = tokenOverlapRatio(activeTokens, uncertaintyTokens);
+    const uncertaintyIntentBoost = /актуальн|точно|помнишь|забыл|не уверен|уточн|что изменил|план|дедлайн|жд[уеё]/i.test(userMessage)
+        ? 0.08
+        : 0;
+    return clamp01(UNCERTAINTY_DIRECT_SCORE + overlap * 0.16 + uncertaintyIntentBoost);
+}
+
 function recallManifestationMarker(r: SearchResultLike): string {
     const finalScore = (r as SearchResultLike & { _finalScore?: number })._finalScore ?? r.score;
     const conf = r.confidence ?? 0.6;
@@ -495,6 +606,9 @@ function recallManifestationMarker(r: SearchResultLike): string {
     if (r.status === 'superseded' || r.status === 'expired') return '[историческое/устаревшее воспоминание] ';
     if (isEpisodeMemoryLike(r)) return '[яркий эпизод] ';
     if (isChapterMemoryLike(r)) return '[сводный автобиографический слой] ';
+    if (isSchemaMemoryLike(r)) return '[устойчивая модель пользователя] ';
+    if (isUncertaintyIndexLike(r)) return '[метапамять: стоит уточнить] ';
+    if (isPossiblyStaleCurrentState(r)) return '[возможно устаревшее состояние] ';
     if (kind === 'open_loop' || kind === 'goal' || kind === 'prospective' || kind === 'promise') {
         return '[незакрытая линия памяти] ';
     }
@@ -515,9 +629,12 @@ function memoryLayerFor(r: SearchResultLike): MemoryLayer {
     const finalScore = (r as SearchResultLike & { _finalScore?: number })._finalScore ?? r.score;
 
     if (r.status === 'superseded' || r.status === 'expired') return 'historical';
+    if (isSchemaMemoryLike(r)) return 'background';
+    if (isUncertaintyIndexLike(r)) return 'associative';
     if (kind === 'open_loop' || kind === 'goal' || kind === 'prospective' || kind === 'promise' || r.status === 'planned') {
         return 'openLoops';
     }
+    if (hasEvidenceRisk(r) && finalScore < 0.66 && !r.isAnchor) return 'associative';
     if (kind === 'preference' || kind === 'routine' || kind === 'boundary' || kind === 'trait' || kind === 'relationship' || kind === 'portrait') {
         return 'background';
     }
@@ -547,7 +664,9 @@ function memoryLayerTitle(layer: MemoryLayer): string {
 
 function isProtectedMemory(r: SearchResultLike): boolean {
     const kind = r.memoryKind ?? 'fact';
+    if (hasEvidenceRisk(r)) return false;
     return Boolean(r.isAnchor) ||
+        isSchemaMemoryLike(r) ||
         kind === 'boundary' ||
         kind === 'open_loop' ||
         kind === 'goal' ||
@@ -625,6 +744,8 @@ function selectLayeredMemories(candidates: RankedMemory[], maxReturn: number, in
 
 function retrievalImportanceBoost(memory: SearchResultLike & { _finalScore?: number }): number {
     if (memory.status === 'superseded' || memory.status === 'expired') return 0;
+    const inferenceLevel = inferenceLevelFromTags(memory);
+    if (hasEvidenceRisk(memory) || inferenceLevel === 'inferred' || inferenceLevel === 'ambiguous') return 0;
 
     const finalScore = memory._finalScore ?? memory.score;
     const confidence = memory.confidence ?? 0.6;
@@ -747,6 +868,8 @@ export interface SearchResultLike {
     sourceContext?: string;
     sourceMemoryIds?: string[];
     status?: string;
+    validFrom?: Date;
+    validTo?: Date;
     confirmationCount?: number;
     retrievalCount?: number;
     lastRetrievedAt?: Date;
@@ -767,6 +890,8 @@ type RecallSource =
     | 'context'
     | 'associative'
     | 'anchor'
+    | 'schema'
+    | 'metamemory'
     | 'inventory'
     | 'tag'
     | 'graph'
@@ -890,24 +1015,32 @@ async function addChapterSourceCandidates(
     const svc = getVectorService();
     if (!svc) return 0;
 
-    const chapterSeeds = seedCandidates
-        .filter((candidate) => isChapterMemoryLike(candidate) && (candidate.sourceMemoryIds?.length ?? 0) > 0)
+    const sourceBackedSeeds = seedCandidates
+        .filter((candidate) =>
+            (isChapterMemoryLike(candidate) || isSchemaMemoryLike(candidate) || isUncertaintyIndexLike(candidate)) &&
+            (candidate.sourceMemoryIds?.length ?? 0) > 0
+        )
         .sort((a, b) => b.score - a.score)
         .slice(0, CHAPTER_SOURCE_TOP_N);
 
     let added = 0;
     await Promise.all(
-        chapterSeeds.map(async (chapter) => {
+        sourceBackedSeeds.map(async (chapter) => {
             try {
                 const ids = chapter.sourceMemoryIds ?? [];
                 const sources = await svc.fetchMemoriesByIds(userId, ids, CHAPTER_SOURCE_MAX_PER_CHAPTER);
-                const sourceScore = Math.max(0.52, chapter.score * CHAPTER_SOURCE_DISCOUNT);
+                const sourceDiscount = isUncertaintyIndexLike(chapter)
+                    ? CHAPTER_SOURCE_DISCOUNT * 0.82
+                    : isSchemaMemoryLike(chapter)
+                        ? CHAPTER_SOURCE_DISCOUNT * 0.90
+                        : CHAPTER_SOURCE_DISCOUNT;
+                const sourceScore = Math.max(0.50, chapter.score * sourceDiscount);
                 for (const source of sources) {
                     if (source.id === chapter.id || seen.has(source.id)) continue;
                     addScopedCandidate({
                         ...source,
                         recallSources: ['chapter'],
-                        recallPath: `sourceChapter=${chapter.id}`,
+                        recallPath: `sourceMemory=${chapter.id}`,
                         score: isEpisodeMemoryLike(source)
                             ? sourceScore * 0.9
                             : sourceScore,
@@ -923,7 +1056,7 @@ async function addChapterSourceCandidates(
         })
     );
 
-    if (added > 0) devLog('Chapter source expansion added memories:', added);
+    if (added > 0) devLog('Source-backed memory expansion added memories:', added);
     return added;
 }
 
@@ -956,6 +1089,11 @@ function formatFactWithHistory(r: SearchResultLike): string {
         ? ` (история изменений, не текущее состояние: ${previous.join(' -> ')})`
         : '';
     const status = r.status && r.status !== 'active' ? ` [статус: ${r.status}]` : '';
+    const validFrom = r.validFrom ? new Date(r.validFrom).toISOString().slice(0, 10) : '';
+    const validTo = r.validTo ? new Date(r.validTo).toISOString().slice(0, 10) : '';
+    const temporal = validFrom || validTo
+        ? ` [временная привязка: ${validFrom || '?'}${validTo ? `—${validTo}` : ''}]`
+        : '';
     const confirmations = (r.confirmationCount ?? 0) > 1 ? ` [подтверждений: ${r.confirmationCount}]` : '';
     const retrievals = (r.retrievalCount ?? 0) >= 3 ? ` [часто всплывает: ${r.retrievalCount}]` : '';
     const kind = r.memoryKind && r.memoryKind !== 'fact' ? ` [тип: ${r.memoryKind}]` : '';
@@ -968,12 +1106,21 @@ function formatFactWithHistory(r: SearchResultLike): string {
     const resonance = (r.cueResonance ?? 0) >= 0.28 ? ` [резонанс подсказки: ${r.cueResonance!.toFixed(2)}]` : '';
     const recallPath = r.recallPath ? ` [путь вспоминания: ${r.recallPath}]` : '';
     const sources = r.recallSources?.length ? ` [источник вспоминания: ${r.recallSources.join('+')}]` : '';
+    const quality = hasEvidenceRisk(r)
+        ? ' [качество: слабая опора]'
+        : '';
+    const inferenceLevel = inferenceLevelFromTags(r);
+    const inference =
+        inferenceLevel === 'reported' ? ' [происхождение: пересказ]' :
+            inferenceLevel === 'inferred' ? ' [происхождение: вывод]' :
+                inferenceLevel === 'ambiguous' ? ' [происхождение: неоднозначно]' :
+                    '';
     const source = r.sourceContext && r.sourceContext.trim() && r.sourceContext.trim() !== r.content.trim()
         ? ` (источник: ${r.sourceContext.trim().slice(0, 140)})`
         : '';
     const manifestation = recallManifestationMarker(r);
 
-    return `${confidenceMarker}${manifestation}${r.content}${kind}${status}${confirmations}${retrievals}${metaSignal}${resonance}${recallPath}${sources}${history}${source}`;
+    return `${confidenceMarker}${manifestation}${r.content}${kind}${status}${temporal}${confirmations}${retrievals}${quality}${inference}${metaSignal}${resonance}${recallPath}${sources}${history}${source}`;
 }
 
 /**
@@ -1216,6 +1363,45 @@ export async function getMultiQueryMemoryContextDetailed(ctx: BotContext, userMe
         }
     } catch { /* ignore */ }
 
+    // Устойчивые модели пользователя: не отвечают на вопрос напрямую, но задают
+    // человеческий фон — предпочтения, границы, стиль решений и повторяющиеся паттерны.
+    if ((need === 'full' || inventoryRequest) && ctx.from?.id) {
+        const svcForSchemas = getVectorService();
+        if (svcForSchemas) {
+            const schemaResults = await svcForSchemas.getMemoriesByTag(String(ctx.from.id), MEMORY_SCHEMA_TAG).catch(() => []);
+            const rankedSchemas = schemaResults
+                .filter((schema) => schema.status !== 'expired' && schema.status !== 'superseded')
+                .map((schema) => ({
+                    ...schema,
+                    score: schemaRecallScore(schema, userMessage, activeRecallCues),
+                }))
+                .sort((a, b) => b.score - a.score)
+                .slice(0, MAX_SCHEMA_MEMORIES);
+            for (const schema of rankedSchemas) {
+                addScopedCandidate({ ...schema, recallSources: ['schema'] }, schema.score);
+            }
+        }
+    }
+
+    // Метапамять о сомнительных/устаревающих сведениях: используется для хеджирования
+    // и мягких уточнений, но не как самостоятельный факт о пользователе.
+    if ((need === 'full' || inventoryRequest) && ctx.from?.id) {
+        const svcForMeta = getVectorService();
+        if (svcForMeta) {
+            const uncertaintyResults = await svcForMeta.getMemoriesByTag(String(ctx.from.id), MEMORY_UNCERTAINTY_TAG).catch(() => []);
+            const index = uncertaintyResults
+                .filter((memory) => memory.status !== 'expired' && memory.status !== 'superseded')
+                .map((memory) => ({
+                    ...memory,
+                    score: uncertaintyRecallScore(memory, userMessage, activeRecallCues),
+                }))
+                .sort((a, b) => b.score - a.score)[0];
+            if (index) {
+                addScopedCandidate({ ...index, recallSources: ['metamemory'] }, index.score);
+            }
+        }
+    }
+
     if (contactScope?.status === 'resolved') {
         const svcForTags = getVectorService();
         if (svcForTags) {
@@ -1255,6 +1441,8 @@ export async function getMultiQueryMemoryContextDetailed(ctx: BotContext, userMe
                     sourceContext: memory.sourceContext,
                     sourceMemoryIds: memory.sourceMemoryIds,
                     status: memory.status,
+                    validFrom: memory.validFrom,
+                    validTo: memory.validTo,
                     confirmationCount: memory.confirmationCount,
                     retrievalCount: memory.retrievalCount,
                     lastRetrievedAt: memory.lastRetrievedAt,
@@ -1394,11 +1582,15 @@ export async function getMultiQueryMemoryContextDetailed(ctx: BotContext, userMe
         }
     }
 
-    // Schema-to-evidence expansion: если нашлась сводная глава памяти,
-    // подтягиваем несколько исходных воспоминаний, чтобы ответ был конкретным и проверяемым.
+    // Schema-to-evidence expansion: если нашлась сводная глава, модель пользователя
+    // или индекс метапамяти, подтягиваем несколько исходных воспоминаний,
+    // чтобы ответ был конкретным и проверяемым.
     if (need === 'full' && ctx.from?.id) {
         const chapterSeeds = Array.from(seen.values())
-            .filter((fact) => isChapterMemoryLike(fact) && (fact.sourceMemoryIds?.length ?? 0) > 0)
+            .filter((fact) =>
+                (isChapterMemoryLike(fact) || isSchemaMemoryLike(fact) || isUncertaintyIndexLike(fact)) &&
+                (fact.sourceMemoryIds?.length ?? 0) > 0
+            )
             .sort((a, b) => b.score - a.score)
             .slice(0, CHAPTER_SOURCE_TOP_N);
         if (chapterSeeds.length > 0) {
@@ -1474,15 +1666,23 @@ export async function getMultiQueryMemoryContextDetailed(ctx: BotContext, userMe
         'Маркеры достоверности:\n' +
         '  [возможно] — помню, но не на 100%; используй мягкие обороты: "кажется", "если не ошибаюсь"\n' +
         '  [не уверена] — слабое воспоминание; скажи что помнишь смутно и предложи уточнить\n' +
+        '  [качество: слабая опора] — факт прошёл фильтр, но опора в переписке слабая или важность была снижена; не делай из него сильных выводов\n' +
+        '  [происхождение: пересказ] — факт сообщил не сам субъект; говори осторожнее\n' +
+        '  [происхождение: вывод] — это аккуратный вывод, не прямое свидетельство; не представляй как точный факт\n' +
+        '  [происхождение: неоднозначно] — атрибуция или смысл сомнительны; лучше уточнить, чем утверждать\n' +
         '  Без маркера — факт надёжен, говори уверенно\n' +
         'Маркеры проявления памяти:\n' +
         '  [устойчивое воспоминание] — можно опираться уверенно\n' +
         '  [рабочее воспоминание] — обычный релевантный факт\n' +
         '  [смутная ассоциация] — используй осторожно, как возможную связь\n' +
         '  [яркий эпизод] / [яркое воспоминание] — конкретная сцена или событие, не обобщай без основания\n' +
+        '  [устойчивая модель пользователя] — повторяющийся паттерн, стиль, граница или предпочтение; учитывай как фон и не цитируй напрямую без необходимости\n' +
+        '  [метапамять: стоит уточнить] — это не факт, а сигнал сомнения: говори осторожнее и уточняй актуальность только если это естественно в текущем ответе\n' +
+        '  [возможно устаревшее состояние] — это было текущим состоянием в прошлом; не называй актуальным без проверки\n' +
         '  [незакрытая линия памяти] — цель, обещание, ожидание или план; проверь актуальность в ответе\n' +
         '  [фоновое предпочтение] / [фоновая привычка] / [граница/важное правило] — учитывай в тоне и предложениях, даже если не называешь явно\n' +
         '  [историческое/устаревшее воспоминание] — упоминай только если пользователь спрашивает историю или изменения\n' +
+        '  [временная привязка] — когда факт был наблюдён или действовал; не выдавай старое текущее состояние за актуальное без оговорки\n' +
         'Служебные поля [мета], [резонанс подсказки], [путь вспоминания] и [источник вспоминания] показывают, почему факт всплыл. Не цитируй их пользователю; используй только для уверенности, глубины и тона ответа.\n' +
         'Если спрашивает конкретное (кто жена, как зовут) — дай прямой ответ из фактов. ' +
         'Если «что знаешь обо мне» — перечисли. Если фактов нет — честно скажи.\n' +

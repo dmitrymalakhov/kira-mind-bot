@@ -89,6 +89,14 @@ interface AssistantConfig {
   dmReportEnabled: boolean;
   dmReportIntervalMs: number;
   dmReportQuietHoursEnabled: boolean;
+  /** Вечерний анализ личных сообщений: кому владелец ещё должен ответить */
+  inboxGuardianEnabled: boolean;
+  /** Час отправки вечерней сводки Inbox Guardian (0–23, USER_TIMEZONE) */
+  inboxGuardianHour: number;
+  /** Сколько последних часов переписок анализировать */
+  inboxGuardianLookbackHours: number;
+  /** Не считать свежие входящие незакрытыми, пока они младше этого порога */
+  inboxGuardianMinAgeMinutes: number;
   /** Проактивный анализ памяти: бот сам напоминает о планах и событиях в нужный момент */
   memoryInsightEnabled: boolean;
   /** Интервал проверки памяти в мс (по умолчанию 3 часа) */
@@ -226,6 +234,10 @@ function assistants(activeAssistant: string): AssistantConfig {
       dmReportEnabled: toBoolean(process.env.DM_REPORT_ENABLED, true),
       dmReportIntervalMs: toNumber(process.env.DM_REPORT_INTERVAL_MS, 30 * 60 * 1000),
       dmReportQuietHoursEnabled: toBoolean(process.env.DM_REPORT_QUIET_HOURS_ENABLED, true),
+      inboxGuardianEnabled: toBoolean(process.env.INBOX_GUARDIAN_ENABLED, true),
+      inboxGuardianHour: toNumber(process.env.INBOX_GUARDIAN_HOUR, 21),
+      inboxGuardianLookbackHours: toNumber(process.env.INBOX_GUARDIAN_LOOKBACK_HOURS, 24),
+      inboxGuardianMinAgeMinutes: toNumber(process.env.INBOX_GUARDIAN_MIN_AGE_MINUTES, 60),
       memoryInsightEnabled: toBoolean(process.env.MEMORY_INSIGHT_ENABLED, true),
       memoryInsightIntervalMs: toNumber(process.env.MEMORY_INSIGHT_INTERVAL_MS, 3 * 60 * 60 * 1000),
       memoryConsolidationEnabled: toBoolean(process.env.MEMORY_CONSOLIDATION_ENABLED, true),
@@ -294,6 +306,10 @@ function assistants(activeAssistant: string): AssistantConfig {
       dmReportEnabled: false,
       dmReportIntervalMs: toNumber(process.env.DM_REPORT_INTERVAL_MS, 30 * 60 * 1000),
       dmReportQuietHoursEnabled: false,
+      inboxGuardianEnabled: false,
+      inboxGuardianHour: toNumber(process.env.INBOX_GUARDIAN_HOUR, 21),
+      inboxGuardianLookbackHours: toNumber(process.env.INBOX_GUARDIAN_LOOKBACK_HOURS, 24),
+      inboxGuardianMinAgeMinutes: toNumber(process.env.INBOX_GUARDIAN_MIN_AGE_MINUTES, 60),
       memoryInsightEnabled: toBoolean(process.env.MEMORY_INSIGHT_ENABLED, false),
       memoryInsightIntervalMs: toNumber(process.env.MEMORY_INSIGHT_INTERVAL_MS, 3 * 60 * 60 * 1000),
       memoryConsolidationEnabled: toBoolean(process.env.MEMORY_CONSOLIDATION_ENABLED, false),

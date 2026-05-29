@@ -16,8 +16,7 @@ import { getBotPersona, getCommunicationStyle } from "../persona";
 import { config } from "../config";
 import openai from "../openai";
 import { getContactPortrait } from "../services/PsychologicalPortraitService";
-import * as fs from "fs";
-import { generateSpeechFile, getTelegramVoiceReadinessIssue, prepareTelegramVoiceFile } from "../services/elevenLabsTts";
+import { getTelegramVoiceReadinessIssue, withTelegramVoiceFile } from "../services/elevenLabsTts";
 import { normalizeNumbersForVoiceMessage } from "../utils/russianSpeechNumbers";
 
 export type MessageDeliveryMode = "text" | "voice";
@@ -103,12 +102,7 @@ async function sendVoiceDraft(draft: MessageDraft): Promise<{ success: boolean, 
         return { success: false, messageId: null, errorMessage: readinessIssue };
     }
 
-    const speech = await generateSpeechFile(speechText);
-    let cleanupPaths = [speech.filePath];
-    try {
-        const voice = await prepareTelegramVoiceFile(speech);
-        cleanupPaths = voice.cleanupPaths;
-
+    return withTelegramVoiceFile(speechText, async (voice) => {
         if (draft.isGroup) {
             return await sendVoiceMessageToChat(client, draft.contactId, voice.filePath);
         }
@@ -120,13 +114,7 @@ async function sendVoiceDraft(draft: MessageDraft): Promise<{ success: boolean, 
             draft.notifyOnReply,
             draft.originalChatId
         );
-    } finally {
-        for (const filePath of cleanupPaths) {
-            if (fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
-            }
-        }
-    }
+    });
 }
 
 /**

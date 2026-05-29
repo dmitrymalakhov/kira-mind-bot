@@ -34,6 +34,7 @@ import { startPersonalChatMemoryIndexer } from "./services/personalChatMemoryInd
 import { startReflectionModeScheduler } from "./services/reflectionModeScheduler";
 import { startMorningDigestScheduler } from "./services/morningDigestScheduler";
 import { startChatGroupTracker } from "./services/chatGroupTracker";
+import { startInboxGuardianScheduler } from "./services/inboxGuardianScheduler";
 import { initReflectionMode } from "./services/reflectionModeService";
 import { maybeProactiveHint } from "./utils/proactiveMemory";
 import { maybeAskMemoryGap } from "./utils/memoryGapDetector";
@@ -46,7 +47,7 @@ import { getTelegramMenuCommands } from "./capabilities";
 import { persistSessionNow } from "./services/SessionStorage";
 import { healthPhotoAgent, shouldRouteHealthPhoto } from "./agents/healthAgent";
 import { applyReminderEditInput } from "./utils/reminderEditor";
-import { generateSpeechFile, getTelegramVoiceReadinessIssue, prepareTelegramVoiceFile } from "./services/elevenLabsTts";
+import { getTelegramVoiceReadinessIssue, withTelegramVoiceFile } from "./services/elevenLabsTts";
 import { stripVoiceReplyDirective, wantsVoiceReply } from "./utils/voiceReply";
 import { addTargetNotificationButtons, appendTargetNotificationPrompt, buildDefaultTargetReminderMessage } from "./utils/reminderTargetNotification";
 import { normalizeNumbersForVoiceMessage } from "./utils/russianSpeechNumbers";
@@ -163,22 +164,12 @@ function canSendResultAsVoice(result: ProcessingResult): boolean {
 
 async function replyWithGeneratedVoiceAndStore(ctx: BotContext, text: string) {
     await ctx.api.sendChatAction(ctx.chat!.id, "record_voice");
-    const speech = await generateSpeechFile(text);
-    let cleanupPaths = [speech.filePath];
-    try {
-        const voice = await prepareTelegramVoiceFile(speech);
-        cleanupPaths = voice.cleanupPaths;
+    return withTelegramVoiceFile(text, async (voice) => {
         const inputFile = new InputFile(voice.filePath, voice.filename);
         const msg = await ctx.replyWithVoice(inputFile);
         storeSentMessageText(ctx, msg.message_id, text);
         return msg;
-    } finally {
-        for (const filePath of cleanupPaths) {
-            if (fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
-            }
-        }
-    }
+    });
 }
 
 async function replyProcessingResult(ctx: BotContext, result: ProcessingResult, voiceRequested: boolean) {
@@ -1876,6 +1867,7 @@ async function startBot() {
         await initReflectionMode();
         startReflectionModeScheduler(bot);
         startMorningDigestScheduler(bot);
+        startInboxGuardianScheduler(bot);
         startChatGroupTracker(bot);
         await bot.api.setMyCommands(getTelegramMenuCommands());
         await bot.start();

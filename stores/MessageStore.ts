@@ -176,4 +176,12 @@ export class MessageStore {
 
         return result;
     }
+
+    // Получение последних сообщений с копиями массивов, чтобы фоновые анализаторы не меняли состояние хранилища
+    getRecentMessageThreads(hours: number = 24): { chatId: string, messages: StoredMessage[] }[] {
+        return this.getRecentMessages(hours).map(chat => ({
+            chatId: chat.chatId,
+            messages: [...chat.messages],
+        }));
+    }
 }

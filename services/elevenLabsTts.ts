@@ -5,9 +5,11 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { ElevenLabs, ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import { config } from "../config";
+import { prepareTextForSpeech } from "../utils/speechText";
 
 const TEMP_DIR = path.join(process.cwd(), "temp");
 const execFileAsync = promisify(execFile);
+const ELEVEN_LABS_TTS_RETRY_DELAYS_MS = [500, 1500];
 
 let resolvedVoiceId: string | null = null;
 let elevenLabsClient: ElevenLabsClient | null = null;
@@ -70,15 +72,6 @@ function ensureTempDir(): void {
     }
 }
 
-function normalizeTextForSpeech(text: string): string {
-    return text
-        .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1")
-        .replace(/https?:\/\/\S+/g, "ссылка")
-        .replace(/[`*_>#]/g, "")
-        .replace(/\n{3,}/g, "\n\n")
-        .trim();
-}
-
 function getElevenLabsClient(): ElevenLabsClient {
     if (!elevenLabsClient) {
         elevenLabsClient = new ElevenLabsClient({
@@ -94,7 +87,7 @@ export async function getTelegramVoiceReadinessIssue(text: string): Promise<stri
         return `Голосовой ответ пока не настроен: добавь ${missing.join(", ")} в env.`;
     }
 
-    const preparedText = normalizeTextForSpeech(text);
+    const preparedText = prepareTextForSpeech(text);
     if (!preparedText) {
         return "Голосовой ответ не отправлен: после очистки текста не осталось содержимого для озвучки.";
     }
@@ -148,6 +141,68 @@ function buildVoiceSettings(): ElevenLabs.VoiceSettings | undefined {
     return Object.keys(settings).length > 0 ? settings : undefined;
 }
 
+function getErrorStatus(error: unknown): number | undefined {
+    const candidate = error as {
+        status?: number;
+        statusCode?: number;
+        response?: { status?: number; statusCode?: number };
+    };
+    return candidate?.status ?? candidate?.statusCode ?? candidate?.response?.status ?? candidate?.response?.statusCode;
+}
+
+function isRetryableElevenLabsError(error: unknown): boolean {
+    const status = getErrorStatus(error);
+    if (status !== undefined) {
+        return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+    }
+
+    const code = (error as NodeJS.ErrnoException)?.code;
+    return code === "ECONNRESET" ||
+        code === "ETIMEDOUT" ||
+        code === "ECONNABORTED" ||
+        code === "EAI_AGAIN" ||
+        code === "ENOTFOUND";
+}
+
+function wait(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function convertTextToSpeechWithRetry(
+    voiceId: string,
+    preparedText: string,
+    outputFormat: string
+): Promise<ReadableStream<Uint8Array>> {
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt <= ELEVEN_LABS_TTS_RETRY_DELAYS_MS.length; attempt += 1) {
+        try {
+            return await getElevenLabsClient().textToSpeech.convert(voiceId, {
+                text: preparedText,
+                modelId: config.elevenLabsModelId,
+                outputFormat: outputFormat as ElevenLabs.TextToSpeechConvertRequestOutputFormat,
+                voiceSettings: buildVoiceSettings(),
+            });
+        } catch (error) {
+            lastError = error;
+            const retryDelay = ELEVEN_LABS_TTS_RETRY_DELAYS_MS[attempt];
+            if (retryDelay === undefined || !isRetryableElevenLabsError(error)) {
+                throw error;
+            }
+
+            const status = getErrorStatus(error);
+            console.warn(`[elevenlabs-tts] convert failed, retrying in ${retryDelay}ms`, {
+                attempt: attempt + 1,
+                status,
+                code: (error as NodeJS.ErrnoException)?.code,
+            });
+            await wait(retryDelay);
+        }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error("ElevenLabs TTS conversion failed");
+}
+
 async function audioStreamToBuffer(stream: ReadableStream<Uint8Array>): Promise<Buffer> {
     const reader = stream.getReader();
     const chunks: Uint8Array[] = [];
@@ -157,6 +212,35 @@ async function audioStreamToBuffer(stream: ReadableStream<Uint8Array>): Promise<
         if (value) chunks.push(value);
     }
     return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+}
+
+export async function removeGeneratedVoiceFiles(filePaths: string[]): Promise<void> {
+    const uniquePaths = [...new Set(filePaths.filter(Boolean))];
+    for (const filePath of uniquePaths) {
+        try {
+            await fs.promises.unlink(filePath);
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+                console.warn(`[elevenlabs-tts] failed to remove temp voice file: ${filePath}`, error);
+            }
+        }
+    }
+}
+
+export async function withTelegramVoiceFile<T>(
+    text: string,
+    callback: (voice: TelegramVoiceFile) => Promise<T>
+): Promise<T> {
+    const speech = await generateSpeechFile(text);
+    let cleanupPaths = [speech.filePath];
+
+    try {
+        const voice = await prepareTelegramVoiceFile(speech);
+        cleanupPaths = voice.cleanupPaths;
+        return await callback(voice);
+    } finally {
+        await removeGeneratedVoiceFiles(cleanupPaths);
+    }
 }
 
 export async function prepareTelegramVoiceFile(speech: GeneratedSpeechFile): Promise<TelegramVoiceFile> {
@@ -196,7 +280,7 @@ export async function generateSpeechFile(text: string): Promise<GeneratedSpeechF
         throw new Error(`ElevenLabs TTS is not configured: ${missing.join(", ")}`);
     }
 
-    const preparedText = normalizeTextForSpeech(text);
+    const preparedText = prepareTextForSpeech(text);
     if (!preparedText) {
         throw new Error("Cannot generate speech from empty text");
     }
@@ -206,12 +290,7 @@ export async function generateSpeechFile(text: string): Promise<GeneratedSpeechF
 
     const voiceId = await resolveVoiceId();
     const outputFormat = config.elevenLabsOutputFormat;
-    const audioStream = await getElevenLabsClient().textToSpeech.convert(voiceId, {
-        text: preparedText,
-        modelId: config.elevenLabsModelId,
-        outputFormat: outputFormat as ElevenLabs.TextToSpeechConvertRequestOutputFormat,
-        voiceSettings: buildVoiceSettings(),
-    });
+    const audioStream = await convertTextToSpeechWithRetry(voiceId, preparedText, outputFormat);
 
     ensureTempDir();
 

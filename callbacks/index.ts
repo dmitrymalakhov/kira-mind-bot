@@ -28,7 +28,7 @@ import { processMessage, type ProcessingResult } from "../orchestrator";
 import { addToHistory } from "../utils/history";
 import { consumeQuickChoice, isQuickChoiceCallback } from "../utils/quickChoice";
 import { MAX_MESSAGE_LENGTH, USER_TIMEZONE } from "../constants";
-import { generateSpeechFile, getTelegramVoiceReadinessIssue, prepareTelegramVoiceFile } from "../services/elevenLabsTts";
+import { getTelegramVoiceReadinessIssue, withTelegramVoiceFile } from "../services/elevenLabsTts";
 import {
     addTargetNotificationButtons,
     appendTargetNotificationPrompt,
@@ -42,19 +42,9 @@ const EVENING_POSTPONE_HOUR = 19;
 
 async function replyWithGeneratedVoice(ctx: BotContext, text: string): Promise<void> {
     await ctx.api.sendChatAction(ctx.chat!.id, "record_voice");
-    const speech = await generateSpeechFile(text);
-    let cleanupPaths = [speech.filePath];
-    try {
-        const voice = await prepareTelegramVoiceFile(speech);
-        cleanupPaths = voice.cleanupPaths;
+    await withTelegramVoiceFile(text, async (voice) => {
         await ctx.replyWithVoice(new InputFile(voice.filePath, voice.filename));
-    } finally {
-        for (const filePath of cleanupPaths) {
-            if (fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
-            }
-        }
-    }
+    });
 }
 
 function getZonedParts(date: Date, timeZone: string): {

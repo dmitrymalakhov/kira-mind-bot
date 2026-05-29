@@ -143,6 +143,48 @@ const ORDINAL_FEMININE_ACCUSATIVE: Record<number, string> = {
 type Gender = "masculine" | "feminine";
 type OrdinalForm = "neuter" | "genitive" | "masculine" | "feminine" | "feminineAccusative";
 
+interface WordForms {
+    one: string;
+    few: string;
+    many: string;
+}
+
+interface CurrencySpeech {
+    forms: WordForms;
+    gender: Gender;
+    fractional?: {
+        forms: WordForms;
+        gender: Gender;
+    };
+}
+
+const RUB_CURRENCY: CurrencySpeech = {
+    forms: { one: "рубль", few: "рубля", many: "рублей" },
+    gender: "masculine",
+    fractional: {
+        forms: { one: "копейка", few: "копейки", many: "копеек" },
+        gender: "feminine",
+    },
+};
+
+const USD_CURRENCY: CurrencySpeech = {
+    forms: { one: "доллар", few: "доллара", many: "долларов" },
+    gender: "masculine",
+    fractional: {
+        forms: { one: "цент", few: "цента", many: "центов" },
+        gender: "masculine",
+    },
+};
+
+const EUR_CURRENCY: CurrencySpeech = {
+    forms: { one: "евро", few: "евро", many: "евро" },
+    gender: "masculine",
+    fractional: {
+        forms: { one: "цент", few: "цента", many: "центов" },
+        gender: "masculine",
+    },
+};
+
 function pluralRu(value: number, one: string, few: string, many: string): string {
     const mod10 = Math.abs(value) % 10;
     const mod100 = Math.abs(value) % 100;
@@ -172,10 +214,10 @@ function speakDigits(value: string): string {
     return value.split("").map((digit) => DIGIT_WORDS[Number(digit)] ?? digit).join(" ");
 }
 
-function cardinalInteger(value: number): string {
+function cardinalIntegerWithGender(value: number, gender: Gender = "masculine"): string {
     if (!Number.isFinite(value)) return "";
     if (value === 0) return "ноль";
-    if (value < 0) return `минус ${cardinalInteger(Math.abs(value))}`;
+    if (value < 0) return `минус ${cardinalIntegerWithGender(Math.abs(value), gender)}`;
     if (value > 999999) return speakDigits(String(Math.trunc(value)));
 
     const thousands = Math.floor(value / 1000);
@@ -185,8 +227,12 @@ function cardinalInteger(value: number): string {
         words.push(cardinalBelowThousand(thousands, "feminine"));
         words.push(pluralRu(thousands, "тысяча", "тысячи", "тысяч"));
     }
-    if (rest > 0) words.push(cardinalBelowThousand(rest));
+    if (rest > 0) words.push(cardinalBelowThousand(rest, gender));
     return words.join(" ");
+}
+
+function cardinalInteger(value: number): string {
+    return cardinalIntegerWithGender(value, "masculine");
 }
 
 function ordinalBelowHundred(value: number, form: OrdinalForm): string {
@@ -241,8 +287,69 @@ function normalizeOrdinalToken(value: number, suffix: string): string {
     return ordinalInteger(value, "neuter");
 }
 
+function dateToSpeech(dayRaw: string, monthRaw: string, yearRaw?: string): string | null {
+    const day = Number(dayRaw);
+    const month = Number(monthRaw);
+    if (day < 1 || day > 31 || month < 1 || month > 12) return null;
+
+    const parts = [ordinalInteger(day, "neuter"), MONTHS_GENITIVE[month]];
+    if (yearRaw) parts.push(yearToSpeech(yearRaw));
+    return parts.join(" ");
+}
+
+function currencyUnit(value: number, forms: WordForms): string {
+    return pluralRu(value, forms.one, forms.few, forms.many);
+}
+
+function getCurrencySpeech(token: string): CurrencySpeech | null {
+    const normalized = token.toLowerCase().replace(/\./g, "");
+    if (token === "$" || normalized.startsWith("долл") || normalized.startsWith("доллар")) return USD_CURRENCY;
+    if (token === "€" || normalized === "евро") return EUR_CURRENCY;
+    if (token === "₽" || normalized === "р" || normalized.startsWith("руб")) return RUB_CURRENCY;
+    return null;
+}
+
+function moneyToSpeech(amountRaw: string, currency: CurrencySpeech): string | null {
+    const normalizedAmount = amountRaw.replace(/\s+/g, "").replace(",", ".");
+    if (!/^\d+(?:\.\d{1,2})?$/.test(normalizedAmount)) return null;
+
+    const [integerRaw, fractionRaw] = normalizedAmount.split(".");
+    const integer = Number(integerRaw);
+    if (!Number.isFinite(integer)) return null;
+
+    const parts = [
+        `${cardinalIntegerWithGender(integer, currency.gender)} ${currencyUnit(integer, currency.forms)}`
+    ];
+
+    if (fractionRaw && currency.fractional) {
+        const fraction = Number(fractionRaw.padEnd(2, "0").slice(0, 2));
+        if (Number.isFinite(fraction) && fraction > 0) {
+            parts.push(`${cardinalIntegerWithGender(fraction, currency.fractional.gender)} ${currencyUnit(fraction, currency.fractional.forms)}`);
+        }
+    }
+
+    return parts.join(" ");
+}
+
+function phoneNumberToSpeech(rawPhone: string): string | null {
+    const digits = rawPhone.replace(/\D/g, "");
+    if (digits.length < 10 || digits.length > 15) return null;
+    return `плюс ${speakDigits(digits)}`;
+}
+
 function normalizeSegment(segment: string): string {
     return segment
+        .replace(/(^|[^\p{L}\p{N}_])\+(\d[\d\s().-]{8,}\d)(?=$|[^\p{L}\p{N}_])/gu, (match, prefix: string, phoneRaw: string) => {
+            return `${prefix}${phoneNumberToSpeech(phoneRaw) ?? match.trimStart()}`;
+        })
+        .replace(/(^|[^\p{L}\p{N}_])([$€₽])\s*(\d[\d\s]*(?:[,.]\d{1,2})?)(?=$|[^\p{L}\p{N}_])/gu, (match, prefix: string, currencyToken: string, amountRaw: string) => {
+            const currency = getCurrencySpeech(currencyToken);
+            return `${prefix}${currency ? moneyToSpeech(amountRaw, currency) ?? match.trimStart() : match.trimStart()}`;
+        })
+        .replace(/(^|[^\p{L}\p{N}_])(\d[\d\s]*(?:[,.]\d{1,2})?)\s*(₽|р\.?|руб\.?|рубл(?:ей|я|ь)?|\$|долл\.?|доллар(?:ов|а)?|€|евро)(?=$|[^\p{L}\p{N}_])/giu, (match, prefix: string, amountRaw: string, currencyToken: string) => {
+            const currency = getCurrencySpeech(currencyToken);
+            return `${prefix}${currency ? moneyToSpeech(amountRaw, currency) ?? match.trimStart() : match.trimStart()}`;
+        })
         .replace(/\b(\d{1,2}):(\d{2})\b/g, (match, hourRaw: string, minuteRaw: string) => {
             const hour = Number(hourRaw);
             const minute = Number(minuteRaw);
@@ -251,13 +358,19 @@ function normalizeSegment(segment: string): string {
             if (minute === 0) return `${hourPart} ровно`;
             return `${hourPart} ${cardinalInteger(minute)} ${pluralRu(minute, "минута", "минуты", "минут")}`;
         })
-        .replace(/\b(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?\b/g, (match, dayRaw: string, monthRaw: string, yearRaw?: string) => {
-            const day = Number(dayRaw);
-            const month = Number(monthRaw);
-            if (day < 1 || day > 31 || month < 1 || month > 12) return match;
-            const parts = [ordinalInteger(day, "neuter"), MONTHS_GENITIVE[month]];
-            if (yearRaw) parts.push(yearToSpeech(yearRaw));
-            return parts.join(" ");
+        .replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (match, yearRaw: string, monthRaw: string, dayRaw: string) => {
+            return dateToSpeech(dayRaw, monthRaw, yearRaw) ?? match;
+        })
+        .replace(/\b(\d{1,2})([./-])(\d{1,2})(?:\2(\d{2,4}))?\b/g, (match, dayRaw: string, separator: string, monthRaw: string, yearRaw?: string) => {
+            const looksLikeShortDate = Boolean(yearRaw) || separator === "/" || (separator === "." && monthRaw.length === 2);
+            if (!looksLikeShortDate) return match;
+            return dateToSpeech(dayRaw, monthRaw, yearRaw) ?? match;
+        })
+        .replace(/(^|[^\p{L}\p{N}_])(\d{1,6})\s*[-–—]\s*(\d{1,6})\s?%/gu, (_match, prefix: string, fromRaw: string, toRaw: string) => {
+            return `${prefix}${cardinalInteger(Number(fromRaw))}-${cardinalInteger(Number(toRaw))} процентов`;
+        })
+        .replace(/(^|[^\p{L}\p{N}_])(\d{1,6})\s*[-–—]\s*(\d{1,6})(?=$|[^\p{L}\p{N}_])/gu, (_match, prefix: string, fromRaw: string, toRaw: string) => {
+            return `${prefix}${cardinalInteger(Number(fromRaw))}-${cardinalInteger(Number(toRaw))}`;
         })
         .replace(/\b(\d+)([,.])(\d+)\b/g, (_match, integerRaw: string, separator: string, fractionRaw: string) => {
             const integer = Number(integerRaw);
@@ -265,7 +378,7 @@ function normalizeSegment(segment: string): string {
             const fraction = speakDigits(fractionRaw);
             return `${cardinalInteger(integer)} ${separatorWord} ${fraction}`;
         })
-        .replace(/\b(\d{1,6})\s?%/g, (_match, valueRaw: string) => {
+        .replace(/\b(\d{1,6})\s*%/g, (_match, valueRaw: string) => {
             const value = Number(valueRaw);
             return `${cardinalInteger(value)} ${pluralRu(value, "процент", "процента", "процентов")}`;
         })

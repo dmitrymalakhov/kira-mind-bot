@@ -57,6 +57,17 @@ function compactMemoryForPrompt(memory: RecalledMemoryRef, index: number): strin
     return `${meta}; content="${memory.content.slice(0, 500)}"`;
 }
 
+function isSyntheticRecalledMemory(memory: RecalledMemoryRef): boolean {
+    const kind = memory.memoryKind ?? '';
+    if (['episode', 'chapter', 'portrait'].includes(kind)) return true;
+    if (memory.content.startsWith('[ЭПИЗОД ПАМЯТИ:')) return true;
+    if (memory.content.startsWith('[ГЛАВА ПАМЯТИ:')) return true;
+    if (memory.content.startsWith('[МОДЕЛЬ ПАМЯТИ:')) return true;
+    if (memory.content.startsWith('[ИНДЕКС ОТКРЫТЫХ ЛИНИЙ ПАМЯТИ]')) return true;
+    if (memory.content.startsWith('[ИНДЕКС СОМНЕНИЙ ПАМЯТИ]')) return true;
+    return false;
+}
+
 async function askReconsolidationLlm(
     userMessage: string,
     botResponse: string,
@@ -190,7 +201,7 @@ export async function reconsolidateAfterResponse(
 
     const recalled = (recalledMemories ?? [])
         .filter(memory => memory.id && memory.domain && memory.score >= MIN_RECALL_SCORE)
-        .filter(memory => !['episode', 'chapter', 'portrait'].includes(memory.memoryKind ?? ''))
+        .filter(memory => !isSyntheticRecalledMemory(memory))
         .slice(0, MAX_RECALLED_FOR_RECONSOLIDATION);
     if (recalled.length === 0) return;
 

@@ -8,9 +8,10 @@
     "start:dev": "NODE_ENV=development ts-node index.ts",
     "start:prod": "NODE_ENV=production node ./index.js",
     "build": "tsc",
-    "test": "npm run build && npm run test:voice-reply && npm run test:voice-number-normalization",
+    "test": "npm run build && npm run test:voice-reply && npm run test:voice-number-normalization && npm run test:speech-text-preparation",
     "test:voice-reply": "ts-node scripts/testVoiceReply.ts",
     "test:voice-number-normalization": "ts-node scripts/testRussianSpeechNumbers.ts",
+    "test:speech-text-preparation": "ts-node scripts/testSpeechTextPreparation.ts",
     "lint": "eslint . --ext .ts"
   },
   "author": "",

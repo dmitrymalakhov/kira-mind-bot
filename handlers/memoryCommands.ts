@@ -7,6 +7,8 @@ import { config } from '../config';
 import { repairLegacyContactIdentities } from '../utils/contactMemoryRepair';
 import { contactOptionLabel, resolveContactIdentity } from '../utils/contactMemory';
 import { runMemoryConsolidationForContext } from '../services/MemoryConsolidationService';
+import { runMemorySchemaConsolidationForContext } from '../services/MemorySchemaConsolidationService';
+import { runMemorySleepCycleForUser } from '../services/MemorySleepCycleService';
 import { getPersonalChatMemoryIndexStatus, runPersonalChatMemoryIndexingCycle } from '../services/personalChatMemoryIndexer';
 
 function isAdmin(ctx: BotContext): boolean {
@@ -63,7 +65,7 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
                 '/memory_stats — статистика + последние 5 сохраненных фактов',
                 '/memory_search <запрос> — ручная проверка векторного поиска',
                 '/memory_cleanup — очистка старых фактов',
-                '/memory_consolidate [домен] — собрать сводные главы памяти',
+                '/memory_consolidate [домен] — собрать сводные главы, модели и индексы памяти',
                 '/personal_chat_memory_status — статус фонового изучения личных переписок',
                 '/personal_chat_memory_run — запустить один цикл изучения личных переписок',
                 '/debug_facts — диагностика извлечения фактов',
@@ -160,7 +162,7 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
         const domain = rawText.replace('/memory_consolidate', '').trim();
         await ctx.reply(domain
             ? `Собираю сводные главы памяти для домена "${domain}"...`
-            : 'Собираю сводные главы памяти по самым насыщенным доменам...');
+            : 'Собираю сводные главы, устойчивые модели и индексы памяти...');
 
         const result = await runMemoryConsolidationForContext(ctx, {
             domain: domain || undefined,
@@ -169,14 +171,29 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
             periodDays: 180,
             maxDomains: 8,
         });
+        const schemas = await runMemorySchemaConsolidationForContext(ctx, {
+            domain: domain || undefined,
+            minSources: domain ? 8 : 12,
+            limit: 800,
+            periodDays: 240,
+        });
+        const sleep = ctx.from?.id
+            ? await runMemorySleepCycleForUser(String(ctx.from.id))
+            : undefined;
 
         const lines = [
             '✅ Консолидация памяти завершена.',
             `Создано глав: ${result.created}`,
             `Заменено старых глав: ${result.replaced}`,
+            `Создано моделей пользователя: ${schemas.created}`,
+            `Заменено старых моделей: ${schemas.replaced}`,
+            sleep ? `Индекс открытых линий: ${sleep.openLoopIndexCreated ? 'обновлён' : 'не создан'}` : undefined,
+            sleep ? `Индекс сомнений: ${sleep.uncertaintyIndexCreated ? 'обновлён' : 'не создан'}` : undefined,
+            sleep ? `Смягчено устаревающих временных фактов: ${sleep.staleFactsSoftened}` : undefined,
             `Использовано источников: ${result.sourceCount}`,
+            schemas.schemaTitles.length ? `Модели: ${schemas.schemaTitles.join(', ')}` : undefined,
             result.domains.length ? `Домены: ${result.domains.join(', ')}` : undefined,
-            result.skipped.length ? `Пропущено: ${result.skipped.join('; ')}` : undefined,
+            [...result.skipped, ...schemas.skipped, ...(sleep?.skipped ?? [])].length ? `Пропущено: ${[...result.skipped, ...schemas.skipped, ...(sleep?.skipped ?? [])].join('; ')}` : undefined,
         ].filter(Boolean);
 
         await ctx.reply(lines.join('\n'));
@@ -206,8 +223,12 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
             `Обработано чатов: ${result.processedChats}`,
             `Пропущено чатов: ${result.skippedChats}`,
             `Сообщений проанализировано: ${result.messagesAnalyzed}`,
+            `Эпизодов переписок сохранено: ${result.episodesCreated}`,
             `Фактов найдено: ${result.factsFound}`,
             `Фактов сохранено: ${result.factsSaved}`,
+            result.postConsolidation
+                ? `Пост-консолидация: моделей ${result.postConsolidation.schemasCreated}, open-loop=${result.postConsolidation.openLoopIndexCreated ? 'да' : 'нет'}, uncertainty=${result.postConsolidation.uncertaintyIndexCreated ? 'да' : 'нет'}, softened=${result.postConsolidation.staleFactsSoftened}`
+                : undefined,
             result.errors.length ? `Ошибки: ${result.errors.slice(0, 5).join('; ')}` : undefined,
         ].filter(Boolean).join('\n'));
     });

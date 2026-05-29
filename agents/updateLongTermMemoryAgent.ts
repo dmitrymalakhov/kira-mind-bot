@@ -14,8 +14,12 @@ const SAVE_CONCURRENCY = 1;
 export interface MemoryUpdateOptions {
     source?: string;
     sourceContactName?: string;
+    sourceContactId?: number;
+    sourceContactUsername?: string;
     sourceContext?: string;
     sourceMessageIds?: string[];
+    sourceMemoryIds?: string[];
+    sourceEpisodeId?: string;
     askOnAmbiguous?: boolean;
 }
 
@@ -50,11 +54,70 @@ function buildFactTags(
 
     const systemTags = [`subject:${subject}`];
     if (options.source) systemTags.push(`source:${options.source}`);
+    if (typeof fact.confidence === 'number') {
+        if (fact.confidence < 0.55) systemTags.push('weak-evidence');
+        if (fact.confidence >= 0.78) systemTags.push('supported');
+    }
+    if (fact.evidence) systemTags.push('evidence-backed');
+    if (fact.inferenceLevel) {
+        systemTags.push(`inference:${fact.inferenceLevel}`);
+        if (fact.inferenceLevel === 'inferred' || fact.inferenceLevel === 'ambiguous') {
+            systemTags.push('needs-caution');
+        }
+    }
+    if (fact.temporalScope) systemTags.push(`temporal_scope:${fact.temporalScope}`);
+    if (fact.status && fact.status !== 'active') systemTags.push(`status:${fact.status}`);
     if (options.sourceContactName) {
         systemTags.push(`source_contact:${options.sourceContactName}`);
     }
+    if (subject === 'contact' && options.sourceContactName) {
+        systemTags.push(`contact:${options.sourceContactName}`);
+        systemTags.push(`contact_name:${options.sourceContactName}`);
+    }
+    if (subject === 'contact' && options.sourceContactId) {
+        systemTags.push(`contact_id:${options.sourceContactId}`);
+        systemTags.push(`contact_key:${options.sourceContactId}`);
+    }
+    if (subject === 'contact' && options.sourceContactUsername) {
+        systemTags.push(`contact_username:${options.sourceContactUsername}`);
+        systemTags.push(`contact_alias:@${options.sourceContactUsername}`);
+    }
 
     return [...new Set([...cleaned, ...systemTags])];
+}
+
+function directContactMemoryContent(contactName: string, content: string): string {
+    const clean = content.trim().replace(/^\[[^\]]+\]\s*/, '');
+    return `[${contactName.trim() || 'Собеседник'}] ${clean}`;
+}
+
+function extractionMethodFromSource(source?: string): MemorySaveMetadata['extractionMethod'] {
+    switch (source) {
+        case 'reflection':
+            return 'reflection';
+        case 'personal_chat_background':
+        case 'study_chat':
+            return 'study_chat';
+        default:
+            return 'study_chat';
+    }
+}
+
+function sourceContextForFact(options: MemoryUpdateOptions, fact: ExtractedFactAboutUser): string | undefined {
+    const evidence = fact.evidence?.replace(/\s+/g, ' ').trim();
+    const temporal = [
+        fact.inferenceLevel ? `inference=${fact.inferenceLevel}` : undefined,
+        fact.temporalScope ? `scope=${fact.temporalScope}` : undefined,
+        fact.status ? `status=${fact.status}` : undefined,
+        fact.validFrom ? `validFrom=${fact.validFrom.toISOString()}` : undefined,
+        fact.validTo ? `validTo=${fact.validTo.toISOString()}` : undefined,
+    ].filter(Boolean).join(', ');
+    return [
+        options.sourceContext,
+        evidence ? `Опора извлечения: ${evidence}` : undefined,
+        temporal ? `Временная привязка: ${temporal}` : undefined,
+        fact.qualityWarnings?.length ? `Quality warnings: ${fact.qualityWarnings.slice(0, 4).join('; ')}` : undefined,
+    ].filter(Boolean).join('\n') || undefined;
 }
 
 /**
@@ -98,15 +161,33 @@ export async function runUpdateLongTermMemoryAgentDetailed(
                 const expectedSubject: 'contact' | 'user' = isContactFact ? 'contact' : 'user';
                 const tags = buildFactTags(fact, expectedSubject, options);
                 const memoryMetadata: MemorySaveMetadata = {
-                    extractionMethod: 'study_chat' as const,
+                    extractionMethod: extractionMethodFromSource(options.source),
                     subject: expectedSubject,
-                    sourceContext: options.sourceContext,
+                    sourceContext: sourceContextForFact(options, fact),
                     sourceMessageIds: options.sourceMessageIds,
+                    sourceMemoryIds: options.sourceMemoryIds,
+                    sourceEpisodeId: options.sourceEpisodeId,
+                    confidence: fact.confidence,
+                    validFrom: fact.validFrom,
+                    validTo: fact.validTo,
+                    status: fact.status,
                     predicate: fact.domain,
                     object: fact.content,
                 };
 
                 if (isContactFact) {
+                    if ((options.askOnAmbiguous ?? true) === false && options.sourceContactId && options.sourceContactName) {
+                        const memoryContent = directContactMemoryContent(options.sourceContactName, fact.content);
+                        const saved = await saveMemory(ctx, fact.domain, memoryContent, fact.importance, tags, false, {
+                            ...memoryMetadata,
+                            subject: 'contact',
+                            sourceContext: memoryMetadata.sourceContext ?? fact.content,
+                        });
+                        if (!saved) return { status: 'skipped' as const, fact };
+                        devLog(`UpdateLongTermMemoryAgent: saved [contact:direct]`, memoryContent.slice(0, 60));
+                        return { status: 'saved' as const, fact: { ...fact, content: memoryContent, tags } };
+                    }
+
                     const result = await saveContactMemoryFactOrAsk(ctx, {
                         contactName,
                         content: fact.content,
