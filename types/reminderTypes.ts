@@ -3,6 +3,9 @@ export type ReminderTargetChat =
     | { type: "group"; groupName: string }
     | { type: "contact"; contactQuery: string };
 
+/** Согласие владельца на отправку напоминания найденному адресату */
+export type ReminderTargetNotificationStatus = "pending" | "enabled" | "disabled";
+
 /** Возможные статусы напоминания */
 export enum ReminderStatus {
     Pending = "pending",

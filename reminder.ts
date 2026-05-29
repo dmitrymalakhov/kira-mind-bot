@@ -5,9 +5,10 @@ import { REMINDER_EXPIRY_TIME, USER_TIMEZONE } from "./constants";
 import { initTelegramClient, searchGroupByTitle, sendMessageToChat, sendMessage } from "./services/telegram";
 import { ContactsStore } from "./stores/ContactsStore";
 import { ReminderRepository } from "./services/ReminderRepository";
-import { ReminderStatus, ReminderTargetChat, RecurrenceRule } from "./types/reminderTypes";
+import { ReminderStatus, ReminderTargetChat, ReminderTargetNotificationStatus, RecurrenceRule } from "./types/reminderTypes";
 import { ReminderRegistry } from "./stores/ReminderRegistry";
-export { ReminderStatus, ReminderTargetChat, RecurrenceRule };
+import { buildDefaultTargetReminderMessage } from "./utils/reminderTargetNotification";
+export { ReminderStatus, ReminderTargetChat, ReminderTargetNotificationStatus, RecurrenceRule };
 
 // Расширенный интерфейс для напоминания с поддержкой статусов
 export interface Reminder {
@@ -22,6 +23,10 @@ export interface Reminder {
     createdAt: Date;            // Дата создания напоминания
     /** Если задано — в момент срабатывания отправить напоминание в этот чат (группа или контакт), иначе — в chatId */
     targetChat?: ReminderTargetChat;
+    /** Текст для адресата targetChat. Не должен быть копией личного напоминания владельцу. */
+    targetDisplayText?: string;
+    /** Отправлять ли targetChat. Без явного enabled напоминание уходит только владельцу. */
+    targetChatNotifyStatus?: ReminderTargetNotificationStatus;
     /** Название чата, в котором создано напоминание (для пикера в приватном чате) */
     chatTitle?: string;
     /** Правило повторения: если задано, после срабатывания автоматически создаётся следующее */
@@ -255,20 +260,20 @@ async function sendReminder(bot: Bot<BotContext>, reminder: Reminder): Promise<v
         let userNotificationText = messageText;
         let targetLabel: string | null = null;
 
-        // Если напоминание нужно отправить в другой чат — отправляем туда текст, пользователю — уведомление с кнопками
-        if (reminder.targetChat) {
+        // Адресату отправляем только после явного согласия владельца при создании напоминания.
+        if (reminder.targetChat && reminder.targetChatNotifyStatus === "enabled") {
             const resolved = await resolveTargetChat(reminder.targetChat);
             if (resolved) {
                 const client = await initTelegramClient();
                 if (client) {
-                    const textToSend = reminder.displayText || reminder.text;
+                    const textToSend = reminder.targetDisplayText || buildDefaultTargetReminderMessage(reminder.text);
                     if (reminder.targetChat.type === "group") {
                         await sendMessageToChat(client, resolved.chatId, textToSend);
                     } else {
                         await sendMessage(client, resolved.chatId, textToSend, false, null);
                     }
                     targetLabel = resolved.label;
-                    userNotificationText = `⏰ Напомнила в чате «${resolved.label}»:\n\n${reminder.displayText || reminder.text}`;
+                    userNotificationText = `⏰ Напомнила тебе и оповестила «${resolved.label}»:\n\n${messageText}`;
                     devLog(`Reminder sent to target chat "${resolved.label}" (${resolved.chatId})`);
                 }
             } else {

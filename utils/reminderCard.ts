@@ -3,6 +3,7 @@ import { Reminder, ReminderStatus, RecurrenceRule } from '../reminder';
 import { BotContext } from '../types';
 import { USER_TIMEZONE } from '../constants';
 import { ReminderRegistry } from '../stores/ReminderRegistry';
+import { targetChatHumanLabel } from './reminderTargetNotification';
 
 /**
  * Возвращает активные напоминания для текущего чата.
@@ -60,6 +61,19 @@ function statusLabel(status?: ReminderStatus): string {
     }
 }
 
+function targetNotificationLabel(reminder: Reminder): string {
+    if (!reminder.targetChat) return '';
+    const target = targetChatHumanLabel(reminder.targetChat);
+    switch (reminder.targetChatNotifyStatus) {
+        case 'enabled':
+            return `\n📨 Адресат: ${target} (оповестить)`;
+        case 'disabled':
+            return `\n📨 Адресат: ${target} (только тебе)`;
+        default:
+            return `\n📨 Адресат: ${target} (ждёт выбора)`;
+    }
+}
+
 /**
  * Собирает текст и клавиатуру одной карточки напоминания.
  * showBackToChats=true добавляет кнопку «↩️ К чатам» (для кросс-чатового просмотра из приватного).
@@ -83,11 +97,12 @@ export function buildReminderCard(
 
     const body = r.displayText || r.text;
     const recLine = r.recurrence ? `\n${recurrenceLabel(r.recurrence)}` : '';
+    const targetLine = targetNotificationLabel(r);
     const text =
         `📋 Напоминание ${num} из ${total}\n\n` +
         `${body}\n\n` +
         `🗓 ${dueTime}\n` +
-        `📌 ${statusLabel(r.status)}${recLine}`;
+        `📌 ${statusLabel(r.status)}${recLine}${targetLine}`;
 
     const prevCb = index > 0       ? `reminders_nav_${index - 1}` : 'reminders_nav_noop';
     const nextCb = index < total-1 ? `reminders_nav_${index + 1}` : 'reminders_nav_noop';
@@ -151,7 +166,8 @@ export function buildRemindersList(
         });
         const body = r.displayText || r.text;
         const recPart = r.recurrence ? ` · ${recurrenceLabel(r.recurrence)}` : '';
-        return `${i + 1}. ${body}\n   🗓 ${dueTime} · 📌 ${statusLabel(r.status)}${recPart}`;
+        const targetPart = r.targetChat ? ` · 📨 ${targetChatHumanLabel(r.targetChat)}` : '';
+        return `${i + 1}. ${body}\n   🗓 ${dueTime} · 📌 ${statusLabel(r.status)}${recPart}${targetPart}`;
     });
     const text = `📋 Все напоминания (${reminders.length}):\n\n${lines.join('\n\n')}`;
     const keyboard = new InlineKeyboard().text('◀️ К карточкам', 'reminders_nav_0');

@@ -11,7 +11,7 @@ import { getMessagesSummary, markAllMessagesAsRead, resetAllMessages } from "./a
 import { handleUnauthorizedUserMessage } from "./agents/unauthorizedUserAgent";
 import { GoogleMapsService } from "./services/googleMaps";
 import { ContactsStore } from "./stores/ContactsStore";
-import { deleteMessageDraft, getMessageDraft, saveMessageDraft, sendMessageFromDraft } from "./agents/sendMessagesAgent";
+import { getMessageDraft, saveMessageDraft } from "./agents/sendMessagesAgent";
 import {
     NegotiationStore,
     buildNegotiationSummaryText,
@@ -48,6 +48,8 @@ import { healthPhotoAgent, shouldRouteHealthPhoto } from "./agents/healthAgent";
 import { applyReminderEditInput } from "./utils/reminderEditor";
 import { generateSpeechFile, getTelegramVoiceReadinessIssue, prepareTelegramVoiceFile } from "./services/elevenLabsTts";
 import { stripVoiceReplyDirective, wantsVoiceReply } from "./utils/voiceReply";
+import { addTargetNotificationButtons, appendTargetNotificationPrompt, buildDefaultTargetReminderMessage } from "./utils/reminderTargetNotification";
+import { normalizeNumbersForVoiceMessage } from "./utils/russianSpeechNumbers";
 
 
 // Загрузка переменных окружения
@@ -218,6 +220,7 @@ async function saveRemindersFromResult(ctx: BotContext, result: ProcessingResult
     if (!result.reminderCreated) return;
     if (!Array.isArray(ctx.session.reminders)) ctx.session.reminders = [];
     const list = result.reminderDetailsList ?? (result.reminderDetails ? [result.reminderDetails] : []);
+    const targetNotificationCandidates: Reminder[] = [];
     // Название группового чата — для пикера в приватном
     const chatType = ctx.chat?.type;
     const chatTitle = chatType === 'group' || chatType === 'supergroup'
@@ -233,9 +236,14 @@ async function saveRemindersFromResult(ctx: BotContext, result: ProcessingResult
             status: ReminderStatus.Pending,
             createdAt: new Date(),
             targetChat: details.targetChat,
+            targetDisplayText: details.targetReminderMessage || (details.targetChat ? buildDefaultTargetReminderMessage(details.text) : undefined),
+            targetChatNotifyStatus: details.targetChat ? "pending" : undefined,
             chatTitle,
             recurrence: details.recurrence,
         };
+        if (reminder.targetChat) {
+            targetNotificationCandidates.push(reminder);
+        }
         ctx.session.reminders.push(reminder);
         ReminderRegistry.getInstance().add(reminder);
         console.info(`[reminder] event=created id=${reminder.id} chatId=${reminder.chatId} due=${new Date(reminder.dueDate).toISOString()}` + (chatTitle ? ` chat="${chatTitle}"` : '') + (details.targetChat ? ` target=${details.targetChat.type}` : ""));
@@ -255,6 +263,13 @@ async function saveRemindersFromResult(ctx: BotContext, result: ProcessingResult
                 }
             }).catch(() => {});
         }
+    }
+
+    if (targetNotificationCandidates.length > 0) {
+        result.responseText = appendTargetNotificationPrompt(result.responseText, targetNotificationCandidates);
+        const keyboard = result.keyboard ?? new InlineKeyboard();
+        if (result.keyboard) keyboard.row();
+        result.keyboard = addTargetNotificationButtons(keyboard, targetNotificationCandidates);
     }
 }
 
@@ -435,6 +450,78 @@ bot.on("message:text", async (ctx, next) => {
 
         // These messages are handled by dedicated bot.hears handlers in memoryCommands
         if (MEMORY_HEARS_RE.test(message) || MEMORY_DELETE_RE.test(message)) {
+            return;
+        }
+
+        if (ctx.session.messageEditing && ctx.chat) {
+            ctx.session.messageEditing = false;
+            const draft = getMessageDraft(ctx.chat.id);
+            if (!draft) {
+                await replyAndStore(ctx, "❌ Черновик сообщения не найден или устарел. Создай сообщение заново.");
+                return;
+            }
+            const preparedMessage = draft.deliveryMode === "voice"
+                ? normalizeNumbersForVoiceMessage(message)
+                : message;
+
+            saveMessageDraft(
+                ctx.chat.id,
+                draft.contactId,
+                preparedMessage,
+                draft.scheduledTime,
+                draft.notifyOnReply,
+                draft.isGroup ?? false,
+                draft.groupTitle,
+                draft.deliveryMode
+            );
+
+            const confirmKeyboard = new InlineKeyboard()
+                .text("✅ Отправить", "send_message")
+                .text("✏️ Изменить текст", "edit_message");
+
+            if (!draft.isGroup) {
+                if (draft.deliveryMode === "text") {
+                    confirmKeyboard
+                        .row()
+                        .text("🕒 Изменить время", "change_time")
+                        .text(draft.notifyOnReply ? "🔔 Выкл. уведомления" : "🔕 Вкл. уведомления", "toggle_notify");
+                } else {
+                    confirmKeyboard
+                        .row()
+                        .text(draft.notifyOnReply ? "🔔 Выкл. уведомления" : "🔕 Вкл. уведомления", "toggle_notify");
+                }
+            }
+
+            confirmKeyboard
+                .row()
+                .text("❌ Отмена", "cancel_message");
+
+            const contactsStore = ContactsStore.getInstance();
+            const contact = draft.isGroup ? null : contactsStore.getContact(draft.contactId);
+            const recipientLabel = draft.isGroup
+                ? `группы «${draft.groupTitle || draft.contactId}»`
+                : `${contact?.firstName || "контакта"} ${contact?.lastName || ""} ${contact?.username ? '(@' + contact.username + ')' : ''}`.trim();
+            const scheduledTimeDisplay = draft.scheduledTime
+                ? draft.scheduledTime.toLocaleString('ru-RU', {
+                    day: 'numeric',
+                    month: 'long',
+                    hour: 'numeric',
+                    minute: 'numeric'
+                })
+                : "сейчас";
+            const notifyIndicator = draft.notifyOnReply ?
+                "✅ С уведомлением о получении ответа" :
+                "❌ Без уведомления о получении ответа";
+
+            await replyAndStore(ctx,
+                `📤 Обновлено ${draft.deliveryMode === "voice" ? "голосовое сообщение" : "сообщение"} для ${recipientLabel}:\n\n` +
+                `"${preparedMessage}"\n\n` +
+                `Формат: ${draft.deliveryMode === "voice" ? "голосовое сообщение, с представлением ассистента в начале" : "текстовое сообщение"}\n` +
+                `Время отправки: ${scheduledTimeDisplay}\n` +
+                `${draft.isGroup ? "" : `${notifyIndicator}\n`}\n` +
+                `Подтверди отправку или внеси изменения:`,
+                { reply_markup: confirmKeyboard }
+            );
             return;
         }
 
@@ -791,7 +878,9 @@ bot.on("message:text", async (ctx, next) => {
                     messageForProcessing,
                     false,
                     "",
-                    ctx.session.messageHistory.slice().reverse() // Передаем историю в хронологическом порядке
+                    ctx.session.messageHistory.slice().reverse(), // Передаем историю в хронологическом порядке
+                    undefined,
+                    { voiceReplyRequested: voiceReplyRequested }
                 );
 
                 // Обрабатываем результат
@@ -1551,7 +1640,9 @@ bot.on("message:voice", async (ctx) => {
                             textForProcessing,
                             false,
                             "",
-                            ctx.session.messageHistory.slice().reverse()
+                            ctx.session.messageHistory.slice().reverse(),
+                            undefined,
+                            { voiceReplyRequested: voiceReplyRequested }
                         );
 
                         // Обрабатываем результат, аналогично обработке текстовых сообщений

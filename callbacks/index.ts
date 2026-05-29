@@ -9,7 +9,7 @@ import { ReminderRepository } from "../services/ReminderRepository";
 import { hasFreshPendingReminder } from "../utils/implicitReminderDetector";
 import { getActiveReminders, buildReminderCard, buildPostponeKeyboard, buildRemindersList, buildChatPicker } from "../utils/reminderCard";
 import { ReminderRegistry } from "../stores/ReminderRegistry";
-import { sendMessageFromDraft, deleteMessageDraft, saveMessageDraft, getMessageDraft } from "../agents/sendMessagesAgent";
+import { sendMessageFromDraftDetailed, deleteMessageDraft, saveMessageDraft, getMessageDraft } from "../agents/sendMessagesAgent";
 import { ContactsStore } from "../stores/ContactsStore";
 import {
     NegotiationStore,
@@ -28,8 +28,34 @@ import { processMessage, type ProcessingResult } from "../orchestrator";
 import { addToHistory } from "../utils/history";
 import { consumeQuickChoice, isQuickChoiceCallback } from "../utils/quickChoice";
 import { MAX_MESSAGE_LENGTH, USER_TIMEZONE } from "../constants";
+import { generateSpeechFile, getTelegramVoiceReadinessIssue, prepareTelegramVoiceFile } from "../services/elevenLabsTts";
+import {
+    addTargetNotificationButtons,
+    appendTargetNotificationPrompt,
+    buildDefaultTargetReminderMessage,
+    parseTargetNotificationCallback,
+    removeTargetNotificationButtons,
+    targetChatHumanLabel,
+} from "../utils/reminderTargetNotification";
 
 const EVENING_POSTPONE_HOUR = 19;
+
+async function replyWithGeneratedVoice(ctx: BotContext, text: string): Promise<void> {
+    await ctx.api.sendChatAction(ctx.chat!.id, "record_voice");
+    const speech = await generateSpeechFile(text);
+    let cleanupPaths = [speech.filePath];
+    try {
+        const voice = await prepareTelegramVoiceFile(speech);
+        cleanupPaths = voice.cleanupPaths;
+        await ctx.replyWithVoice(new InputFile(voice.filePath, voice.filename));
+    } finally {
+        for (const filePath of cleanupPaths) {
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        }
+    }
+}
 
 function getZonedParts(date: Date, timeZone: string): {
     year: number;
@@ -105,6 +131,7 @@ async function saveRemindersFromResult(ctx: BotContext, bot: Bot<BotContext>, re
     if (!result.reminderCreated) return;
     if (!Array.isArray(ctx.session.reminders)) ctx.session.reminders = [];
     const list = result.reminderDetailsList ?? (result.reminderDetails ? [result.reminderDetails] : []);
+    const targetNotificationCandidates: Reminder[] = [];
     const chatType = ctx.chat?.type;
     const chatTitle = chatType === "group" || chatType === "supergroup"
         ? `👥 ${(ctx.chat as any).title ?? "Группа"}`
@@ -120,9 +147,14 @@ async function saveRemindersFromResult(ctx: BotContext, bot: Bot<BotContext>, re
             status: ReminderStatus.Pending,
             createdAt: new Date(),
             targetChat: details.targetChat,
+            targetDisplayText: details.targetReminderMessage || (details.targetChat ? buildDefaultTargetReminderMessage(details.text) : undefined),
+            targetChatNotifyStatus: details.targetChat ? "pending" : undefined,
             chatTitle,
             recurrence: details.recurrence,
         };
+        if (reminder.targetChat) {
+            targetNotificationCandidates.push(reminder);
+        }
         ctx.session.reminders.push(reminder);
         ReminderRegistry.getInstance().add(reminder);
         await ReminderRepository.save(reminder).catch(e => console.error("[reminder] DB save failed on quick choice:", e));
@@ -140,6 +172,13 @@ async function saveRemindersFromResult(ctx: BotContext, bot: Bot<BotContext>, re
                 }
             }).catch(() => {});
         }
+    }
+
+    if (targetNotificationCandidates.length > 0) {
+        result.responseText = appendTargetNotificationPrompt(result.responseText, targetNotificationCandidates);
+        const keyboard = result.keyboard ?? new InlineKeyboard();
+        if (result.keyboard) keyboard.row();
+        result.keyboard = addTargetNotificationButtons(keyboard, targetNotificationCandidates);
     }
 }
 
@@ -564,6 +603,93 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 return;
             }
 
+            const targetNotification = parseTargetNotificationCallback(callbackData);
+            if (targetNotification) {
+                const { action, reminderId } = targetNotification;
+                const reminder = ReminderRegistry.getInstance().get(reminderId);
+
+                if (!reminder) {
+                    await ctx.answerCallbackQuery({ text: "Напоминание не найдено" });
+                    return;
+                }
+
+                if (!reminder.targetChat) {
+                    await ctx.answerCallbackQuery({ text: "У этого напоминания нет адресата" });
+                    return;
+                }
+
+                const canStillChoose = !reminder.status ||
+                    reminder.status === ReminderStatus.Pending ||
+                    reminder.status === ReminderStatus.Postponed;
+                if (!canStillChoose) {
+                    await ctx.answerCallbackQuery({ text: "Напоминание уже сработало" });
+                    const message = ctx.callbackQuery.message;
+                    if (message?.message_id && message.chat?.id) {
+                        const remainingKeyboard = removeTargetNotificationButtons(
+                            message.reply_markup?.inline_keyboard,
+                            reminderId
+                        );
+                        await ctx.api.editMessageReplyMarkup(
+                            message.chat.id,
+                            message.message_id,
+                            { reply_markup: { inline_keyboard: remainingKeyboard } }
+                        ).catch(() => {});
+                    }
+                    return;
+                }
+
+                reminder.targetChatNotifyStatus = action === "enable" ? "enabled" : "disabled";
+                if (action === "enable" && !reminder.targetDisplayText) {
+                    reminder.targetDisplayText = buildDefaultTargetReminderMessage(reminder.text);
+                }
+
+                const sessionReminder = ctx.session.reminders?.find((r) => r.id === reminderId);
+                if (sessionReminder) {
+                    sessionReminder.targetChatNotifyStatus = reminder.targetChatNotifyStatus;
+                    sessionReminder.targetDisplayText = reminder.targetDisplayText;
+                }
+
+                await ReminderRepository.update(reminder).catch(e => console.error("[reminder] DB update failed on target notification choice:", e));
+
+                const label = targetChatHumanLabel(reminder.targetChat);
+                const statusText = action === "enable"
+                    ? `📨 Оповещу ${label} при срабатывании.`
+                    : `Ок, ${label} не буду оповещать. Напоминание останется только тебе.`;
+                await ctx.answerCallbackQuery({ text: action === "enable" ? "Оповещу адресата" : "Только тебе" });
+
+                const message = ctx.callbackQuery.message;
+                if (message?.message_id && message.chat?.id) {
+                    const remainingKeyboard = removeTargetNotificationButtons(
+                        message.reply_markup?.inline_keyboard,
+                        reminderId
+                    );
+                    const replyMarkup = { inline_keyboard: remainingKeyboard };
+                    const currentText = "text" in message ? message.text : undefined;
+
+                    if (currentText) {
+                        await ctx.api.editMessageText(
+                            message.chat.id,
+                            message.message_id,
+                            `${currentText}\n\n${statusText}`,
+                            { reply_markup: replyMarkup }
+                        ).catch(async () => {
+                            await ctx.api.editMessageReplyMarkup(
+                                message.chat.id,
+                                message.message_id,
+                                { reply_markup: replyMarkup }
+                            ).catch(() => {});
+                        });
+                    } else {
+                        await ctx.api.editMessageReplyMarkup(
+                            message.chat.id,
+                            message.message_id,
+                            { reply_markup: replyMarkup }
+                        ).catch(() => {});
+                    }
+                }
+                return;
+            }
+
             // ── Отмена напоминания ──────────────────────────────────────────────
             if (callbackData.startsWith("reminder_cancel_")) {
                 const reminderId = callbackData.replace("reminder_cancel_", "");
@@ -634,6 +760,34 @@ export function registerCallback(bot: Bot<BotContext>): void {
 
                 const result = await handleChatAnalysisPeriodCallback(ctx, period, requestId);
                 const replyOptions = result.keyboard ? { reply_markup: result.keyboard } : { reply_markup: new InlineKeyboard() };
+                if (result.voiceReplyRequested) {
+                    if (callbackChatId && callbackMessageId) {
+                        await ctx.api.editMessageText(
+                            callbackChatId,
+                            callbackMessageId,
+                            result.keyboard
+                                ? "Готово. Голосовая сводка ниже. Этот набор чатов можно сохранить кнопкой."
+                                : "Готово. Голосовая сводка ниже.",
+                            replyOptions
+                        ).catch(() => {});
+                    }
+
+                    const voiceReadinessIssue = await getTelegramVoiceReadinessIssue(result.responseText);
+                    if (voiceReadinessIssue) {
+                        await sendMessage(ctx, `${result.responseText}\n\n${voiceReadinessIssue}`, result.keyboard ? { reply_markup: result.keyboard } : {});
+                        return;
+                    }
+
+                    try {
+                        await replyWithGeneratedVoice(ctx, result.responseText);
+                    } catch (voiceError) {
+                        console.error("[chat-analysis-voice] failed to generate or send voice:", voiceError);
+                        await sendMessage(ctx, result.responseText, result.keyboard ? { reply_markup: result.keyboard } : {});
+                        await ctx.reply("Не смогла отправить голосом, поэтому оставила текстом.").catch(() => {});
+                    }
+                    return;
+                }
+
                 if (callbackChatId && callbackMessageId && result.responseText.length <= MAX_MESSAGE_LENGTH) {
                     await ctx.api.editMessageText(
                         callbackChatId,
@@ -890,14 +1044,15 @@ export function registerCallback(bot: Bot<BotContext>): void {
             } else if (callbackData === "send_message") {
                 // Если нажата кнопка "Отправить", отправляем сообщение
                 if (ctx.chat) {
-                    const success = await sendMessageFromDraft(ctx.chat.id);
+                    const sendResult = await sendMessageFromDraftDetailed(ctx.chat.id);
 
-                    if (success) {
-                        await ctx.answerCallbackQuery({ text: "Сообщение отправлено!" });
-                        await ctx.reply("✅ Сообщение успешно отправлено!");
+                    if (sendResult.success) {
+                        const sentLabel = sendResult.deliveryMode === "voice" ? "Голосовое отправлено!" : "Сообщение отправлено!";
+                        await ctx.answerCallbackQuery({ text: sentLabel });
+                        await ctx.reply(sendResult.deliveryMode === "voice" ? "✅ Голосовое сообщение успешно отправлено!" : "✅ Сообщение успешно отправлено!");
                     } else {
                         await ctx.answerCallbackQuery({ text: "Ошибка отправки" });
-                        await ctx.reply("❌ Не удалось отправить сообщение. Пожалуйста, попробуйте ещё раз.");
+                        await ctx.reply(`❌ Не удалось отправить сообщение.${sendResult.errorMessage ? `\n\n${sendResult.errorMessage}` : "\n\nПожалуйста, попробуйте ещё раз."}`);
                     }
                 }
             } else if (callbackData === "edit_message") {
@@ -946,7 +1101,8 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         draft.scheduledTime,
                         newNotifyValue,
                         draft.isGroup ?? false,
-                        draft.groupTitle
+                        draft.groupTitle,
+                        draft.deliveryMode
                     );
 
                     // Получаем информацию о контакте (для группы не применимо)
@@ -982,16 +1138,27 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     // Создаем обновленную клавиатуру
                     const confirmKeyboard = new InlineKeyboard()
                         .text("✅ Отправить", "send_message")
-                        .text("✏️ Изменить текст", "edit_message")
-                        .row()
-                        .text("🕒 Изменить время", "change_time")
-                        .text(newNotifyValue ? "🔔 Выкл. уведомления" : "🔕 Вкл. уведомления", "toggle_notify")
+                        .text("✏️ Изменить текст", "edit_message");
+
+                    if (draft.deliveryMode === "text") {
+                        confirmKeyboard
+                            .row()
+                            .text("🕒 Изменить время", "change_time")
+                            .text(newNotifyValue ? "🔔 Выкл. уведомления" : "🔕 Вкл. уведомления", "toggle_notify");
+                    } else {
+                        confirmKeyboard
+                            .row()
+                            .text(newNotifyValue ? "🔔 Выкл. уведомления" : "🔕 Вкл. уведомления", "toggle_notify");
+                    }
+
+                    confirmKeyboard
                         .row()
                         .text("❌ Отмена", "cancel_message");
 
                     // Формируем обновленное сообщение с предварительным просмотром
-                    const responseText = `📤 Подготовлено сообщение для ${contact.firstName} ${contact.lastName || ''} ${contact.username ? '(@' + contact.username + ')' : ''}:\n\n` +
+                    const responseText = `📤 Подготовлено ${draft.deliveryMode === "voice" ? "голосовое сообщение" : "сообщение"} для ${contact.firstName} ${contact.lastName || ''} ${contact.username ? '(@' + contact.username + ')' : ''}:\n\n` +
                         `"${draft.text}"\n\n` +
+                        `Формат: ${draft.deliveryMode === "voice" ? "голосовое сообщение, с представлением ассистента в начале" : "текстовое сообщение"}\n` +
                         `Время отправки: ${scheduledTimeDisplay}\n` +
                         `${notifyIndicator}\n\n` +
                         `Подтверди отправку или внеси изменения:`;
@@ -1066,12 +1233,19 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         await ctx.answerCallbackQuery({ text: "Для группы доступна только отправка сейчас" });
                         return;
                     }
+                    if (draft.deliveryMode === "voice") {
+                        await ctx.answerCallbackQuery({ text: "Для голосовых доступна только отправка сейчас" });
+                        return;
+                    }
                     saveMessageDraft(
                         ctx.chat.id,
                         draft.contactId,
                         draft.text,
                         scheduledTime,
-                        draft.notifyOnReply
+                        draft.notifyOnReply,
+                        draft.isGroup ?? false,
+                        draft.groupTitle,
+                        draft.deliveryMode
                     );
 
                     // Получаем информацию о контакте
@@ -1126,32 +1300,8 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 const reminderResult = await reminderAgent(
                     pending.originalMessage, false, '', ctx.session.messageHistory, ''
                 );
-                await ctx.reply(reminderResult.responseText);
-
-                if (reminderResult.reminderCreated) {
-                    const list = reminderResult.reminderDetailsList
-                        ?? (reminderResult.reminderDetails ? [reminderResult.reminderDetails] : []);
-                    for (const details of list) {
-                        const reminder: Reminder = {
-                            id: details.id,
-                            text: details.text,
-                            displayText: details.reminderMessage,
-                            dueDate: details.dueDate,
-                            chatId: ctx.chat!.id,
-                            status: ReminderStatus.Pending,
-                            createdAt: new Date(),
-                            targetChat: details.targetChat,
-                            recurrence: details.recurrence,
-                        };
-                        ctx.session.reminders.push(reminder);
-                        ReminderRegistry.getInstance().add(reminder);
-                        await ReminderRepository.save(reminder).catch((e) =>
-                            console.error('[implicit_reminder] DB save failed:', e)
-                        );
-                        scheduleReminder(bot, reminder);
-                        console.info(`[implicit_reminder] created id=${reminder.id} due=${new Date(reminder.dueDate).toISOString()}`);
-                    }
-                }
+                await saveRemindersFromResult(ctx, bot, reminderResult);
+                await sendProcessingResult(ctx, reminderResult);
                 return;
 
             } else if (callbackData === 'implicit_reminder_no') {

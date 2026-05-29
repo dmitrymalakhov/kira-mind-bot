@@ -6,6 +6,7 @@ import { getBotPersona, getCommunicationStyle } from "../persona";
 import openai from "../openai";
 import { USER_TIMEZONE } from "../constants";
 import type { ReminderTargetChat, RecurrenceRule } from "../reminder";
+import { buildDefaultTargetReminderMessage } from "../utils/reminderTargetNotification";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -16,6 +17,7 @@ interface ReminderAnalysis {
     exactTimeSpecified: boolean;
     confirmationMessage: string;
     reminderMessage: string;
+    targetReminderMessage?: string | null;
     /** Если пользователь просит напомнить "в чате с X" / "в группе Y" — куда отправить напоминание (резолвится из памяти) */
     targetChat?: ReminderTargetChat;
     /** Правило повторения, если пользователь просит напоминать регулярно */
@@ -181,6 +183,7 @@ export async function reminderAgent(
             minute: 'numeric',
             weekday: 'long'
         });
+        const targetReminderExample = buildDefaultTargetReminderMessage("нужно обсудить распределение ставок.");
 
         const prompt = `
         Текущая дата и время в часовом поясе пользователя (${userTimezone}): ${formattedDateTime}
@@ -197,11 +200,13 @@ export async function reminderAgent(
         1. Точно определить, о чём нужно напомнить
         2. Определить, когда нужно напомнить (дата и время)
         3. Создать естественное сообщение для подтверждения создания напоминания
-        4. Создать текст для самого напоминания, который будет отправлен в указанное время
+        4. Создать текст для самого напоминания, который пользователь получит в указанное время
         5. Если пользователь просит напомнить "в чате с X", "в группе Y", "в чате с лидами" и т.п. — определить targetChat по контексту и памяти:
            - targetType "group": если имеется в виду группа/чат по названию — укажи в groupName точное или подходящее название (например из памяти: "чат с лидами" → "Каркас: Leads")
            - targetType "contact": если имеется в виду личная переписка с контактом — укажи в contactQuery имя/ник для поиска контакта
            - Если напоминание только "мне" (в личку с ботом) — не указывай targetChat
+           - Даже если targetChat найден, НЕ обещай в confirmationMessage, что адресат будет автоматически оповещён. Подтверждай только напоминание пользователю; бот потом спросит отдельным действием, отправлять ли сообщение адресату.
+           - Если targetChat найден, создай targetReminderMessage — отдельный текст для адресата, НЕ копию reminderMessage. Он должен звучать как сообщение адресату от ассистента владельца: например "${targetReminderExample}" Не обращайся к адресату именем владельца и не пиши так, будто адресат сам ставил напоминание.
 
         ВАЖНО для определения времени:
         - Интерпретируй выражения вида "в 15:00", "завтра утром" и т.п. строго в часовом поясе пользователя: ${userTimezone}
@@ -233,8 +238,9 @@ export async function reminderAgent(
               "reminderText": "краткий текст о чем напомнить (для внутреннего использования)",
               "reminderTime": "время первого срабатывания в ISO формате",
               "exactTimeSpecified": true/false,
-              "confirmationMessage": "естественное сообщение для подтверждения (упомяни повторение, если оно есть)",
+              "confirmationMessage": "естественное сообщение для подтверждения владельцу (упомяни повторение, если оно есть; если targetChat есть, НЕ обещай автоотправку адресату)",
               "reminderMessage": "текст самого напоминания (то, что пользователь получит в указанное время)",
+              "targetReminderMessage": null или "текст для адресата, если владелец позже подтвердит оповещение отдельной кнопкой",
               "targetChat": null или { "type": "group", "groupName": "название группы" } или { "type": "contact", "contactQuery": "имя/ник контакта" },
               "recurrence": null или { "type": "daily"|"weekly"|"monthly"|"yearly"|"hourly", "interval": N, "daysOfWeek": [0-6] }
             }
@@ -315,21 +321,30 @@ export async function reminderAgent(
             const due = noTemporalReference
                 ? new Date(defaultDueDate)
                 : new Date(processReminderTime(r.reminderTime));
+            const targetChat = normalizeTargetChat(r.targetChat);
+            const targetReminderMessage = typeof r.targetReminderMessage === "string" && r.targetReminderMessage.trim()
+                ? r.targetReminderMessage.trim()
+                : targetChat ? buildDefaultTargetReminderMessage(r.reminderText) : undefined;
             return {
                 id: `${Date.now()}-${idx}-${Math.floor(Math.random() * 1_000_000)}`,
                 text: r.reminderText,
                 reminderMessage: r.reminderMessage,
+                targetReminderMessage,
                 dueDate: due,
-                targetChat: normalizeTargetChat(r.targetChat),
+                targetChat,
                 recurrence: normalizeRecurrence(r.recurrence),
             };
         });
 
-        const responseText = validReminders.map((r) => {
+        const responseText = validReminders.map((r, idx) => {
             const due = noTemporalReference
                 ? new Date(defaultDueDate)
                 : new Date(processReminderTime(r.reminderTime));
             const displayTime = formatReminderDueDate(due, userTimezone);
+            if (detailsList[idx]?.targetChat) {
+                const recurrenceSuffix = detailsList[idx].recurrence ? " Повторение учла." : "";
+                return `✅ Создала напоминание для тебя: ${r.reminderText} — ${displayTime}.${recurrenceSuffix}`;
+            }
             if (noTemporalReference) {
                 return `✅ Напомню: ${r.reminderText} — ${displayTime}.`;
             }

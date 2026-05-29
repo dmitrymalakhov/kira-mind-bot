@@ -1,19 +1,32 @@
 import { MessageHistory } from "../types";
 import { ProcessingResult } from "../orchestrator";
 import { InlineKeyboard } from "grammy";
-import { initTelegramClient, scheduleMessageSend, sendMessage, sendMessageToChat, searchGroupByTitle } from "../services/telegram";
+import {
+    initTelegramClient,
+    scheduleMessageSend,
+    sendMessage,
+    sendMessageToChat,
+    sendVoiceMessage,
+    sendVoiceMessageToChat,
+    searchGroupByTitle,
+} from "../services/telegram";
 import { Contact, ContactsStore } from "../stores/ContactsStore";
 import { devLog, notifyUser } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { config } from "../config";
 import openai from "../openai";
 import { getContactPortrait } from "../services/PsychologicalPortraitService";
+import * as fs from "fs";
+import { generateSpeechFile, getTelegramVoiceReadinessIssue, prepareTelegramVoiceFile } from "../services/elevenLabsTts";
+import { normalizeNumbersForVoiceMessage } from "../utils/russianSpeechNumbers";
 
+export type MessageDeliveryMode = "text" | "voice";
 
 // Интерфейс для временного хранения информации о подготовленном сообщении
 export interface MessageDraft {
     contactId: number; // ID контакта (ЛС) или ID чата (группа)
     text: string;
+    deliveryMode: MessageDeliveryMode;
     scheduledTime: Date | null; // null для немедленной отправки
     notifyOnReply: boolean; // Флаг для уведомления о получении ответа (только для ЛС)
     expiresAt: Date; // Время истечения срока действия черновика
@@ -26,6 +39,95 @@ export interface MessageDraft {
 
 // Хранилище черновиков сообщений по ID чата
 const messageDrafts = new Map<number, MessageDraft>();
+
+const OUTBOUND_VOICE_RE = /(?:голосом|голосов(?:ое|ым|ую|ого)(?:\s+сообщени(?:е|ем|я|ю))?|войсом|войс|аудио(?:сообщени(?:е|ем|я|ю))?|voice|audio)/iu;
+
+export function wantsOutboundVoiceMessage(message: string): boolean {
+    return OUTBOUND_VOICE_RE.test(message);
+}
+
+export function buildOutboundVoiceSpeechText(messageText: string): string {
+    const botName = config.characterName || "Кира";
+    const ownerName = config.ownerName || config.userName || "пользователя";
+    return `Привет, это ${botName}, личный ассистент ${ownerName}. Передаю сообщение: ${messageText.trim()}`;
+}
+
+function prepareTextForDelivery(text: string, deliveryMode: MessageDeliveryMode): string {
+    return deliveryMode === "voice" ? normalizeNumbersForVoiceMessage(text) : text;
+}
+
+function buildPersonalMessageConfirmKeyboard(deliveryMode: MessageDeliveryMode, notifyOnReply: boolean): InlineKeyboard {
+    const keyboard = new InlineKeyboard()
+        .text("✅ Отправить", "send_message")
+        .text("✏️ Изменить текст", "edit_message");
+
+    if (deliveryMode === "text") {
+        keyboard
+            .row()
+            .text("🕒 Изменить время", "change_time")
+            .text(notifyOnReply ? "🔔 Выкл. уведомления" : "🔕 Вкл. уведомления", "toggle_notify");
+    } else {
+        keyboard
+            .row()
+            .text(notifyOnReply ? "🔔 Выкл. уведомления" : "🔕 Вкл. уведомления", "toggle_notify");
+    }
+
+    return keyboard
+        .row()
+        .text("❌ Отмена", "cancel_message");
+}
+
+function getDeliveryPreviewLine(deliveryMode: MessageDeliveryMode): string {
+    return deliveryMode === "voice"
+        ? "Формат: голосовое сообщение, с представлением ассистента в начале"
+        : "Формат: текстовое сообщение";
+}
+
+async function sendVoiceDraft(draft: MessageDraft): Promise<{ success: boolean, messageId: number | null, errorMessage?: string }> {
+    const client = await initTelegramClient();
+    if (!client) {
+        return { success: false, messageId: null, errorMessage: "Не удалось подключиться к Telegram. Попробуй позже." };
+    }
+
+    if (draft.scheduledTime && draft.scheduledTime > new Date()) {
+        return {
+            success: false,
+            messageId: null,
+            errorMessage: "Отложенная отправка голосовых сообщений пока не поддерживается. Отправь голосовое сейчас или используй текстовое сообщение для расписания."
+        };
+    }
+
+    const speechText = buildOutboundVoiceSpeechText(draft.text);
+    const readinessIssue = await getTelegramVoiceReadinessIssue(speechText);
+    if (readinessIssue) {
+        return { success: false, messageId: null, errorMessage: readinessIssue };
+    }
+
+    const speech = await generateSpeechFile(speechText);
+    let cleanupPaths = [speech.filePath];
+    try {
+        const voice = await prepareTelegramVoiceFile(speech);
+        cleanupPaths = voice.cleanupPaths;
+
+        if (draft.isGroup) {
+            return await sendVoiceMessageToChat(client, draft.contactId, voice.filePath);
+        }
+
+        return await sendVoiceMessage(
+            client,
+            draft.contactId,
+            voice.filePath,
+            draft.notifyOnReply,
+            draft.originalChatId
+        );
+    } finally {
+        for (const filePath of cleanupPaths) {
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        }
+    }
+}
 
 /**
  * Анализирует запрос пользователя и одновременно генерирует текст сообщения
@@ -48,6 +150,7 @@ async function analyzeAndGenerateMessage(
     targetType?: "contact" | "group";
     /** Название группы для поиска (например, "Каркас: Leads") */
     groupName?: string;
+    deliveryMode?: MessageDeliveryMode;
     messageText?: string;
     scheduledTime?: Date | null;
     notifyOnReply?: boolean;
@@ -88,12 +191,16 @@ async function analyzeAndGenerateMessage(
         2. Сразу составить готовый текст сообщения для отправки
         3. Определить время отправки (если указано в запросе)
         4. Определить, требуется ли уведомление о получении ответа (только для ЛС; для групп не используется)
+        5. Определить формат отправки: deliveryMode = "voice", если пользователь просит голосовое, войс, аудио, voice/audio или "голосом"; иначе deliveryMode = "text".
         
         Текст сообщения должен быть:
         1. Персонализированным и учитывающим информацию о контакте
         2. Соответствующим запросу пользователя
         3. Естественным и вежливым
         4. Не слишком длинным (оптимально 2-4 предложения)
+        5. Для deliveryMode = "voice" верни в messageText только основное сообщение адресату, без представления ассистента.
+           Все числа для voice-режима пиши словами, а не цифрами: "25-е" → "двадцать пятое", "10:30" → "десять тридцать".
+           Представление ассистента будет добавлено кодом перед генерацией аудио.
         
         Для определения необходимости уведомления о получении ответа:
         - Ищи фразы вроде "сообщи когда ответит", "перешли ответ", "дай знать о реакции", "скажи что ответит"
@@ -106,6 +213,7 @@ async function analyzeAndGenerateMessage(
           "contactName": "полное имя контакта для поиска в контактах",
           "targetType": "contact" или "group",
           "groupName": "название группы для поиска в чатах (только для targetType group, например «Каркас: Leads»)",
+          "deliveryMode": "text" или "voice",
           "messageText": "полностью готовый текст сообщения для отправки",
           "scheduledTime": "время отправки в ISO формате (если указано)",
           "notifyOnReply": true/false,
@@ -172,6 +280,7 @@ async function analyzeAndGenerateMessage(
  * @param notifyOnReply Флаг для уведомления о получении ответа (только для ЛС)
  * @param isGroup true — получатель группа/чат
  * @param groupTitle Название группы (для отображения)
+ * @param deliveryMode Формат отправки: текст или голосовое
  */
 export function saveMessageDraft(
     chatId: number,
@@ -180,15 +289,18 @@ export function saveMessageDraft(
     scheduledTime: Date | null = null,
     notifyOnReply: boolean = false,
     isGroup: boolean = false,
-    groupTitle?: string
+    groupTitle?: string,
+    deliveryMode: MessageDeliveryMode = "text"
 ): boolean {
     try {
         const expiresAt = new Date();
         expiresAt.setMinutes(expiresAt.getMinutes() + 30);
+        const preparedText = prepareTextForDelivery(text, deliveryMode);
 
         const draft: MessageDraft = {
             contactId,
-            text,
+            text: preparedText,
+            deliveryMode,
             scheduledTime,
             notifyOnReply,
             expiresAt,
@@ -235,17 +347,44 @@ export function deleteMessageDraft(chatId: number): boolean {
     return messageDrafts.delete(chatId);
 }
 
+export interface DraftSendResult {
+    success: boolean;
+    deliveryMode: MessageDeliveryMode;
+    errorMessage?: string;
+}
+
 /**
  * Отправляет сообщение из черновика
  * @param chatId ID чата
- * @returns Promise<boolean> - успешность операции
+ * @returns Детальный результат отправки
  */
-export async function sendMessageFromDraft(chatId: number): Promise<boolean> {
+export async function sendMessageFromDraftDetailed(chatId: number): Promise<DraftSendResult> {
     try {
         const draft = getMessageDraft(chatId);
 
         if (!draft) {
-            return false;
+            return { success: false, deliveryMode: "text", errorMessage: "Черновик сообщения не найден или устарел." };
+        }
+
+        if (draft.deliveryMode === "voice") {
+            try {
+                const voiceResult = await sendVoiceDraft(draft);
+                if (voiceResult.success) {
+                    messageDrafts.delete(chatId);
+                }
+                return {
+                    success: voiceResult.success,
+                    deliveryMode: "voice",
+                    errorMessage: voiceResult.errorMessage,
+                };
+            } catch (error) {
+                console.error("Ошибка при отправке голосового сообщения из черновика:", error);
+                return {
+                    success: false,
+                    deliveryMode: "voice",
+                    errorMessage: "Произошла техническая ошибка при генерации или отправке голосового сообщения.",
+                };
+            }
         }
 
         const client = await initTelegramClient();
@@ -279,11 +418,16 @@ export async function sendMessageFromDraft(chatId: number): Promise<boolean> {
         }
 
         messageDrafts.delete(chatId);
-        return success;
+        return { success, deliveryMode: "text" };
     } catch (error) {
         console.error("Ошибка при отправке сообщения из черновика:", error);
-        return false;
+        return { success: false, deliveryMode: "text", errorMessage: "Произошла техническая ошибка при отправке сообщения." };
     }
+}
+
+export async function sendMessageFromDraft(chatId: number): Promise<boolean> {
+    const result = await sendMessageFromDraftDetailed(chatId);
+    return result.success;
 }
 
 /**
@@ -321,6 +465,15 @@ export async function sendMessagesAgent(
         devLog("sendMessagesAgent", "Анализ запроса:", result);
 
         const targetType = result.targetType || "contact";
+        const deliveryMode: MessageDeliveryMode = wantsOutboundVoiceMessage(message) || result.deliveryMode === "voice"
+            ? "voice"
+            : "text";
+        const messageText = prepareTextForDelivery(result.messageText || "", deliveryMode);
+        if (!messageText.trim()) {
+            return {
+                responseText: result.errorMessage || "Не удалось составить текст сообщения. Сформулируй, пожалуйста, что именно нужно передать адресату."
+            };
+        }
 
         // Отправка в группу/чат
         if (targetType === "group" && result.groupName) {
@@ -335,15 +488,31 @@ export async function sendMessagesAgent(
                 };
             }
 
+            if (deliveryMode === "voice") {
+                if (result.scheduledTime && result.scheduledTime > new Date()) {
+                    return {
+                        responseText: "Голосовые сообщения пока можно отправлять только сразу. Для отложенной отправки используй текстовое сообщение или попроси отправить голосовое без расписания."
+                    };
+                }
+
+                const readinessIssue = await getTelegramVoiceReadinessIssue(buildOutboundVoiceSpeechText(messageText));
+                if (readinessIssue) {
+                    return {
+                        responseText: `Голосовое сообщение пока не готово к отправке.\n\n${readinessIssue}`
+                    };
+                }
+            }
+
             if (ctx.chat) {
                 saveMessageDraft(
                     ctx.chat.id,
                     group.id,
-                    result.messageText || "",
+                    messageText,
                     null,
                     false,
                     true,
-                    group.title
+                    group.title,
+                    deliveryMode
                 );
             }
 
@@ -353,8 +522,9 @@ export async function sendMessagesAgent(
                 .row()
                 .text("❌ Отмена", "cancel_message");
 
-            const responseText = `📤 Подготовлено сообщение для группы «${group.title}»:\n\n` +
-                `"${result.messageText}"\n\n` +
+            const responseText = `📤 Подготовлено ${deliveryMode === "voice" ? "голосовое сообщение" : "сообщение"} для группы «${group.title}»:\n\n` +
+                `"${messageText}"\n\n` +
+                `${getDeliveryPreviewLine(deliveryMode)}\n\n` +
                 `Подтверди отправку или внеси изменения:`;
 
             return { responseText, keyboard: confirmKeyboard };
@@ -380,6 +550,21 @@ export async function sendMessagesAgent(
             };
         }
 
+        if (deliveryMode === "voice") {
+            if (result.scheduledTime && result.scheduledTime > new Date()) {
+                return {
+                    responseText: "Голосовые сообщения пока можно отправлять только сразу. Для отложенной отправки используй текстовое сообщение или попроси отправить голосовое без расписания."
+                };
+            }
+
+            const readinessIssue = await getTelegramVoiceReadinessIssue(buildOutboundVoiceSpeechText(messageText));
+            if (readinessIssue) {
+                return {
+                    responseText: `Голосовое сообщение пока не готово к отправке.\n\n${readinessIssue}`
+                };
+            }
+        }
+
         let scheduledTime = result.scheduledTime;
         let scheduledTimeDisplay = "сейчас";
 
@@ -398,27 +583,24 @@ export async function sendMessagesAgent(
             saveMessageDraft(
                 ctx.chat.id,
                 contact.id,
-                result.messageText || "",
+                messageText,
                 scheduledTime,
-                notifyOnReply
+                notifyOnReply,
+                false,
+                undefined,
+                deliveryMode
             );
         }
 
-        const confirmKeyboard = new InlineKeyboard()
-            .text("✅ Отправить", "send_message")
-            .text("✏️ Изменить текст", "edit_message")
-            .row()
-            .text("🕒 Изменить время", "change_time")
-            .text(notifyOnReply ? "🔔 Выкл. уведомления" : "🔕 Вкл. уведомления", "toggle_notify")
-            .row()
-            .text("❌ Отмена", "cancel_message");
+        const confirmKeyboard = buildPersonalMessageConfirmKeyboard(deliveryMode, notifyOnReply);
 
         let notifyIndicator = notifyOnReply ?
             "✅ С уведомлением о получении ответа" :
             "❌ Без уведомления о получении ответа";
 
-        const responseText = `📤 Подготовлено сообщение для ${contact.firstName} ${contact.lastName || ''} ${contact.username ? '(@' + contact.username + ')' : ''}:\n\n` +
-            `"${result.messageText}"\n\n` +
+        const responseText = `📤 Подготовлено ${deliveryMode === "voice" ? "голосовое сообщение" : "сообщение"} для ${contact.firstName} ${contact.lastName || ''} ${contact.username ? '(@' + contact.username + ')' : ''}:\n\n` +
+            `"${messageText}"\n\n` +
+            `${getDeliveryPreviewLine(deliveryMode)}\n` +
             `Время отправки: ${scheduledTimeDisplay}\n` +
             `${notifyIndicator}\n\n` +
             `Подтверди отправку или внеси изменения:`;

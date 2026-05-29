@@ -14,6 +14,8 @@ function toEntity(r: Reminder): ReminderEntity {
     e.remindAgainAt = r.remindAgainAt ? new Date(r.remindAgainAt) : undefined;
     e.createdAt = new Date(r.createdAt);
     e.targetChat = r.targetChat;
+    e.targetDisplayText = r.targetDisplayText;
+    e.targetChatNotifyStatus = r.targetChatNotifyStatus;
     e.chatTitle = r.chatTitle;
     e.recurrence = r.recurrence;
     e.postponeCount = r.postponeCount ?? 0;
@@ -32,6 +34,8 @@ function fromEntity(e: ReminderEntity): Reminder {
         remindAgainAt: e.remindAgainAt ? new Date(e.remindAgainAt) : undefined,
         createdAt: new Date(e.createdAt),
         targetChat: e.targetChat ?? undefined,
+        targetDisplayText: e.targetDisplayText ?? undefined,
+        targetChatNotifyStatus: e.targetChatNotifyStatus ?? undefined,
         chatTitle: e.chatTitle ?? undefined,
         recurrence: e.recurrence ?? undefined,
         postponeCount: e.postponeCount ?? 0,

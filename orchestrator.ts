@@ -107,6 +107,8 @@ export interface ProcessingResult {
         id: string;
         text: string;
         reminderMessage?: string;
+        /** Текст для адресата, если владелец подтвердит отправку в targetChat */
+        targetReminderMessage?: string;
         dueDate: Date;
         /** Куда отправить напоминание: в группу или контакту (резолвится при срабатывании) */
         targetChat?: { type: "group"; groupName: string } | { type: "contact"; contactQuery: string };
@@ -116,6 +118,7 @@ export interface ProcessingResult {
         id: string;
         text: string;
         reminderMessage?: string;
+        targetReminderMessage?: string;
         dueDate: Date;
         targetChat?: { type: "group"; groupName: string } | { type: "contact"; contactQuery: string };
         recurrence?: import("./types/reminderTypes").RecurrenceRule;
@@ -145,6 +148,8 @@ export interface ProcessingResult {
     negotiationSummarySent?: boolean;
     /** Воспоминания, реально подмешанные в контекст ответа. Используется для reconsolidation. */
     recalledMemories?: RecalledMemoryRef[];
+    /** Ответ нужно отдать голосовым сообщением, если канал отправки это поддерживает. */
+    voiceReplyRequested?: boolean;
 }
 
 interface IntentDedupCheckResult {
@@ -795,7 +800,8 @@ export async function processMessage(
     isForwarded: boolean = false,
     forwardFrom: string = "",
     messageHistory: MessageHistory[] = [],
-    lastLocation?: { latitude: number; longitude: number; address?: string; }
+    lastLocation?: { latitude: number; longitude: number; address?: string; },
+    options: { voiceReplyRequested?: boolean } = {}
 ): Promise<ProcessingResult> {
     try {
         const originalMessage = message;
@@ -1080,6 +1086,7 @@ export async function processMessage(
             classification,
             lastLocation,
             enrichedContextFromMemory,
+            voiceReplyRequested: options.voiceReplyRequested === true,
         });
         result.recalledMemories = initialMemory.recalledMemories ?? [];
         saveSessionDedupSnapshot(ctx, { message, classification, plan, result });

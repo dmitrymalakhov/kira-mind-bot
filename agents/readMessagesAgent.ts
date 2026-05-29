@@ -59,6 +59,17 @@ const CHAT_ANALYSIS_PERIOD_TITLES: Record<StudyChatPeriod, string> = {
     year: 'год',
 };
 
+const VOICE_CHAT_ANALYSIS_MAX_CHARS = 900;
+
+function getVoiceChatAnalysisInstruction(): string {
+    return [
+        'Режим голосового ответа: ответ должен быть короткой устной сводкой.',
+        `Максимум ${VOICE_CHAT_ANALYSIS_MAX_CHARS} символов, без Markdown, списков, таблиц и длинных цитат.`,
+        'Сфокусируйся только на главном: срочное, решения, дедлайны, блокеры и действия, которые ждут от пользователя.',
+        'Не пересказывай фоновые обсуждения и не добавляй вступления вроде "я проанализировала".',
+    ].join(' ');
+}
+
 let isListening: boolean = false;
 
 function createStudyChatRequestId(): string {
@@ -81,7 +92,10 @@ function detectExplicitChatAnalysisPeriod(message: string): StudyChatPeriod | un
     return undefined;
 }
 
-function withChatAnalysisPeriodHeader(text: string, period: StudyChatPeriod): string {
+function withChatAnalysisPeriodHeader(text: string, period: StudyChatPeriod, voiceReplyRequested: boolean = false): string {
+    if (voiceReplyRequested) {
+        return `Коротко за ${CHAT_ANALYSIS_PERIOD_LABELS[period]}: ${text}`;
+    }
     return `Период анализа: ${CHAT_ANALYSIS_PERIOD_TITLES[period]}.\n\n${text}`;
 }
 
@@ -511,7 +525,8 @@ export function resetAllMessages(): boolean {
 export async function getAnswerFromMessages(
     contactName: string,
     analysisQuery: string,
-    memoryContext: string = ""
+    memoryContext: string = "",
+    voiceReplyRequested: boolean = false
 ): Promise<string | null> {
     try {
         devLog(`Analyzing conversation with contact "${contactName}" for query: "${analysisQuery}"`);
@@ -599,6 +614,7 @@ export async function getAnswerFromMessages(
 
             // Use OpenAI to analyze the conversation
 
+            const voiceInstruction = voiceReplyRequested ? `\n${getVoiceChatAnalysisInstruction()}\n` : '';
             const prompt = `
             Ниже представлена переписка с контактом ${contact.firstName} ${contact.lastName || ''}:
             
@@ -606,13 +622,14 @@ export async function getAnswerFromMessages(
             
             Запрос пользователя: "${analysisQuery}"
             ${memoryContext ? `Контекст из долговременной памяти (факты о пользователе и его контактах):\n${memoryContext}` : ''}
+            ${voiceInstruction}
 
             Проанализируй эту переписку и дай точный, информативный ответ на запрос пользователя.
             Основывай свой ответ только на информации из представленной переписки.
             Если в переписке нет информации, необходимой для ответа на запрос, честно укажи это.
             `;
 
-            const response = await openai.chat.completions.create({
+            const completionOptions: any = {
                 model: "gpt-5.4",
                 messages: [
                     {
@@ -629,7 +646,10 @@ export async function getAnswerFromMessages(
                     }
                 ],
                 temperature: 0.3,
-            });
+            };
+            if (voiceReplyRequested) completionOptions.max_completion_tokens = 450;
+
+            const response = await openai.chat.completions.create(completionOptions);
 
             const analysisResult = response.choices[0]?.message?.content;
 
@@ -843,7 +863,8 @@ async function studyGroupChatAndSaveFacts(
     groupName: string,
     analysisQuery: string,
     memoryContext: string,
-    period: StudyChatPeriod
+    period: StudyChatPeriod,
+    voiceReplyRequested: boolean = false
 ): Promise<string> {
     const client = await initTelegramClient();
     if (!client) return "Не удалось подключиться к Telegram. Проверь статус подключения.";
@@ -863,19 +884,23 @@ async function studyGroupChatAndSaveFacts(
     const persona = getBotPersona();
     const style = getCommunicationStyle();
     const memoryBlock = memoryContext ? `\nКонтекст из долговременной памяти (факты о пользователе и его контактах):\n${memoryContext}` : '';
-    const systemPrompt = `${persona}\n\n${style}${memoryBlock}`.trim();
+    const voiceInstruction = voiceReplyRequested ? `\n\n${getVoiceChatAnalysisInstruction()}` : '';
+    const systemPrompt = `${persona}\n\n${style}${memoryBlock}${voiceInstruction}`.trim();
     const userPrompt = `Ниже — сообщения из группового чата «${group.title}» за ${CHAT_ANALYSIS_PERIOD_LABELS[period]} (${messages.length} сообщений).\n\nЗадача: ${analysisQuery}\n\nСообщения чата:\n${conversationText}`;
 
     // Параллельно: текстовый анализ + извлечение структурированных фактов
+    const analysisCompletionOptions: any = {
+        model: "gpt-5.4",
+        messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+        ],
+        temperature: 0.4,
+    };
+    if (voiceReplyRequested) analysisCompletionOptions.max_completion_tokens = 450;
+
     const [analysisResult, factsResult] = await Promise.allSettled([
-        openai.chat.completions.create({
-            model: "gpt-5.4",
-            messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: userPrompt },
-            ],
-            temperature: 0.4,
-        }),
+        openai.chat.completions.create(analysisCompletionOptions),
         extractFactsAboutUserFromConversation(conversationText, group.title as string, startDate, endDate),
     ]);
 
@@ -887,6 +912,14 @@ async function studyGroupChatAndSaveFacts(
         try {
             const savedCount = await runUpdateLongTermMemoryAgent(ctx, factsResult.value);
             if (savedCount > 0) {
+                if (voiceReplyRequested) {
+                    const factLabel = savedCount === 1
+                        ? 'важный факт'
+                        : savedCount < 5
+                            ? 'важных факта'
+                            : 'важных фактов';
+                    return `${analysisText} Я ещё сохранила ${savedCount} ${factLabel} в память.`;
+                }
                 return `${analysisText}\n\n💾 Сохранила ${savedCount} факт(ов) в долговременную память.`;
             }
         } catch (e) {
@@ -903,7 +936,8 @@ async function analyzeGroupChatMessages(
     groupName: string,
     analysisQuery: string,
     memoryContext: string,
-    period: StudyChatPeriod
+    period: StudyChatPeriod,
+    voiceReplyRequested: boolean = false
 ): Promise<string> {
     const client = await initTelegramClient();
     if (!client) {
@@ -930,7 +964,8 @@ async function analyzeGroupChatMessages(
     const style = getCommunicationStyle();
     const memoryBlock2 = memoryContext ? `\nКонтекст из долговременной памяти (факты о пользователе и его контактах):\n${memoryContext}` : '';
 
-    const systemPrompt = `${persona}\n\n${style}${memoryBlock2}`.trim();
+    const voiceInstruction = voiceReplyRequested ? `\n\n${getVoiceChatAnalysisInstruction()}` : '';
+    const systemPrompt = `${persona}\n\n${style}${memoryBlock2}${voiceInstruction}`.trim();
 
     const userPrompt = `Ниже — сообщения из группового чата «${group.title}» за ${CHAT_ANALYSIS_PERIOD_LABELS[period]} (${messages.length} сообщений).
 
@@ -939,14 +974,17 @@ async function analyzeGroupChatMessages(
 Сообщения чата:
 ${conversationText}`;
 
-    const response = await openai.chat.completions.create({
+    const completionOptions: any = {
         model: "gpt-5.4",
         messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
         ],
         temperature: 0.4,
-    });
+    };
+    if (voiceReplyRequested) completionOptions.max_completion_tokens = 450;
+
+    const response = await openai.chat.completions.create(completionOptions);
 
     return response.choices[0]?.message?.content?.trim() || "Не удалось проанализировать сообщения чата.";
 }
@@ -955,7 +993,8 @@ async function analyzeMultipleGroupChats(
     groupNames: string[],
     analysisQuery: string,
     memoryContext: string,
-    period: StudyChatPeriod
+    period: StudyChatPeriod,
+    voiceReplyRequested: boolean = false
 ): Promise<string> {
     const client = await initTelegramClient();
     if (!client) {
@@ -991,7 +1030,8 @@ async function analyzeMultipleGroupChats(
     const persona = getBotPersona();
     const style = getCommunicationStyle();
     const memoryBlock = memoryContext ? `\nКонтекст из долговременной памяти:\n${memoryContext}` : '';
-    const systemPrompt = `${persona}\n\n${style}${memoryBlock}`.trim();
+    const voiceInstruction = voiceReplyRequested ? `\n\n${getVoiceChatAnalysisInstruction()}` : '';
+    const systemPrompt = `${persona}\n\n${style}${memoryBlock}${voiceInstruction}`.trim();
 
     const chatSections = chats.map(c =>
         `=== Чат «${c.name}» за ${CHAT_ANALYSIS_PERIOD_LABELS[period]} (${c.count} сообщений) ===\n${c.text}`
@@ -1007,14 +1047,17 @@ async function analyzeMultipleGroupChats(
 
 ${chatSections}${notFoundNote}`;
 
-    const response = await openai.chat.completions.create({
+    const completionOptions: any = {
         model: "gpt-5.4",
         messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
         ],
         temperature: 0.4,
-    });
+    };
+    if (voiceReplyRequested) completionOptions.max_completion_tokens = 500;
+
+    const response = await openai.chat.completions.create(completionOptions);
 
     return response.choices[0]?.message?.content?.trim() || "Не удалось проанализировать сообщения чатов.";
 }
@@ -1027,6 +1070,7 @@ interface ChatAnalysisPeriodRequest {
     step: 'period';
     saveFactsAboutUser?: boolean;
     offerSaveGroup?: boolean;
+    voiceReplyRequested?: boolean;
     memoryContext?: string;
     createdAt: number;
     expiresAt: number;
@@ -1045,26 +1089,30 @@ async function runChatAnalysisPeriodRequest(
             req.groupNames[0],
             req.analysisQuery,
             req.memoryContext || "",
-            period
+            period,
+            req.voiceReplyRequested === true
         );
     } else if (req.groupNames.length === 1) {
         answer = await analyzeGroupChatMessages(
             req.groupNames[0],
             req.analysisQuery,
             req.memoryContext || "",
-            period
+            period,
+            req.voiceReplyRequested === true
         );
     } else {
         answer = await analyzeMultipleGroupChats(
             req.groupNames,
             req.analysisQuery,
             req.memoryContext || "",
-            period
+            period,
+            req.voiceReplyRequested === true
         );
     }
 
     const result: ProcessingResult = {
-        responseText: withChatAnalysisPeriodHeader(answer, period),
+        responseText: withChatAnalysisPeriodHeader(answer, period, req.voiceReplyRequested === true),
+        voiceReplyRequested: req.voiceReplyRequested === true,
     };
 
     if (req.offerSaveGroup && ctx.session) {
@@ -1121,7 +1169,8 @@ export async function readMessagesAgent(
     forwardFrom: string = "",
     messageHistory: MessageHistory[] = [],
     classification?: MessageClassification,
-    memoryContext: string = ""
+    memoryContext: string = "",
+    voiceReplyRequested: boolean = false
 ): Promise<ProcessingResult> {
     try {
         if (classification && classification.details.messagesCheckType === "ALL_MESSAGES") {
@@ -1151,6 +1200,7 @@ export async function readMessagesAgent(
                     analysisQuery,
                     step: 'period',
                     offerSaveGroup: true,
+                    voiceReplyRequested,
                     memoryContext,
                     createdAt: now,
                     expiresAt: now + STUDY_CHAT_PERIOD_SELECTION_TTL_MS,
@@ -1175,6 +1225,7 @@ export async function readMessagesAgent(
                             displayName: `группу «${savedGroup.name}» (${names})`,
                             analysisQuery,
                             step: 'period',
+                            voiceReplyRequested,
                             memoryContext,
                             createdAt: now,
                             expiresAt: now + STUDY_CHAT_PERIOD_SELECTION_TTL_MS,
@@ -1191,6 +1242,7 @@ export async function readMessagesAgent(
                         analysisQuery,
                         step: 'period',
                         saveFactsAboutUser: true,
+                        voiceReplyRequested,
                         memoryContext,
                         createdAt: now,
                         expiresAt: now + STUDY_CHAT_PERIOD_SELECTION_TTL_MS,
@@ -1203,6 +1255,7 @@ export async function readMessagesAgent(
                     displayName: `чат «${groupQuery}»`,
                     analysisQuery,
                     step: 'period',
+                    voiceReplyRequested,
                     memoryContext,
                     createdAt: now,
                     expiresAt: now + STUDY_CHAT_PERIOD_SELECTION_TTL_MS,
@@ -1284,11 +1337,12 @@ export async function readMessagesAgent(
             const answer = await getAnswerFromMessages(
                 nameToSearch,
                 classification.details.analysisQuery,
-                memoryContext
+                memoryContext,
+                voiceReplyRequested
             );
 
             if (answer) {
-                return { responseText: answer };
+                return { responseText: answer, voiceReplyRequested };
             }
             return {
                 responseText: "Не удалось найти информацию по твоему запросу."

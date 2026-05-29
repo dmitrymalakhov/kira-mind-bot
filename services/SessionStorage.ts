@@ -26,6 +26,7 @@ interface PersistedSession {
     lastBrowserTask?: SessionData['lastBrowserTask'];
     pendingQuickChoices?: SessionData['pendingQuickChoices'];
     studyChatRequest?: SessionData['studyChatRequest'];
+    chatAnalysisPeriodRequest?: SessionData['chatAnalysisPeriodRequest'];
 }
 
 function extract(data: SessionData): PersistedSession {
@@ -61,6 +62,7 @@ function extract(data: SessionData): PersistedSession {
             : undefined,
         pendingQuickChoices: prunePendingQuickChoices(data.pendingQuickChoices, now),
         studyChatRequest: pruneStudyChatRequest(data.studyChatRequest, now),
+        chatAnalysisPeriodRequest: pruneChatAnalysisPeriodRequest(data.chatAnalysisPeriodRequest, now),
     };
 }
 
@@ -84,6 +86,7 @@ function merge(initial: SessionData, persisted: PersistedSession): SessionData {
         lastBrowserTask: persisted.lastBrowserTask ?? initial.lastBrowserTask,
         pendingQuickChoices: persisted.pendingQuickChoices ?? initial.pendingQuickChoices,
         studyChatRequest: persisted.studyChatRequest ?? initial.studyChatRequest,
+        chatAnalysisPeriodRequest: persisted.chatAnalysisPeriodRequest ?? initial.chatAnalysisPeriodRequest,
     };
 }
 
@@ -119,6 +122,17 @@ function pruneStudyChatRequest(
         return undefined;
     }
     if (!request.expiresAt && !request.createdAt) return undefined;
+    return request;
+}
+
+function pruneChatAnalysisPeriodRequest(
+    request: SessionData['chatAnalysisPeriodRequest'],
+    now: number
+): SessionData['chatAnalysisPeriodRequest'] {
+    if (!request) return undefined;
+    if (request.expiresAt && request.expiresAt <= now) return undefined;
+    if (!request.expiresAt && !request.createdAt) return undefined;
+    if (request.createdAt && now - request.createdAt > STUDY_CHAT_REQUEST_FALLBACK_TTL_MS) return undefined;
     return request;
 }
 
@@ -168,6 +182,7 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
             }
             persisted.pendingQuickChoices = prunePendingQuickChoices(persisted.pendingQuickChoices, now);
             persisted.studyChatRequest = pruneStudyChatRequest(persisted.studyChatRequest, now);
+            persisted.chatAnalysisPeriodRequest = pruneChatAnalysisPeriodRequest(persisted.chatAnalysisPeriodRequest, now);
             persisted.lastProactiveInsight = pruneLastProactiveInsight(persisted.lastProactiveInsight, now);
             // Возвращаем PersistedSession — Grammy session.initial() объединится с ним через Object.assign
             return persisted as unknown as SessionData;

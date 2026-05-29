@@ -1,4 +1,4 @@
-import { Bot } from 'grammy';
+import { Bot, InlineKeyboard } from 'grammy';
 import { InputFile } from 'grammy/types';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -13,6 +13,7 @@ import {
     handleHealthCallback,
 } from '../agents/healthAgent';
 import { addToHistory } from '../utils/history';
+import { addTargetNotificationButtons, appendTargetNotificationPrompt, buildDefaultTargetReminderMessage } from '../utils/reminderTargetNotification';
 
 export function registerHealthCommands(bot: Bot<BotContext>): void {
     bot.command('health', async (ctx) => {
@@ -69,6 +70,7 @@ async function saveHealthRemindersFromResult(
     if (!Array.isArray(ctx.session.reminders)) ctx.session.reminders = [];
 
     const list = result.reminderDetailsList ?? (result.reminderDetails ? [result.reminderDetails] : []);
+    const targetNotificationCandidates: Reminder[] = [];
     const chatType = ctx.chat.type;
     const chatTitle = chatType === 'group' || chatType === 'supergroup'
         ? `👥 ${(ctx.chat as any).title ?? 'Группа'}`
@@ -84,12 +86,24 @@ async function saveHealthRemindersFromResult(
             status: ReminderStatus.Pending,
             createdAt: new Date(),
             targetChat: details.targetChat,
+            targetDisplayText: details.targetReminderMessage || (details.targetChat ? buildDefaultTargetReminderMessage(details.text) : undefined),
+            targetChatNotifyStatus: details.targetChat ? "pending" : undefined,
             chatTitle,
             recurrence: details.recurrence,
         };
+        if (reminder.targetChat) {
+            targetNotificationCandidates.push(reminder);
+        }
         ctx.session.reminders.push(reminder);
         ReminderRegistry.getInstance().add(reminder);
         await ReminderRepository.save(reminder).catch((error) => console.error('[health] reminder DB save failed:', error));
         scheduleReminder(bot, reminder);
+    }
+
+    if (targetNotificationCandidates.length > 0) {
+        result.responseText = appendTargetNotificationPrompt(result.responseText, targetNotificationCandidates);
+        const keyboard = result.keyboard ?? new InlineKeyboard();
+        if (result.keyboard) keyboard.row();
+        result.keyboard = addTargetNotificationButtons(keyboard, targetNotificationCandidates);
     }
 }

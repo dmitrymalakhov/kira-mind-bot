@@ -118,6 +118,40 @@ export async function sendMessage(
     }
 }
 
+/**
+ * Отправляет голосовое сообщение указанному контакту от имени Telegram-аккаунта пользователя.
+ * Текстовое представление не прикладывается: ассистент представляется внутри самого аудио.
+ */
+export async function sendVoiceMessage(
+    client: TelegramClient,
+    contactId: number,
+    voiceFilePath: string,
+    notifyOnReply: boolean = false,
+    originalChatId: number | null = null
+): Promise<{ success: boolean, messageId: number | null }> {
+    try {
+        const sentMessage = await client.sendFile(contactId, {
+            file: voiceFilePath,
+            voiceNote: true,
+        });
+        const messageId = sentMessage.id;
+        devLog(`Голосовое сообщение отправлено контакту ${contactId}, ID сообщения: ${messageId}`);
+
+        const contactsStore = ContactsStore.getInstance();
+        contactsStore.updateLastInteraction(contactId);
+
+        if (notifyOnReply && originalChatId && messageId) {
+            const messageTracker = MessageTracker.getInstance();
+            messageTracker.trackMessage(messageId, contactId, originalChatId);
+        }
+
+        return { success: true, messageId };
+    } catch (error) {
+        console.error(`Ошибка при отправке голосового сообщения контакту ${contactId}:`, error);
+        return { success: false, messageId: null };
+    }
+}
+
 /** Результат поиска группы/чата по названию */
 export interface GroupChat {
     id: number;
@@ -204,6 +238,29 @@ export async function sendMessageToChat(
         return { success: true, messageId };
     } catch (error) {
         console.error(`Ошибка при отправке сообщения в чат ${chatId}:`, error);
+        return { success: false, messageId: null };
+    }
+}
+
+/**
+ * Отправляет голосовое сообщение в группу/чат через MTProto.
+ * Для voice-режима не используем Bot API, чтобы сообщение ушло от аккаунта владельца.
+ */
+export async function sendVoiceMessageToChat(
+    client: TelegramClient,
+    chatId: number,
+    voiceFilePath: string
+): Promise<{ success: boolean, messageId: number | null }> {
+    try {
+        const sentMessage = await client.sendFile(chatId, {
+            file: voiceFilePath,
+            voiceNote: true,
+        });
+        const messageId = sentMessage.id;
+        devLog(`Голосовое сообщение отправлено в чат ${chatId} через MTProto, ID сообщения: ${messageId}`);
+        return { success: true, messageId };
+    } catch (error) {
+        console.error(`Ошибка при отправке голосового сообщения в чат ${chatId}:`, error);
         return { success: false, messageId: null };
     }
 }

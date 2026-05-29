@@ -220,6 +220,8 @@ export interface SessionData {
         step: 'period';
         saveFactsAboutUser?: boolean;
         offerSaveGroup?: boolean;
+        /** Исходный запрос просил ответить голосом; после выбора периода отправляем краткую voice-сводку. */
+        voiceReplyRequested?: boolean;
         memoryContext?: string;
         createdAt: number;
         expiresAt: number;
@@ -246,6 +248,7 @@ export interface SessionData {
                 id: string;
                 text: string;
                 reminderMessage?: string;
+                targetReminderMessage?: string;
                 dueDate: Date;
                 targetChat?: { type: "group"; groupName: string } | { type: "contact"; contactQuery: string };
             };
@@ -253,6 +256,7 @@ export interface SessionData {
                 id: string;
                 text: string;
                 reminderMessage?: string;
+                targetReminderMessage?: string;
                 dueDate: Date;
                 targetChat?: { type: "group"; groupName: string } | { type: "contact"; contactQuery: string };
             }[];

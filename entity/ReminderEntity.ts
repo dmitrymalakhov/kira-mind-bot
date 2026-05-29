@@ -1,5 +1,5 @@
 import { Entity, Column, PrimaryColumn, CreateDateColumn } from 'typeorm';
-import { ReminderStatus, ReminderTargetChat, RecurrenceRule } from '../types/reminderTypes';
+import { ReminderStatus, ReminderTargetChat, ReminderTargetNotificationStatus, RecurrenceRule } from '../types/reminderTypes';
 
 @Entity('reminders')
 export class ReminderEntity {
@@ -32,6 +32,12 @@ export class ReminderEntity {
 
     @Column({ nullable: true, type: 'jsonb' })
     targetChat?: ReminderTargetChat;
+
+    @Column({ nullable: true, type: 'text' })
+    targetDisplayText?: string;
+
+    @Column({ nullable: true, type: 'text' })
+    targetChatNotifyStatus?: ReminderTargetNotificationStatus;
 
     @Column({ nullable: true, type: 'text' })
     chatTitle?: string;

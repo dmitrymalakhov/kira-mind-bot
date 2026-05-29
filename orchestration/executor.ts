@@ -349,6 +349,8 @@ export interface ExecutePlanParams {
     lastLocation?: { latitude: number; longitude: number; address?: string };
     /** Контекст из долговременной памяти, уже донасыщенный оркестратором до классификации и плана. Если передан — не дублируем обогащение. */
     enrichedContextFromMemory?: string;
+    /** Исходный запрос просил ответить голосом. */
+    voiceReplyRequested?: boolean;
 }
 
 /**
@@ -368,6 +370,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
         classification,
         lastLocation,
         enrichedContextFromMemory: passedContext,
+        voiceReplyRequested,
     } = params;
 
     const steps = plan.steps;
@@ -541,7 +544,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
             case 'readMessages': {
                 await notifyProgress('readMessages');
                 const readRes = await safeStep('readMessages', () => readMessagesAgent(
-                    ctx, message, isForwarded, forwardFrom, messageHistory, classification, enrichedContextFromMemory || ''
+                    ctx, message, isForwarded, forwardFrom, messageHistory, classification, enrichedContextFromMemory || '', voiceReplyRequested === true
                 ));
                 if (readRes === null) return { responseText: 'Не удалось прочитать сообщения. Попробуй ещё раз 🙏', botReaction: classification.details?.botReaction };
                 const passReadToNext = nextStep && (step.params?.asContext === true || hasMoreSteps(i));
