@@ -44,10 +44,6 @@ services:
       dockerfile: Dockerfile.server
       args:
         NODE_ENV: ${NODE_ENV:-production}
-        HTTP_PROXY: ${HTTP_PROXY:-}
-        HTTPS_PROXY: ${HTTPS_PROXY:-}
-        ALL_PROXY: ${ALL_PROXY:-}
-        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,postgres,qdrant}
     container_name: kira-mind-bot
     <<: *default-restart
     env_file:
@@ -71,10 +67,6 @@ services:
       dockerfile: Dockerfile.server
       args:
         NODE_ENV: ${NODE_ENV:-production}
-        HTTP_PROXY: ${HTTP_PROXY:-}
-        HTTPS_PROXY: ${HTTPS_PROXY:-}
-        ALL_PROXY: ${ALL_PROXY:-}
-        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,postgres,qdrant}
     container_name: sergey-brain-bot
     <<: *default-restart
     env_file:
@@ -95,11 +87,6 @@ services:
   admin-panel:
     build:
       context: ./admin-panel
-      args:
-        HTTP_PROXY: ${HTTP_PROXY:-}
-        HTTPS_PROXY: ${HTTPS_PROXY:-}
-        ALL_PROXY: ${ALL_PROXY:-}
-        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,postgres,qdrant}
     container_name: admin-panel
     <<: *default-restart
     ports:

@@ -6,4 +6,4 @@
 - Добавлен `docker-compose.server.yml` для серверного сценария; legacy `docker-compose.yml` и `deploy.sh` сохранены отдельно для старого remote-deploy потока.
 - Добавлен `Dockerfile.server`, чтобы серверный сценарий собирал TypeScript в `dist/` и запускал `dist/index.js`, не ломая legacy deploy flow.
 - Добавлен `tsconfig.server.json`, а `Dockerfile.server` теперь ставит dev-зависимости и компилирует только код бота без `admin-panel`.
-- README обновлён под новый серверный сценарий с обязательным VPN через `socks5h://172.17.0.1:10808`.
+- README обновлён под новый серверный сценарий с ожиданием VPN/маршрутизации на уровне хоста, без app-level proxy-конфига.

@@ -1,10 +1,5 @@
 FROM node:23-alpine
 
-ARG HTTP_PROXY
-ARG HTTPS_PROXY
-ARG ALL_PROXY
-ARG NO_PROXY
-
 RUN apk add --no-cache python3 make g++ gcc chromium ffmpeg
 
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \

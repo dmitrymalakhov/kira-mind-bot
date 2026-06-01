@@ -9,10 +9,9 @@
 #
 # Что делает:
 #   1. Проверяет Docker и docker compose на самой VPS
-#   2. Проверяет доступность Xray SOCKS5 на 172.17.0.1:10808
-#   3. Генерирует или обновляет .env.production
-#   4. Создаёт personality.json при первом запуске
-#   5. Собирает и запускает контейнеры локально через docker compose
+#   2. Генерирует или обновляет .env.production
+#   3. Создаёт personality.json при первом запуске
+#   4. Собирает и запускает контейнеры локально через docker compose
 # =============================================================================
 
 set -euo pipefail
@@ -122,10 +121,6 @@ DB_USER=postgres
 DB_PASSWORD=${DB_PASSWORD}
 DB_NAME=KiraMind
 NODE_ENV=production
-HTTP_PROXY=${HTTP_PROXY}
-HTTPS_PROXY=${HTTPS_PROXY}
-ALL_PROXY=${ALL_PROXY}
-NO_PROXY=${NO_PROXY}
 ADMIN_PORT=${ADMIN_PORT}
 ADMIN_USERNAME=${ADMIN_USERNAME}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
@@ -153,11 +148,6 @@ VECTOR_PROVIDER=qdrant
 QDRANT_URL=http://qdrant:6333
 
 USER_TIMEZONE=${USER_TIMEZONE}
-
-HTTP_PROXY=${HTTP_PROXY}
-HTTPS_PROXY=${HTTPS_PROXY}
-ALL_PROXY=${ALL_PROXY}
-NO_PROXY=${NO_PROXY}
 
 KIRA_PROACTIVE_ENABLED=true
 KIRA_PROACTIVE_INTERVAL_MS=86400000
@@ -280,19 +270,10 @@ compose() {
     "${COMPOSE_CMD[@]}" "$@"
 }
 
-verify_proxy_endpoint() {
-    header "Проверка Xray SOCKS5"
-    if ! (exec 3<>/dev/tcp/172.17.0.1/10808) >/dev/null 2>&1; then
-        error "Xray SOCKS5 недоступен на 172.17.0.1:10808. Подними Xray на хосте и проверь схему с HTTP_PROXY/HTTPS_PROXY/ALL_PROXY перед запуском."
-    fi
-    success "Xray SOCKS5 доступен на 172.17.0.1:10808"
-}
-
 collect_config() {
     header "Настройка бота"
     echo ""
     echo "Отвечай на вопросы ниже. Обязательные поля отмечены [*]."
-    echo "VPN через Xray обязателен и будет записан в .env.production."
     echo ""
 
     echo -e "\n${BOLD}OpenAI${NC}"
@@ -341,11 +322,6 @@ collect_config() {
     echo -e "\n${BOLD}Настройки${NC}"
     prompt_default USER_TIMEZONE "Часовой пояс" "${USER_TIMEZONE:-Europe/Moscow}"
 
-    echo -e "\n${BOLD}Обязательный VPN через Xray${NC}"
-    prompt_default ALL_PROXY "SOCKS5 URL" "${ALL_PROXY:-socks5h://172.17.0.1:10808}"
-    HTTP_PROXY="$ALL_PROXY"
-    HTTPS_PROXY="$ALL_PROXY"
-    prompt_default NO_PROXY "NO_PROXY" "${NO_PROXY:-localhost,127.0.0.1,postgres,qdrant}"
 }
 
 validate_existing_config() {
@@ -358,10 +334,6 @@ validate_existing_config() {
     [ -n "${KIRA_BOT_TOKEN:-}" ] || error "В $ENV_FILE отсутствует KIRA_BOT_TOKEN"
     [ -n "${KIRA_ALLOWED_USER_ID:-}" ] || error "В $ENV_FILE отсутствует KIRA_ALLOWED_USER_ID"
     [ -n "${DB_PASSWORD:-}" ] || error "В $ENV_FILE отсутствует DB_PASSWORD"
-    [ -n "${ALL_PROXY:-}" ] || error "В $ENV_FILE отсутствует ALL_PROXY. VPN-конфиг обязателен."
-    [ -n "${HTTP_PROXY:-}" ] || error "В $ENV_FILE отсутствует HTTP_PROXY. VPN-конфиг обязателен."
-    [ -n "${HTTPS_PROXY:-}" ] || error "В $ENV_FILE отсутствует HTTPS_PROXY. VPN-конфиг обязателен."
-    [ -n "${NO_PROXY:-}" ] || error "В $ENV_FILE отсутствует NO_PROXY. VPN-конфиг обязателен."
 }
 
 ensure_admin_state() {
@@ -426,7 +398,6 @@ echo -e "${BOLD}  Установка Kira Mind Bot прямо на VPS${NC}\n"
 
 ensure_repo_root
 ensure_docker
-verify_proxy_endpoint
 
 if [ "$SKIP_CONFIG" = true ]; then
     validate_existing_config
