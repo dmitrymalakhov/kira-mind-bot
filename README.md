@@ -8,28 +8,61 @@
 
 ## Быстрый старт
 
-Нужно: VPS с Ubuntu/Debian, SSH-доступ по ключу и локальная машина с Node.js 20+.
+Нужно: VPS с Ubuntu/Debian, Docker-доступ на самой машине и уже поднятый Xray SOCKS5 на `172.17.0.1:10808`.
 
 ```bash
 git clone <repo>
 cd kira-mind-bot
-./install.sh --server-ip YOUR_VPS_IP
+./server-install.sh
 ```
 
-Установщик:
+Серверный установщик:
 
-1. проверит SSH-доступ к серверу;
-2. установит Docker, если он ещё не установлен;
+1. проверит Docker и при необходимости установит его прямо на VPS;
+2. проверит доступность Xray SOCKS5 на `172.17.0.1:10808`;
 3. спросит ключи и базовые настройки;
-4. сгенерирует `.env.production` и `personality.json`;
-5. задеплоит PostgreSQL, Qdrant, ботов и админ-панель;
-6. выведет URL, логин и пароль панели управления.
+4. запишет `.env.production` с обязательными `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY`;
+5. сгенерирует `.env`, `personality.json` и состояние админ-панели;
+6. соберёт и поднимет PostgreSQL, Qdrant, Kira и админ-панель прямо на VPS;
+7. выведет URL, логин и пароль панели управления.
 
-Повторный деплой:
+Обновление после изменений в репозитории:
 
 ```bash
-./deploy.sh --kira-mind-bot --server-ip YOUR_VPS_IP
+git pull && ./server-install.sh --skip-config
 ```
+
+Если нужен второй бот `SergeyBrainBot`, используй:
+
+```bash
+git pull && ./server-install.sh --skip-config --with-sergey
+```
+
+Локальный сценарий `install.sh` / `deploy.sh` остаётся как отдельный legacy-flow для деплоя с локальной машины на удалённый VPS. Для этого пути сохраняется старый `docker-compose.yml`, а `server-install.sh` использует отдельный `docker-compose.server.yml`.
+
+---
+
+## Обязательный VPN-контур
+
+Перед запуском `server-install.sh` на VPS уже должен работать Xray SOCKS5 на `172.17.0.1:10808`.
+
+Скрипт записывает в `.env.production`:
+
+```text
+HTTP_PROXY=socks5h://172.17.0.1:10808
+HTTPS_PROXY=socks5h://172.17.0.1:10808
+ALL_PROXY=socks5h://172.17.0.1:10808
+NO_PROXY=localhost,127.0.0.1,postgres,qdrant
+```
+
+Это обязательно для серверного сценария. Смысл схемы:
+
+- весь внешний HTTP(S)-трафик контейнеров идёт через VPN;
+- локальные сервисы Docker Compose не уходят через VPN благодаря `NO_PROXY`;
+- не используется `network_mode: container:xray`;
+- не нужно менять `DATABASE_URL` и `QDRANT_URL`.
+
+Если Xray на `172.17.0.1:10808` недоступен, `server-install.sh` завершится с ошибкой до сборки контейнеров.
 
 ---
 
@@ -198,7 +231,7 @@ cd kira-mind-bot
 
 ## Веб-панель управления
 
-После деплоя панель доступна по адресу вида `http://YOUR_VPS_IP:PORT`. Порт, логин и пароль выводятся в конце установки и сохраняются на сервере в `/root/.kira-admin-state`.
+После деплоя панель доступна по адресу вида `http://YOUR_VPS_IP:PORT`. Порт, логин и пароль выводятся в конце установки и сохраняются на сервере в `~/.kira-admin-state`.
 
 В панели можно:
 
@@ -223,11 +256,11 @@ cd kira-mind-bot
 
 Подойдёт Ubuntu 20.04+ или Debian 11+. Минимально: 1 CPU, 2 GB RAM, 20 GB диска.
 
-Настройте SSH-доступ по ключу:
+На VPS должны быть:
 
-```bash
-ssh-copy-id root@YOUR_VPS_IP
-```
+- git checkout проекта;
+- доступ к Docker или возможность поставить Docker через `root`/`sudo`;
+- уже поднятый Xray SOCKS5 на `172.17.0.1:10808`.
 
 ### 2. Подготовить ключи
 
@@ -247,10 +280,17 @@ ssh-copy-id root@YOUR_VPS_IP
 | Ideogram API key | генерация изображений |
 | Telegram API ID + Hash | чтение переписок и отправка от имени пользователя |
 
-### 3. Запустить установщик
+### 3. Клонировать репозиторий на VPS
 
 ```bash
-./install.sh --server-ip YOUR_VPS_IP
+git clone <repo>
+cd kira-mind-bot
+```
+
+### 4. Запустить серверный установщик
+
+```bash
+./server-install.sh
 ```
 
 В конце будет напечатан блок вида:
@@ -265,7 +305,7 @@ ssh-copy-id root@YOUR_VPS_IP
 ╚══════════════════════════════════════════╝
 ```
 
-### 4. Настроить личность
+### 5. Настроить личность
 
 В панели управления откройте раздел “Личность” и заполните:
 
@@ -281,7 +321,7 @@ ssh-copy-id root@YOUR_VPS_IP
 git update-index --assume-unchanged personality.json
 ```
 
-### 5. Получить Telegram Session String
+### 6. Получить Telegram Session String
 
 Нужно только для функций Telegram User Client.
 
@@ -291,7 +331,7 @@ git update-index --assume-unchanged personality.json
 
 Скрипт авторизует пользовательскую Telegram-сессию через Docker и выведет `TELEGRAM_SESSION_STRING`. Вставьте его в панель управления или `.env.production`.
 
-### 6. Включить публичный режим в группе
+### 7. Включить публичный режим в группе
 
 1. Добавьте бота в группу.
 2. В BotFather отключите privacy mode, если бот должен видеть сообщения в группе.
@@ -358,7 +398,7 @@ git update-index --assume-unchanged personality.json
 
 ## Переменные окружения
 
-Основные настройки можно менять через веб-панель. Для ручной настройки скопируйте `.env.template` в `.env.production` или редактируйте `.env.production` на сервере.
+Основные настройки можно менять через веб-панель. Для ручной настройки редактируйте `.env.production` на сервере или перезапускайте `./server-install.sh` без `--skip-config`.
 
 ### Обязательные
 
@@ -406,6 +446,17 @@ git update-index --assume-unchanged personality.json
 | `VECTOR_SEARCH_THRESHOLD` | Глобальный порог релевантности поиска памяти |
 
 `PineconeVectorService` есть в коде, но большинство методов в нём пока являются заглушками. Рабочий вариант по умолчанию: Qdrant.
+
+### Обязательный VPN для контейнеров
+
+| Переменная | Описание |
+|------------|----------|
+| `HTTP_PROXY` | Должна быть `socks5h://172.17.0.1:10808` |
+| `HTTPS_PROXY` | Должна быть `socks5h://172.17.0.1:10808` |
+| `ALL_PROXY` | Должна быть `socks5h://172.17.0.1:10808` |
+| `NO_PROXY` | Должна включать `localhost,127.0.0.1,postgres,qdrant` |
+
+`server-install.sh` записывает эти значения автоматически. Без них серверный сценарий считается неполным, потому что внешний трафик контейнеров должен идти через Xray VPN.
 
 ### Telegram User Client
 
@@ -499,7 +550,9 @@ Telegram Bot API / Telegram User Client
 - `services/*` - интеграции, планировщики, репозитории и инфраструктурные сервисы.
 - `utils/enhancedDomainMemory.ts` и `services/QdrantVectorService.ts` - долговременная память.
 - `admin-panel/*` - React/Vite UI и Node.js backend панели управления.
-- `docker-compose.yml` - PostgreSQL, Qdrant, два профиля бота и админ-панель.
+- `docker-compose.yml` - legacy compose для старого удалённого деплоя с локальной машины.
+- `docker-compose.server.yml` - основной compose для `server-install.sh` и запуска прямо на VPS.
+- `server-install.sh` - основной сценарий установки и redeploy прямо на VPS после `git pull`.
 
 ---
 
