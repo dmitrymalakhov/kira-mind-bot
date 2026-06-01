@@ -41,6 +41,7 @@ services:
   kira-mind-bot:
     build:
       context: .
+      dockerfile: Dockerfile.server
       args:
         NODE_ENV: ${NODE_ENV:-production}
         HTTP_PROXY: ${HTTP_PROXY:-}
@@ -67,6 +68,7 @@ services:
   sergey-brain-bot:
     build:
       context: .
+      dockerfile: Dockerfile.server
       args:
         NODE_ENV: ${NODE_ENV:-production}
         HTTP_PROXY: ${HTTP_PROXY:-}

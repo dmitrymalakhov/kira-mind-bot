@@ -552,6 +552,7 @@ Telegram Bot API / Telegram User Client
 - `admin-panel/*` - React/Vite UI и Node.js backend панели управления.
 - `docker-compose.yml` - legacy compose для старого удалённого деплоя с локальной машины.
 - `docker-compose.server.yml` - основной compose для `server-install.sh` и запуска прямо на VPS.
+- `Dockerfile.server` - server-only образ для VPS-first сценария с компиляцией TypeScript в `dist/`.
 - `server-install.sh` - основной сценарий установки и redeploy прямо на VPS после `git pull`.
 
 ---
