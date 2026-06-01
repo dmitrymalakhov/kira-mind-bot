@@ -553,6 +553,7 @@ Telegram Bot API / Telegram User Client
 - `docker-compose.yml` - legacy compose для старого удалённого деплоя с локальной машины.
 - `docker-compose.server.yml` - основной compose для `server-install.sh` и запуска прямо на VPS.
 - `Dockerfile.server` - server-only образ для VPS-first сценария с компиляцией TypeScript в `dist/`.
+- `tsconfig.server.json` - server-only конфиг TypeScript, который исключает `admin-panel` из сборки бота на VPS.
 - `server-install.sh` - основной сценарий установки и redeploy прямо на VPS после `git pull`.
 
 ---

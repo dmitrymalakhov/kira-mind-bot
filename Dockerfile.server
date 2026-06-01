@@ -13,13 +13,15 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
 WORKDIR /usr/src/app
 
 ARG NODE_ENV=production
-ENV NODE_ENV=${NODE_ENV}
+ENV NODE_ENV=development
 
 COPY package*.json ./
-RUN npm install
+RUN npm install --include=dev
 
 COPY . .
-RUN npm run build
+RUN ./node_modules/.bin/tsc -p tsconfig.server.json
+
+ENV NODE_ENV=${NODE_ENV}
 
 EXPOSE 3011
 CMD ["node", "./dist/index.js"]
