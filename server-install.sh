@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# Kira Mind Bot — Установка и деплой прямо на VPS
+# Kira Mind Bot — Установка и первичный запуск прямо на VPS
 #
 # Использование:
 #   ./server-install.sh
@@ -12,6 +12,7 @@
 #   2. Генерирует или обновляет .env.production
 #   3. Создаёт personality.json при первом запуске
 #   4. Собирает и запускает контейнеры локально через docker compose
+#   5. Для обычного redeploy после git pull используется ./server-deploy.sh
 # =============================================================================
 
 set -euo pipefail
@@ -25,6 +26,12 @@ warn()    { echo -e "${YELLOW}⚠️  $*${NC}"; }
 error()   { echo -e "${RED}❌ $*${NC}"; exit 1; }
 header()  { echo -e "\n${BOLD}${BLUE}── $* ──────────────────────────────────────${NC}"; }
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/server-common.sh"
+
 SKIP_CONFIG=false
 DEPLOY_SERGEY=false
 
@@ -36,18 +43,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-cd "$(dirname "$0")"
-
-ENV_FILE=".env.production"
-COMPOSE_ENV_FILE=".env"
-PERSONALITY_FILE="personality.json"
-ADMIN_STATE_FILE="${HOME}/.kira-admin-state"
-SERVER_COMPOSE_FILE="docker-compose.server.yml"
-
 ensure_repo_root() {
-    [ -f "$SERVER_COMPOSE_FILE" ] || error "Не найден $SERVER_COMPOSE_FILE в корне репозитория"
-    [ -f "package.json" ] || error "Не найден package.json в текущей директории"
-    [ -d "admin-panel" ] || error "Не найдена директория admin-panel"
+    ensure_server_repo_root || error "Не найден $SERVER_COMPOSE_FILE в корне репозитория"
 }
 
 prompt_required_default() {
@@ -88,10 +85,7 @@ prompt_default() {
 
 load_existing_env() {
     if [ -f "$ENV_FILE" ]; then
-        set -a
-        # shellcheck disable=SC1090
-        source "$ENV_FILE"
-        set +a
+        load_env_if_present
         info "Найден существующий $ENV_FILE, использую текущие значения как defaults"
     fi
 }
@@ -233,8 +227,7 @@ EOF
 }
 
 ensure_docker() {
-    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-        COMPOSE_CMD=(docker compose -f "$SERVER_COMPOSE_FILE")
+    if resolve_compose_cmd; then
         success "Docker уже доступен"
         return
     fi
@@ -260,16 +253,8 @@ ensure_docker() {
     $SUDO apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin
     $SUDO systemctl enable --now docker
 
-    if docker compose version >/dev/null 2>&1; then
-        COMPOSE_CMD=(docker compose -f "$SERVER_COMPOSE_FILE")
-    else
-        COMPOSE_CMD=(sudo docker compose -f "$SERVER_COMPOSE_FILE")
-    fi
+    resolve_compose_cmd || error "Docker установлен, но docker compose всё ещё недоступен"
     success "Docker установлен"
-}
-
-compose() {
-    "${COMPOSE_CMD[@]}" "$@"
 }
 
 collect_config() {
@@ -328,10 +313,7 @@ collect_config() {
 
 validate_existing_config() {
     [ -f "$ENV_FILE" ] || error "Флаг --skip-config требует существующий $ENV_FILE"
-    set -a
-    # shellcheck disable=SC1090
-    source "$ENV_FILE"
-    set +a
+    load_env_if_present
     [ -n "${OPENAI_API_KEY:-}" ] || error "В $ENV_FILE отсутствует OPENAI_API_KEY"
     [ -n "${KIRA_BOT_TOKEN:-}" ] || error "В $ENV_FILE отсутствует KIRA_BOT_TOKEN"
     [ -n "${KIRA_ALLOWED_USER_ID:-}" ] || error "В $ENV_FILE отсутствует KIRA_ALLOWED_USER_ID"
@@ -353,39 +335,17 @@ ensure_admin_state() {
 }
 
 deploy_stack() {
-    header "Деплой"
+    header "Первичный запуск"
 
-    local app_services=("kira-mind-bot" "admin-panel")
-    if [ "$DEPLOY_SERGEY" = true ]; then
-        app_services+=("sergey-brain-bot")
-    fi
-
+    collect_app_services
     compose up -d postgres qdrant
-    compose stop "${app_services[@]}" 2>/dev/null || true
-    compose build --no-cache "${app_services[@]}"
-    compose up -d "${app_services[@]}"
+    compose build "${APP_SERVICES[@]}"
+    compose up -d "${APP_SERVICES[@]}"
 
-    for svc in postgres qdrant "${app_services[@]}"; do
-        if ! compose ps "$svc" 2>/dev/null | grep -q "Up"; then
-            compose logs --tail 40 "$svc" 2>/dev/null || true
-            error "Сервис $svc не запустился"
-        fi
-    done
+    verify_services_running postgres qdrant "${APP_SERVICES[@]}" || error "Не все сервисы успешно запустились"
 
     success "Сервисы успешно запущены"
-
-    local HOST_IP
-    HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
-    HOST_IP=${HOST_IP:-YOUR_VPS_IP}
-
-    echo ""
-    echo "╔══════════════════════════════════════════╗"
-    echo "║        🌐 ПАНЕЛЬ УПРАВЛЕНИЯ              ║"
-    echo "╠══════════════════════════════════════════╣"
-    echo "║  URL:     http://${HOST_IP}:${ADMIN_PORT}"
-    echo "║  Логин:   ${ADMIN_USERNAME}"
-    echo "║  Пароль:  ${ADMIN_PASSWORD}"
-    echo "╚══════════════════════════════════════════╝"
+    show_admin_panel_access "$(detect_host_ip)"
 }
 
 echo -e "\n${BOLD}${BLUE}"

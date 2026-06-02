@@ -24,27 +24,31 @@ cd kira-mind-bot
 4. соберёт и поднимет PostgreSQL, Qdrant, Kira и админ-панель прямо на VPS;
 5. выведет URL, логин и пароль панели управления.
 
-Обновление после изменений в репозитории:
+Обычный redeploy после изменений в репозитории:
 
 ```bash
-git pull && ./server-install.sh --skip-config
+git pull origin main && ./server-deploy.sh deploy
 ```
 
 Если нужен второй бот `SergeyBrainBot`, используй:
 
 ```bash
-git pull && ./server-install.sh --skip-config --with-sergey
+./server-install.sh --with-sergey
 ```
 
-Локальный сценарий `install.sh` / `deploy.sh` остаётся как отдельный legacy-flow для деплоя с локальной машины на удалённый VPS. Для этого пути сохраняется старый `docker-compose.yml`, а `server-install.sh` использует отдельный `docker-compose.server.yml`.
+Если Docker-кэш или место на диске развалили сборку, используй аварийный redeploy:
+
+```bash
+git pull origin main && ./server-deploy.sh deploy --clean
+```
+
+Локальный сценарий `install.sh` / `deploy.sh` остаётся как отдельный legacy-flow для деплоя с локальной машины на удалённый VPS. Для этого пути сохраняется старый `docker-compose.yml`, а VPS-first поток использует `docker-compose.server.yml`, `server-install.sh` и `server-deploy.sh`.
 
 ---
 
 ## VPN на уровне хоста
 
 Если нужен VPN-доступ к Telegram или другим внешним сервисам, он должен быть настроен на уровне самого VPS или сетевого маршрута Docker-хоста.
-
-`server-install.sh` больше не настраивает SOCKS/HTTP proxy внутри контейнеров и не требует app-level proxy-конфигов. Серверный сценарий предполагает, что маршрутизация наружу уже решена вне приложения.
 
 ---
 
@@ -381,7 +385,7 @@ git update-index --assume-unchanged personality.json
 
 ## Переменные окружения
 
-Основные настройки можно менять через веб-панель. Для ручной настройки редактируйте `.env.production` на сервере или перезапускайте `./server-install.sh` без `--skip-config`.
+Основные настройки можно менять через веб-панель. Для ручной настройки редактируйте `.env.production` на сервере или перезапускайте `./server-install.sh` без `--skip-config`. Для обычного обновления кода используй `./server-deploy.sh deploy`.
 
 ### Обязательные
 
@@ -523,10 +527,29 @@ Telegram Bot API / Telegram User Client
 - `utils/enhancedDomainMemory.ts` и `services/QdrantVectorService.ts` - долговременная память.
 - `admin-panel/*` - React/Vite UI и Node.js backend панели управления.
 - `docker-compose.yml` - legacy compose для старого удалённого деплоя с локальной машины.
-- `docker-compose.server.yml` - основной compose для `server-install.sh` и запуска прямо на VPS.
+- `docker-compose.server.yml` - основной compose для VPS-first запуска и redeploy на сервере.
 - `Dockerfile.server` - server-only образ для VPS-first сценария с компиляцией TypeScript в `dist/`.
 - `tsconfig.server.json` - server-only конфиг TypeScript, который исключает `admin-panel` из сборки бота на VPS.
-- `server-install.sh` - основной сценарий установки и redeploy прямо на VPS после `git pull`.
+- `server-install.sh` - первый запуск и конфигурирование на VPS.
+- `server-deploy.sh` - обычный redeploy, логи, статус и restart для VPS-first сценария.
+
+---
+
+## Операционные команды на VPS
+
+```bash
+./server-deploy.sh status
+./server-deploy.sh logs
+./server-deploy.sh logs kira-mind-bot
+./server-deploy.sh restart
+./server-deploy.sh restart admin-panel
+./server-deploy.sh stop
+```
+
+Безопасность данных:
+
+- `server-deploy.sh deploy --clean` не использует `down -v` и не удаляет Docker volumes.
+- Скрипт не использует `docker network prune`, чтобы не задевать соседние контейнеры вне этого compose-файла.
 
 ---
 
