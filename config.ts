@@ -3,6 +3,7 @@ import * as fs from "fs";
 
 // ── Загрузка personality.json (редактируется через admin panel) ───────────────
 interface PersonalityOverride {
+  characterName?: string;
   persona?: string;
   communicationStyle?: string;
   biography?: string;
@@ -180,7 +181,7 @@ function assistants(activeAssistant: string): AssistantConfig {
       botToken: process.env.KIRA_BOT_TOKEN || "",
       ownerName: kiraP.ownerName || "Дмитрий",
       ownerUsername: kiraP.ownerUsername || undefined,
-      characterName: "Кира",
+      characterName: kiraP.characterName || "Кира",
       userName: kiraP.userName || "Дмитрий",
       userBirthDate: kiraP.userBirthDate || "16.07.1988",
       botUsername: "KiraMindBot",
@@ -259,7 +260,7 @@ function assistants(activeAssistant: string): AssistantConfig {
       botToken: envResult.parsed?.SERGEY_BOT_TOKEN || process.env.SERGEY_BOT_TOKEN || "",
       ownerName: sergeyP.ownerName || "Юлия",
       ownerUsername: sergeyP.ownerUsername || undefined,
-      characterName: "Сергей",
+      characterName: sergeyP.characterName || "Сергей",
       userName: sergeyP.userName || "Юлия",
       userBirthDate: sergeyP.userBirthDate || "25.04.1982",
       botUsername: "SergeyBrainBot",

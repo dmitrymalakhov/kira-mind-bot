@@ -17,6 +17,7 @@ import { fetchPersonality, savePersonality } from '../api';
 import type { PersonalityConfig, PersonalityProfile } from '../types';
 
 const EMPTY_PROFILE: PersonalityProfile = {
+  characterName: '',
   persona: '',
   communicationStyle: '',
   biography: '',
@@ -65,6 +66,17 @@ function ProfileEditor({ icon, title, values, onChange, onSave, saving }: Profil
       />
       <CardContent>
         <Grid container spacing={2}>
+          <Grid item xs={12} sm={3}>
+            <TextField
+              label="Имя персонажа"
+              value={values.characterName}
+              onChange={(e) => onChange('characterName', e.target.value)}
+              fullWidth
+              placeholder="Кира"
+              helperText="Если оставить пустым, бот возьмёт имя по умолчанию из профиля."
+              FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px' } }}
+            />
+          </Grid>
           <Grid item xs={12} sm={3}>
             <TextField
               label="Имя владельца"

@@ -96,6 +96,7 @@ git pull && ./server-install.sh --skip-config --with-sergey
 ### Telegram User Client
 
 Если настроить `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` и `TELEGRAM_SESSION_STRING`, бот получает доступ к вашему Telegram-аккаунту через пользовательскую сессию.
+Имя персонажа для профиля можно менять через `personality.json` или admin panel; если поле пустое, используются стандартные имена профилей (`Кира` / `Сергей`).
 
 Возможности:
 

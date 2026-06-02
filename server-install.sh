@@ -199,6 +199,7 @@ ensure_personality_file() {
         cat > "$PERSONALITY_FILE" << EOF
 {
   "KiraMindBot": {
+    "characterName": "Кира",
     "persona": "",
     "communicationStyle": "",
     "biography": "",
@@ -211,6 +212,7 @@ ensure_personality_file() {
     "proactiveMessageHint": ""
   },
   "SergeyBrainBot": {
+    "characterName": "Сергей",
     "persona": "",
     "communicationStyle": "",
     "biography": "",
