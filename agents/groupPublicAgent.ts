@@ -193,7 +193,7 @@ async function handlePublicConversation(
         : config.ownerName;
 
     const systemContent =
-        // Персонаж без owner-specific части (getBotPersona содержит "Твой пользователь — Дмитрий" и ломает контекст)
+        // Ассистент без owner-specific части, чтобы не тащить персональные установки владельца в публичный контекст
         `Ты — ${config.characterName}. ${getBotBiography()}\nСтиль общения: ${getCommunicationStyle()}\n\n` +
         // Контекст публичного чата
         `Ты отвечаешь в публичном групповом чате.\n` +

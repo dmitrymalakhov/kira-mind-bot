@@ -197,7 +197,7 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         key: 'KIRA_PROACTIVE_INTERVAL_MS',
         label: 'Интервал проактивных сообщений',
         type: 'duration',
-        hint: 'Как часто Кира пишет первой',
+        hint: 'Как часто Ассистентка пишет первой',
       },
       {
         key: 'KIRA_PROACTIVE_QUIET_HOURS_ENABLED',
@@ -221,7 +221,7 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         key: 'DM_REPORT_INTERVAL_MS',
         label: 'Интервал отчётов о сообщениях',
         type: 'duration',
-        hint: 'Как часто Кира присылает дайджест непрочитанных',
+        hint: 'Как часто Ассистентка присылает дайджест непрочитанных',
       },
       { key: 'DM_REPORT_QUIET_HOURS_ENABLED', label: 'Тихие часы для отчётов', type: 'toggle' },
       { key: 'INBOX_GUARDIAN_ENABLED', label: 'Вечерний Inbox Guardian включён', type: 'toggle' },
@@ -262,7 +262,7 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         key: 'SERGEY_PROACTIVE_INTERVAL_MS',
         label: 'Интервал проактивных сообщений',
         type: 'duration',
-        hint: 'Как часто Сергей пишет первым',
+        hint: 'Как часто Ассистент пишет первым',
       },
       {
         key: 'SERGEY_PROACTIVE_QUIET_HOURS_ENABLED',

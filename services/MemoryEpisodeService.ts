@@ -108,7 +108,7 @@ ${dialogue}
 JSON:
 {
   "summary": "1-2 предложения, конкретная сцена разговора",
-  "participants": ["Пользователь", "Кира", "имена людей если были"],
+  "participants": ["Пользователь", "имя ассистента", "имена людей если были"],
   "entities": ["люди, места, проекты, события"],
   "domains": ["work|health|family|finance|education|hobbies|travel|social|home|personal|entertainment|general"],
   "emotion": "краткий эмоциональный фон или neutral",

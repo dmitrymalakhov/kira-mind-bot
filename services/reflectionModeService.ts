@@ -503,7 +503,7 @@ function getContextMessages(chatId: string, beforeDate: Date): BufferedMessage[]
         .slice(0, CONTEXT_MAX_MESSAGES)
         .reverse()
         .map(m => ({
-            // Исходящие помечаем именем владельца ("Я" / Дмитрий), входящие — именем контакта
+            // Исходящие помечаем именем владельца ("Я" / имя владельца), входящие — именем контакта
             senderName: m.isOwn ? ownerLabel : m.senderName,
             text: m.text,
             date: m.date,

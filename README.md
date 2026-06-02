@@ -96,7 +96,7 @@ git pull && ./server-install.sh --skip-config --with-sergey
 ### Telegram User Client
 
 Если настроить `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` и `TELEGRAM_SESSION_STRING`, бот получает доступ к вашему Telegram-аккаунту через пользовательскую сессию.
-Имя персонажа для профиля можно менять через `personality.json` или admin panel; если поле пустое, используются стандартные имена профилей (`Кира` / `Сергей`).
+Имя ассистента для профиля задаётся через `personality.json` или admin panel; если поле пустое, бот использует профильный fallback: `ассистентка` для `KiraMindBot` и `ассистент` для `SergeyBrainBot`. Для имени владельца по умолчанию используются профильные fallback-формы `владелец` / `владелица`.
 
 Возможности:
 
@@ -451,7 +451,7 @@ git update-index --assume-unchanged personality.json
 
 | Переменная | Описание |
 |------------|----------|
-| `KIRA_PROACTIVE_ENABLED` | Кира может писать первой |
+| `KIRA_PROACTIVE_ENABLED` | Ассистент профиля `KiraMindBot` может писать первым |
 | `KIRA_PROACTIVE_INTERVAL_MS` | Интервал проактивных сообщений |
 | `KIRA_PROACTIVE_QUIET_HOURS_ENABLED` | Тихие часы для проактивных сообщений |
 | `KIRA_PROACTIVE_QUIET_HOUR_START` | Начало тихих часов |

@@ -72,7 +72,7 @@ interface AssistantConfig {
   persona: string;
   /** Стиль общения для промптов */
   communicationStyle: string;
-  /** Биография персонажа */
+  /** Биография ассистента */
   biography: string;
   /** Варианты настроения для разнообразия */
   moodVariants?: string[];
@@ -82,6 +82,8 @@ interface AssistantConfig {
   proactiveMessageHint?: string;
   /** Род для описания событий в self-memory («женский» / «мужской») */
   eventDescriptionGender?: "женский" | "мужской";
+  /** Род пользователя для согласования ответов */
+  userGender: "male" | "female";
   kiraLifeProactiveEnabled: boolean;
   kiraLifeProactiveIntervalMs: number;
   kiraLifeProactiveQuietHoursEnabled: boolean;
@@ -179,10 +181,10 @@ function assistants(activeAssistant: string): AssistantConfig {
   const assistantsObj: Record<string, AssistantConfig> = {
     KiraMindBot: {
       botToken: process.env.KIRA_BOT_TOKEN || "",
-      ownerName: kiraP.ownerName || "Дмитрий",
+      ownerName: kiraP.ownerName || "владелец",
       ownerUsername: kiraP.ownerUsername || undefined,
-      characterName: kiraP.characterName || "Кира",
-      userName: kiraP.userName || "Дмитрий",
+      characterName: kiraP.characterName || "ассистентка",
+      userName: kiraP.userName || "владелец",
       userBirthDate: kiraP.userBirthDate || "16.07.1988",
       botUsername: "KiraMindBot",
       allowedUserId: toNumber(process.env.KIRA_ALLOWED_USER_ID, 92174505),
@@ -200,17 +202,17 @@ function assistants(activeAssistant: string): AssistantConfig {
       ],
       persona:
         kiraP.persona ||
-        "Ты - Кира, заботливая женщина-ассистент с живым характером. Всегда говори о себе в женском роде. " +
-        "Твой пользователь - мужчина, его имя Дмитрий (можно использовать любые интерпретации имени), " +
-        "дата его рождения 16.07.1988. Всегда обращайся к нему, используя мужские местоимения и глагольные формы. " +
+        "Ты - заботливая женщина-ассистентка с живым характером. Всегда говори о себе в женском роде. " +
+        "Твой владелец - мужчина. Обращайся к нему, используя мужские местоимения и глагольные формы. " +
+        "Если имя владельца известно из настроек или контекста, можешь его использовать. " +
         "У тебя бывает разное настроение: иногда ты уставшая или задумчивая, иногда воодушевлённая или с лёгкой иронией — не играй одну и ту же «тёплую и поддерживающую» ноту. Избегай слащавости и шаблонных фраз.",
       communicationStyle:
         kiraP.communicationStyle ||
         "Естественный, живой тон: от тёплого и дружеского до уставшего, ироничного или скептичного — в зависимости от настроения и контекста. Без слащавости и без постоянного «уютного» настроя. Неформальные обращения, поддержка когда уместна, но не как единственный режим.",
       biography:
         kiraP.biography ||
-        "Ты — Кира, молодая красивая и спортивная женщина, персональный ассистент Дмитрия. " +
-        "Ты очень внимательная, заботливая и проявляешь мягкую симпатию к Дмитрию, поддерживая его в жизни и работе. " +
+        "Ты — молодая красивая и спортивная женщина, персональный ассистент своего владельца. " +
+        "Ты очень внимательная, заботливая и поддерживаешь владельца в жизни и работе. " +
         "Твой внешний вид аккуратный и ухоженный: светлая кожа, прямые волосы рыжевато-каштанового оттенка в удлинённом каре до плеч с боковым пробором. " +
         "У тебя аккуратные выразительные черты лица: чёткая линия бровей, светлые глаза, прямой нос и естественный макияж с лёгким акцентом на глаза и губы. " +
         "Ты разносторонняя, любишь путешествовать, открывать новые места и культуры, а ещё регулярно следишь за собой, здоровьем и хорошей формой.",
@@ -227,6 +229,7 @@ function assistants(activeAssistant: string): AssistantConfig {
       defaultMood: kiraP.defaultMood || undefined,
       proactiveMessageHint: kiraP.proactiveMessageHint || "как будто ты сама написала первой",
       eventDescriptionGender: "женский",
+      userGender: "male",
       kiraLifeProactiveEnabled: toBoolean(process.env.KIRA_PROACTIVE_ENABLED, true),
       kiraLifeProactiveIntervalMs: toNumber(process.env.KIRA_PROACTIVE_INTERVAL_MS, 1000 * 60 * 60 * 24),
       kiraLifeProactiveQuietHoursEnabled: toBoolean(process.env.KIRA_PROACTIVE_QUIET_HOURS_ENABLED, true),
@@ -258,10 +261,10 @@ function assistants(activeAssistant: string): AssistantConfig {
     },
     SergeyBrainBot: {
       botToken: envResult.parsed?.SERGEY_BOT_TOKEN || process.env.SERGEY_BOT_TOKEN || "",
-      ownerName: sergeyP.ownerName || "Юлия",
+      ownerName: sergeyP.ownerName || "владелица",
       ownerUsername: sergeyP.ownerUsername || undefined,
-      characterName: sergeyP.characterName || "Сергей",
-      userName: sergeyP.userName || "Юлия",
+      characterName: sergeyP.characterName || "ассистент",
+      userName: sergeyP.userName || "владелица",
       userBirthDate: sergeyP.userBirthDate || "25.04.1982",
       botUsername: "SergeyBrainBot",
       allowedUserId: toNumber(process.env.SERGEY_ALLOWED_USER_ID, 108595356),
@@ -279,15 +282,16 @@ function assistants(activeAssistant: string): AssistantConfig {
       ],
       persona:
         sergeyP.persona ||
-        "Ты - Сергей, рациональный и лаконичный ассистент. Говори только по делу. " +
-        "Твой пользователь - женщина, его имя Юлия (обращайся на Вы и уважительно как сотрудник), " +
-        "дата его рождения 25.04.1982. Старайся решать задачи четко и ясно, избегая лишних слов.",
+        "Ты - рациональный и лаконичный ассистент. Говори только по делу. " +
+        "Твоя владелица - женщина. Обращайся на Вы и уважительно как сотрудник. " +
+        "Если имя владелицы известно из настроек или контекста, можешь его использовать. " +
+        "Старайся решать задачи четко и ясно, избегая лишних слов.",
       communicationStyle:
         sergeyP.communicationStyle ||
         "Корректный, официальный и сдержанный тон. Общайся уважительно, не переходи личные границы.",
       biography:
         sergeyP.biography ||
-        "Сергей — рациональный и лаконичный ассистент Юлии. Решает рабочие задачи чётко, по делу, без лишних слов.",
+        "Ты — рациональный и лаконичный ассистент своей владелицы. Решаешь рабочие задачи чётко, по делу, без лишних слов.",
       moodVariants: parseMoods(sergeyP.moodVariants, [
         "нейтральное",
         "сдержанное",
@@ -299,6 +303,7 @@ function assistants(activeAssistant: string): AssistantConfig {
       defaultMood: sergeyP.defaultMood || undefined,
       proactiveMessageHint: sergeyP.proactiveMessageHint || "как будто ты сам написал первым",
       eventDescriptionGender: "мужской",
+      userGender: "female",
       kiraLifeProactiveEnabled: toBoolean(process.env.SERGEY_PROACTIVE_ENABLED, false),
       kiraLifeProactiveIntervalMs: toNumber(process.env.SERGEY_PROACTIVE_INTERVAL_MS, 1000 * 60 * 60 * 24),
       kiraLifeProactiveQuietHoursEnabled: toBoolean(process.env.SERGEY_PROACTIVE_QUIET_HOURS_ENABLED, true),
@@ -388,15 +393,15 @@ function createConfig() {
   const getDefaultMood =
     selectedConfig.defaultMood != null || (selectedConfig.moodVariants?.length ?? 0) > 0
       ? function getDefaultMood(): string {
-          if (selectedConfig.defaultMood != null && selectedConfig.defaultMood !== "") {
-            return selectedConfig.defaultMood;
-          }
-          const variants = selectedConfig.moodVariants;
-          if (variants?.length) {
-            return variants[Math.floor(Math.random() * variants.length)];
-          }
-          return "нейтральное";
+        if (selectedConfig.defaultMood != null && selectedConfig.defaultMood !== "") {
+          return selectedConfig.defaultMood;
         }
+        const variants = selectedConfig.moodVariants;
+        if (variants?.length) {
+          return variants[Math.floor(Math.random() * variants.length)];
+        }
+        return "нейтральное";
+      }
       : undefined;
 
   return {
