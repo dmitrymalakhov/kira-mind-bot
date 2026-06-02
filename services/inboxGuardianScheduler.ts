@@ -1,7 +1,7 @@
 import { Bot } from "grammy";
 import { config } from "../config";
 import { USER_TIMEZONE } from "../constants";
-import openai from "../openai";
+import openai, { openAiModels } from "../openai";
 import { MessageStore, StoredMessage } from "../stores/MessageStore";
 import { BotContext } from "../types";
 import { parseLLMJson } from "../utils";
@@ -268,7 +268,7 @@ async function analyzeThreads(threads: InboxThreadCandidate[]): Promise<InboxGua
 
     try {
         const response = await openai.chat.completions.create({
-            model: "gpt-5.4-nano",
+            model: openAiModels.memoryExtractionModel,
             messages: [
                 {
                     role: "system",

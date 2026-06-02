@@ -5,7 +5,7 @@ import { detectDomain, getDomainContext } from "../utils/domainMemory";
 import { AgentMemoryContext } from "../utils/agentMemoryContext";
 import { getBotPersona, getCommunicationStyle, getBotBiography } from "../persona";
 import { config } from "../config";
-import openai from "../openai";
+import openai, { openAiModels } from "../openai";
 import { getKiraSelfMemoryState, getRecentKiraSelfEvents, searchKiraSelfEventsByQuery } from "../utils/kiraSelfMemory";
 
 
@@ -191,7 +191,7 @@ ${domainContext ? `Факты из памяти о пользователе:\n${
 
         // Отправка запроса к API OpenAI
         const response = await openai.chat.completions.create({
-            model: "gpt-5.4",
+            model: openAiModels.conversationModel,
             messages: [
                 {
                     role: "system",

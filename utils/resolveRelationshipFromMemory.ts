@@ -1,7 +1,7 @@
 import { BotContext } from '../types';
 import { searchAllDomainsMemories } from './enhancedDomainMemory';
 import { devLog } from '../utils';
-import openai from '../openai';
+import openai, { openAiModels } from '../openai';
 
 const MAX_QUERIES = 5;
 
@@ -11,7 +11,7 @@ export async function detectRelationshipInMessage(message: string): Promise<stri
     if (trimmed.length < 2) return null;
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
+            model: openAiModels.memoryExtractionModel,
             messages: [
                 {
                     role: 'system',
@@ -52,7 +52,7 @@ async function generateMemorySearchQueries(
 
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
+            model: openAiModels.memoryExtractionModel,
             messages: [
                 {
                     role: 'system',
@@ -94,7 +94,7 @@ ${factsText.slice(0, 3000)}
 
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
+            model: openAiModels.memoryExtractionModel,
             messages: [
                 {
                     role: 'system',

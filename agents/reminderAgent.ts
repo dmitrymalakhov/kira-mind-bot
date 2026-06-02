@@ -3,7 +3,7 @@ import { MessageHistory } from "../types";
 import { ProcessingResult } from "../orchestrator";
 import { devLog, processReminderTime } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
-import openai from "../openai";
+import openai, { openAiModels } from "../openai";
 import { USER_TIMEZONE } from "../constants";
 import type { ReminderTargetChat, RecurrenceRule } from "../reminder";
 import { buildDefaultTargetReminderMessage } from "../utils/reminderTargetNotification";
@@ -249,7 +249,7 @@ export async function reminderAgent(
         `;
 
         const response = await openai.chat.completions.create({
-            model: "gpt-5.4",
+            model: openAiModels.conversationModel,
             messages: [
                 {
                     role: "system",

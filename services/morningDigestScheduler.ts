@@ -5,7 +5,7 @@ import { ReminderRegistry } from "../stores/ReminderRegistry";
 import { USER_TIMEZONE } from "../constants";
 import { getProactiveChatId } from "../utils/allowedUserChatStore";
 import { getBotPersona, getCommunicationStyle } from "../persona";
-import openai from "../openai";
+import openai, { openAiModels } from "../openai";
 
 let timer: NodeJS.Timeout | undefined;
 let lastSentDate = "";
@@ -45,7 +45,7 @@ function formatDigestReminders(reminders: ReturnType<typeof getRemindersForToday
 async function buildDigestGreeting(reminderCount: number): Promise<string> {
     try {
         const response = await openai.chat.completions.create({
-            model: "gpt-5.4",
+            model: openAiModels.messageAnalysisModel,
             messages: [
                 {
                     role: "system",

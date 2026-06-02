@@ -7,7 +7,7 @@ import { mapsAgent } from "./agents/googleMapsAgent";
 import { healthAgent } from "./agents/healthAgent";
 import { InlineKeyboard } from "grammy";
 import { devLog, parseLLMJson } from "./utils";
-import openai from "./openai";
+import openai, { openAiModels } from "./openai";
 import { llmCache, LLM_CACHE_TTL } from "./utils/llmCache";
 import { fetchAgentMemoryContext, buildMemoryContextBlock } from "./utils/agentMemoryContext";
 import type { RecalledMemoryRef } from "./utils/multiQueryMemory";
@@ -397,7 +397,7 @@ async function isDuplicateIntentByLLM(params: {
 
     try {
         const resp = await openai.chat.completions.create({
-            model: "gpt-5.2",
+            model: openAiModels.intentDedupModel,
             messages: [
                 {
                     role: "system",
@@ -742,7 +742,7 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
 
         // Отправка запроса к API OpenAI (gpt-5.2 — для максимально точного определения интента)
         const response = await openai.chat.completions.create({
-            model: "gpt-5.2",
+            model: openAiModels.intentClassificationModel,
             messages: [
                 {
                     role: "system",
