@@ -212,6 +212,59 @@ function setPendingContactMemory(ctx: BotContext, fact: ContactMemoryFact, candi
     };
 }
 
+function normalizedContentKey(content: string): string {
+    return content.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function mergeSourceMessageIds(
+    existing?: string[],
+    incoming?: string[]
+): string[] | undefined {
+    const merged = [...(existing ?? []), ...(incoming ?? [])].filter(Boolean);
+    return merged.length > 0 ? [...new Set(merged)] : undefined;
+}
+
+function mergePendingContactMemory(ctx: BotContext, fact: ContactMemoryFact, candidates: Contact[]): boolean {
+    const pending = ctx.session.pendingContactMemory;
+    if (!pending) return false;
+
+    if (Date.now() - pending.createdAt > PENDING_CONTACT_MEMORY_TTL_MS) {
+        ctx.session.pendingContactMemory = undefined;
+        return false;
+    }
+
+    if (normalizeContactLookupValue(pending.contactName) !== normalizeContactLookupValue(fact.contactName)) {
+        return false;
+    }
+
+    const incomingContent = stripContactLead(fact.content, fact.contactName);
+    const existingKey = normalizedContentKey(pending.content);
+    const incomingKey = normalizedContentKey(incomingContent);
+
+    if (incomingKey && !existingKey.includes(incomingKey) && !incomingKey.includes(existingKey)) {
+        pending.content = `${pending.content.trim()}\n${incomingContent}`;
+    }
+
+    pending.tags = [...new Set([...(pending.tags ?? []), ...(fact.tags ?? [])])];
+    if (candidates.length > 0) {
+        pending.candidateIds = [...new Set([...(pending.candidateIds ?? []), ...candidates.map(c => c.id)])];
+    }
+    pending.memoryMetadata = {
+        ...pending.memoryMetadata,
+        ...fact.memoryMetadata,
+        sourceContext: [pending.memoryMetadata?.sourceContext, fact.memoryMetadata?.sourceContext]
+            .filter(Boolean)
+            .join('\n') || pending.memoryMetadata?.sourceContext,
+        sourceMessageIds: mergeSourceMessageIds(
+            pending.memoryMetadata?.sourceMessageIds,
+            fact.memoryMetadata?.sourceMessageIds
+        ),
+    };
+    pending.createdAt = Date.now();
+    devLog('Contact memory clarification already pending, merged duplicate prompt:', fact.contactName);
+    return true;
+}
+
 async function askContactClarification(ctx: BotContext, fact: ContactMemoryFact, candidates: Contact[]): Promise<void> {
     setPendingContactMemory(ctx, fact, candidates);
 
@@ -246,11 +299,13 @@ export async function saveContactMemoryFactOrAsk(
 
     if (resolution.status === 'ambiguous') {
         if (!askOnAmbiguous) return { status: 'skipped' };
+        if (mergePendingContactMemory(ctx, fact, resolution.candidates)) return { status: 'pending' };
         await askContactClarification(ctx, fact, resolution.candidates);
         return { status: 'pending' };
     }
 
     if (!askOnAmbiguous) return { status: 'skipped' };
+    if (mergePendingContactMemory(ctx, fact, [])) return { status: 'pending' };
 
     ctx.session.pendingContactMemory = {
         contactName,

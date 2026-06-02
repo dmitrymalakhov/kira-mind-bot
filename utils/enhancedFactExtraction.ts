@@ -4,7 +4,7 @@ import { saveMemory } from './enhancedDomainMemory';
 import { devLog, parseLLMJson } from '../utils';
 import { rememberFact } from './domainMemory';
 import openai from '../openai';
-import { saveContactMemoryFactOrAsk } from './contactMemory';
+import { normalizeContactLookupValue, saveContactMemoryFactOrAsk } from './contactMemory';
 import { createMemoryEpisode, updateWorkingMemoryFromMessages } from '../services/MemoryEpisodeService';
 
 interface QuickFact {
@@ -225,11 +225,24 @@ export async function extractAndSaveFactsFromConversation(
         const messageIds = sourceMessageIds(conversation);
         // Список фактов, уже сохранённых quickFactCheck — пропускаем похожие
         const alreadySaved = ctx.session.quickFactContents ?? [];
+        const seenFactKeys = new Set<string>();
         for (const fact of facts) {
             if (fact.confidence > 0.5 && fact.importance > 0.3) {
                 const factContent = (fact.subject === 'contact' && fact.contactName)
                     ? `[${fact.contactName}] ${fact.content}`
                     : fact.content;
+                const factKey = [
+                    fact.subject ?? 'user',
+                    fact.subject === 'contact' ? normalizeContactLookupValue(fact.contactName ?? '') : '',
+                    fact.domain,
+                    factContent.trim().replace(/\s+/g, ' ').toLowerCase(),
+                ].join('|');
+
+                if (seenFactKeys.has(factKey)) {
+                    devLog(`⏩ Факт пропущен (дубль в текущем delayed-анализе): ${factContent.slice(0, 60)}`);
+                    continue;
+                }
+                seenFactKeys.add(factKey);
 
                 // Пропускаем факты, уже сохранённые quickFactCheck (нечёткое сравнение)
                 const isDuplicate = alreadySaved.some(saved => {
@@ -260,9 +273,15 @@ export async function extractAndSaveFactsFromConversation(
                             predicate: fact.factType,
                             object: fact.content,
                         },
+                    }, {
+                        askOnAmbiguous: false,
                     });
-                    if (result.status !== 'saved') {
+                    if (result.status === 'pending') {
                         devLog(`Факт о контакте ожидает уточнения: [${fact.contactName}] ${fact.content}`);
+                        continue;
+                    }
+                    if (result.status !== 'saved') {
+                        devLog(`Факт о контакте пропущен без уточнения: [${fact.contactName}] ${fact.content}`);
                         continue;
                     }
                     devLog(`Сохранен факт о контакте [${fact.contactName}]: ${fact.content}`);
