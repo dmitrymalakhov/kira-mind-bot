@@ -2,7 +2,7 @@ import * as dotenv from "dotenv";
 import * as fs from 'fs';
 import * as path from 'path';
 import fetch from 'node-fetch';
-import openai, { openAiModels } from "../openai";
+import openai from "../openai";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -40,7 +40,7 @@ export async function transcribeAudio(audioFilePath: string): Promise<string> {
         // Отправляем запрос на транскрипцию в OpenAI
         const transcription = await openai.audio.transcriptions.create({
             file: audioFileStream,
-            model: openAiModels.transcriptionModel,
+            model: "whisper-1",
             language: "ru",
             response_format: "text",
         });

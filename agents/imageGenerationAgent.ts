@@ -4,7 +4,7 @@ import { MessageHistory } from "../types";
 import { ProcessingResult } from "../orchestrator";
 import { devLog } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
-import openai, { openAiModels } from "../openai";
+import openai from "../openai";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -149,7 +149,7 @@ export async function imageGenerationAgent(
         `;
 
         const response = await openai.chat.completions.create({
-            model: openAiModels.conversationModel,
+            model: "gpt-5.4",
             messages: [
                 {
                     role: "system",

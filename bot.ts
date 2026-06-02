@@ -7,7 +7,7 @@ import { handleGroupPublicUserMessage } from "./agents/groupPublicAgent";
 import { devLog } from "./utils";
 import { saveAllowedUserChatId } from "./utils/allowedUserChatStore";
 import { upsertChat, isChatPublicMode } from "./services/chatRegistry";
-import openai, { openAiModels } from "./openai";
+import openai from "./openai";
 import { getBotPersona } from "./persona";
 import { config } from "./config";
 import { pushGroupChatMessage } from "./stores/GroupChatBuffer";
@@ -30,7 +30,7 @@ async function handleGroupPrivateDismissal(ctx: BotContext): Promise<void> {
 
   try {
     const resp = await openai.chat.completions.create({
-      model: openAiModels.memoryExtractionModel,
+      model: "gpt-5.4-nano",
       messages: [
         {
           role: "system",

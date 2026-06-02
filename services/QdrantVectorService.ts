@@ -4,7 +4,7 @@ import { IDomainVectorService } from './interfaces/IDomainVectorService';
 import { MemoryEntry, SearchOptions, SearchResult, MemoryStats, DomainConfig, SearchStrategy, DomainStats, DomainTrend, MemoryRelation, MemoryRelationType } from '../types';
 import { PREDEFINED_DOMAINS, DOMAIN_SEARCH_THRESHOLDS } from '../constants/domains';
 import { config } from '../config';
-import openai, { openAiModels } from '../openai';
+import openai from '../openai';
 import { devLog } from '../utils';
 
 export class QdrantVectorService implements IDomainVectorService {
@@ -419,7 +419,7 @@ export class QdrantVectorService implements IDomainVectorService {
 
     private async embed(text: string): Promise<number[]> {
         const resp = await openai.embeddings.create({
-            model: openAiModels.embeddingModel,
+            model: 'text-embedding-ada-002',
             input: text,
         });
         return resp.data[0].embedding;

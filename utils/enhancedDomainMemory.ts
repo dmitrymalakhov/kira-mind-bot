@@ -2,7 +2,7 @@ import { getVectorService } from '../services/VectorServiceFactory';
 import { EmotionalTag, MemoryEntry, MemoryExtractionMethod, MemoryKind, MemoryRelationType, MemoryStatus, MemorySubject, SearchOptions } from '../types';
 import { BotContext } from '../types';
 import { devLog, parseLLMJson } from '../utils';
-import openai, { openAiModels } from '../openai';
+import openai from '../openai';
 import { llmCache, LLM_CACHE_TTL } from './llmCache';
 import { detectEmotionalTag } from './emotionalTagger';
 import { PREDEFINED_DOMAINS } from '../constants/domains';
@@ -458,7 +458,7 @@ async function isStateChangeFact(content: string): Promise<boolean> {
     const prompt = `Факт: "${content}"\nЭто факт смены состояния? (человек что-то сделал/изменил: приехал, переехал, уволился, купил, вернулся, начал/закончил работу, получил диагноз и т.п.)\nJSON: {"state_change": true/false}`;
     try {
         const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -488,7 +488,7 @@ async function isPlanningFact(content: string): Promise<boolean> {
     const prompt = `Факт: "${content}"\nЭто планировочный/будущий факт? (человек планирует, собирается, хочет, намерен что-то сделать — но ещё не сделал)\nJSON: {"planning": true/false}`;
     try {
         const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -569,7 +569,7 @@ async function checkContradiction(
 
     try {
         const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -652,7 +652,7 @@ async function detectTemporalExpiry(content: string): Promise<Date | undefined> 
 
     try {
         const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 {
@@ -1513,7 +1513,7 @@ export async function generateMemoryInsights(ctx: BotContext): Promise<string> {
 
     try {
         const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: 'gpt-5.4-nano',
             messages: [
                 {
                     role: 'system',
@@ -1623,7 +1623,7 @@ export async function compressOldMemories(
     let summaries: string[] = [];
     try {
         const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: 'gpt-5.4-nano',
             messages: [
                 {
                     role: 'system',

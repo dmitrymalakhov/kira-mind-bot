@@ -16,7 +16,7 @@ import {
 } from "../stores/NegotiationStore";
 import { config } from "../config";
 import { getBotPersona, getCommunicationStyle } from "../persona";
-import openai, { openAiModels } from "../openai";
+import openai from "../openai";
 import { sendMessage as sendTelegramMessage } from "../services/telegram";
 import { InlineKeyboard } from "grammy";
 import { studyChatAndSaveFacts } from "../utils/studyChatPipeline";
@@ -129,7 +129,7 @@ ${historyLines}
 
     try {
         const resp = await openai.chat.completions.create({
-            model: openAiModels.messageAnalysisModel,
+            model: "gpt-5.4",
             messages: [
                 {
                     role: "system",
@@ -630,7 +630,7 @@ export async function getAnswerFromMessages(
             `;
 
             const completionOptions: any = {
-                model: openAiModels.messageAnalysisModel,
+                model: "gpt-5.4",
                 messages: [
                     {
                         role: "system",
@@ -762,7 +762,7 @@ export async function getMessagesSummary(hours: number = 24, memoryContext: stri
         `;
 
         const response = await openai.chat.completions.create({
-            model: openAiModels.messageAnalysisModel,
+            model: "gpt-5.4",
             messages: [
                 {
                     role: "system",
@@ -890,7 +890,7 @@ async function studyGroupChatAndSaveFacts(
 
     // Параллельно: текстовый анализ + извлечение структурированных фактов
     const analysisCompletionOptions: any = {
-        model: openAiModels.messageAnalysisModel,
+        model: "gpt-5.4",
         messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
@@ -975,7 +975,7 @@ async function analyzeGroupChatMessages(
 ${conversationText}`;
 
     const completionOptions: any = {
-        model: openAiModels.messageAnalysisModel,
+        model: "gpt-5.4",
         messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
@@ -1048,7 +1048,7 @@ async function analyzeMultipleGroupChats(
 ${chatSections}${notFoundNote}`;
 
     const completionOptions: any = {
-        model: openAiModels.messageAnalysisModel,
+        model: "gpt-5.4",
         messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },

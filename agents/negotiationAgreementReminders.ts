@@ -1,5 +1,5 @@
 import { Bot } from "grammy";
-import openai, { openAiModels } from "../openai";
+import openai from "../openai";
 import { USER_TIMEZONE } from "../constants";
 import { devLog, processReminderTime } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
@@ -91,7 +91,7 @@ ${historyText}
 `;
 
         const resp = await openai.chat.completions.create({
-            model: openAiModels.conversationModel,
+            model: "gpt-5.4",
             messages: [
                 {
                     role: "system",

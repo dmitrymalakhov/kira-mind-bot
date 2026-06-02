@@ -134,23 +134,8 @@ interface AssistantConfig {
   morningDigestHour: number;
 }
 
-export interface OpenAIModelsConfig {
-  intentClassificationModel: string;
-  intentDedupModel: string;
-  conversationModel: string;
-  memoryExtractionModel: string;
-  memoryConsolidationModel: string;
-  messageAnalysisModel: string;
-  webSearchReasoningModel: string;
-  browserPlanningModel: string;
-  browserVisionModel: string;
-  embeddingModel: string;
-  transcriptionModel: string;
-}
-
 export interface Config extends AssistantConfig {
   openAiApiKey: string;
-  openAiModels: OpenAIModelsConfig;
   elevenLabsApiKey: string;
   elevenLabsVoiceId?: string;
   elevenLabsVoiceName?: string;
@@ -419,23 +404,8 @@ function createConfig() {
       }
       : undefined;
 
-  const openAiModels: OpenAIModelsConfig = {
-    intentClassificationModel: process.env.OPENAI_MODEL_INTENT_CLASSIFICATION || "gpt-5.4-mini",
-    intentDedupModel: process.env.OPENAI_MODEL_INTENT_DEDUP || "gpt-5.4-mini",
-    conversationModel: process.env.OPENAI_MODEL_CONVERSATION || "gpt-5.4",
-    memoryExtractionModel: process.env.OPENAI_MODEL_MEMORY_EXTRACTION || "gpt-5.4-nano",
-    memoryConsolidationModel: process.env.OPENAI_MODEL_MEMORY_CONSOLIDATION || "gpt-5.4",
-    messageAnalysisModel: process.env.OPENAI_MODEL_MESSAGE_ANALYSIS || "gpt-5.4",
-    webSearchReasoningModel: process.env.OPENAI_MODEL_WEB_SEARCH_REASONING || "gpt-5.4",
-    browserPlanningModel: process.env.OPENAI_MODEL_BROWSER_PLANNING || "gpt-5.4-nano",
-    browserVisionModel: process.env.OPENAI_MODEL_BROWSER_VISION || "gpt-4o",
-    embeddingModel: process.env.OPENAI_MODEL_EMBEDDING || "text-embedding-3-small",
-    transcriptionModel: process.env.OPENAI_MODEL_TRANSCRIPTION || "whisper-1",
-  };
-
   return {
     openAiApiKey: process.env.OPENAI_API_KEY || "",
-    openAiModels,
     elevenLabsApiKey: process.env.ELEVENLABS_API_KEY || "",
     elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID || undefined,
     elevenLabsVoiceName: process.env.ELEVENLABS_VOICE_NAME || "Nastya",

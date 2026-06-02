@@ -5,7 +5,7 @@ import { MessageClassification, ProcessingResult } from "../orchestrator";
 import { devLog, processReminderTime } from "../utils";
 import { ChatCompletionContentPart } from "openai/resources/chat";
 import { getBotPersona, getCommunicationStyle } from "../persona";
-import openai, { openAiModels } from "../openai";
+import openai from "../openai";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -164,7 +164,7 @@ export async function imageAgent(
 
         // Отправляем запрос к OpenAI API
         const response = await openai.chat.completions.create({
-            model: openAiModels.conversationModel,
+            model: "gpt-5.4",
             messages: [
                 {
                     role: "system",

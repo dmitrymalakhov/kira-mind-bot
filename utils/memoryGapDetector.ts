@@ -1,6 +1,6 @@
 import { BotContext } from '../types';
 import { searchAllDomainsMemories } from './enhancedDomainMemory';
-import openai, { openAiModels } from '../openai';
+import openai from '../openai';
 import { devLog } from '../utils';
 import { addToHistory } from './history';
 
@@ -92,7 +92,7 @@ export async function maybeAskMemoryGap(
  */
 async function extractPersonNames(message: string): Promise<string[]> {
     const resp = await openai.chat.completions.create({
-        model: openAiModels.memoryExtractionModel,
+        model: 'gpt-5.4-nano',
         messages: [
             {
                 role: 'system',

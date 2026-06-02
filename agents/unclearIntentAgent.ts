@@ -2,7 +2,7 @@ import { MessageHistory } from "../types";
 import { MessageClassification, ProcessingResult } from "../orchestrator";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { config } from "../config";
-import openai, { openAiModels } from "../openai";
+import openai from "../openai";
 
 const INTENT_LABELS: Partial<Record<MessageClassification["intent"], string>> = {
     "НАПОМИНАНИЕ": "поставить напоминание",
@@ -135,7 +135,7 @@ export async function unclearIntentAgent(
 
         // Отправка запроса к API OpenAI
         const response = await openai.chat.completions.create({
-            model: openAiModels.conversationModel,
+            model: "gpt-5.4",
             messages: [
                 {
                     role: "system",

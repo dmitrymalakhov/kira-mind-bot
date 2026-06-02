@@ -1,6 +1,6 @@
 import { BotContext } from '../types';
 import { getVectorService } from '../services/VectorServiceFactory';
-import openai, { openAiModels } from '../openai';
+import openai from '../openai';
 import { devLog, parseLLMJson } from '../utils';
 import { config } from '../config';
 import { addToHistory } from './history';
@@ -108,7 +108,7 @@ ${factsText}
 {"shouldHint": true/false, "hint": "текст реплики на русском", "factIndex": число}`;
 
         const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },

@@ -34,7 +34,7 @@ import { runUpdateLongTermMemoryAgentDetailed } from '../agents/updateLongTermMe
 import { searchAllDomainsMemories } from '../utils/enhancedDomainMemory';
 import { getSetting, setSetting } from './botSettingsService';
 import { devLog, parseLLMJson } from '../utils';
-import openai, { openAiModels } from '../openai';
+import openai from '../openai';
 import { getProactiveChatId } from '../utils/allowedUserChatStore';
 import { MessageStore } from '../stores/MessageStore';
 import { getVectorService } from './VectorServiceFactory';
@@ -277,7 +277,7 @@ JSON: {"urgent": true/false}`;
 
     try {
         const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -470,7 +470,7 @@ JSON: {"useful": true/false, "emotion": "neutral|stress|conflict|grief|joy|anxie
 
     try {
         const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -558,7 +558,7 @@ async function classifyChat(chatId: string, chatTitle: string, messages: Buffere
 
     try {
         const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },

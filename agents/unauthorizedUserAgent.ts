@@ -4,7 +4,7 @@ import { isUserInContacts } from "../services/telegram";
 import { devLog } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { config } from "../config";
-import openai, { openAiModels } from "../openai";
+import openai from "../openai";
 
 // Максимальное количество вопросов от бота
 const MAX_BOT_QUESTIONS = 2;
@@ -287,7 +287,7 @@ async function generateFirstQuestion(ctx: BotContext): Promise<string> {
 
     try {
         const response = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: "gpt-5.4-nano",
             messages: [
                 {
                     role: "system",
@@ -341,7 +341,7 @@ async function generateSecondQuestion(ctx: BotContext): Promise<string> {
 
     try {
         const response = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: "gpt-5.4-nano",
             messages: [
                 {
                     role: "system",

@@ -1,7 +1,7 @@
 import { BotContext, MemoryEntry, MemoryKind } from '../types';
 import { PREDEFINED_DOMAINS } from '../constants/domains';
 import { config } from '../config';
-import openai, { openAiModels } from '../openai';
+import openai from '../openai';
 import { devLog, parseLLMJson } from '../utils';
 import { getVectorService } from './VectorServiceFactory';
 
@@ -288,7 +288,7 @@ async function synthesizeUserSchemas(sources: MemoryEntry[], periodDays: number)
 
     try {
         const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryConsolidationModel,
+            model: 'gpt-5.4',
             messages: [
                 {
                     role: 'system',

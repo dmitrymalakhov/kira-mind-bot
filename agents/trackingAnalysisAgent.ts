@@ -1,4 +1,4 @@
-import openai, { openAiModels } from '../openai';
+import openai from '../openai';
 import { getVectorService } from '../services/VectorServiceFactory';
 import { config } from '../config';
 import { getBotPersona, getCommunicationStyle } from '../persona';
@@ -73,7 +73,7 @@ ${messagesText}`;
 
     try {
         const response = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt },

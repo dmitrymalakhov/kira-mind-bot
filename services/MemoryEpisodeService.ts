@@ -3,7 +3,7 @@ import { BotContext, MemoryEpisode, MemorySourceMessage, MessageHistory, Working
 import { PREDEFINED_DOMAINS } from '../constants/domains';
 import { getVectorService } from './VectorServiceFactory';
 import { config } from '../config';
-import openai, { openAiModels } from '../openai';
+import openai from '../openai';
 import { devLog, parseLLMJson } from '../utils';
 
 const EPISODE_DOMAIN = PREDEFINED_DOMAINS.GENERAL;
@@ -92,7 +92,7 @@ async function analyzeEpisode(messages: MemorySourceMessage[]): Promise<EpisodeL
 
     try {
         const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: 'gpt-5.4-nano',
             messages: [
                 {
                     role: 'system',
@@ -215,7 +215,7 @@ export async function updateWorkingMemoryFromMessages(
 
     try {
         const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Ты обновляешь краткую рабочую память ассистента. Отвечай только JSON.' },
                 {

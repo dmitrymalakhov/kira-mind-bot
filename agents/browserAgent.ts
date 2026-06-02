@@ -7,7 +7,7 @@ import * as path from 'path';
 import { InlineKeyboard, InputFile } from 'grammy';
 import type { BotContext, MessageHistory } from '../types';
 import type { ProcessingResult, MessageClassification } from '../orchestrator';
-import openai, { openAiModels } from '../openai';
+import openai from '../openai';
 import { devLog, parseLLMJson } from '../utils';
 import { fetchAgentMemoryContext, buildMemoryContextBlock } from '../utils/agentMemoryContext';
 import { BrowserSessionStore } from '../services/BrowserSessionStore';
@@ -19,7 +19,7 @@ const MAX_MEMORY_LOOKUPS = 6;
 const MAX_CONSECUTIVE_ACTION_FAILURES = 4;
 const ACTION_TIMEOUT_MS = 10_000;
 const NAVIGATION_TIMEOUT_MS = 20_000;
-const VISION_MODEL = openAiModels.browserVisionModel;
+const VISION_MODEL = 'gpt-4o';
 const SCREENSHOT_INTERVAL = 6;
 const PENDING_BROWSER_TTL_MS = 15 * 60 * 1000;
 const LAST_BROWSER_TASK_TTL_MS = 45 * 60 * 1000;
@@ -6277,7 +6277,7 @@ async function extractSemanticFormValuesWithLlm(
     for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
             const response = await openai.chat.completions.create({
-                model: openAiModels.browserPlanningModel,
+                model: 'gpt-5.4-nano',
                 max_tokens: 600,
                 temperature: 0,
                 messages: [
@@ -7092,7 +7092,7 @@ async function repairBrowserActionJson(text: string): Promise<BrowserAction | nu
 
     try {
         const response = await openai.chat.completions.create({
-            model: openAiModels.browserPlanningModel,
+            model: 'gpt-5.4-nano',
             max_tokens: 260,
             temperature: 0,
             messages: [
@@ -11459,7 +11459,7 @@ async function chooseTaskScopedCandidateWithLlm(
 
     try {
         const response = await openai.chat.completions.create({
-            model: openAiModels.browserPlanningModel,
+            model: 'gpt-5.4-nano',
             max_tokens: 240,
             temperature: 0,
             messages: [
@@ -11986,7 +11986,7 @@ async function chooseContextualCandidateWithLlm(
 
     try {
         const response = await openai.chat.completions.create({
-            model: openAiModels.browserPlanningModel,
+            model: 'gpt-5.4-nano',
             max_tokens: 260,
             temperature: 0,
             messages: [

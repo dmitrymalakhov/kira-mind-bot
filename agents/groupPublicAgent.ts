@@ -16,7 +16,7 @@ import { webSearchAgent } from "./webSearchAgent";
 import { mapsAgent } from "./googleMapsAgent";
 import { imageGenerationAgent } from "./imageGenerationAgent";
 import { answerCapabilitiesQuestion } from "../capabilities";
-import openai, { openAiModels } from "../openai";
+import openai from "../openai";
 import { parseLLMJson } from "../utils";
 import { searchMemories } from "../utils/enhancedDomainMemory";
 import { getChatAllowedDomains, getChatForbiddenTopics } from "../services/chatRegistry";
@@ -48,7 +48,7 @@ function pushGroupHistory(chatId: number, entry: GroupHistoryEntry): void {
 async function classifyPublicMessage(message: string): Promise<PublicIntent> {
     try {
         const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: "gpt-5.4-nano",
             messages: [
                 {
                     role: "system",
@@ -213,7 +213,7 @@ async function handlePublicConversation(
     }
 
     const resp = await openai.chat.completions.create({
-        model: openAiModels.conversationModel,
+        model: "gpt-5.4",
         messages: [
             { role: "system", content: systemContent },
             ...historyMessages,

@@ -3,7 +3,7 @@ import { ProcessingResult } from "../orchestrator";
 import { devLog, processMarkdownLinks } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { config } from "../config";
-import openai, { openAiModels } from "../openai";
+import openai from "../openai";
 
 interface WebSearchResult {
     success: boolean;
@@ -63,7 +63,7 @@ export async function webSearchAgent(
 async function performWebSearch(query: string): Promise<WebSearchResult> {
     try {
         const response = await openai.responses.create({
-            model: openAiModels.webSearchReasoningModel,
+            model: "gpt-5.4",
             input: [
                 {
                     role: "system",

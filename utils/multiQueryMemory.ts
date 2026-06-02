@@ -1,7 +1,7 @@
 import { BotContext, MemoryRelation, MemoryRelationType } from '../types';
 import { searchAllDomainsMemories, getAnchorMemories, getRecentMemories } from './enhancedDomainMemory';
 import { devLog } from '../utils';
-import openai, { openAiModels } from '../openai';
+import openai from '../openai';
 import { getVectorService } from '../services/VectorServiceFactory';
 import { llmCache, LLM_CACHE_TTL } from './llmCache';
 import { Contact } from '../stores/ContactsStore';
@@ -90,7 +90,7 @@ export async function classifyMemoryNeed(message: string): Promise<MemoryNeed> {
 
     try {
         const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: 'gpt-5.4-nano',
             messages: [
                 { role: 'system', content: 'Отвечай только одним словом: none, light или full.' },
                 {
@@ -806,7 +806,7 @@ CONTEXT:
 
     try {
         const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: 'gpt-5.4-nano',
             messages: [
                 {
                     role: 'system',
@@ -1154,7 +1154,7 @@ async function rerankFacts(
 
     try {
         const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+            model: 'gpt-5.4-nano',
             messages: [
                 {
                     role: 'system',
