@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ChatCompletionContentPart } from 'openai/resources/chat';
 import type { ProcessingResult } from '../orchestrator';
 import type { BotContext, MessageHistory } from '../types';
-import openai from '../openai';
+import openai, { openAiModels } from '../openai';
 import { USER_TIMEZONE } from '../constants';
 import { parseLLMJson } from '../utils';
 import { HealthLogKind, HealthLogRecord, HealthLogRepository, HealthTimeOfDay } from '../services/HealthLogRepository';
@@ -515,7 +515,7 @@ async function analyzeHealthPhoto(
     let analysisFailure: unknown;
     try {
         const response = await openai.chat.completions.create({
-            model: 'gpt-5.4',
+            model: openAiModels.conversationModel,
             messages: [
                 {
                     role: 'system',
@@ -644,7 +644,7 @@ async function analyzeHealthRequest(
 
     try {
         const response = await openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
+            model: openAiModels.memoryExtractionModel,
             messages: [
                 {
                     role: 'system',
@@ -915,7 +915,7 @@ async function extractDiscomfortLevel(message: string): Promise<DiscomfortExtrac
 
     try {
         const response = await openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
+            model: openAiModels.memoryExtractionModel,
             messages: [
                 {
                     role: 'system',
@@ -974,7 +974,7 @@ async function buildAIHealthAnalysis(
 
     try {
         const response = await openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
+            model: openAiModels.memoryExtractionModel,
             messages: [
                 {
                     role: 'system',

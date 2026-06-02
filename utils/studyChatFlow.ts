@@ -1,6 +1,6 @@
 import { Api } from 'telegram';
 import { initTelegramClient } from '../services/telegram';
-import openai from '../openai';
+import openai, { openAiModels } from '../openai';
 import { config } from '../config';
 import { parseLLMJson } from '../utils';
 import type { MemoryStatus } from '../types';
@@ -448,7 +448,7 @@ async function extractRawFactsFromChunk(
     // Два параллельных запроса — каждый про одного человека
     const [userResp, contactResp] = await Promise.allSettled([
         openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
+            model: openAiModels.memoryExtractionModel,
             messages: [
                 { role: 'system', content: EXTRACTION_SYSTEM },
                 { role: 'user', content: buildUserFactsPrompt(chunk, contactName, periodLabel) },
@@ -456,7 +456,7 @@ async function extractRawFactsFromChunk(
             temperature: 1,
         }),
         openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
+            model: openAiModels.memoryExtractionModel,
             messages: [
                 { role: 'system', content: EXTRACTION_SYSTEM },
                 { role: 'user', content: buildContactFactsPrompt(chunk, contactName, periodLabel) },
@@ -566,7 +566,7 @@ async function synthesizeGroup(
 
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5.4',
+            model: openAiModels.messageAnalysisModel,
             messages: [
                 { role: 'system', content: SYNTHESIS_SYSTEM },
                 { role: 'user', content: buildSynthesisPrompt(facts, personName) },
@@ -808,7 +808,7 @@ async function critiqueFactsAgainstConversation(
         const batch = gated.slice(i, i + FACT_CRITIC_BATCH_SIZE);
         try {
             const resp = await openai.chat.completions.create({
-                model: 'gpt-5.4-nano',
+                model: openAiModels.memoryExtractionModel,
                 messages: [
                     {
                         role: 'system',

@@ -2,7 +2,7 @@ import { Bot } from "grammy";
 import { BotContext } from "../types";
 import { config } from "../config";
 import { getBotPersona, getCommunicationStyle, getBotBiography } from "../persona";
-import openai from "../openai";
+import openai, { openAiModels } from "../openai";
 import {
   addKiraSelfEvent,
   getKiraSelfMemoryState,
@@ -108,7 +108,7 @@ async function maybeGenerateLifeEvent(): Promise<KiraSelfEvent> {
     .join(" | ");
 
   const response = await openai.chat.completions.create({
-    model: "gpt-5.4",
+    model: openAiModels.conversationModel,
     messages: [
       {
         role: "system",
@@ -164,7 +164,7 @@ async function buildProactiveMessage(): Promise<string> {
   const formatHint = PROACTIVE_MESSAGE_FORMATS[Math.floor(Math.random() * PROACTIVE_MESSAGE_FORMATS.length)];
 
   const response = await openai.chat.completions.create({
-    model: "gpt-5.4",
+    model: openAiModels.conversationModel,
     messages: [
       {
         role: "system",

@@ -22,7 +22,7 @@ import { BotContext } from '../types';
 import { config } from '../config';
 import { getVectorService } from './VectorServiceFactory';
 import { getProactiveChatId } from '../utils/allowedUserChatStore';
-import openai from '../openai';
+import openai, { openAiModels } from '../openai';
 import { parseLLMJson } from '../utils';
 import { getBotPersona, getCommunicationStyle } from '../persona';
 import { appendPersistedHistory, saveProactiveInsight } from './SessionStorage';
@@ -212,7 +212,7 @@ ${doneText}
 {"shouldSend": true/false, "message": "текст сообщения для пользователя или пустая строка", "sourceIndexes": [номера пунктов из списка планов, на которых основано сообщение]}`;
 
     const resp = await openai.chat.completions.create({
-        model: 'gpt-5.4',
+        model: openAiModels.messageAnalysisModel,
         messages: [
             { role: 'system', content: `${getBotPersona()}\nСтиль: ${getCommunicationStyle()}\nОтвечай только валидным JSON.` },
             { role: 'user', content: prompt },

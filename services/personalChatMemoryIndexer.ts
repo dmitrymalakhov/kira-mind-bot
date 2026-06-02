@@ -18,7 +18,7 @@ import { initTelegramClient } from './telegram';
 import { getVectorService } from './VectorServiceFactory';
 import { runMemorySchemaConsolidationForUser } from './MemorySchemaConsolidationService';
 import { runMemorySleepCycleForUser } from './MemorySleepCycleService';
-import openai from '../openai';
+import openai, { openAiModels } from '../openai';
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const STATE_PATH = path.join(DATA_DIR, `${config.botUsername.toLowerCase()}-personal-chat-memory-index.json`);
@@ -332,7 +332,7 @@ async function summarizeChatEpisode(
 ): Promise<ChatEpisodeSummary> {
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
+            model: openAiModels.memoryExtractionModel,
             messages: [
                 {
                     role: 'system',
