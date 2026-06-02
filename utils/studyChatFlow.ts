@@ -302,7 +302,7 @@ const DOMAIN_LIST = 'work|health|family|finance|education|hobbies|travel|social|
 
 /** Промпт для извлечения фактов о владельце бота ("Я") */
 function buildUserFactsPrompt(chunk: string, contactName: string, periodLabel: string): string {
-    const ownerName = config.ownerName || 'Дмитрий';
+    const ownerName = config.ownerName || 'пользователь';
     return `Переписка ${ownerName} ("Я") с ${contactName}. Период: ${periodLabel}.
 
 Твоя задача: извлечь факты ТОЛЬКО о ${ownerName}.
@@ -369,7 +369,7 @@ JSON:
 
 /** Промпт для извлечения фактов о собеседнике (контакте) */
 function buildContactFactsPrompt(chunk: string, contactName: string, periodLabel: string): string {
-    const ownerName = config.ownerName || 'Дмитрий';
+    const ownerName = config.ownerName || 'пользователь';
     return `Переписка ${ownerName} ("Я") с ${contactName}. Период: ${periodLabel}.
 
 Твоя задача: извлечь факты ТОЛЬКО о ${contactName}.
@@ -594,7 +594,7 @@ async function synthesizeFacts(
 ): Promise<ExtractedFactAboutUser[]> {
     if (rawFacts.length === 0) return [];
 
-    const ownerName = config.ownerName || 'Дмитрий';
+    const ownerName = config.ownerName || 'пользователь';
     const userFacts = rawFacts.filter(f => f.subject === 'user');
     const contactFacts = rawFacts.filter(f => f.subject === 'contact');
 
@@ -684,7 +684,7 @@ function buildCriticPrompt(
     contactName: string,
     periodLabel: string
 ): string {
-    const ownerName = config.ownerName || 'Дмитрий';
+    const ownerName = config.ownerName || 'пользователь';
     const factsText = facts.map((fact, index) => [
         `${index}. subject=${fact.subject}`,
         `domain=${fact.domain}`,

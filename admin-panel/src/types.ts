@@ -31,6 +31,7 @@ export interface Toast {
 }
 
 export interface PersonalityProfile {
+  characterName: string;
   persona: string;
   communicationStyle: string;
   biography: string;

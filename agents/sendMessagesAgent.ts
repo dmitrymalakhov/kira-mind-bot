@@ -46,7 +46,7 @@ export function wantsOutboundVoiceMessage(message: string): boolean {
 }
 
 export function buildOutboundVoiceSpeechText(messageText: string): string {
-    const botName = config.characterName || "Кира";
+    const botName = config.characterName;
     const ownerName = config.ownerName || config.userName || "пользователя";
     return `Привет, это ${botName}, личный ассистент ${ownerName}. Передаю сообщение: ${messageText.trim()}`;
 }

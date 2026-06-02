@@ -86,7 +86,7 @@ export async function sendMessage(
 ): Promise<{ success: boolean, messageId: number | null }> {
     try {
         // Добавляем подпись к сообщению
-        const botName = config.characterName || "Кира";
+        const botName = config.characterName;
         const botUsername = config.botUsername || "KiraMindBot";
 
         // Элегантная подпись с разделительной линией
@@ -215,7 +215,7 @@ export async function sendMessageToChat(
     message: string
 ): Promise<{ success: boolean, messageId: number | null }> {
     try {
-        const botName = config.characterName || "Кира";
+        const botName = config.characterName;
         const botUsername = config.botUsername || "KiraMindBot";
         const signature = `\n\n──────────\n✉️ ${botName} | @${botUsername}`;
         const messageWithSignature = message + signature;

@@ -12,14 +12,9 @@ interface TargetReminderButtonSource {
 
 function ownerNameForInstruction(): string {
     const name = (config.ownerName || "").trim();
-    if (!name) return "пользователя";
-
-    const known: Record<string, string> = {
-        Дмитрий: "Дмитрия",
-        Дима: "Димы",
-        Юлия: "Юлии",
-    };
-    if (known[name]) return known[name];
+    if (!name) return config.userGender === "female" ? "владелицы" : "владельца";
+    if (/^владелец$/iu.test(name)) return "владельца";
+    if (/^владелица$/iu.test(name)) return "владелицы";
     if (/ия$/iu.test(name)) return `${name.slice(0, -1)}и`;
     if (/ий$/iu.test(name)) return `${name.slice(0, -2)}ия`;
     if (/а$/iu.test(name)) return `${name.slice(0, -1)}ы`;

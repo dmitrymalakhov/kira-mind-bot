@@ -94,7 +94,7 @@ function ensureConfigLoaded() {
 
     return {
       botToken,
-      characterName: activeAssistant === "SergeyBrainBot" ? "Сергей" : "Кира",
+      characterName: "Ассистент",
       allowedUserId: activeAssistant === "SergeyBrainBot" ? 108595356 : 92174505,
       openAiApiKey: process.env.OPENAI_API_KEY || "",
     };
