@@ -10,7 +10,6 @@ yarn-error.log
 # Docker
 *.log
 docker-compose.override.yml
-.dockerignore
 
 # Environment variables
 .env
