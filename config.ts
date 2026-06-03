@@ -1,5 +1,6 @@
 import * as dotenv from "dotenv";
 import * as fs from "fs";
+import openAiModelRegistry from "./admin-panel/src/openai-model-registry.json";
 
 // ── Загрузка personality.json (редактируется через admin panel) ───────────────
 interface PersonalityOverride {
@@ -164,6 +165,14 @@ interface RawOpenAIModelsConfig {
   transcriptionModel: string;
 }
 
+interface OpenAIModelRegistryField {
+  envKey: string;
+  configKey: keyof OpenAIModelsConfig;
+  kind: "default_text" | "text_override" | "fixed";
+  resolution: "system_default" | "inherits_default_text";
+  systemDefault: string;
+}
+
 export interface Config extends AssistantConfig {
   openAiApiKey: string;
   openAiModels: OpenAIModelsConfig;
@@ -207,28 +216,36 @@ function hasEnvKey(key: string): boolean {
   return Object.prototype.hasOwnProperty.call(process.env, key);
 }
 
-function readTextModelOverride(key: string, missingFallback?: string): string | undefined {
-  if (!hasEnvKey(key)) return missingFallback;
-  return toOptionalString(process.env[key]);
+const openAiModelFields = (openAiModelRegistry.fields as OpenAIModelRegistryField[]);
+
+function resolveRawOpenAIField(field: OpenAIModelRegistryField): string | undefined {
+  const rawValue = hasEnvKey(field.envKey) ? process.env[field.envKey] : undefined;
+  const explicitValue = toOptionalString(rawValue);
+
+  if (field.kind === "default_text" || field.kind === "fixed") {
+    return explicitValue ?? field.systemDefault;
+  }
+
+  if (!hasEnvKey(field.envKey)) {
+    return field.resolution === "system_default" ? field.systemDefault : undefined;
+  }
+
+  return explicitValue;
 }
 
 function resolveOpenAIModels(raw: RawOpenAIModelsConfig): OpenAIModelsConfig {
   const fallbackTextModel = raw.defaultTextModel;
+  const resolved = {} as OpenAIModelsConfig;
 
-  return {
-    defaultTextModel: fallbackTextModel,
-    intentClassificationModel: raw.intentClassificationModel ?? fallbackTextModel,
-    intentDedupModel: raw.intentDedupModel ?? fallbackTextModel,
-    conversationModel: raw.conversationModel ?? fallbackTextModel,
-    memoryExtractionModel: raw.memoryExtractionModel ?? fallbackTextModel,
-    memoryConsolidationModel: raw.memoryConsolidationModel ?? fallbackTextModel,
-    messageAnalysisModel: raw.messageAnalysisModel ?? fallbackTextModel,
-    webSearchReasoningModel: raw.webSearchReasoningModel ?? fallbackTextModel,
-    browserPlanningModel: raw.browserPlanningModel ?? fallbackTextModel,
-    browserVisionModel: raw.browserVisionModel,
-    embeddingModel: raw.embeddingModel,
-    transcriptionModel: raw.transcriptionModel,
-  };
+  for (const field of openAiModelFields) {
+    const rawValue = raw[field.configKey];
+    resolved[field.configKey] =
+      field.kind === "text_override"
+        ? (rawValue ?? fallbackTextModel)
+        : (rawValue as string);
+  }
+
+  return resolved;
 }
 
 function assistants(activeAssistant: string): AssistantConfig {
@@ -469,20 +486,9 @@ function createConfig() {
       }
       : undefined;
 
-  const rawOpenAiModels: RawOpenAIModelsConfig = {
-    defaultTextModel: process.env.OPENAI_MODEL_DEFAULT_TEXT || "gpt-5.4",
-    intentClassificationModel: readTextModelOverride("OPENAI_MODEL_INTENT_CLASSIFICATION", "gpt-5.2"),
-    intentDedupModel: readTextModelOverride("OPENAI_MODEL_INTENT_DEDUP", "gpt-5.2"),
-    conversationModel: readTextModelOverride("OPENAI_MODEL_CONVERSATION"),
-    memoryExtractionModel: readTextModelOverride("OPENAI_MODEL_MEMORY_EXTRACTION", "gpt-5.4-nano"),
-    memoryConsolidationModel: readTextModelOverride("OPENAI_MODEL_MEMORY_CONSOLIDATION"),
-    messageAnalysisModel: readTextModelOverride("OPENAI_MODEL_MESSAGE_ANALYSIS"),
-    webSearchReasoningModel: readTextModelOverride("OPENAI_MODEL_WEB_SEARCH_REASONING"),
-    browserPlanningModel: readTextModelOverride("OPENAI_MODEL_BROWSER_PLANNING", "gpt-5.4-nano"),
-    browserVisionModel: process.env.OPENAI_MODEL_BROWSER_VISION || "gpt-4o",
-    embeddingModel: process.env.OPENAI_MODEL_EMBEDDING || "text-embedding-ada-002",
-    transcriptionModel: process.env.OPENAI_MODEL_TRANSCRIPTION || "whisper-1",
-  };
+  const rawOpenAiModels = Object.fromEntries(
+    openAiModelFields.map((field) => [field.configKey, resolveRawOpenAIField(field)])
+  ) as unknown as RawOpenAIModelsConfig;
   const openAiModels = resolveOpenAIModels(rawOpenAiModels);
 
   return {

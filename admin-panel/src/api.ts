@@ -3,6 +3,7 @@ import type {
   HealthExportFormat,
   HealthLogQuery,
   HealthLogsResponse,
+  ModelPresetResponse,
   PersonalityConfig,
 } from './types';
 
@@ -25,13 +26,19 @@ export async function fetchConfig(): Promise<ConfigResponse> {
   return r.json();
 }
 
-export async function saveConfig(data: Record<string, string>) {
+export async function saveConfig(data: Record<string, string | null>) {
   const r = await fetch('/api/config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   return r.json() as Promise<{ success: boolean; message?: string; error?: string }>;
+}
+
+export async function fetchModelPresets(): Promise<ModelPresetResponse> {
+  const r = await fetch('/api/model-presets');
+  if (!r.ok) throw new Error('Failed to load model presets');
+  return r.json();
 }
 
 export async function fetchPersonality(): Promise<PersonalityConfig> {
