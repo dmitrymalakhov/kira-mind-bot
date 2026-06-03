@@ -18,9 +18,9 @@ show_help() {
 Usage:
   ./server-deploy.sh deploy [--clean]
   ./server-deploy.sh status
-  ./server-deploy.sh logs [service]
+  ./server-deploy.sh logs [-f|--follow] [service]
   ./server-deploy.sh restart [service]
-  ./server-deploy.sh stop
+  ./server-deploy.sh stop [service]
   ./server-deploy.sh help
 
 Commands:
@@ -28,11 +28,12 @@ Commands:
   status        Показать статус сервисов из docker-compose.server.yml.
   logs          Показать последние логи всего стека или одного сервиса.
   restart       Перезапустить app-сервисы или один конкретный сервис.
-  stop          Остановить app-сервисы без удаления volumes.
+  stop          Остановить весь стек или один конкретный сервис без удаления volumes.
   help          Показать эту справку.
 
 Options:
   --clean       Для deploy: выполнить down и безопасную Docker-очистку перед rebuild.
+  -f, --follow  Для logs: следить за логами в реальном времени.
 EOF
 }
 
@@ -50,6 +51,15 @@ shift || true
 
 DEPLOY_CLEAN=false
 TARGET_SERVICE=""
+FOLLOW_LOGS=false
+
+validate_service_name() {
+    local service="$1"
+
+    if ! compose config --services | grep -Fxq "$service"; then
+        error "Сервис $service не найден в $SERVER_COMPOSE_FILE"
+    fi
+}
 
 case "$COMMAND" in
     deploy)
@@ -60,13 +70,30 @@ case "$COMMAND" in
             esac
         done
         ;;
-    logs|restart)
+    logs)
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                -f|--follow)
+                    FOLLOW_LOGS=true
+                    shift
+                    ;;
+                *)
+                    if [[ -n "$TARGET_SERVICE" ]]; then
+                        error "Слишком много аргументов для команды logs"
+                    fi
+                    TARGET_SERVICE="$1"
+                    shift
+                    ;;
+            esac
+        done
+        ;;
+    restart|stop)
         if [[ $# -gt 1 ]]; then
             error "Слишком много аргументов для команды $COMMAND"
         fi
         TARGET_SERVICE="${1:-}"
         ;;
-    status|stop|help)
+    status|help)
         if [[ $# -gt 0 ]]; then
             error "Команда $COMMAND не принимает аргументы"
         fi
@@ -107,18 +134,27 @@ deploy_stack() {
 }
 
 show_logs() {
+    local args=(logs --tail 100)
+
+    if [ "$FOLLOW_LOGS" = true ]; then
+        args+=(--follow)
+    fi
+
     if [ -n "$TARGET_SERVICE" ]; then
-        compose logs --tail 100 "$TARGET_SERVICE"
+        validate_service_name "$TARGET_SERVICE"
+        args+=("$TARGET_SERVICE")
+        compose "${args[@]}"
         return
     fi
 
-    compose logs --tail 100
+    compose "${args[@]}"
 }
 
 restart_services() {
     header "Restart"
 
     if [ -n "$TARGET_SERVICE" ]; then
+        validate_service_name "$TARGET_SERVICE"
         compose restart "$TARGET_SERVICE"
         if ! verify_services_running "$TARGET_SERVICE"; then
             error "Сервис $TARGET_SERVICE не запустился после restart"
@@ -136,8 +172,16 @@ restart_services() {
 
 stop_services() {
     header "Stop"
-    compose stop "${APP_SERVICES[@]}"
-    success "App-сервисы остановлены"
+
+    if [ -n "$TARGET_SERVICE" ]; then
+        validate_service_name "$TARGET_SERVICE"
+        compose stop "$TARGET_SERVICE"
+        success "Сервис $TARGET_SERVICE остановлен"
+        return
+    fi
+
+    compose stop
+    success "Весь стек остановлен"
 }
 
 case "$COMMAND" in
