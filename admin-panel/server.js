@@ -91,6 +91,35 @@ const EDITABLE_KEYS = new Set([
   'SERGEY_PROACTIVE_QUIET_HOURS_ENABLED', 'SERGEY_PROACTIVE_QUIET_HOUR_START', 'SERGEY_PROACTIVE_QUIET_HOUR_END',
 ]);
 
+const OPENAI_MODEL_KEYS = [
+  'OPENAI_MODEL_DEFAULT_TEXT',
+  'OPENAI_MODEL_INTENT_CLASSIFICATION',
+  'OPENAI_MODEL_INTENT_DEDUP',
+  'OPENAI_MODEL_CONVERSATION',
+  'OPENAI_MODEL_MEMORY_EXTRACTION',
+  'OPENAI_MODEL_MEMORY_CONSOLIDATION',
+  'OPENAI_MODEL_MESSAGE_ANALYSIS',
+  'OPENAI_MODEL_WEB_SEARCH_REASONING',
+  'OPENAI_MODEL_BROWSER_PLANNING',
+  'OPENAI_MODEL_BROWSER_VISION',
+  'OPENAI_MODEL_EMBEDDING',
+  'OPENAI_MODEL_TRANSCRIPTION',
+];
+
+const OPENAI_TEXT_MODEL_FALLBACKS = {
+  OPENAI_MODEL_INTENT_CLASSIFICATION: 'gpt-5.2',
+  OPENAI_MODEL_INTENT_DEDUP: 'gpt-5.2',
+  OPENAI_MODEL_MEMORY_EXTRACTION: 'gpt-5.4-nano',
+  OPENAI_MODEL_BROWSER_PLANNING: 'gpt-5.4-nano',
+};
+
+const OPENAI_NON_TEXT_MODEL_DEFAULTS = {
+  OPENAI_MODEL_DEFAULT_TEXT: 'gpt-5.4',
+  OPENAI_MODEL_BROWSER_VISION: 'gpt-4o',
+  OPENAI_MODEL_EMBEDDING: 'text-embedding-ada-002',
+  OPENAI_MODEL_TRANSCRIPTION: 'whisper-1',
+};
+
 // ── Env file helpers ──────────────────────────────────────────────────────────
 
 function readEnvFile() {
@@ -130,6 +159,62 @@ function writeEnvFile(updates) {
 
   fs.writeFileSync(BOT_ENV_FILE, newLines.join('\n'));
   return true;
+}
+
+function hasEnvVar(vars, key) {
+  return Object.prototype.hasOwnProperty.call(vars, key);
+}
+
+function toOptionalString(value) {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
+function buildOpenAIModelEntries(vars) {
+  const result = {};
+  const defaultTextRaw = hasEnvVar(vars, 'OPENAI_MODEL_DEFAULT_TEXT')
+    ? vars.OPENAI_MODEL_DEFAULT_TEXT
+    : '';
+  const defaultTextExplicit = toOptionalString(defaultTextRaw);
+  const defaultTextValue = defaultTextExplicit || OPENAI_NON_TEXT_MODEL_DEFAULTS.OPENAI_MODEL_DEFAULT_TEXT;
+
+  for (const key of OPENAI_MODEL_KEYS) {
+    const rawValue = hasEnvVar(vars, key) ? vars[key] : '';
+    const explicitValue = toOptionalString(rawValue);
+    let value = '';
+    let source = 'system_default';
+
+    if (key === 'OPENAI_MODEL_DEFAULT_TEXT') {
+      value = defaultTextValue;
+      source = explicitValue ? 'env_file' : 'system_default';
+    } else if (key in OPENAI_NON_TEXT_MODEL_DEFAULTS) {
+      value = explicitValue || OPENAI_NON_TEXT_MODEL_DEFAULTS[key];
+      source = explicitValue ? 'env_file' : 'system_default';
+    } else if (explicitValue) {
+      value = explicitValue;
+      source = 'env_file';
+    } else if (hasEnvVar(vars, key)) {
+      value = defaultTextValue;
+      source = 'inherited_default_text';
+    } else if (key in OPENAI_TEXT_MODEL_FALLBACKS) {
+      value = OPENAI_TEXT_MODEL_FALLBACKS[key];
+      source = 'system_default';
+    } else {
+      value = defaultTextValue;
+      source = 'inherited_default_text';
+    }
+
+    result[key] = {
+      value,
+      rawValue,
+      masked: false,
+      source,
+      configPath: BOT_ENV_FILE,
+    };
+  }
+
+  return result;
 }
 
 // ── Docker socket ─────────────────────────────────────────────────────────────
@@ -204,6 +289,7 @@ app.get('/api/config', requireAuth, (req, res) => {
       result[key] = { value, masked: false };
     }
   }
+  Object.assign(result, buildOpenAIModelEntries(vars));
   res.json(result);
 });
 

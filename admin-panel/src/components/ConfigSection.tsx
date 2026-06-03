@@ -10,6 +10,9 @@ import {
   FormControlLabel,
   Checkbox,
   Tooltip,
+  Box,
+  Typography,
+  Chip,
 } from '@mui/material';
 import SaveIcon from '@mui/icons-material/Save';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
@@ -29,18 +32,43 @@ export interface ConfigSectionHandle {
   getUpdates: () => Record<string, string>;
 }
 
+const OPENAI_SECTION_ID = 'openai-models';
+
+function getEntryRawValue(entry?: ConfigResponse[string]): string {
+  if (!entry) return '';
+  if (entry.rawValue !== undefined) return entry.rawValue;
+  return entry.value ?? '';
+}
+
+function getSourceLabel(source?: ConfigResponse[string]['source']): string | null {
+  switch (source) {
+    case 'env_file':
+      return 'Из env-файла';
+    case 'inherited_default_text':
+      return 'Наследуется от Default Text Model';
+    case 'system_default':
+      return 'Системный дефолт';
+    default:
+      return null;
+  }
+}
+
 export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
   function ConfigSection({ section, config, onUpdate, onToast }, ref) {
+    const isOpenAIModelsSection = section.id === OPENAI_SECTION_ID;
     const [localValues, setLocalValues] = useState<Record<string, string>>(() =>
-      Object.fromEntries(section.fields.map((f) => [f.key, config[f.key]?.value ?? '']))
+      Object.fromEntries(section.fields.map((f) => [f.key, getEntryRawValue(config[f.key])]))
     );
     const [saving, setSaving] = useState(false);
-  const [autoRestart, setAutoRestart] = useState(false);
+    const [autoRestart, setAutoRestart] = useState(false);
+    const configPath = isOpenAIModelsSection
+      ? section.fields.map((f) => config[f.key]?.configPath).find(Boolean)
+      : undefined;
 
     // Re-sync when parent config changes (e.g. after Save All refreshes config)
     useEffect(() => {
       setLocalValues(
-        Object.fromEntries(section.fields.map((f) => [f.key, config[f.key]?.value ?? '']))
+        Object.fromEntries(section.fields.map((f) => [f.key, getEntryRawValue(config[f.key])]))
       );
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [config]);
@@ -52,6 +80,8 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
         for (const field of section.fields) {
           const val = localValues[field.key] ?? '';
           if (val.includes('••••')) continue; // unchanged masked — skip
+          const initialValue = getEntryRawValue(config[field.key]);
+          if (val === initialValue) continue;
           updates[field.key] = val;
         }
         return updates;
@@ -69,6 +99,8 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
         for (const field of section.fields) {
           const val = localValues[field.key] ?? '';
           if (val.includes('••••')) continue;
+          const initialValue = getEntryRawValue(config[field.key]);
+          if (val === initialValue) continue;
           updates[field.key] = val;
         }
         const result = await saveConfig(updates);
@@ -86,7 +118,7 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
           const newCfg = await fetchConfig();
           onUpdate(newCfg);
           setLocalValues(
-            Object.fromEntries(section.fields.map((f) => [f.key, newCfg[f.key]?.value ?? '']))
+            Object.fromEntries(section.fields.map((f) => [f.key, getEntryRawValue(newCfg[f.key])]))
           );
         } else {
           onToast(result.error || 'Ошибка сохранения', 'error');
@@ -149,6 +181,12 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
           sx={{ pb: 0 }}
         />
         <CardContent>
+          {isOpenAIModelsSection && configPath && (
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 2 }}>
+              Источник настроек: {configPath}
+            </Typography>
+          )}
+
           {regularFields.length > 0 && (
             <Grid container spacing={2} sx={{ mb: toggleFields.length > 0 ? 0 : undefined }}>
               {regularFields.map((field) => (
@@ -158,11 +196,22 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
                   xs={12}
                   sm={field.type === 'textarea' ? 12 : 6}
                 >
-                  <FieldInput
-                    field={field}
-                    value={localValues[field.key] ?? ''}
-                    onChange={handleChange}
-                  />
+                  <Box>
+                    <FieldInput
+                      field={field}
+                      value={localValues[field.key] ?? ''}
+                      displayValue={isOpenAIModelsSection ? config[field.key]?.value : undefined}
+                      onChange={handleChange}
+                    />
+                    {isOpenAIModelsSection && getSourceLabel(config[field.key]?.source) && (
+                      <Chip
+                        size="small"
+                        label={getSourceLabel(config[field.key]?.source)}
+                        variant="outlined"
+                        sx={{ mt: 1, height: 22, fontSize: '11px' }}
+                      />
+                    )}
+                  </Box>
                 </Grid>
               ))}
             </Grid>

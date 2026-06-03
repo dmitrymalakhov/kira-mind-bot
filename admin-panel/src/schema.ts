@@ -44,7 +44,14 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         label: 'Intent Classification Model',
         type: 'text',
         placeholder: 'gpt-5.2',
-        hint: 'Маршрутизация пользовательского запроса по интентам. Оставь пустым, чтобы использовать Default Text Model.',
+        hint: 'Маршрутизация пользовательского запроса по интентам. Пусто = Default Text Model, если override уже заведён; иначе используется системный дефолт.',
+      },
+      {
+        key: 'OPENAI_MODEL_INTENT_DEDUP',
+        label: 'Intent Dedup Model',
+        type: 'text',
+        placeholder: 'gpt-5.2',
+        hint: 'Удаление дублей и близких интентов. Пусто = Default Text Model или системный дефолт, если override не задан.',
       },
       {
         key: 'OPENAI_MODEL_CONVERSATION',
@@ -65,7 +72,14 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         label: 'Memory Extraction Model',
         type: 'text',
         placeholder: 'gpt-5.4-nano',
-        hint: 'Извлечение фактов, triage, память и дешёвые структурные шаги. Пусто = использовать Default Text Model.',
+        hint: 'Извлечение фактов, triage, память и дешёвые структурные шаги. Пусто = Default Text Model, если override уже заведён; иначе используется системный дефолт.',
+      },
+      {
+        key: 'OPENAI_MODEL_MEMORY_CONSOLIDATION',
+        label: 'Memory Consolidation Model',
+        type: 'text',
+        placeholder: 'gpt-5.4',
+        hint: 'Фоновая консолидация памяти. Пусто = использовать Default Text Model.',
       },
       {
         key: 'OPENAI_MODEL_EMBEDDING',
@@ -73,6 +87,20 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         type: 'text',
         placeholder: 'text-embedding-ada-002',
         hint: 'Эмбеддинги для векторной памяти.',
+      },
+      {
+        key: 'OPENAI_MODEL_WEB_SEARCH_REASONING',
+        label: 'Web Search Reasoning Model',
+        type: 'text',
+        placeholder: 'gpt-5.4',
+        hint: 'Рассуждение поверх web search. Пусто = использовать Default Text Model.',
+      },
+      {
+        key: 'OPENAI_MODEL_BROWSER_PLANNING',
+        label: 'Browser Planning Model',
+        type: 'text',
+        placeholder: 'gpt-5.4-nano',
+        hint: 'Планирование шагов браузерного агента. Пусто = Default Text Model или системный дефолт, если override не задан.',
       },
       {
         key: 'OPENAI_MODEL_TRANSCRIPTION',

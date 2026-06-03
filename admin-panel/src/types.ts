@@ -1,6 +1,9 @@
 export interface ConfigEntry {
   value: string;
   masked: boolean;
+  rawValue?: string;
+  source?: 'env_file' | 'inherited_default_text' | 'system_default';
+  configPath?: string;
 }
 
 export interface ConfigResponse {
