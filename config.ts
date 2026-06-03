@@ -203,6 +203,15 @@ function toOptionalString(value: string | undefined): string | undefined {
   return trimmed === "" ? undefined : trimmed;
 }
 
+function hasEnvKey(key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(process.env, key);
+}
+
+function readTextModelOverride(key: string, missingFallback?: string): string | undefined {
+  if (!hasEnvKey(key)) return missingFallback;
+  return toOptionalString(process.env[key]);
+}
+
 function resolveOpenAIModels(raw: RawOpenAIModelsConfig): OpenAIModelsConfig {
   const fallbackTextModel = raw.defaultTextModel;
 
@@ -462,14 +471,14 @@ function createConfig() {
 
   const rawOpenAiModels: RawOpenAIModelsConfig = {
     defaultTextModel: process.env.OPENAI_MODEL_DEFAULT_TEXT || "gpt-5.4",
-    intentClassificationModel: toOptionalString(process.env.OPENAI_MODEL_INTENT_CLASSIFICATION) ?? "gpt-5.2",
-    intentDedupModel: toOptionalString(process.env.OPENAI_MODEL_INTENT_DEDUP) ?? "gpt-5.2",
-    conversationModel: toOptionalString(process.env.OPENAI_MODEL_CONVERSATION),
-    memoryExtractionModel: toOptionalString(process.env.OPENAI_MODEL_MEMORY_EXTRACTION) ?? "gpt-5.4-nano",
-    memoryConsolidationModel: toOptionalString(process.env.OPENAI_MODEL_MEMORY_CONSOLIDATION),
-    messageAnalysisModel: toOptionalString(process.env.OPENAI_MODEL_MESSAGE_ANALYSIS),
-    webSearchReasoningModel: toOptionalString(process.env.OPENAI_MODEL_WEB_SEARCH_REASONING),
-    browserPlanningModel: toOptionalString(process.env.OPENAI_MODEL_BROWSER_PLANNING) ?? "gpt-5.4-nano",
+    intentClassificationModel: readTextModelOverride("OPENAI_MODEL_INTENT_CLASSIFICATION", "gpt-5.2"),
+    intentDedupModel: readTextModelOverride("OPENAI_MODEL_INTENT_DEDUP", "gpt-5.2"),
+    conversationModel: readTextModelOverride("OPENAI_MODEL_CONVERSATION"),
+    memoryExtractionModel: readTextModelOverride("OPENAI_MODEL_MEMORY_EXTRACTION", "gpt-5.4-nano"),
+    memoryConsolidationModel: readTextModelOverride("OPENAI_MODEL_MEMORY_CONSOLIDATION"),
+    messageAnalysisModel: readTextModelOverride("OPENAI_MODEL_MESSAGE_ANALYSIS"),
+    webSearchReasoningModel: readTextModelOverride("OPENAI_MODEL_WEB_SEARCH_REASONING"),
+    browserPlanningModel: readTextModelOverride("OPENAI_MODEL_BROWSER_PLANNING", "gpt-5.4-nano"),
     browserVisionModel: process.env.OPENAI_MODEL_BROWSER_VISION || "gpt-4o",
     embeddingModel: process.env.OPENAI_MODEL_EMBEDDING || "text-embedding-ada-002",
     transcriptionModel: process.env.OPENAI_MODEL_TRANSCRIPTION || "whisper-1",
