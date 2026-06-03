@@ -147,22 +147,22 @@
     {
       "id": "gpt_balanced",
       "title": "GPT Balanced",
-      "description": "Удешевление интентов и части анализа без снижения базового разговорного качества.",
+      "description": "Умеренное снижение стоимости с переносом разговорного контура и фонового анализа на mini.",
       "riskLabel": "Низкий риск",
-      "costLabel": "Средняя цена",
+      "costLabel": "Ниже средней",
       "qualityLabel": "Высокое качество",
       "values": {
         "OPENAI_MODEL_DEFAULT_TEXT": null,
         "OPENAI_MODEL_INTENT_CLASSIFICATION": "gpt-5.4-mini",
         "OPENAI_MODEL_INTENT_DEDUP": "gpt-5.4-mini",
-        "OPENAI_MODEL_CONVERSATION": null,
+        "OPENAI_MODEL_CONVERSATION": "gpt-5.4-mini",
         "OPENAI_MODEL_MEMORY_EXTRACTION": null,
-        "OPENAI_MODEL_MEMORY_CONSOLIDATION": null,
+        "OPENAI_MODEL_MEMORY_CONSOLIDATION": "gpt-5.4-mini",
         "OPENAI_MODEL_MESSAGE_ANALYSIS": "gpt-5.4-mini",
         "OPENAI_MODEL_WEB_SEARCH_REASONING": "gpt-5.4-mini",
         "OPENAI_MODEL_BROWSER_PLANNING": null,
         "OPENAI_MODEL_BROWSER_VISION": null,
-        "OPENAI_MODEL_EMBEDDING": null,
+        "OPENAI_MODEL_EMBEDDING": "text-embedding-3-small",
         "OPENAI_MODEL_TRANSCRIPTION": null
       }
     },
