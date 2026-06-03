@@ -135,6 +135,7 @@ interface AssistantConfig {
 }
 
 export interface OpenAIModelsConfig {
+  defaultTextModel: string;
   intentClassificationModel: string;
   intentDedupModel: string;
   conversationModel: string;
@@ -143,6 +144,21 @@ export interface OpenAIModelsConfig {
   messageAnalysisModel: string;
   webSearchReasoningModel: string;
   browserPlanningModel: string;
+  browserVisionModel: string;
+  embeddingModel: string;
+  transcriptionModel: string;
+}
+
+interface RawOpenAIModelsConfig {
+  defaultTextModel: string;
+  intentClassificationModel?: string;
+  intentDedupModel?: string;
+  conversationModel?: string;
+  memoryExtractionModel?: string;
+  memoryConsolidationModel?: string;
+  messageAnalysisModel?: string;
+  webSearchReasoningModel?: string;
+  browserPlanningModel?: string;
   browserVisionModel: string;
   embeddingModel: string;
   transcriptionModel: string;
@@ -179,6 +195,31 @@ function toOptionalNumber(value: string | undefined): number | undefined {
   if (value === undefined || value.trim() === "") return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function toOptionalString(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+function resolveOpenAIModels(raw: RawOpenAIModelsConfig): OpenAIModelsConfig {
+  const fallbackTextModel = raw.defaultTextModel;
+
+  return {
+    defaultTextModel: fallbackTextModel,
+    intentClassificationModel: raw.intentClassificationModel ?? fallbackTextModel,
+    intentDedupModel: raw.intentDedupModel ?? fallbackTextModel,
+    conversationModel: raw.conversationModel ?? fallbackTextModel,
+    memoryExtractionModel: raw.memoryExtractionModel ?? fallbackTextModel,
+    memoryConsolidationModel: raw.memoryConsolidationModel ?? fallbackTextModel,
+    messageAnalysisModel: raw.messageAnalysisModel ?? fallbackTextModel,
+    webSearchReasoningModel: raw.webSearchReasoningModel ?? fallbackTextModel,
+    browserPlanningModel: raw.browserPlanningModel ?? fallbackTextModel,
+    browserVisionModel: raw.browserVisionModel,
+    embeddingModel: raw.embeddingModel,
+    transcriptionModel: raw.transcriptionModel,
+  };
 }
 
 function assistants(activeAssistant: string): AssistantConfig {
@@ -419,19 +460,21 @@ function createConfig() {
       }
       : undefined;
 
-  const openAiModels: OpenAIModelsConfig = {
-    intentClassificationModel: process.env.OPENAI_MODEL_INTENT_CLASSIFICATION || "gpt-5.4-mini",
-    intentDedupModel: process.env.OPENAI_MODEL_INTENT_DEDUP || "gpt-5.4-mini",
-    conversationModel: process.env.OPENAI_MODEL_CONVERSATION || "gpt-5.4",
-    memoryExtractionModel: process.env.OPENAI_MODEL_MEMORY_EXTRACTION || "gpt-5.4-nano",
-    memoryConsolidationModel: process.env.OPENAI_MODEL_MEMORY_CONSOLIDATION || "gpt-5.4",
-    messageAnalysisModel: process.env.OPENAI_MODEL_MESSAGE_ANALYSIS || "gpt-5.4",
-    webSearchReasoningModel: process.env.OPENAI_MODEL_WEB_SEARCH_REASONING || "gpt-5.4",
-    browserPlanningModel: process.env.OPENAI_MODEL_BROWSER_PLANNING || "gpt-5.4-nano",
+  const rawOpenAiModels: RawOpenAIModelsConfig = {
+    defaultTextModel: process.env.OPENAI_MODEL_DEFAULT_TEXT || "gpt-5.4",
+    intentClassificationModel: toOptionalString(process.env.OPENAI_MODEL_INTENT_CLASSIFICATION) ?? "gpt-5.2",
+    intentDedupModel: toOptionalString(process.env.OPENAI_MODEL_INTENT_DEDUP) ?? "gpt-5.2",
+    conversationModel: toOptionalString(process.env.OPENAI_MODEL_CONVERSATION),
+    memoryExtractionModel: toOptionalString(process.env.OPENAI_MODEL_MEMORY_EXTRACTION) ?? "gpt-5.4-nano",
+    memoryConsolidationModel: toOptionalString(process.env.OPENAI_MODEL_MEMORY_CONSOLIDATION),
+    messageAnalysisModel: toOptionalString(process.env.OPENAI_MODEL_MESSAGE_ANALYSIS),
+    webSearchReasoningModel: toOptionalString(process.env.OPENAI_MODEL_WEB_SEARCH_REASONING),
+    browserPlanningModel: toOptionalString(process.env.OPENAI_MODEL_BROWSER_PLANNING) ?? "gpt-5.4-nano",
     browserVisionModel: process.env.OPENAI_MODEL_BROWSER_VISION || "gpt-4o",
-    embeddingModel: process.env.OPENAI_MODEL_EMBEDDING || "text-embedding-3-small",
+    embeddingModel: process.env.OPENAI_MODEL_EMBEDDING || "text-embedding-ada-002",
     transcriptionModel: process.env.OPENAI_MODEL_TRANSCRIPTION || "whisper-1",
   };
+  const openAiModels = resolveOpenAIModels(rawOpenAiModels);
 
   return {
     openAiApiKey: process.env.OPENAI_API_KEY || "",
