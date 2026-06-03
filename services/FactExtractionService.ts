@@ -3,7 +3,7 @@ import { MessageHistory } from '../types';
 import { ExtractedFact } from '../types/FactTypes';
 import { FACT_EXTRACTION_PROMPT } from '../utils/factExtraction';
 import { devLog, parseLLMJson } from '../utils';
-import openai from '../openai';
+import openai, { openAiModels } from '../openai';
 import { PREDEFINED_DOMAINS } from '../constants/domains';
 
 function normalizeDomain(domain: unknown): string {
@@ -29,7 +29,7 @@ export class FactExtractionService {
     try {
       devLog('Fact extraction prompt:', prompt);
       const resp = await openai.chat.completions.create({
-        model: 'gpt-5.4-nano',
+        model: openAiModels.memoryExtractionModel,
         messages: [
           { role: 'system', content: 'Ты извлекаешь факты из диалога и возвращаешь JSON.' },
           { role: 'user', content: prompt }
@@ -154,7 +154,7 @@ ${dialogueText}
     try {
       devLog('Dialogue fact extraction prompt:', prompt);
       const resp = await openai.chat.completions.create({
-        model: 'gpt-5.4',
+        model: openAiModels.messageAnalysisModel,
         messages: [
           {
             role: 'system',

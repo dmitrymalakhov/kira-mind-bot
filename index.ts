@@ -777,10 +777,10 @@ bot.on("message:text", async (ctx, next) => {
                         const now = new Date();
                         let newDueDate: Date | null = null;
                         try {
-                            const { default: openaiClient } = await import('./openai');
+                            const { default: openaiClient, openAiModels } = await import('./openai');
                             const { parseLLMJson: parse } = await import('./utils');
                             const resp = await openaiClient.chat.completions.create({
-                                model: 'gpt-5.4-nano',
+                                model: openAiModels.memoryExtractionModel,
                                 messages: [
                                     {
                                         role: 'system',

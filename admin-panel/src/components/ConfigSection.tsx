@@ -25,34 +25,37 @@ interface Props {
 }
 
 export interface ConfigSectionHandle {
-  /** Collect all changed (non-masked) values from this section */
-  getUpdates: () => Record<string, string>;
+  getUpdates: () => Record<string, string | null>;
+}
+
+function getEntryValue(entry?: ConfigResponse[string]): string {
+  if (!entry) return '';
+  if (entry.rawValue !== undefined) return entry.rawValue ?? '';
+  return entry.value ?? '';
 }
 
 export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
   function ConfigSection({ section, config, onUpdate, onToast }, ref) {
     const [localValues, setLocalValues] = useState<Record<string, string>>(() =>
-      Object.fromEntries(section.fields.map((f) => [f.key, config[f.key]?.value ?? '']))
+      Object.fromEntries(section.fields.map((field) => [field.key, getEntryValue(config[field.key])]))
     );
     const [saving, setSaving] = useState(false);
-  const [autoRestart, setAutoRestart] = useState(false);
+    const [autoRestart, setAutoRestart] = useState(false);
 
-    // Re-sync when parent config changes (e.g. after Save All refreshes config)
     useEffect(() => {
       setLocalValues(
-        Object.fromEntries(section.fields.map((f) => [f.key, config[f.key]?.value ?? '']))
+        Object.fromEntries(section.fields.map((field) => [field.key, getEntryValue(config[field.key])]))
       );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [config]);
+    }, [config, section.fields]);
 
-    // Expose getUpdates() so Dashboard's Save All can collect values
     useImperativeHandle(ref, () => ({
       getUpdates() {
-        const updates: Record<string, string> = {};
+        const updates: Record<string, string | null> = {};
         for (const field of section.fields) {
-          const val = localValues[field.key] ?? '';
-          if (val.includes('••••')) continue; // unchanged masked — skip
-          updates[field.key] = val;
+          const value = localValues[field.key] ?? '';
+          if (value.includes('••••')) continue;
+          if (value === getEntryValue(config[field.key])) continue;
+          updates[field.key] = value;
         }
         return updates;
       },
@@ -65,12 +68,14 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
     const handleSave = async () => {
       setSaving(true);
       try {
-        const updates: Record<string, string> = {};
+        const updates: Record<string, string | null> = {};
         for (const field of section.fields) {
-          const val = localValues[field.key] ?? '';
-          if (val.includes('••••')) continue;
-          updates[field.key] = val;
+          const value = localValues[field.key] ?? '';
+          if (value.includes('••••')) continue;
+          if (value === getEntryValue(config[field.key])) continue;
+          updates[field.key] = value;
         }
+
         const result = await saveConfig(updates);
         if (result.success) {
           if (autoRestart) {
@@ -86,7 +91,7 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
           const newCfg = await fetchConfig();
           onUpdate(newCfg);
           setLocalValues(
-            Object.fromEntries(section.fields.map((f) => [f.key, newCfg[f.key]?.value ?? '']))
+            Object.fromEntries(section.fields.map((field) => [field.key, getEntryValue(newCfg[field.key])]))
           );
         } else {
           onToast(result.error || 'Ошибка сохранения', 'error');
@@ -98,8 +103,8 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
       }
     };
 
-    const toggleFields = section.fields.filter((f) => f.type === 'toggle');
-    const regularFields = section.fields.filter((f) => f.type !== 'toggle');
+    const toggleFields = section.fields.filter((field) => field.type === 'toggle');
+    const regularFields = section.fields.filter((field) => field.type !== 'toggle');
 
     return (
       <Card id={section.id} sx={{ mb: 2 }}>
@@ -152,12 +157,7 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
           {regularFields.length > 0 && (
             <Grid container spacing={2} sx={{ mb: toggleFields.length > 0 ? 0 : undefined }}>
               {regularFields.map((field) => (
-                <Grid
-                  item
-                  key={field.key}
-                  xs={12}
-                  sm={field.type === 'textarea' ? 12 : 6}
-                >
+                <Grid item key={field.key} xs={12} sm={field.type === 'textarea' ? 12 : 6}>
                   <FieldInput
                     field={field}
                     value={localValues[field.key] ?? ''}

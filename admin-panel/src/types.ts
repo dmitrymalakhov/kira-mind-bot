@@ -1,6 +1,10 @@
 export interface ConfigEntry {
   value: string;
   masked: boolean;
+  rawValue?: string | null;
+  rawState?: 'missing' | 'empty' | 'value';
+  source?: 'env_file' | 'inherited_default_text' | 'system_default';
+  configPath?: string;
 }
 
 export interface ConfigResponse {
@@ -28,6 +32,22 @@ export interface SectionDef {
 export interface Toast {
   message: string;
   severity: 'success' | 'error' | 'info';
+}
+
+export interface ModelPreset {
+  id: string;
+  title: string;
+  description: string;
+  riskLabel: string;
+  costLabel: string;
+  qualityLabel: string;
+  values: Record<string, string | null>;
+}
+
+export interface ModelPresetResponse {
+  presets: ModelPreset[];
+  activePresetId: string | null;
+  configPath: string;
 }
 
 export interface PersonalityProfile {

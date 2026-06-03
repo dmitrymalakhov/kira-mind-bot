@@ -1,0 +1,192 @@
+{
+  "fields": [
+    {
+      "envKey": "OPENAI_MODEL_DEFAULT_TEXT",
+      "configKey": "defaultTextModel",
+      "label": "Default Text Model",
+      "hint": "Базовая текстовая модель. Пустые text overrides ниже наследуют это значение.",
+      "placeholder": "gpt-5.4",
+      "kind": "default_text",
+      "resolution": "system_default",
+      "systemDefault": "gpt-5.4"
+    },
+    {
+      "envKey": "OPENAI_MODEL_INTENT_CLASSIFICATION",
+      "configKey": "intentClassificationModel",
+      "label": "Intent Classification Model",
+      "hint": "Маршрутизация пользовательского запроса по интентам. Пусто = Default Text Model, если override уже заведён; иначе используется системный дефолт.",
+      "placeholder": "gpt-5.2",
+      "kind": "text_override",
+      "resolution": "system_default",
+      "systemDefault": "gpt-5.2"
+    },
+    {
+      "envKey": "OPENAI_MODEL_INTENT_DEDUP",
+      "configKey": "intentDedupModel",
+      "label": "Intent Dedup Model",
+      "hint": "Удаление дублей и близких интентов. Пусто = Default Text Model или системный дефолт, если override не задан.",
+      "placeholder": "gpt-5.2",
+      "kind": "text_override",
+      "resolution": "system_default",
+      "systemDefault": "gpt-5.2"
+    },
+    {
+      "envKey": "OPENAI_MODEL_CONVERSATION",
+      "configKey": "conversationModel",
+      "label": "Conversation Model",
+      "hint": "Основной ответ пользователю в разговорных сценариях. Пусто = использовать Default Text Model.",
+      "placeholder": "gpt-5.4",
+      "kind": "text_override",
+      "resolution": "inherits_default_text",
+      "systemDefault": "gpt-5.4"
+    },
+    {
+      "envKey": "OPENAI_MODEL_MEMORY_EXTRACTION",
+      "configKey": "memoryExtractionModel",
+      "label": "Memory Extraction Model",
+      "hint": "Извлечение фактов, triage, память и дешёвые структурные шаги. Пусто = Default Text Model, если override уже заведён; иначе используется системный дефолт.",
+      "placeholder": "gpt-5.4-nano",
+      "kind": "text_override",
+      "resolution": "system_default",
+      "systemDefault": "gpt-5.4-nano"
+    },
+    {
+      "envKey": "OPENAI_MODEL_MEMORY_CONSOLIDATION",
+      "configKey": "memoryConsolidationModel",
+      "label": "Memory Consolidation Model",
+      "hint": "Фоновая консолидация памяти. Пусто = использовать Default Text Model.",
+      "placeholder": "gpt-5.4",
+      "kind": "text_override",
+      "resolution": "inherits_default_text",
+      "systemDefault": "gpt-5.4"
+    },
+    {
+      "envKey": "OPENAI_MODEL_MESSAGE_ANALYSIS",
+      "configKey": "messageAnalysisModel",
+      "label": "Message Analysis Model",
+      "hint": "Анализ переписок, чтение чатов и похожие задачи. Пусто = использовать Default Text Model.",
+      "placeholder": "gpt-5.4",
+      "kind": "text_override",
+      "resolution": "inherits_default_text",
+      "systemDefault": "gpt-5.4"
+    },
+    {
+      "envKey": "OPENAI_MODEL_WEB_SEARCH_REASONING",
+      "configKey": "webSearchReasoningModel",
+      "label": "Web Search Reasoning Model",
+      "hint": "Рассуждение поверх web search. Пусто = использовать Default Text Model.",
+      "placeholder": "gpt-5.4",
+      "kind": "text_override",
+      "resolution": "inherits_default_text",
+      "systemDefault": "gpt-5.4"
+    },
+    {
+      "envKey": "OPENAI_MODEL_BROWSER_PLANNING",
+      "configKey": "browserPlanningModel",
+      "label": "Browser Planning Model",
+      "hint": "Планирование шагов браузерного агента. Пусто = Default Text Model или системный дефолт, если override не задан.",
+      "placeholder": "gpt-5.4-nano",
+      "kind": "text_override",
+      "resolution": "system_default",
+      "systemDefault": "gpt-5.4-nano"
+    },
+    {
+      "envKey": "OPENAI_MODEL_BROWSER_VISION",
+      "configKey": "browserVisionModel",
+      "label": "Browser Vision Model",
+      "hint": "Vision-модель для браузерного агента. Не наследует Default Text Model.",
+      "placeholder": "gpt-4o",
+      "kind": "fixed",
+      "resolution": "system_default",
+      "systemDefault": "gpt-4o"
+    },
+    {
+      "envKey": "OPENAI_MODEL_EMBEDDING",
+      "configKey": "embeddingModel",
+      "label": "Embedding Model",
+      "hint": "Эмбеддинги для векторной памяти.",
+      "placeholder": "text-embedding-ada-002",
+      "kind": "fixed",
+      "resolution": "system_default",
+      "systemDefault": "text-embedding-ada-002"
+    },
+    {
+      "envKey": "OPENAI_MODEL_TRANSCRIPTION",
+      "configKey": "transcriptionModel",
+      "label": "Transcription Model",
+      "hint": "Распознавание голосовых сообщений.",
+      "placeholder": "whisper-1",
+      "kind": "fixed",
+      "resolution": "system_default",
+      "systemDefault": "whisper-1"
+    }
+  ],
+  "presets": [
+    {
+      "id": "gpt_max",
+      "title": "GPT Max",
+      "description": "Текущее безопасное поведение с системными дефолтами и без удешевления.",
+      "riskLabel": "Низкий риск",
+      "costLabel": "Максимальная цена",
+      "qualityLabel": "Максимальное качество",
+      "values": {
+        "OPENAI_MODEL_DEFAULT_TEXT": null,
+        "OPENAI_MODEL_INTENT_CLASSIFICATION": null,
+        "OPENAI_MODEL_INTENT_DEDUP": null,
+        "OPENAI_MODEL_CONVERSATION": null,
+        "OPENAI_MODEL_MEMORY_EXTRACTION": null,
+        "OPENAI_MODEL_MEMORY_CONSOLIDATION": null,
+        "OPENAI_MODEL_MESSAGE_ANALYSIS": null,
+        "OPENAI_MODEL_WEB_SEARCH_REASONING": null,
+        "OPENAI_MODEL_BROWSER_PLANNING": null,
+        "OPENAI_MODEL_BROWSER_VISION": null,
+        "OPENAI_MODEL_EMBEDDING": null,
+        "OPENAI_MODEL_TRANSCRIPTION": null
+      }
+    },
+    {
+      "id": "gpt_balanced",
+      "title": "GPT Balanced",
+      "description": "Удешевление интентов и части анализа без снижения базового разговорного качества.",
+      "riskLabel": "Низкий риск",
+      "costLabel": "Средняя цена",
+      "qualityLabel": "Высокое качество",
+      "values": {
+        "OPENAI_MODEL_DEFAULT_TEXT": null,
+        "OPENAI_MODEL_INTENT_CLASSIFICATION": "gpt-5.4-mini",
+        "OPENAI_MODEL_INTENT_DEDUP": "gpt-5.4-mini",
+        "OPENAI_MODEL_CONVERSATION": null,
+        "OPENAI_MODEL_MEMORY_EXTRACTION": null,
+        "OPENAI_MODEL_MEMORY_CONSOLIDATION": null,
+        "OPENAI_MODEL_MESSAGE_ANALYSIS": "gpt-5.4-mini",
+        "OPENAI_MODEL_WEB_SEARCH_REASONING": "gpt-5.4-mini",
+        "OPENAI_MODEL_BROWSER_PLANNING": null,
+        "OPENAI_MODEL_BROWSER_VISION": null,
+        "OPENAI_MODEL_EMBEDDING": null,
+        "OPENAI_MODEL_TRANSCRIPTION": null
+      }
+    },
+    {
+      "id": "gpt_budget",
+      "title": "GPT Budget",
+      "description": "Агрессивное снижение стоимости с переносом большинства текстовых задач на mini и nano.",
+      "riskLabel": "Средний риск",
+      "costLabel": "Низкая цена",
+      "qualityLabel": "Хорошее качество",
+      "values": {
+        "OPENAI_MODEL_DEFAULT_TEXT": "gpt-5.4-mini",
+        "OPENAI_MODEL_INTENT_CLASSIFICATION": "gpt-5.4-nano",
+        "OPENAI_MODEL_INTENT_DEDUP": "gpt-5.4-nano",
+        "OPENAI_MODEL_CONVERSATION": "gpt-5.4-mini",
+        "OPENAI_MODEL_MEMORY_EXTRACTION": null,
+        "OPENAI_MODEL_MEMORY_CONSOLIDATION": "gpt-5.4-mini",
+        "OPENAI_MODEL_MESSAGE_ANALYSIS": "gpt-5.4-mini",
+        "OPENAI_MODEL_WEB_SEARCH_REASONING": "gpt-5.4-mini",
+        "OPENAI_MODEL_BROWSER_PLANNING": null,
+        "OPENAI_MODEL_BROWSER_VISION": null,
+        "OPENAI_MODEL_EMBEDDING": "text-embedding-3-small",
+        "OPENAI_MODEL_TRANSCRIPTION": null
+      }
+    }
+  ]
+}

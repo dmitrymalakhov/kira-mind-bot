@@ -7,6 +7,12 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const { Pool } = require('pg');
+const {
+  OPENAI_MODEL_KEYS,
+  OPENAI_MODEL_PRESETS,
+  buildOpenAIModelEntries,
+  findActiveModelPresetId,
+} = require('./openaiModelHelpers');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -63,6 +69,7 @@ const SENSITIVE_KEYS = new Set([
 
 const EDITABLE_KEYS = new Set([
   'OPENAI_API_KEY', 'KIRA_BOT_TOKEN', 'SERGEY_BOT_TOKEN',
+  ...OPENAI_MODEL_KEYS,
   'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID', 'ELEVENLABS_VOICE_NAME',
   'ELEVENLABS_MODEL_ID', 'ELEVENLABS_OUTPUT_FORMAT',
   'ELEVENLABS_VOICE_STABILITY', 'ELEVENLABS_VOICE_SIMILARITY_BOOST',
@@ -112,12 +119,16 @@ function writeEnvFile(updates) {
     const key = t.slice(0, idx).trim();
     if (key in updates) {
       updatedKeys.add(key);
+      if (updates[key] === null) {
+        return null;
+      }
       return `${key}=${updates[key]}`;
     }
     return line;
-  });
+  }).filter(line => line !== null);
 
   for (const [k, v] of Object.entries(updates)) {
+    if (v === null) continue;
     if (!updatedKeys.has(k)) newLines.push(`${k}=${v}`);
   }
 
@@ -197,7 +208,17 @@ app.get('/api/config', requireAuth, (req, res) => {
       result[key] = { value, masked: false };
     }
   }
+  Object.assign(result, buildOpenAIModelEntries(vars, BOT_ENV_FILE));
   res.json(result);
+});
+
+app.get('/api/model-presets', requireAuth, (req, res) => {
+  const vars = readEnvFile();
+  res.json({
+    presets: OPENAI_MODEL_PRESETS,
+    activePresetId: findActiveModelPresetId(vars),
+    configPath: BOT_ENV_FILE,
+  });
 });
 
 app.post('/api/config', requireAuth, (req, res) => {

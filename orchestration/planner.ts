@@ -1,6 +1,6 @@
 import type { Plan, PlanStep, PlanningInput } from './types';
 import { devLog, parseLLMJson } from '../utils';
-import openai from '../openai';
+import openai, { openAiModels } from '../openai';
 import { llmCache, LLM_CACHE_TTL } from '../utils/llmCache';
 
 const AVAILABLE_STEPS = `
@@ -129,7 +129,7 @@ ${AVAILABLE_STEPS}
 
     try {
         const resp = await openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
+            model: openAiModels.memoryExtractionModel,
             messages: [
                 {
                     role: 'system',
