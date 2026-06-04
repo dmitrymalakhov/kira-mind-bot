@@ -86,7 +86,7 @@ bot.command("contacts", async (ctx) => {
         message += `\nВсего контактов: ${contacts.length}`;
 
         // Отправляем сообщение со списком контактов
-        await ctx.reply(message);
+        await sendMessage(ctx, message);
     } catch (error) {
         console.error("Ошибка при получении списка контактов:", error);
         await ctx.reply("Произошла ошибка при получении списка контактов. Пожалуйста, попробуйте позже.");
