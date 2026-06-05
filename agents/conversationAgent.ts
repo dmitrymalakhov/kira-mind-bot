@@ -7,6 +7,8 @@ import { getBotPersona, getCommunicationStyle, getBotBiography } from "../person
 import { config } from "../config";
 import openai from "../openai";
 import { getKiraSelfMemoryState, getRecentKiraSelfEvents, searchKiraSelfEventsByQuery } from "../utils/kiraSelfMemory";
+import { buildGroupChatContext } from "../utils/groupChatContext";
+import { devLog } from "../utils";
 
 
 /**
@@ -33,6 +35,14 @@ export async function conversationAgent(
             messageHistory.forEach((item, index) => {
                 historyContext += `${index + 1}. ${item.role === 'user' ? 'Пользователь' : 'Бот'}: ${item.content}\n`;
             });
+        }
+
+        const groupChatContext = await buildGroupChatContext(ctx, message, {
+            botUsername: config.botUsername,
+            limit: 15,
+        });
+        if (groupChatContext.isGroupChat) {
+            devLog(groupChatContext.debugSummary);
         }
 
         // Текущая дата и время для контекста
@@ -155,6 +165,7 @@ ${domainContext ? `Факты из памяти о пользователе:\n${
         Сгенерируй очень естественный, человечный ответ на следующее сообщение${isForwarded ? `, пересланное от ${forwardFrom}` : ""}:
 
         "${message}"
+        ${groupChatContext.promptBlock ? `\n${groupChatContext.promptBlock}\n\n${groupChatContext.systemHint}` : ''}
         ${historyContext}
         ${domainContext ? `\nКонтекст из памяти по теме \"${domain}\":\n${domainContext}` : ''}
         ${assistantLifeContext}
@@ -198,7 +209,8 @@ ${domainContext ? `Факты из памяти о пользователе:\n${
                     content:
                         `${getBotPersona()}\nБиография: ${getBotBiography()}\nСтиль общения: ${getCommunicationStyle()}\n` +
                         `Сейчас: ${formattedDateTime}.\n` +
-                        `Твои ответы звучат естественно, как от настоящего человека. Учитывай время суток и день недели в своём настроении и реакциях — вечер пятницы отличается от утра понедельника. Тон ответа должен соответствовать твоему текущему настроению из контекста — не будь всегда одинаково «тёплой и поддерживающей».`
+                        `Твои ответы звучат естественно, как от настоящего человека. Учитывай время суток и день недели в своём настроении и реакциях — вечер пятницы отличается от утра понедельника. Тон ответа должен соответствовать твоему текущему настроению из контекста — не будь всегда одинаково «тёплой и поддерживающей».` +
+                        (groupChatContext.systemHint ? `\n${groupChatContext.systemHint}` : '')
                 },
                 {
                     role: "user",

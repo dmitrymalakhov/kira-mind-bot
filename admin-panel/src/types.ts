@@ -73,6 +73,7 @@ export type HealthLogKind =
 
 export interface HealthLogRecord {
   id: string;
+  profile: string | null;
   userId: string | null;
   chatId: string | null;
   kind: HealthLogKind;
@@ -106,6 +107,7 @@ export interface HealthLogsResponse {
   limit: number;
   offset: number;
   filters: {
+    profile?: string;
     userId?: string;
     kind?: HealthLogKind;
     from?: string;
@@ -117,6 +119,7 @@ export interface HealthLogsResponse {
 }
 
 export interface HealthLogQuery {
+  profile?: string;
   userId?: string;
   kind?: HealthLogKind | '';
   from?: string;

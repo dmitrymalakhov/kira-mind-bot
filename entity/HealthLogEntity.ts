@@ -8,6 +8,9 @@ export class HealthLogEntity {
     @Column({ type: 'bigint' })
     userId!: number;
 
+    @Column({ type: 'text', default: 'KiraMindBot' })
+    profile!: string;
+
     @Column({ type: 'bigint', nullable: true })
     chatId?: number;
 

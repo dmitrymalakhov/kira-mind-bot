@@ -1,6 +1,7 @@
 import { AppDataSource } from '../data-source';
 import { ReminderEntity } from '../entity/ReminderEntity';
 import { Reminder, ReminderStatus } from '../reminder';
+import { getActiveBotProfile } from '../utils/botIdentity';
 
 function toEntity(r: Reminder): ReminderEntity {
     const e = new ReminderEntity();
@@ -9,6 +10,7 @@ function toEntity(r: Reminder): ReminderEntity {
     e.displayText = r.displayText;
     e.dueDate = new Date(r.dueDate);
     e.chatId = r.chatId;
+    e.profile = getActiveBotProfile();
     e.status = r.status ?? ReminderStatus.Pending;
     e.messageId = r.messageId;
     e.remindAgainAt = r.remindAgainAt ? new Date(r.remindAgainAt) : undefined;
@@ -63,10 +65,10 @@ export const ReminderRepository = {
     async loadActive(): Promise<Reminder[]> {
         const entities = await repo().find({
             where: [
-                { status: ReminderStatus.Pending },
-                { status: ReminderStatus.Postponed },
-                { status: ReminderStatus.Sent },
-                { status: ReminderStatus.Expired },
+                { profile: getActiveBotProfile(), status: ReminderStatus.Pending },
+                { profile: getActiveBotProfile(), status: ReminderStatus.Postponed },
+                { profile: getActiveBotProfile(), status: ReminderStatus.Sent },
+                { profile: getActiveBotProfile(), status: ReminderStatus.Expired },
             ],
         });
         return entities.map(fromEntity);
@@ -76,8 +78,8 @@ export const ReminderRepository = {
     async loadPending(): Promise<Reminder[]> {
         const entities = await repo().find({
             where: [
-                { status: ReminderStatus.Pending },
-                { status: ReminderStatus.Postponed },
+                { profile: getActiveBotProfile(), status: ReminderStatus.Pending },
+                { profile: getActiveBotProfile(), status: ReminderStatus.Postponed },
             ],
         });
         return entities.map(fromEntity);

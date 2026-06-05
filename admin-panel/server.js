@@ -263,15 +263,18 @@ app.get('/api/chats', requireAuth, async (_req, res) => {
 
 app.patch('/api/chats/:chatId/forbidden-topics', requireAuth, async (req, res) => {
   const { chatId } = req.params;
-  const { topics } = req.body;
+  const { topics, profile } = req.body;
   if (typeof topics !== 'string') {
     return res.status(400).json({ error: 'Поле topics должно быть строкой' });
+  }
+  if (typeof profile !== 'string' || !profile.trim()) {
+    return res.status(400).json({ error: 'Поле profile должно быть строкой' });
   }
   const pool = createDbPool();
   try {
     const result = await pool.query(
-      'UPDATE chats SET "forbiddenTopics" = $1 WHERE "chatId" = $2',
-      [topics, chatId]
+      'UPDATE chats SET "forbiddenTopics" = $1 WHERE "chatId" = $2 AND profile = $3',
+      [topics, chatId, profile.trim()]
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ error: 'Чат не найден' });
@@ -286,15 +289,18 @@ app.patch('/api/chats/:chatId/forbidden-topics', requireAuth, async (req, res) =
 
 app.patch('/api/chats/:chatId/allowed-domains', requireAuth, async (req, res) => {
   const { chatId } = req.params;
-  const { domains } = req.body;
+  const { domains, profile } = req.body;
   if (!Array.isArray(domains)) {
     return res.status(400).json({ error: 'Поле domains должно быть массивом строк' });
+  }
+  if (typeof profile !== 'string' || !profile.trim()) {
+    return res.status(400).json({ error: 'Поле profile должно быть строкой' });
   }
   const pool = createDbPool();
   try {
     const result = await pool.query(
-      'UPDATE chats SET "allowedDomains" = $1 WHERE "chatId" = $2',
-      [JSON.stringify(domains), chatId]
+      'UPDATE chats SET "allowedDomains" = $1 WHERE "chatId" = $2 AND profile = $3',
+      [JSON.stringify(domains), chatId, profile.trim()]
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ error: 'Чат не найден' });
@@ -309,15 +315,18 @@ app.patch('/api/chats/:chatId/allowed-domains', requireAuth, async (req, res) =>
 
 app.patch('/api/chats/:chatId/public-mode', requireAuth, async (req, res) => {
   const { chatId } = req.params;
-  const { enabled } = req.body;
+  const { enabled, profile } = req.body;
   if (typeof enabled !== 'boolean') {
     return res.status(400).json({ error: 'Поле enabled должно быть boolean' });
+  }
+  if (typeof profile !== 'string' || !profile.trim()) {
+    return res.status(400).json({ error: 'Поле profile должно быть строкой' });
   }
   const pool = createDbPool();
   try {
     const result = await pool.query(
-      'UPDATE chats SET "publicMode" = $1 WHERE "chatId" = $2',
-      [enabled, chatId]
+      'UPDATE chats SET "publicMode" = $1 WHERE "chatId" = $2 AND profile = $3',
+      [enabled, chatId, profile.trim()]
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ error: 'Чат не найден' });
@@ -456,6 +465,13 @@ function buildHealthLogFilters(query, options = {}) {
   const meta = {};
   const defaultDays = options.defaultDays ?? 30;
 
+  const profile = firstQueryValue(query.profile);
+  if (typeof profile === 'string' && profile.trim()) {
+    values.push(profile.trim());
+    clauses.push(`profile = $${values.length}`);
+    meta.profile = profile.trim();
+  }
+
   const userId = firstQueryValue(query.userId);
   if (typeof userId === 'string' && userId.trim()) {
     if (!/^-?\d+$/.test(userId.trim())) throw httpInputError('userId должен быть числом');
@@ -524,6 +540,7 @@ function buildHealthLogFilters(query, options = {}) {
 function normalizeHealthLogRow(row) {
   return {
     id: row.id,
+    profile: row.profile ?? null,
     userId: row.userId == null ? null : String(row.userId),
     chatId: row.chatId == null ? null : String(row.chatId),
     kind: row.kind,
@@ -540,7 +557,7 @@ function normalizeHealthLogRow(row) {
 }
 
 function healthBaseSelect() {
-  return 'SELECT id, "userId", "chatId", kind, "rawText", summary, severity, "occurredAt", "timeOfDay", structured, tags, "photoFileId", "createdAt" FROM health_logs';
+  return 'SELECT id, profile, "userId", "chatId", kind, "rawText", summary, severity, "occurredAt", "timeOfDay", structured, tags, "photoFileId", "createdAt" FROM health_logs';
 }
 
 function healthRecordSummary(record) {
@@ -607,6 +624,7 @@ function csvEscape(value) {
 function buildHealthCsvExport(records) {
   const headers = [
     'id',
+    'profile',
     'userId',
     'chatId',
     'kind',
@@ -623,6 +641,7 @@ function buildHealthCsvExport(records) {
   ];
   const rows = records.map((record) => [
     record.id,
+    record.profile,
     record.userId,
     record.chatId,
     record.kind,

@@ -13,6 +13,9 @@ export class ChatGroupEntity {
     @Column({ type: 'bigint' })
     ownerChatId!: number;
 
+    @Column({ type: 'text', default: 'KiraMindBot' })
+    profile!: string;
+
     /** Список названий Telegram-групп/каналов */
     @Column({ type: 'jsonb' })
     chatNames!: string[];

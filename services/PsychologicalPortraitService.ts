@@ -3,6 +3,7 @@ import { BotContext } from '../types';
 import { getVectorService } from './VectorServiceFactory';
 import { devLog } from '../utils';
 import openai from '../openai';
+import { getActiveMemoryBotId } from '../utils/botIdentity';
 
 const PORTRAIT_DOMAIN = 'contacts';
 const PORTRAIT_IMPORTANCE = 0.92;
@@ -200,7 +201,7 @@ export async function saveOrUpdatePortrait(
     if (!portrait) return false;
 
     const content = serializePortrait(portrait);
-    const botId = process.env.BOT_ID || 'kira-mind-bot';
+    const botId = getActiveMemoryBotId();
 
     // Удаляем старую запись
     if (oldId) {
