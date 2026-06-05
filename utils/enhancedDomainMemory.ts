@@ -1319,21 +1319,30 @@ function memoryEntryToSearchResult(memory: MemoryEntry, score: number): MemorySe
 
 export async function searchAllDomainsMemoriesWithFallback(ctx: BotContext, query: string, limit = 5): Promise<MemorySearchResultLike[]> {
     const semantic = await searchAllDomainsMemories(ctx, query, limit);
-    if (semantic.length >= limit) return semantic;
-
     const recent = await getRecentMemories(ctx, 1000);
-    const seen = new Set(semantic.map((item) => item.id));
-    const lexical = recent
-        .filter((memory) => !seen.has(memory.id))
-        .map((memory) => ({ memory, score: lexicalMemoryScore(memory.content, query) }))
-        .filter((item) => item.score >= 0.45)
+    const byId = new Map<string, MemorySearchResultLike>();
+
+    for (const item of semantic) {
+        byId.set(item.id, item);
+    }
+
+    for (const memory of recent) {
+        const lexicalScore = lexicalMemoryScore(memory.content, query);
+        if (lexicalScore < 0.45) continue;
+
+        const normalizedScore = Math.min(0.99, lexicalScore);
+        const existing = byId.get(memory.id);
+        if (!existing || normalizedScore > existing.score) {
+            byId.set(memory.id, memoryEntryToSearchResult(memory, normalizedScore));
+        }
+    }
+
+    return Array.from(byId.values())
         .sort((a, b) => {
             if (b.score !== a.score) return b.score - a.score;
-            return b.memory.timestamp.getTime() - a.memory.timestamp.getTime();
+            return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
         })
-        .map((item) => memoryEntryToSearchResult(item.memory, Math.min(0.99, item.score)));
-
-    return [...semantic, ...lexical].slice(0, limit);
+        .slice(0, limit);
 }
 
 export async function getDomainContextVector(ctx: BotContext, domain: string, query: string, limit = 5): Promise<string> {
