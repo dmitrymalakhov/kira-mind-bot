@@ -1,5 +1,5 @@
 import { getVectorService } from '../services/VectorServiceFactory';
-import { EmotionalTag, MemoryEntry, MemoryExtractionMethod, MemoryKind, MemoryRelationType, MemoryStatus, MemorySubject, SearchOptions } from '../types';
+import { EmotionalTag, MemoryEntry, MemoryExtractionMethod, MemoryKind, MemoryRelationType, MemoryStatus, MemorySubject, SearchOptions, SearchResult } from '../types';
 import { BotContext } from '../types';
 import { devLog, parseLLMJson } from '../utils';
 import openai, { openAiModels } from '../openai';
@@ -1257,6 +1257,85 @@ export async function searchAllDomainsMemories(ctx: BotContext, query: string, l
     }
 }
 
+type MemorySearchResultLike = SearchResult;
+
+function tokenizeMemoryQuery(query: string): string[] {
+    const normalized = query
+        .toLowerCase()
+        .replace(/[«»"'`]/g, ' ')
+        .replace(/[^a-zа-яё0-9:.@_-]+/giu, ' ');
+
+    return Array.from(new Set(
+        normalized
+            .split(/\s+/)
+            .map((token) => token.trim())
+            .filter((token) => token.length >= 2)
+    ));
+}
+
+function lexicalMemoryScore(content: string, query: string): number {
+    const loweredContent = content.toLowerCase();
+    const loweredQuery = query.toLowerCase().trim();
+    if (!loweredQuery) return 0;
+
+    const tokens = tokenizeMemoryQuery(loweredQuery);
+    if (tokens.length === 0) return 0;
+
+    let score = 0;
+    if (loweredContent.includes(loweredQuery)) score += 1;
+
+    const matched = tokens.filter((token) => loweredContent.includes(token));
+    score += matched.length / tokens.length;
+
+    // Временные маркеры вроде 9:01 очень важны для одноразовых планов из reflection-эпизодов.
+    if (/\d{1,2}[:.]\d{2}/u.test(query) && matched.some((token) => /\d{1,2}[:.]\d{2}/u.test(token))) {
+        score += 0.35;
+    }
+
+    if (/source:reflection|reflection|рефлекс/iu.test(loweredQuery) && /source:reflection|фоновая рефлексия|reflection/iu.test(loweredContent)) {
+        score += 0.35;
+    }
+
+    return score;
+}
+
+function memoryEntryToSearchResult(memory: MemoryEntry, score: number): MemorySearchResultLike {
+    return {
+        id: memory.id,
+        content: memory.content,
+        score,
+        timestamp: memory.timestamp,
+        importance: memory.importance,
+        tags: memory.tags,
+        domain: memory.domain,
+        confidence: memory.confidence,
+        lastAccessedAt: memory.lastAccessedAt,
+        retrievalCount: memory.retrievalCount,
+        lastRetrievedAt: memory.lastRetrievedAt,
+        retrievalCues: memory.retrievalCues,
+        previousVersions: memory.previousVersions,
+    };
+}
+
+export async function searchAllDomainsMemoriesWithFallback(ctx: BotContext, query: string, limit = 5): Promise<MemorySearchResultLike[]> {
+    const semantic = await searchAllDomainsMemories(ctx, query, limit);
+    if (semantic.length >= limit) return semantic;
+
+    const recent = await getRecentMemories(ctx, 1000);
+    const seen = new Set(semantic.map((item) => item.id));
+    const lexical = recent
+        .filter((memory) => !seen.has(memory.id))
+        .map((memory) => ({ memory, score: lexicalMemoryScore(memory.content, query) }))
+        .filter((item) => item.score >= 0.45)
+        .sort((a, b) => {
+            if (b.score !== a.score) return b.score - a.score;
+            return b.memory.timestamp.getTime() - a.memory.timestamp.getTime();
+        })
+        .map((item) => memoryEntryToSearchResult(item.memory, Math.min(0.99, item.score)));
+
+    return [...semantic, ...lexical].slice(0, limit);
+}
+
 export async function getDomainContextVector(ctx: BotContext, domain: string, query: string, limit = 5): Promise<string> {
     const svc = vectorService();
     if (!svc) return '';
@@ -1560,8 +1639,20 @@ export async function findMemoryByContent(
     if (!svc) return undefined;
     const userId = String(ctx.from?.id);
 
-    const results = await svc.searchAllDomains(query, userId, 1);
-    if (results.length === 0 || results[0].score < 0.55) return undefined;
+    let results = await svc.searchAllDomains(query, userId, 1);
+    if (results.length === 0 || results[0].score < 0.55) {
+        const recent = await getRecentMemories(ctx, 1000);
+        const lexical = recent
+            .map((memory) => ({ memory, score: lexicalMemoryScore(memory.content, query) }))
+            .filter((item) => item.score >= 0.45)
+            .sort((a, b) => {
+                if (b.score !== a.score) return b.score - a.score;
+                return b.memory.timestamp.getTime() - a.memory.timestamp.getTime();
+            });
+
+        if (lexical.length === 0) return undefined;
+        results = [memoryEntryToSearchResult(lexical[0].memory, Math.min(0.99, lexical[0].score))];
+    }
 
     const best = results[0];
     return {
