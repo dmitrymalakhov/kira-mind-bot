@@ -2,6 +2,7 @@ import type { StorageAdapter } from 'grammy';
 import { AppDataSource } from '../data-source';
 import { SessionEntity } from '../entity/SessionEntity';
 import type { BotContext, SessionData } from '../types';
+import { scopedBotKey } from '../utils/botIdentity';
 
 const MAX_HISTORY = 20;
 const RECENT_FACTS_TTL_MS = 24 * 60 * 60 * 1000;
@@ -139,6 +140,8 @@ function pruneChatAnalysisPeriodRequest(
 /**
  * Grammy StorageAdapter backed by PostgreSQL via TypeORM.
  * Persists only the context-critical subset of SessionData (history, summary, domain facts).
+ * The stored key is namespaced by ASSISTANT_PROFILE so two bots can share one DB
+ * without sharing per-chat memory.
  * Non-serializable fields (Map, timers) and reminders are excluded — reminders live in ReminderRegistry/DB.
  */
 export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
@@ -148,7 +151,7 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
 
     async read(key: string): Promise<SessionData | undefined> {
         try {
-            const row = await this.repo.findOne({ where: { key } });
+            const row = await this.repo.findOne({ where: { key: scopedBotKey(key) } });
             if (!row) return undefined;
             const persisted: PersistedSession = JSON.parse(row.data);
             const now = Date.now();
@@ -194,9 +197,10 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
 
     async write(key: string, value: SessionData): Promise<void> {
         try {
+            const scopedKey = scopedBotKey(key);
             const persisted = extract(value);
             const data = JSON.stringify(persisted);
-            await this.repo.upsert({ key, data }, ['key']);
+            await this.repo.upsert({ key: scopedKey, data }, ['key']);
         } catch (e) {
             console.error('[SessionStorage] write error:', e);
         }
@@ -204,7 +208,7 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
 
     async delete(key: string): Promise<void> {
         try {
-            await this.repo.delete({ key });
+            await this.repo.delete({ key: scopedBotKey(key) });
         } catch (e) {
             console.error('[SessionStorage] delete error:', e);
         }
@@ -224,7 +228,7 @@ export async function appendPersistedHistory(
 ): Promise<void> {
     try {
         const repo = AppDataSource.getRepository(SessionEntity);
-        const key = String(chatId);
+        const key = scopedBotKey(chatId);
         const row = await repo.findOne({ where: { key } });
         const persisted: Partial<PersistedSession> = row ? JSON.parse(row.data) : {};
         const now = Date.now();
@@ -280,7 +284,7 @@ export async function saveProactiveInsight(
 ): Promise<void> {
     try {
         const repo = AppDataSource.getRepository(SessionEntity);
-        const key = String(chatId);
+        const key = scopedBotKey(chatId);
         const row = await repo.findOne({ where: { key } });
         const persisted: Partial<PersistedSession> = row ? JSON.parse(row.data) : {};
         const now = Date.now();

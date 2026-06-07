@@ -18,6 +18,9 @@ export class ReminderEntity {
     @Column({ type: 'bigint' })
     chatId!: number;
 
+    @Column({ type: 'text', default: 'KiraMindBot' })
+    profile!: string;
+
     @Column({ default: ReminderStatus.Pending })
     status!: string;
 

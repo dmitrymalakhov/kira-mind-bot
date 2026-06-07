@@ -11,6 +11,8 @@ import openai, { openAiModels } from "./openai";
 import { getBotPersona } from "./persona";
 import { config } from "./config";
 import { pushGroupChatMessage } from "./stores/GroupChatBuffer";
+import { isBotMentioned, isMessageReplyToBot } from "./utils/groupChatContext";
+import { GroupChatMessageRepository } from "./services/GroupChatMessageRepository";
 
 const DISMISSAL_VARIANTS = [
   "занята важными делами",
@@ -211,22 +213,30 @@ function setupBot(bot: Bot<BotContext>, config: any) {
         return;
       }
 
-      // Сохраняем все сообщения в буфер для контекста (до фильтра по упоминанию)
-      if (text && ctx.from && !ctx.from.is_bot) {
-        pushGroupChatMessage(ctx.chat!.id, {
+      const botUsername = config.botUsername.toLowerCase();
+
+      // Сохраняем все сообщения в буфер для контекста (до фильтра по упоминанию).
+      // Сообщения других ботов тоже важны: в группах часто спрашивают мнение Киры о них.
+      const senderUsername = ctx.from?.username?.toLowerCase();
+      const isOwnBotMessage = Boolean(ctx.from?.is_bot && senderUsername && senderUsername === botUsername);
+      if (text && ctx.from && !isOwnBotMessage) {
+        const groupMessage = {
           senderName: ctx.from.first_name || ctx.from.username || 'Участник',
           text,
           date: new Date((ctx.message?.date ?? 0) * 1000),
+          messageId: ctx.message?.message_id,
+          senderId: ctx.from.id,
+          isBot: ctx.from.is_bot,
+        };
+        pushGroupChatMessage(ctx.chat!.id, groupMessage);
+        GroupChatMessageRepository.save(ctx.chat!.id, groupMessage).catch((error) => {
+          console.error('[group-context] persist message failed:', error);
         });
       }
 
-      const entities = ctx.message?.entities || ctx.message?.caption_entities || [];
-      const botUsername = config.botUsername.toLowerCase();
-      const isMentioned = entities.some(e =>
-        e.type === 'mention' &&
-        text.substring(e.offset, e.offset + e.length).toLowerCase() === `@${botUsername}`
-      );
-      if (!isMentioned) return;
+      const isMentioned = isBotMentioned(ctx, text, botUsername);
+      const isReplyToBot = isMessageReplyToBot(ctx, botUsername);
+      if (!isMentioned && !isReplyToBot) return;
     }
     await next();
   });

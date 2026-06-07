@@ -8,7 +8,6 @@ import openai, { openAiModels } from "../openai";
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
 
 const detector = new SmartDomainDetector();
-const botId = process.env.BOT_ID || 'kira-mind-bot';
 
 const MAX_FACTS = 10;
 

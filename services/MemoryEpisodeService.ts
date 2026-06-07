@@ -2,9 +2,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { BotContext, MemoryEpisode, MemorySourceMessage, MessageHistory, WorkingMemoryState } from '../types';
 import { PREDEFINED_DOMAINS } from '../constants/domains';
 import { getVectorService } from './VectorServiceFactory';
-import { config } from '../config';
 import openai, { openAiModels } from '../openai';
 import { devLog, parseLLMJson } from '../utils';
+import { getActiveMemoryBotId } from '../utils/botIdentity';
 
 const EPISODE_DOMAIN = PREDEFINED_DOMAINS.GENERAL;
 const EPISODE_TAG = 'memory-episode';
@@ -29,7 +29,7 @@ interface WorkingMemoryLLMResult {
 }
 
 function botId(): string {
-    return process.env.BOT_ID || config.botUsername?.toLowerCase() || 'kira-mind-bot';
+    return getActiveMemoryBotId();
 }
 
 function asSourceMessages(messages: MessageHistory[]): MemorySourceMessage[] {

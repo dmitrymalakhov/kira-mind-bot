@@ -83,7 +83,7 @@ function DomainRow({ chat, onUpdate }: { chat: ChatInfo; onUpdate: (updated: Cha
       : [...current, domainKey];
     setSaving(true);
     try {
-      await setChatAllowedDomains(chat.chatId, next);
+      await setChatAllowedDomains(chat.chatId, chat.profile, next);
       onUpdate({ ...chat, allowedDomains: next });
     } finally {
       setSaving(false);
@@ -140,7 +140,7 @@ function DomainRow({ chat, onUpdate }: { chat: ChatInfo; onUpdate: (updated: Cha
                   size="small"
                   checked={chat.publicMode}
                   onChange={async () => {
-                    await setChatPublicMode(chat.chatId, !chat.publicMode);
+                    await setChatPublicMode(chat.chatId, chat.profile, !chat.publicMode);
                     onUpdate({ ...chat, publicMode: !chat.publicMode });
                   }}
                   color="success"
@@ -223,7 +223,7 @@ function DomainRow({ chat, onUpdate }: { chat: ChatInfo; onUpdate: (updated: Cha
                   onClick={async () => {
                     setTopicsSaving(true);
                     try {
-                      await setChatForbiddenTopics(chat.chatId, topicsText);
+                      await setChatForbiddenTopics(chat.chatId, chat.profile, topicsText);
                       onUpdate({ ...chat, forbiddenTopics: topicsText });
                     } finally {
                       setTopicsSaving(false);

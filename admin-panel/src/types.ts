@@ -94,6 +94,7 @@ export type HealthLogKind =
 
 export interface HealthLogRecord {
   id: string;
+  profile: string | null;
   userId: string | null;
   chatId: string | null;
   kind: HealthLogKind;
@@ -127,6 +128,7 @@ export interface HealthLogsResponse {
   limit: number;
   offset: number;
   filters: {
+    profile?: string;
     userId?: string;
     kind?: HealthLogKind;
     from?: string;
@@ -138,6 +140,7 @@ export interface HealthLogsResponse {
 }
 
 export interface HealthLogQuery {
+  profile?: string;
   userId?: string;
   kind?: HealthLogKind | '';
   from?: string;
@@ -149,3 +152,143 @@ export interface HealthLogQuery {
 }
 
 export type HealthExportFormat = 'txt' | 'csv' | 'json';
+
+export type MemoryProfile = 'KiraMindBot' | 'SergeyBrainBot';
+
+export type MemoryStatus = 'active' | 'planned' | 'done' | 'superseded' | 'expired' | 'unknown';
+
+export type MemoryFocus =
+  | 'open_loops'
+  | 'stale'
+  | 'low_confidence'
+  | 'weak_evidence'
+  | 'no_source'
+  | 'anchors'
+  | 'synthetic'
+  | 'contacts';
+
+export type MemoryKind =
+  | 'fact'
+  | 'episode'
+  | 'chapter'
+  | 'trait'
+  | 'preference'
+  | 'goal'
+  | 'open_loop'
+  | 'relationship'
+  | 'routine'
+  | 'boundary'
+  | 'promise'
+  | 'prospective'
+  | 'portrait'
+  | 'event'
+  | 'state'
+  | 'unknown';
+
+export interface MemoryRecord {
+  id: string;
+  content: string;
+  domain: string;
+  botId: string;
+  userId: string;
+  timestamp: string | null;
+  importance: number;
+  tags: string[];
+  confidence: number;
+  isAnchor: boolean;
+  memoryKind: MemoryKind | string;
+  status: MemoryStatus | string;
+  subject?: string;
+  predicate?: string;
+  object?: string;
+  extractionMethod?: string;
+  sourceContext?: string;
+  sourceEpisodeId?: string;
+  sourceMemoryIds: string[];
+  sourceMessageIds: string[];
+  previousVersions: Array<{
+    content: string;
+    timestamp: string;
+    confidence: number;
+  }>;
+  validFrom: string | null;
+  validTo: string | null;
+  expiresAt: string | null;
+  lastAccessedAt: string | null;
+  lastRetrievedAt: string | null;
+  retrievalCount: number;
+  confirmationCount: number;
+  lastConfirmedAt: string | null;
+  synthetic: boolean;
+}
+
+export interface MemoryCountStat {
+  domain?: string;
+  kind?: string;
+  status?: string;
+  count: number;
+}
+
+export interface MemoryStats {
+  total: number;
+  avgConfidence: number | null;
+  lowConfidence: number;
+  stale: number;
+  openLoops: number;
+  weakEvidence: number;
+  noSource: number;
+  contacts: number;
+  synthetic: number;
+  anchors: number;
+  lastUpdatedAt: string | null;
+  byDomain: Array<{ domain: string; count: number }>;
+  byKind: Array<{ kind: string; count: number }>;
+  byStatus: Array<{ status: string; count: number }>;
+  dreaming: {
+    openLoopIndex: MemoryRecord | null;
+    uncertaintyIndex: MemoryRecord | null;
+  };
+}
+
+export interface MemoryQuery {
+  profile?: MemoryProfile;
+  userId?: string;
+  domain?: string;
+  kind?: MemoryKind | '';
+  status?: MemoryStatus | '';
+  focus?: MemoryFocus | '';
+  q?: string;
+  includeSynthetic?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export interface MemoryResponse {
+  records: MemoryRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+  filters: MemoryQuery;
+  stats: MemoryStats;
+  domains: string[];
+  kinds: string[];
+  statuses: string[];
+  focuses: string[];
+}
+
+export interface MemoryFormPayload {
+  profile: MemoryProfile;
+  userId?: string;
+  domain: string;
+  content: string;
+  importance: number;
+  confidence: number;
+  tags: string[];
+  memoryKind: MemoryKind | string;
+  status: MemoryStatus | string;
+  isAnchor: boolean;
+  subject?: string;
+  predicate?: string;
+  object?: string;
+  sourceContext?: string;
+}

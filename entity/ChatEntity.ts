@@ -14,7 +14,7 @@ export class ChatEntity {
     @Column({ nullable: true, type: 'text' })
     username?: string;
 
-    @Column({ type: 'text', default: 'KiraMindBot' })
+    @PrimaryColumn({ type: 'text', default: 'KiraMindBot' })
     profile!: string;
 
     @Column({ type: 'boolean', default: false })

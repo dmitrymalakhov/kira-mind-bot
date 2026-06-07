@@ -1,7 +1,8 @@
 import { IDomainVectorService } from './interfaces/IDomainVectorService';
 import { MemoryEntry, SearchOptions, SearchResult, MemoryStats, DomainConfig, SearchStrategy, DomainStats, DomainTrend, MemoryRelation, MemoryRelationType } from '../types';
+import { getActiveMemoryBotId } from '../utils/botIdentity';
 export class PineconeVectorService implements IDomainVectorService {
-    private botId = process.env.BOT_ID || 'kira-mind-bot';
+    private botId = getActiveMemoryBotId();
     async initializeCollection(): Promise<void> {
         // TODO: implement initialization
     }
