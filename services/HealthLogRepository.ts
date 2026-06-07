@@ -1,6 +1,7 @@
 import { Between } from 'typeorm';
 import { AppDataSource } from '../data-source';
 import { HealthLogEntity } from '../entity/HealthLogEntity';
+import { getActiveBotProfile } from '../utils/botIdentity';
 
 export type HealthLogKind = 'food' | 'drink' | 'symptom' | 'medication' | 'activity' | 'skin' | 'blood_pressure' | 'note';
 export type HealthTimeOfDay = 'утро' | 'день' | 'вечер' | 'ночь';
@@ -29,6 +30,7 @@ function toEntity(record: HealthLogRecord): HealthLogEntity {
     const entity = new HealthLogEntity();
     entity.id = record.id;
     entity.userId = record.userId;
+    entity.profile = getActiveBotProfile();
     entity.chatId = record.chatId;
     entity.kind = record.kind;
     entity.rawText = record.rawText;
@@ -68,7 +70,7 @@ export const HealthLogRepository = {
     },
 
     async findById(id: string): Promise<HealthLogRecord | null> {
-        const entity = await repo().findOne({ where: { id } });
+        const entity = await repo().findOne({ where: { id, profile: getActiveBotProfile() } });
         return entity ? fromEntity(entity) : null;
     },
 
@@ -79,7 +81,7 @@ export const HealthLogRepository = {
 
     async findRecent(userId: number, limit = 10): Promise<HealthLogRecord[]> {
         const entities = await repo().find({
-            where: { userId },
+            where: { userId, profile: getActiveBotProfile() },
             order: { occurredAt: 'DESC' },
             take: limit,
         });
@@ -90,6 +92,7 @@ export const HealthLogRepository = {
         const entities = await repo().find({
             where: {
                 userId,
+                profile: getActiveBotProfile(),
                 occurredAt: Between(from, to),
             },
             order: { occurredAt: 'ASC' },

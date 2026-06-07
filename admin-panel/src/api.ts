@@ -4,6 +4,9 @@ import type {
   HealthLogQuery,
   HealthLogsResponse,
   ModelPresetResponse,
+  MemoryFormPayload,
+  MemoryQuery,
+  MemoryResponse,
   PersonalityConfig,
 } from './types';
 
@@ -67,36 +70,36 @@ export async function fetchChats() {
   return r.json() as Promise<import('./types').ChatInfo[]>;
 }
 
-export async function setChatPublicMode(chatId: string, enabled: boolean) {
+export async function setChatPublicMode(chatId: string, profile: string, enabled: boolean) {
   const r = await fetch(`/api/chats/${chatId}/public-mode`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled }),
+    body: JSON.stringify({ profile, enabled }),
   });
   return r.json() as Promise<{ success: boolean; error?: string }>;
 }
 
-export async function setChatForbiddenTopics(chatId: string, topics: string) {
+export async function setChatForbiddenTopics(chatId: string, profile: string, topics: string) {
   const r = await fetch(`/api/chats/${chatId}/forbidden-topics`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ topics }),
+    body: JSON.stringify({ profile, topics }),
   });
   return r.json() as Promise<{ success: boolean; error?: string }>;
 }
 
-export async function setChatAllowedDomains(chatId: string, domains: string[]) {
+export async function setChatAllowedDomains(chatId: string, profile: string, domains: string[]) {
   const r = await fetch(`/api/chats/${chatId}/allowed-domains`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ domains }),
+    body: JSON.stringify({ profile, domains }),
   });
   return r.json() as Promise<{ success: boolean; error?: string }>;
 }
 
-function toSearchParams(query: HealthLogQuery = {}) {
+function toSearchParams<T extends object>(query: T = {} as T) {
   const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(query)) {
+  for (const [key, value] of Object.entries(query as Record<string, unknown>)) {
     if (value == null || value === '') continue;
     params.set(key, String(value));
   }
@@ -118,4 +121,46 @@ export function buildHealthExportUrl(format: HealthExportFormat, query: HealthLo
   const params = toSearchParams({ ...query, offset: undefined });
   params.set('format', format);
   return `/api/health/export?${params}`;
+}
+
+export async function fetchMemories(query: MemoryQuery = {}): Promise<MemoryResponse> {
+  const params = toSearchParams(query);
+  const url = params.toString() ? `/api/memory?${params}` : '/api/memory';
+  const r = await fetch(url);
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body.error || 'Failed to load memories');
+  }
+  return r.json();
+}
+
+export async function createMemory(payload: MemoryFormPayload) {
+  const r = await fetch('/api/memory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || 'Failed to create memory');
+  return body as { success: boolean; record?: import('./types').MemoryRecord };
+}
+
+export async function updateMemory(domain: string, id: string, payload: MemoryFormPayload) {
+  const r = await fetch(`/api/memory/${encodeURIComponent(domain)}/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || 'Failed to update memory');
+  return body as { success: boolean; record?: import('./types').MemoryRecord };
+}
+
+export async function deleteMemory(domain: string, id: string, query: Pick<MemoryQuery, 'profile' | 'userId'> = {}) {
+  const params = toSearchParams(query);
+  const url = `/api/memory/${encodeURIComponent(domain)}/${encodeURIComponent(id)}${params.toString() ? `?${params}` : ''}`;
+  const r = await fetch(url, { method: 'DELETE' });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || 'Failed to delete memory');
+  return body as { success: boolean };
 }

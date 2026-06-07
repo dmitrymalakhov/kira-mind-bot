@@ -2,7 +2,7 @@ import { Entity, PrimaryColumn, Column, UpdateDateColumn } from 'typeorm';
 
 /**
  * Персистентное хранилище сессий Grammy.
- * Ключ = chatId (string). Данные — JSONB с подмножеством SessionData:
+ * Ключ = `${ASSISTANT_PROFILE}:${chatId}`. Данные — JSONB с подмножеством SessionData:
  * messageHistory (последние 20), dialogueSummary, domains, recentlySavedFacts.
  */
 @Entity('bot_sessions')

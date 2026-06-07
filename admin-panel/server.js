@@ -87,6 +87,10 @@ const EDITABLE_KEYS = new Set([
   'DM_REPORT_ENABLED', 'DM_REPORT_INTERVAL_MS', 'DM_REPORT_QUIET_HOURS_ENABLED',
   'INBOX_GUARDIAN_ENABLED', 'INBOX_GUARDIAN_HOUR', 'INBOX_GUARDIAN_LOOKBACK_HOURS', 'INBOX_GUARDIAN_MIN_AGE_MINUTES',
   'MEMORY_INSIGHT_ENABLED', 'MEMORY_INSIGHT_INTERVAL_MS',
+  'MEMORY_CONSOLIDATION_ENABLED', 'MEMORY_CONSOLIDATION_INTERVAL_MS', 'MEMORY_CONSOLIDATION_MIN_FACTS',
+  'PERSONAL_CHAT_MEMORY_ENABLED', 'PERSONAL_CHAT_MEMORY_INTERVAL_MS', 'PERSONAL_CHAT_MEMORY_INITIAL_LOOKBACK_DAYS',
+  'PERSONAL_CHAT_MEMORY_MAX_CHATS_PER_RUN', 'PERSONAL_CHAT_MEMORY_MAX_MESSAGES_PER_CHAT',
+  'PERSONAL_CHAT_MEMORY_MIN_NEW_MESSAGES', 'PERSONAL_CHAT_MEMORY_DIALOG_LIMIT',
   'SERGEY_PROACTIVE_ENABLED', 'SERGEY_PROACTIVE_INTERVAL_MS',
   'SERGEY_PROACTIVE_QUIET_HOURS_ENABLED', 'SERGEY_PROACTIVE_QUIET_HOUR_START', 'SERGEY_PROACTIVE_QUIET_HOUR_END',
 ]);
@@ -286,15 +290,18 @@ app.get('/api/chats', requireAuth, async (_req, res) => {
 
 app.patch('/api/chats/:chatId/forbidden-topics', requireAuth, async (req, res) => {
   const { chatId } = req.params;
-  const { topics } = req.body;
+  const { topics, profile } = req.body;
   if (typeof topics !== 'string') {
     return res.status(400).json({ error: 'Поле topics должно быть строкой' });
+  }
+  if (typeof profile !== 'string' || !profile.trim()) {
+    return res.status(400).json({ error: 'Поле profile должно быть строкой' });
   }
   const pool = createDbPool();
   try {
     const result = await pool.query(
-      'UPDATE chats SET "forbiddenTopics" = $1 WHERE "chatId" = $2',
-      [topics, chatId]
+      'UPDATE chats SET "forbiddenTopics" = $1 WHERE "chatId" = $2 AND profile = $3',
+      [topics, chatId, profile.trim()]
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ error: 'Чат не найден' });
@@ -309,15 +316,18 @@ app.patch('/api/chats/:chatId/forbidden-topics', requireAuth, async (req, res) =
 
 app.patch('/api/chats/:chatId/allowed-domains', requireAuth, async (req, res) => {
   const { chatId } = req.params;
-  const { domains } = req.body;
+  const { domains, profile } = req.body;
   if (!Array.isArray(domains)) {
     return res.status(400).json({ error: 'Поле domains должно быть массивом строк' });
+  }
+  if (typeof profile !== 'string' || !profile.trim()) {
+    return res.status(400).json({ error: 'Поле profile должно быть строкой' });
   }
   const pool = createDbPool();
   try {
     const result = await pool.query(
-      'UPDATE chats SET "allowedDomains" = $1 WHERE "chatId" = $2',
-      [JSON.stringify(domains), chatId]
+      'UPDATE chats SET "allowedDomains" = $1 WHERE "chatId" = $2 AND profile = $3',
+      [JSON.stringify(domains), chatId, profile.trim()]
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ error: 'Чат не найден' });
@@ -332,15 +342,18 @@ app.patch('/api/chats/:chatId/allowed-domains', requireAuth, async (req, res) =>
 
 app.patch('/api/chats/:chatId/public-mode', requireAuth, async (req, res) => {
   const { chatId } = req.params;
-  const { enabled } = req.body;
+  const { enabled, profile } = req.body;
   if (typeof enabled !== 'boolean') {
     return res.status(400).json({ error: 'Поле enabled должно быть boolean' });
+  }
+  if (typeof profile !== 'string' || !profile.trim()) {
+    return res.status(400).json({ error: 'Поле profile должно быть строкой' });
   }
   const pool = createDbPool();
   try {
     const result = await pool.query(
-      'UPDATE chats SET "publicMode" = $1 WHERE "chatId" = $2',
-      [enabled, chatId]
+      'UPDATE chats SET "publicMode" = $1 WHERE "chatId" = $2 AND profile = $3',
+      [enabled, chatId, profile.trim()]
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ error: 'Чат не найден' });
@@ -388,6 +401,698 @@ function httpInputError(message) {
   error.statusCode = 400;
   return error;
 }
+
+// ── Memory management ────────────────────────────────────────────────────────
+
+const MEMORY_DOMAINS = [
+  'work',
+  'health',
+  'family',
+  'finance',
+  'education',
+  'hobbies',
+  'travel',
+  'social',
+  'home',
+  'personal',
+  'entertainment',
+  'general',
+  'contacts',
+];
+
+const MEMORY_KINDS = new Set([
+  'fact',
+  'episode',
+  'chapter',
+  'trait',
+  'preference',
+  'goal',
+  'open_loop',
+  'relationship',
+  'routine',
+  'boundary',
+  'promise',
+  'prospective',
+  'portrait',
+  'event',
+  'state',
+  'unknown',
+]);
+
+const MEMORY_STATUSES = new Set(['active', 'planned', 'done', 'superseded', 'expired', 'unknown']);
+const MEMORY_SUBJECTS = new Set(['user', 'contact', 'bot', 'system']);
+const MEMORY_FOCUSES = new Set([
+  'open_loops',
+  'stale',
+  'low_confidence',
+  'weak_evidence',
+  'no_source',
+  'anchors',
+  'synthetic',
+  'contacts',
+]);
+const MEMORY_PROFILE_TO_BOT_ID = {
+  KiraMindBot: 'kiramindbot',
+  SergeyBrainBot: 'sergeybrainbot',
+};
+
+function parseBooleanQuery(value, fallback = false) {
+  const raw = firstQueryValue(value);
+  if (raw === undefined || raw === null || raw === '') return fallback;
+  if (typeof raw === 'boolean') return raw;
+  return String(raw).toLowerCase() === 'true';
+}
+
+function getMemoryProfile(value) {
+  const profile = String(firstQueryValue(value) || 'KiraMindBot').trim();
+  if (!MEMORY_PROFILE_TO_BOT_ID[profile]) {
+    throw httpInputError('Недопустимый profile');
+  }
+  return profile;
+}
+
+function getMemoryUserId(profile, explicitUserId) {
+  const raw = firstQueryValue(explicitUserId);
+  if (typeof raw === 'string' && raw.trim()) {
+    if (!/^-?\d+$/.test(raw.trim())) throw httpInputError('userId должен быть числом');
+    return raw.trim();
+  }
+
+  const vars = readEnvFile();
+  const envKey = profile === 'SergeyBrainBot' ? 'SERGEY_ALLOWED_USER_ID' : 'KIRA_ALLOWED_USER_ID';
+  return String(vars[envKey] || process.env[envKey] || '').trim();
+}
+
+function getMemoryBotId(profile) {
+  return MEMORY_PROFILE_TO_BOT_ID[profile];
+}
+
+function memoryCollection(profile, domain) {
+  return `${getMemoryBotId(profile)}_memories_${domain}`;
+}
+
+function normalizeMemoryDomain(value, fallback = 'general') {
+  const domain = String(value || fallback).trim().toLowerCase();
+  if (!MEMORY_DOMAINS.includes(domain)) {
+    throw httpInputError('Недопустимый домен памяти');
+  }
+  return domain;
+}
+
+function getQdrantConfig() {
+  const vars = readEnvFile();
+  return {
+    url: String(vars.QDRANT_URL || process.env.QDRANT_URL || 'http://qdrant:6333').replace(/\/+$/, ''),
+    apiKey: vars.QDRANT_API_KEY || process.env.QDRANT_API_KEY || '',
+  };
+}
+
+async function qdrantRequest(pathname, options = {}) {
+  const { url, apiKey } = getQdrantConfig();
+  const headers = { ...(options.headers || {}) };
+  if (apiKey) headers['api-key'] = apiKey;
+  if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+
+  const response = await fetch(`${url}${pathname}`, { ...options, headers });
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    const error = new Error(`Qdrant HTTP ${response.status}${body ? `: ${body.slice(0, 300)}` : ''}`);
+    error.statusCode = response.status === 404 ? 404 : 502;
+    throw error;
+  }
+  return response.json();
+}
+
+async function collectionExists(collection) {
+  try {
+    await qdrantRequest(`/collections/${encodeURIComponent(collection)}`);
+    return true;
+  } catch (err) {
+    if (err.statusCode === 404) return false;
+    throw err;
+  }
+}
+
+async function ensureMemoryCollection(profile, domain, vectorSize = 1536) {
+  const collection = memoryCollection(profile, domain);
+  if (await collectionExists(collection)) return collection;
+  await qdrantRequest(`/collections/${encodeURIComponent(collection)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ vectors: { size: vectorSize, distance: 'Cosine' } }),
+  });
+  return collection;
+}
+
+async function getOpenAiEmbedding(text) {
+  const vars = readEnvFile();
+  const apiKey = vars.OPENAI_API_KEY || process.env.OPENAI_API_KEY || '';
+  if (!apiKey) throw httpInputError('OPENAI_API_KEY не задан: нельзя пересчитать embedding');
+
+  const response = await fetch('https://api.openai.com/v1/embeddings', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'text-embedding-ada-002',
+      input: text,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    const error = new Error(`OpenAI embeddings HTTP ${response.status}${body ? `: ${body.slice(0, 300)}` : ''}`);
+    error.statusCode = 502;
+    throw error;
+  }
+
+  const data = await response.json();
+  const embedding = data?.data?.[0]?.embedding;
+  if (!Array.isArray(embedding)) {
+    const error = new Error('OpenAI не вернул embedding');
+    error.statusCode = 502;
+    throw error;
+  }
+  return embedding;
+}
+
+function activeMemoryMustNotFilter() {
+  return [{ key: 'expiresAt', range: { lt: new Date().toISOString() } }];
+}
+
+async function scrollQdrantCollection(collection, filter, max = 2000) {
+  const points = [];
+  let offset;
+  while (points.length < max) {
+    const remaining = max - points.length;
+    const response = await qdrantRequest(`/collections/${encodeURIComponent(collection)}/points/scroll`, {
+      method: 'POST',
+      body: JSON.stringify({
+        filter,
+        limit: Math.min(256, remaining),
+        offset,
+        with_payload: true,
+        with_vector: false,
+      }),
+    });
+    const result = response.result || {};
+    points.push(...(result.points || []));
+    if (!result.next_page_offset) break;
+    offset = result.next_page_offset;
+  }
+  return points;
+}
+
+function normalizeMemoryTags(value) {
+  const tags = Array.isArray(value)
+    ? value
+    : String(value || '').split(',');
+  return [...new Set(tags
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .slice(0, 30))];
+}
+
+function normalizePreviousVersions(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => ({
+      content: String(entry?.content || ''),
+      timestamp: entry?.timestamp || new Date().toISOString(),
+      confidence: typeof entry?.confidence === 'number' ? entry.confidence : 0.6,
+    }))
+    .filter((entry) => entry.content.trim())
+    .slice(0, 10);
+}
+
+function normalizeMemoryPoint(point, fallbackDomain) {
+  const payload = point.payload || {};
+  const tags = normalizeMemoryTags(payload.tags);
+  return {
+    id: String(payload.id || point.id),
+    content: String(payload.content || ''),
+    domain: String(payload.domain || fallbackDomain),
+    botId: payload.botId ? String(payload.botId) : '',
+    userId: payload.userId == null ? '' : String(payload.userId),
+    timestamp: payload.timestamp || null,
+    importance: typeof payload.importance === 'number' ? payload.importance : 0.5,
+    tags,
+    confidence: typeof payload.confidence === 'number' ? payload.confidence : 0.6,
+    isAnchor: Boolean(payload.isAnchor),
+    memoryKind: payload.memoryKind ? String(payload.memoryKind) : 'fact',
+    status: payload.status ? String(payload.status) : 'active',
+    subject: payload.subject ? String(payload.subject) : undefined,
+    predicate: payload.predicate ? String(payload.predicate) : undefined,
+    object: payload.object ? String(payload.object) : undefined,
+    extractionMethod: payload.extractionMethod ? String(payload.extractionMethod) : undefined,
+    sourceContext: payload.sourceContext ? String(payload.sourceContext) : undefined,
+    sourceEpisodeId: payload.sourceEpisodeId ? String(payload.sourceEpisodeId) : undefined,
+    sourceMemoryIds: Array.isArray(payload.sourceMemoryIds) ? payload.sourceMemoryIds.map(String) : [],
+    sourceMessageIds: Array.isArray(payload.sourceMessageIds) ? payload.sourceMessageIds.map(String) : [],
+    previousVersions: normalizePreviousVersions(payload.previousVersions),
+    validFrom: payload.validFrom || null,
+    validTo: payload.validTo || null,
+    expiresAt: payload.expiresAt || null,
+    lastAccessedAt: payload.lastAccessedAt || null,
+    lastRetrievedAt: payload.lastRetrievedAt || null,
+    retrievalCount: typeof payload.retrievalCount === 'number' ? payload.retrievalCount : 0,
+    confirmationCount: typeof payload.confirmationCount === 'number' ? payload.confirmationCount : 0,
+    lastConfirmedAt: payload.lastConfirmedAt || null,
+    synthetic: isSyntheticMemoryPayload(payload),
+  };
+}
+
+function isSyntheticMemoryPayload(payload) {
+  const tags = normalizeMemoryTags(payload.tags);
+  const content = String(payload.content || '');
+  return tags.includes('memory-episode') ||
+    tags.includes('memory-chapter') ||
+    tags.includes('memory-schema') ||
+    tags.includes('sleep_open_loop_index') ||
+    tags.includes('sleep_uncertainty_index') ||
+    content.startsWith('[ЭПИЗОД ПАМЯТИ:') ||
+    content.startsWith('[ГЛАВА ПАМЯТИ:') ||
+    content.startsWith('[МОДЕЛЬ ПАМЯТИ:') ||
+    content.startsWith('[ИНДЕКС ОТКРЫТЫХ ЛИНИЙ ПАМЯТИ]') ||
+    content.startsWith('[ИНДЕКС СОМНЕНИЙ ПАМЯТИ]');
+}
+
+function isOpenLoopIndex(record) {
+  return record.tags.includes('sleep_open_loop_index') ||
+    record.content.startsWith('[ИНДЕКС ОТКРЫТЫХ ЛИНИЙ ПАМЯТИ]');
+}
+
+function isUncertaintyIndex(record) {
+  return record.tags.includes('sleep_uncertainty_index') ||
+    record.content.startsWith('[ИНДЕКС СОМНЕНИЙ ПАМЯТИ]');
+}
+
+function isContactRecord(record) {
+  return record.domain === 'contacts' ||
+    record.tags.includes('subject:contact') ||
+    record.tags.some((tag) =>
+      tag.startsWith('contact:') ||
+      tag.startsWith('contact_name:') ||
+      tag.startsWith('contact_alias:') ||
+      tag.startsWith('contact_id:') ||
+      tag.startsWith('contact_key:')
+    ) ||
+    /^\[[^\]]+\]\s+/.test(record.content);
+}
+
+function isOpenLoopRecord(record) {
+  return record.status === 'planned' ||
+    record.memoryKind === 'open_loop' ||
+    record.memoryKind === 'goal' ||
+    record.memoryKind === 'promise' ||
+    record.memoryKind === 'prospective' ||
+    record.tags.includes('temporal_scope:future_plan');
+}
+
+function isStaleRecord(record, now = Date.now()) {
+  return record.tags.includes('possibly-stale') ||
+    record.tags.includes('sleep-softened') ||
+    record.status === 'unknown' ||
+    (record.memoryKind === 'state' && record.timestamp && now - memoryDateMs(record.timestamp) > 120 * 24 * 60 * 60 * 1000) ||
+    (isOpenLoopRecord(record) && record.timestamp && now - memoryDateMs(record.timestamp) > 60 * 24 * 60 * 60 * 1000);
+}
+
+function isWeakEvidenceRecord(record) {
+  return record.tags.includes('weak-evidence') ||
+    record.tags.includes('needs-caution') ||
+    record.tags.includes('inference:ambiguous') ||
+    record.tags.includes('inference:inferred') ||
+    record.tags.includes('importance-capped') ||
+    record.tags.includes('anchor-capped') ||
+    record.tags.some((tag) => tag.startsWith('quality:'));
+}
+
+function hasSourceRecord(record) {
+  return Boolean(
+    record.synthetic ||
+    record.sourceContext ||
+    record.sourceEpisodeId ||
+    record.sourceMemoryIds.length > 0 ||
+    record.sourceMessageIds.length > 0
+  );
+}
+
+function memoryDateMs(value) {
+  const ms = value ? new Date(value).getTime() : 0;
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function buildMemoryStats(records) {
+  const byDomain = {};
+  const byKind = {};
+  const byStatus = {};
+  let confidenceSum = 0;
+  let lowConfidence = 0;
+  let stale = 0;
+  let openLoops = 0;
+  let weakEvidence = 0;
+  let noSource = 0;
+  let contacts = 0;
+  let synthetic = 0;
+  let anchors = 0;
+  let lastUpdatedAt = null;
+  let openLoopIndex = null;
+  let uncertaintyIndex = null;
+  const now = Date.now();
+
+  for (const record of records) {
+    byDomain[record.domain] = (byDomain[record.domain] || 0) + 1;
+    byKind[record.memoryKind || 'fact'] = (byKind[record.memoryKind || 'fact'] || 0) + 1;
+    byStatus[record.status || 'active'] = (byStatus[record.status || 'active'] || 0) + 1;
+    confidenceSum += record.confidence ?? 0.6;
+    if ((record.confidence ?? 0.6) < 0.55) lowConfidence++;
+    if (record.synthetic) synthetic++;
+    if (record.isAnchor) anchors++;
+    if (isStaleRecord(record, now)) stale++;
+    if (isOpenLoopRecord(record)) openLoops++;
+    if (isWeakEvidenceRecord(record)) weakEvidence++;
+    if (!hasSourceRecord(record)) noSource++;
+    if (isContactRecord(record)) contacts++;
+    if (!lastUpdatedAt || memoryDateMs(record.timestamp) > memoryDateMs(lastUpdatedAt)) {
+      lastUpdatedAt = record.timestamp;
+    }
+    if (isOpenLoopIndex(record) && (!openLoopIndex || memoryDateMs(record.timestamp) > memoryDateMs(openLoopIndex.timestamp))) {
+      openLoopIndex = record;
+    }
+    if (isUncertaintyIndex(record) && (!uncertaintyIndex || memoryDateMs(record.timestamp) > memoryDateMs(uncertaintyIndex.timestamp))) {
+      uncertaintyIndex = record;
+    }
+  }
+
+  return {
+    total: records.length,
+    avgConfidence: records.length ? confidenceSum / records.length : null,
+    lowConfidence,
+    stale,
+    openLoops,
+    weakEvidence,
+    noSource,
+    contacts,
+    synthetic,
+    anchors,
+    lastUpdatedAt,
+    byDomain: Object.entries(byDomain).map(([domain, count]) => ({ domain, count })).sort((a, b) => b.count - a.count),
+    byKind: Object.entries(byKind).map(([kind, count]) => ({ kind, count })).sort((a, b) => b.count - a.count),
+    byStatus: Object.entries(byStatus).map(([status, count]) => ({ status, count })).sort((a, b) => b.count - a.count),
+    dreaming: {
+      openLoopIndex,
+      uncertaintyIndex,
+    },
+  };
+}
+
+async function fetchMemoryRecords(profile, userId, domainFilter) {
+  const botId = getMemoryBotId(profile);
+  const domains = domainFilter ? [domainFilter] : MEMORY_DOMAINS;
+  const maxPerDomain = Number(process.env.MEMORY_PANEL_MAX_POINTS_PER_DOMAIN || 2000);
+  const records = [];
+
+  await Promise.all(domains.map(async (domain) => {
+    const collection = memoryCollection(profile, domain);
+    if (!(await collectionExists(collection))) return;
+    const filter = {
+      must: [
+        { key: 'botId', match: { value: botId } },
+        userId ? { key: 'userId', match: { value: userId } } : undefined,
+      ].filter(Boolean),
+      must_not: activeMemoryMustNotFilter(),
+    };
+    const points = await scrollQdrantCollection(collection, filter, maxPerDomain);
+    for (const point of points) {
+      const record = normalizeMemoryPoint(point, domain);
+      if (record.content) records.push(record);
+    }
+  }));
+
+  return records.sort((a, b) => memoryDateMs(b.timestamp) - memoryDateMs(a.timestamp));
+}
+
+function applyMemoryFilters(records, query) {
+  const q = String(firstQueryValue(query.q) || '').trim().toLowerCase();
+  const kind = String(firstQueryValue(query.kind) || '').trim();
+  const status = String(firstQueryValue(query.status) || '').trim();
+  const focus = String(firstQueryValue(query.focus) || '').trim();
+  const includeSynthetic = parseBooleanQuery(query.includeSynthetic, true);
+  if (focus && !MEMORY_FOCUSES.has(focus)) {
+    throw httpInputError('Недопустимый focus');
+  }
+
+  return records.filter((record) => {
+    if (!includeSynthetic && record.synthetic) return false;
+    if (kind && record.memoryKind !== kind) return false;
+    if (status && record.status !== status) return false;
+    if (focus === 'open_loops' && !isOpenLoopRecord(record)) return false;
+    if (focus === 'stale' && !isStaleRecord(record)) return false;
+    if (focus === 'low_confidence' && (record.confidence ?? 0.6) >= 0.55) return false;
+    if (focus === 'weak_evidence' && !isWeakEvidenceRecord(record)) return false;
+    if (focus === 'no_source' && hasSourceRecord(record)) return false;
+    if (focus === 'anchors' && !record.isAnchor) return false;
+    if (focus === 'synthetic' && !record.synthetic) return false;
+    if (focus === 'contacts' && !isContactRecord(record)) return false;
+    if (!q) return true;
+    const haystack = [
+      record.content,
+      record.domain,
+      record.memoryKind,
+      record.status,
+      record.subject,
+      record.predicate,
+      record.object,
+      record.sourceContext,
+      record.tags.join(' '),
+    ].filter(Boolean).join('\n').toLowerCase();
+    return haystack.includes(q);
+  });
+}
+
+async function fetchExistingMemoryPayload(profile, domain, id) {
+  const collection = memoryCollection(profile, domain);
+  const response = await qdrantRequest(`/collections/${encodeURIComponent(collection)}/points`, {
+    method: 'POST',
+    body: JSON.stringify({
+      ids: [id],
+      with_payload: true,
+      with_vector: false,
+    }),
+  });
+  return response.result?.[0]?.payload || null;
+}
+
+function clamp01(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(1, Math.max(0, parsed));
+}
+
+function estimateMemorySpecificity(content, tags) {
+  let score = 0.25;
+  if (/\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b|\b20\d{2}\b/.test(content)) score += 0.18;
+  if (/[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+/.test(content)) score += 0.14;
+  if (content.length >= 80) score += 0.10;
+  if (tags.length >= 2) score += 0.06;
+  return clamp01(score, 0.35);
+}
+
+function buildAdminMemoryPayload({ id, profile, userId, domain, body, existingPayload }) {
+  const now = new Date().toISOString();
+  const existingContent = String(existingPayload?.content || '').trim();
+  const content = String(body.content || existingContent).trim();
+  if (content.length < 3) throw httpInputError('content должен быть длиннее 3 символов');
+  if (content.length > 4000) throw httpInputError('content слишком длинный');
+
+  const rawTags = body.tags !== undefined ? normalizeMemoryTags(body.tags) : normalizeMemoryTags(existingPayload?.tags);
+  const subject = MEMORY_SUBJECTS.has(String(body.subject || existingPayload?.subject || 'user'))
+    ? String(body.subject || existingPayload?.subject || 'user')
+    : 'user';
+  const tags = [...new Set([
+    ...rawTags,
+    'manual-admin',
+    rawTags.some((tag) => tag.startsWith('subject:')) ? undefined : `subject:${subject}`,
+  ].filter(Boolean))];
+
+  const memoryKind = String(body.memoryKind || existingPayload?.memoryKind || 'fact');
+  const status = String(body.status || existingPayload?.status || 'active');
+  if (!MEMORY_KINDS.has(memoryKind)) throw httpInputError('Недопустимый memoryKind');
+  if (!MEMORY_STATUSES.has(status)) throw httpInputError('Недопустимый status');
+
+  const importance = clamp01(body.importance, typeof existingPayload?.importance === 'number' ? existingPayload.importance : 0.7);
+  const confidence = clamp01(body.confidence, typeof existingPayload?.confidence === 'number' ? existingPayload.confidence : 0.82);
+  const contentChanged = Boolean(existingPayload) && content !== existingContent;
+  const previousVersions = normalizePreviousVersions(existingPayload?.previousVersions);
+  if (contentChanged && existingContent) {
+    previousVersions.unshift({
+      content: existingContent,
+      timestamp: existingPayload.timestamp || now,
+      confidence: typeof existingPayload.confidence === 'number' ? existingPayload.confidence : 0.6,
+    });
+  }
+
+  const specificity = estimateMemorySpecificity(content, tags);
+  const strength = clamp01((importance * 0.42) + (confidence * 0.30) + specificity * 0.14 + (body.isAnchor ? 0.12 : 0), 0.65);
+
+  const payload = {
+    ...(existingPayload || {}),
+    id,
+    content,
+    domain,
+    botId: getMemoryBotId(profile),
+    characterName: profile === 'SergeyBrainBot' ? 'Сергей' : 'Кира',
+    userId,
+    timestamp: contentChanged || !existingPayload ? now : existingPayload.timestamp || now,
+    importance,
+    tags,
+    confidence,
+    isAnchor: Boolean(body.isAnchor ?? existingPayload?.isAnchor),
+    lastAccessedAt: now,
+    previousVersions: previousVersions.length ? previousVersions.slice(0, 10) : undefined,
+    memoryKind,
+    status,
+    subject,
+    predicate: body.predicate !== undefined ? String(body.predicate || '').trim() || undefined : existingPayload?.predicate,
+    object: body.object !== undefined ? String(body.object || '').trim() || undefined : existingPayload?.object || content,
+    extractionMethod: 'manual',
+    sourceContext: body.sourceContext !== undefined
+      ? String(body.sourceContext || '').trim() || undefined
+      : existingPayload?.sourceContext || 'Добавлено или исправлено вручную через admin-panel.',
+    strength,
+    specificity,
+    vividness: typeof existingPayload?.vividness === 'number' ? existingPayload.vividness : Math.min(0.65, 0.22 + specificity * 0.3),
+  };
+
+  for (const key of Object.keys(payload)) {
+    if (payload[key] === undefined || payload[key] === '') delete payload[key];
+  }
+
+  return payload;
+}
+
+app.get('/api/memory', requireAuth, async (req, res) => {
+  try {
+    const profile = getMemoryProfile(req.query.profile);
+    const userId = getMemoryUserId(profile, req.query.userId);
+    const domain = firstQueryValue(req.query.domain)
+      ? normalizeMemoryDomain(firstQueryValue(req.query.domain))
+      : '';
+    const limit = normalizeIntegerQuery(req.query.limit, 100, 500);
+    const offset = Math.max(0, normalizeIntegerQuery(req.query.offset, 0, 100000));
+    const records = await fetchMemoryRecords(profile, userId, domain);
+    const stats = buildMemoryStats(records);
+    const filtered = applyMemoryFilters(records, req.query);
+
+    res.json({
+      records: filtered.slice(offset, offset + limit),
+      total: filtered.length,
+      limit,
+      offset,
+      filters: {
+        profile,
+        userId,
+        domain: domain || undefined,
+        q: firstQueryValue(req.query.q) || undefined,
+        kind: firstQueryValue(req.query.kind) || undefined,
+        status: firstQueryValue(req.query.status) || undefined,
+        focus: firstQueryValue(req.query.focus) || undefined,
+        includeSynthetic: parseBooleanQuery(req.query.includeSynthetic, true),
+      },
+      stats,
+      domains: MEMORY_DOMAINS,
+      kinds: [...MEMORY_KINDS],
+      statuses: [...MEMORY_STATUSES],
+      focuses: [...MEMORY_FOCUSES],
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : `Ошибка памяти: ${err.message}` });
+  }
+});
+
+app.post('/api/memory', requireAuth, async (req, res) => {
+  try {
+    const profile = getMemoryProfile(req.body.profile);
+    const userId = getMemoryUserId(profile, req.body.userId);
+    if (!userId) throw httpInputError('Не найден userId владельца для выбранного профиля');
+    const domain = normalizeMemoryDomain(req.body.domain);
+    const id = crypto.randomUUID();
+    const payload = buildAdminMemoryPayload({ id, profile, userId, domain, body: req.body, existingPayload: null });
+    const vector = await getOpenAiEmbedding(payload.content);
+    const collection = await ensureMemoryCollection(profile, domain, vector.length);
+
+    await qdrantRequest(`/collections/${encodeURIComponent(collection)}/points?wait=true`, {
+      method: 'PUT',
+      body: JSON.stringify({ points: [{ id, vector, payload }] }),
+    });
+
+    res.json({ success: true, record: normalizeMemoryPoint({ id, payload }, domain) });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : `Ошибка сохранения памяти: ${err.message}` });
+  }
+});
+
+app.patch('/api/memory/:domain/:id', requireAuth, async (req, res) => {
+  try {
+    const profile = getMemoryProfile(req.body.profile || req.query.profile);
+    const userId = getMemoryUserId(profile, req.body.userId || req.query.userId);
+    const domain = normalizeMemoryDomain(req.params.domain);
+    const id = String(req.params.id || '').trim();
+    if (!id) throw httpInputError('id обязателен');
+
+    const existingPayload = await fetchExistingMemoryPayload(profile, domain, id);
+    if (!existingPayload) return res.status(404).json({ error: 'Воспоминание не найдено' });
+    if (userId && String(existingPayload.userId || '') !== userId) {
+      return res.status(404).json({ error: 'Воспоминание не найдено для выбранного userId' });
+    }
+
+    const payload = buildAdminMemoryPayload({
+      id,
+      profile,
+      userId: String(existingPayload.userId || userId),
+      domain,
+      body: req.body,
+      existingPayload,
+    });
+    const vector = await getOpenAiEmbedding(payload.content);
+    const collection = await ensureMemoryCollection(profile, domain, vector.length);
+
+    await qdrantRequest(`/collections/${encodeURIComponent(collection)}/points?wait=true`, {
+      method: 'PUT',
+      body: JSON.stringify({ points: [{ id, vector, payload }] }),
+    });
+
+    res.json({ success: true, record: normalizeMemoryPoint({ id, payload }, domain) });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : `Ошибка обновления памяти: ${err.message}` });
+  }
+});
+
+app.delete('/api/memory/:domain/:id', requireAuth, async (req, res) => {
+  try {
+    const profile = getMemoryProfile(req.query.profile);
+    const userId = getMemoryUserId(profile, req.query.userId);
+    const domain = normalizeMemoryDomain(req.params.domain);
+    const id = String(req.params.id || '').trim();
+    if (!id) throw httpInputError('id обязателен');
+
+    const existingPayload = await fetchExistingMemoryPayload(profile, domain, id);
+    if (!existingPayload) return res.status(404).json({ error: 'Воспоминание не найдено' });
+    if (userId && String(existingPayload.userId || '') !== userId) {
+      return res.status(404).json({ error: 'Воспоминание не найдено для выбранного userId' });
+    }
+
+    const collection = memoryCollection(profile, domain);
+    await qdrantRequest(`/collections/${encodeURIComponent(collection)}/points/delete?wait=true`, {
+      method: 'POST',
+      body: JSON.stringify({ points: [id] }),
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : `Ошибка удаления памяти: ${err.message}` });
+  }
+});
 
 function parseDateQuery(value, endOfDay = false) {
   const raw = firstQueryValue(value);
@@ -479,6 +1184,13 @@ function buildHealthLogFilters(query, options = {}) {
   const meta = {};
   const defaultDays = options.defaultDays ?? 30;
 
+  const profile = firstQueryValue(query.profile);
+  if (typeof profile === 'string' && profile.trim()) {
+    values.push(profile.trim());
+    clauses.push(`profile = $${values.length}`);
+    meta.profile = profile.trim();
+  }
+
   const userId = firstQueryValue(query.userId);
   if (typeof userId === 'string' && userId.trim()) {
     if (!/^-?\d+$/.test(userId.trim())) throw httpInputError('userId должен быть числом');
@@ -547,6 +1259,7 @@ function buildHealthLogFilters(query, options = {}) {
 function normalizeHealthLogRow(row) {
   return {
     id: row.id,
+    profile: row.profile ?? null,
     userId: row.userId == null ? null : String(row.userId),
     chatId: row.chatId == null ? null : String(row.chatId),
     kind: row.kind,
@@ -563,7 +1276,7 @@ function normalizeHealthLogRow(row) {
 }
 
 function healthBaseSelect() {
-  return 'SELECT id, "userId", "chatId", kind, "rawText", summary, severity, "occurredAt", "timeOfDay", structured, tags, "photoFileId", "createdAt" FROM health_logs';
+  return 'SELECT id, profile, "userId", "chatId", kind, "rawText", summary, severity, "occurredAt", "timeOfDay", structured, tags, "photoFileId", "createdAt" FROM health_logs';
 }
 
 function healthRecordSummary(record) {
@@ -630,6 +1343,7 @@ function csvEscape(value) {
 function buildHealthCsvExport(records) {
   const headers = [
     'id',
+    'profile',
     'userId',
     'chatId',
     'kind',
@@ -646,6 +1360,7 @@ function buildHealthCsvExport(records) {
   ];
   const rows = records.map((record) => [
     record.id,
+    record.profile,
     record.userId,
     record.chatId,
     record.kind,

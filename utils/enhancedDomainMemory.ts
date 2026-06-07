@@ -6,12 +6,13 @@ import openai, { openAiModels } from '../openai';
 import { llmCache, LLM_CACHE_TTL } from './llmCache';
 import { detectEmotionalTag } from './emotionalTagger';
 import { PREDEFINED_DOMAINS } from '../constants/domains';
+import { getActiveMemoryBotId } from './botIdentity';
 
 function vectorService() {
     return getVectorService();
 }
 
-const botId = process.env.BOT_ID || 'kira-mind-bot';
+const botId = getActiveMemoryBotId();
 
 let lastSaveError: string | null = null;
 
