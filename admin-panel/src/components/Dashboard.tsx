@@ -24,12 +24,14 @@ import PersonIcon from '@mui/icons-material/Person';
 import TuneIcon from '@mui/icons-material/Tune';
 import ForumIcon from '@mui/icons-material/Forum';
 import LocalHospitalIcon from '@mui/icons-material/LocalHospital';
+import MemoryIcon from '@mui/icons-material/Memory';
 import { StatusBar } from './StatusBar';
 import { CONFIG_SCHEMA } from '../schema';
 import { ConfigSection, type ConfigSectionHandle } from './ConfigSection';
 import { PersonalitySection } from './PersonalitySection';
 import { ChatsSection } from './ChatsSection';
 import { HealthSection } from './HealthSection';
+import { MemorySection } from './MemorySection';
 import { saveConfig, fetchConfig, logout, restartService } from '../api';
 import type { ConfigResponse, Toast } from '../types';
 
@@ -54,12 +56,16 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
       ? 'Управление личностью'
       : activeTab === 2
         ? 'Чаты бота'
-        : 'Дневник здоровья';
+        : activeTab === 3
+          ? 'Дневник здоровья'
+          : 'Управление памятью';
   const pageCaption = activeTab === 0 || activeTab === 1
     ? 'Изменения применяются после перезапуска контейнера'
     : activeTab === 2
       ? 'Группы, публичный режим и доступ к памяти'
-      : 'Сохранённые наблюдения и выгрузки';
+      : activeTab === 3
+        ? 'Сохранённые наблюдения и выгрузки'
+        : 'Сводка, факты, индексы и ручная правка';
 
   // Refs to collect values from each section for "Save All"
   const sectionRefs = useRef<Record<string, ConfigSectionHandle | null>>({});
@@ -147,6 +153,7 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
         <Tab icon={<PersonIcon fontSize="small" />} iconPosition="start" label="Личность" />
         <Tab icon={<ForumIcon fontSize="small" />} iconPosition="start" label="Чаты" />
         <Tab icon={<LocalHospitalIcon fontSize="small" />} iconPosition="start" label="Здоровье" />
+        <Tab icon={<MemoryIcon fontSize="small" />} iconPosition="start" label="Память" />
       </Tabs>
 
       {/* Settings navigation (only shown on tab 0) */}
@@ -209,6 +216,14 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
         <Box sx={{ flexGrow: 1, overflow: 'auto', py: 1, px: 1.5 }}>
           <Typography variant="caption" color="text.disabled">
             Записи и выгрузки дневника здоровья
+          </Typography>
+        </Box>
+      )}
+
+      {activeTab === 4 && (
+        <Box sx={{ flexGrow: 1, overflow: 'auto', py: 1, px: 1.5 }}>
+          <Typography variant="caption" color="text.disabled">
+            Факты, сводки и индексы памяти
           </Typography>
         </Box>
       )}
@@ -318,7 +333,7 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
       </Drawer>
 
       {/* Main content */}
-      <Box component="main" sx={{ flexGrow: 1, p: 3, maxWidth: activeTab === 3 ? 1200 : 880, mx: 'auto' }}>
+      <Box component="main" sx={{ flexGrow: 1, p: 3, maxWidth: activeTab === 3 || activeTab === 4 ? 1200 : 880, mx: 'auto' }}>
         {/* Header */}
         <Box
           sx={{
@@ -375,6 +390,9 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
 
         {/* Health tab */}
         {activeTab === 3 && <HealthSection />}
+
+        {/* Memory tab */}
+        {activeTab === 4 && <MemorySection onToast={showToast} />}
       </Box>
 
       {/* Toast */}
