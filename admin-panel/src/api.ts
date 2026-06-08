@@ -3,10 +3,8 @@ import type {
   HealthExportFormat,
   HealthLogQuery,
   HealthLogsResponse,
-  ModelPresetResponse,
-  MemoryFormPayload,
-  MemoryQuery,
-  MemoryResponse,
+  AiPresetName,
+  AiPresetResponse,
   PersonalityConfig,
 } from './types';
 
@@ -38,10 +36,19 @@ export async function saveConfig(data: Record<string, string | null>) {
   return r.json() as Promise<{ success: boolean; message?: string; error?: string }>;
 }
 
-export async function fetchModelPresets(): Promise<ModelPresetResponse> {
-  const r = await fetch('/api/model-presets');
-  if (!r.ok) throw new Error('Failed to load model presets');
+export async function fetchAiPreset(): Promise<AiPresetResponse> {
+  const r = await fetch('/api/ai-preset');
+  if (!r.ok) throw new Error('Failed to load AI preset');
   return r.json();
+}
+
+export async function saveAiPreset(preset: AiPresetName) {
+  const r = await fetch('/api/ai-preset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ preset }),
+  });
+  return r.json() as Promise<{ success: boolean; activePresetName?: AiPresetName; message?: string; error?: string }>;
 }
 
 export async function fetchPersonality(): Promise<PersonalityConfig> {

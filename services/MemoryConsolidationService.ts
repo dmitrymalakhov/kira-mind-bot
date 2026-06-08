@@ -1,7 +1,7 @@
 import { BotContext, MemoryEntry } from '../types';
 import { PREDEFINED_DOMAINS } from '../constants/domains';
 import { config } from '../config';
-import openai, { openAiModels } from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { devLog, parseLLMJson } from '../utils';
 import { getVectorService } from './VectorServiceFactory';
 
@@ -173,8 +173,7 @@ async function synthesizeChapters(domain: string, sources: MemoryEntry[], period
     const sourceText = selected.map(formatSource).join('\n');
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryConsolidationModel,
+        const resp = await createChatCompletionForTask('memoryConsolidation', {
             messages: [
                 {
                     role: 'system',

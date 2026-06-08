@@ -16,7 +16,7 @@ import {
 } from "../stores/NegotiationStore";
 import { config } from "../config";
 import { getBotPersona, getCommunicationStyle } from "../persona";
-import openai, { openAiModels } from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { sendMessage as sendTelegramMessage } from "../services/telegram";
 import { InlineKeyboard } from "grammy";
 import { studyChatAndSaveFacts } from "../utils/studyChatPipeline";
@@ -128,8 +128,7 @@ ${historyLines}
 Ответь только JSON, без markdown.`;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.messageAnalysisModel,
+        const resp = await createChatCompletionForTask('messageAnalysis', {
             messages: [
                 {
                     role: "system",
@@ -630,7 +629,6 @@ export async function getAnswerFromMessages(
             `;
 
             const completionOptions: any = {
-                model: openAiModels.messageAnalysisModel,
                 messages: [
                     {
                         role: "system",
@@ -649,7 +647,7 @@ export async function getAnswerFromMessages(
             };
             if (voiceReplyRequested) completionOptions.max_completion_tokens = 450;
 
-            const response = await openai.chat.completions.create(completionOptions);
+            const response = await createChatCompletionForTask('messageAnalysis', completionOptions);
 
             const analysisResult = response.choices[0]?.message?.content;
 
@@ -761,8 +759,7 @@ export async function getMessagesSummary(hours: number = 24, memoryContext: stri
         Ответ должен быть лаконичным, структурированным и легко читаемым."
         `;
 
-        const response = await openai.chat.completions.create({
-            model: openAiModels.messageAnalysisModel,
+        const response = await createChatCompletionForTask('messageAnalysis', {
             messages: [
                 {
                     role: "system",
@@ -890,7 +887,6 @@ async function studyGroupChatAndSaveFacts(
 
     // Параллельно: текстовый анализ + извлечение структурированных фактов
     const analysisCompletionOptions: any = {
-        model: openAiModels.messageAnalysisModel,
         messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
@@ -900,7 +896,7 @@ async function studyGroupChatAndSaveFacts(
     if (voiceReplyRequested) analysisCompletionOptions.max_completion_tokens = 450;
 
     const [analysisResult, factsResult] = await Promise.allSettled([
-        openai.chat.completions.create(analysisCompletionOptions),
+        createChatCompletionForTask('messageAnalysis', analysisCompletionOptions),
         extractFactsAboutUserFromConversation(conversationText, group.title as string, startDate, endDate),
     ]);
 
@@ -975,7 +971,6 @@ async function analyzeGroupChatMessages(
 ${conversationText}`;
 
     const completionOptions: any = {
-        model: openAiModels.messageAnalysisModel,
         messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
@@ -984,7 +979,7 @@ ${conversationText}`;
     };
     if (voiceReplyRequested) completionOptions.max_completion_tokens = 450;
 
-    const response = await openai.chat.completions.create(completionOptions);
+    const response = await createChatCompletionForTask('messageAnalysis', completionOptions);
 
     return response.choices[0]?.message?.content?.trim() || "Не удалось проанализировать сообщения чата.";
 }
@@ -1048,7 +1043,6 @@ async function analyzeMultipleGroupChats(
 ${chatSections}${notFoundNote}`;
 
     const completionOptions: any = {
-        model: openAiModels.messageAnalysisModel,
         messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
@@ -1057,7 +1051,7 @@ ${chatSections}${notFoundNote}`;
     };
     if (voiceReplyRequested) completionOptions.max_completion_tokens = 500;
 
-    const response = await openai.chat.completions.create(completionOptions);
+    const response = await createChatCompletionForTask('messageAnalysis', completionOptions);
 
     return response.choices[0]?.message?.content?.trim() || "Не удалось проанализировать сообщения чатов.";
 }
