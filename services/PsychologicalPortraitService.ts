@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { BotContext } from '../types';
 import { getVectorService } from './VectorServiceFactory';
 import { devLog } from '../utils';
-import openai, { openAiModels } from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { getActiveMemoryBotId } from '../utils/botIdentity';
 
 const PORTRAIT_DOMAIN = 'contacts';
@@ -112,8 +112,7 @@ async function buildPortraitFromText(
         : BUILD_PORTRAIT_PROMPT(contactName, conversationText);
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryConsolidationModel,
+        const resp = await createChatCompletionForTask('memoryConsolidation', {
             messages: [
                 {
                     role: 'system',

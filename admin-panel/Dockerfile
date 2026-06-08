@@ -12,8 +12,7 @@ WORKDIR /app
 RUN npm install --no-save express express-session pg
 COPY --from=builder /app/dist ./dist
 COPY server.js ./
-COPY openaiModelHelpers.js ./
 RUN mkdir -p ./src
-COPY src/openai-model-registry.json ./src/openai-model-registry.json
+COPY src/ai-model-presets.json ./src/ai-model-presets.json
 EXPOSE 3000
 CMD ["node", "server.js"]

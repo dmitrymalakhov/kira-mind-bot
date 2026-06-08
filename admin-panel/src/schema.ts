@@ -11,7 +11,19 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         label: 'OpenAI API Key',
         type: 'password',
         required: true,
-        hint: 'Используется для ChatGPT, генерации изображений и распознавания речи',
+        hint: 'Используется для GPT fallback, web reasoning, embeddings, vision и whisper.',
+      },
+      {
+        key: 'DEEPSEEK_API_KEY',
+        label: 'DeepSeek API Key',
+        type: 'password',
+        hint: 'Нужен для пресета Hybrid DeepSeek + GPT. Применяется после рестарта процесса.',
+      },
+      {
+        key: 'GEMINI_API_KEY',
+        label: 'Gemini API Key',
+        type: 'password',
+        hint: 'Нужен для пресета Hybrid Gemini + GPT. Применяется после рестарта процесса.',
       },
       {
         key: 'IDEOGRAM_API_KEY',

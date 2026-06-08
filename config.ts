@@ -1,6 +1,8 @@
 import * as dotenv from "dotenv";
 import * as fs from "fs";
-import openAiModelRegistry from "./admin-panel/src/openai-model-registry.json";
+import { aiPresets, parseAiPresetName, type AiTaskKey } from "./ai/modelPresets";
+import { getFallbackModel } from "./ai/fallbackModels";
+import { getCachedAiPresetName } from "./services/aiRuntimeConfigService";
 
 // ── Загрузка personality.json (редактируется через admin panel) ───────────────
 interface PersonalityOverride {
@@ -154,27 +156,33 @@ export interface OpenAIModelsConfig {
   transcriptionModel: string;
 }
 
-interface RawOpenAIModelsConfig {
-  defaultTextModel: string;
-  intentClassificationModel?: string;
-  intentDedupModel?: string;
-  conversationModel?: string;
-  memoryExtractionModel?: string;
-  memoryConsolidationModel?: string;
-  messageAnalysisModel?: string;
-  webSearchReasoningModel?: string;
-  browserPlanningModel?: string;
-  browserVisionModel: string;
-  embeddingModel: string;
-  transcriptionModel: string;
-}
+const LEGACY_OPENAI_CONFIG_TASKS = {
+  defaultTextModel: 'defaultText',
+  intentClassificationModel: 'intentClassification',
+  intentDedupModel: 'intentDedup',
+  conversationModel: 'conversation',
+  memoryExtractionModel: 'memoryExtraction',
+  memoryConsolidationModel: 'memoryConsolidation',
+  messageAnalysisModel: 'messageAnalysis',
+  webSearchReasoningModel: 'webSearchReasoning',
+  browserPlanningModel: 'browserPlanning',
+  browserVisionModel: 'browserVision',
+  embeddingModel: 'embedding',
+  transcriptionModel: 'transcription',
+} satisfies Record<keyof OpenAIModelsConfig, AiTaskKey>;
 
-interface OpenAIModelRegistryField {
-  envKey: string;
-  configKey: keyof OpenAIModelsConfig;
-  kind: "default_text" | "text_override" | "fixed";
-  resolution: "system_default" | "inherits_default_text";
-  systemDefault: string;
+export function resolveOpenAIModelsFromAiPreset(presetName = getCachedAiPresetName()): OpenAIModelsConfig {
+  const preset = aiPresets[presetName];
+  const resolved = {} as OpenAIModelsConfig;
+
+  for (const [configKey, taskKey] of Object.entries(LEGACY_OPENAI_CONFIG_TASKS) as Array<[keyof OpenAIModelsConfig, AiTaskKey]>) {
+    const modelRef = preset.models[taskKey];
+    resolved[configKey] = modelRef.provider === 'openai'
+      ? modelRef.model
+      : getFallbackModel(taskKey).model;
+  }
+
+  return resolved;
 }
 
 export interface Config extends AssistantConfig {
@@ -208,48 +216,6 @@ function toOptionalNumber(value: string | undefined): number | undefined {
   if (value === undefined || value.trim() === "") return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function toOptionalString(value: string | undefined): string | undefined {
-  if (value === undefined) return undefined;
-  const trimmed = value.trim();
-  return trimmed === "" ? undefined : trimmed;
-}
-
-function hasEnvKey(key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(process.env, key);
-}
-
-const openAiModelFields = (openAiModelRegistry.fields as OpenAIModelRegistryField[]);
-
-function resolveRawOpenAIField(field: OpenAIModelRegistryField): string | undefined {
-  const rawValue = hasEnvKey(field.envKey) ? process.env[field.envKey] : undefined;
-  const explicitValue = toOptionalString(rawValue);
-
-  if (field.kind === "default_text" || field.kind === "fixed") {
-    return explicitValue ?? field.systemDefault;
-  }
-
-  if (!hasEnvKey(field.envKey)) {
-    return field.resolution === "system_default" ? field.systemDefault : undefined;
-  }
-
-  return explicitValue;
-}
-
-function resolveOpenAIModels(raw: RawOpenAIModelsConfig): OpenAIModelsConfig {
-  const fallbackTextModel = raw.defaultTextModel;
-  const resolved = {} as OpenAIModelsConfig;
-
-  for (const field of openAiModelFields) {
-    const rawValue = raw[field.configKey];
-    resolved[field.configKey] =
-      field.kind === "text_override"
-        ? (rawValue ?? fallbackTextModel)
-        : (rawValue as string);
-  }
-
-  return resolved;
 }
 
 function assistants(activeAssistant: string): AssistantConfig {
@@ -494,10 +460,7 @@ function createConfig() {
       }
       : undefined;
 
-  const rawOpenAiModels = Object.fromEntries(
-    openAiModelFields.map((field) => [field.configKey, resolveRawOpenAIField(field)])
-  ) as unknown as RawOpenAIModelsConfig;
-  const openAiModels = resolveOpenAIModels(rawOpenAiModels);
+  const openAiModels = resolveOpenAIModelsFromAiPreset();
 
   return {
     openAiApiKey: process.env.OPENAI_API_KEY || "",

@@ -7,12 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const { Pool } = require('pg');
-const {
-  OPENAI_MODEL_KEYS,
-  OPENAI_MODEL_PRESETS,
-  buildOpenAIModelEntries,
-  findActiveModelPresetId,
-} = require('./openaiModelHelpers');
+const { AI_PRESETS, AI_PRESET_NAMES, parseAiPresetName } = require('./aiPresetRegistry');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -61,7 +56,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 10 * 60 * 1000;
 
 const SENSITIVE_KEYS = new Set([
-  'OPENAI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN', 'SERGEY_BOT_TOKEN',
+  'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN', 'SERGEY_BOT_TOKEN',
   'KIRA_ALLOWED_USER_ID', 'SERGEY_ALLOWED_USER_ID',
   'DB_PASSWORD', 'QDRANT_API_KEY', 'TELEGRAM_API_HASH',
   'TELEGRAM_SESSION_STRING', 'IDEOGRAM_API_KEY', 'GOOGLE_MAPS_API_KEY',
@@ -71,8 +66,7 @@ const GROUP_RUNTIME_SETTING_KEYS = new Set(['GROUP_CHAT_CONTEXT_ENABLED', 'GROUP
 const GLOBAL_SETTING_PREFIX = 'global:';
 
 const EDITABLE_KEYS = new Set([
-  'OPENAI_API_KEY', 'KIRA_BOT_TOKEN', 'SERGEY_BOT_TOKEN',
-  ...OPENAI_MODEL_KEYS,
+  'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'KIRA_BOT_TOKEN', 'SERGEY_BOT_TOKEN',
   'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID', 'ELEVENLABS_VOICE_NAME',
   'ELEVENLABS_MODEL_ID', 'ELEVENLABS_OUTPUT_FORMAT',
   'ELEVENLABS_VOICE_STABILITY', 'ELEVENLABS_VOICE_SIMILARITY_BOOST',
@@ -111,6 +105,30 @@ function readEnvFile() {
     result[t.slice(0, idx).trim()] = t.slice(idx + 1);
   }
   return result;
+}
+
+function buildConfigSource(kind, label, description, technicalPath, appliesImmediately) {
+  return { kind, label, description, technicalPath, appliesImmediately };
+}
+
+function buildEnvFileSource(technicalPath = BOT_ENV_FILE) {
+  return buildConfigSource(
+    'env_file',
+    'Файл настроек бота',
+    'Значения сохраняются в env-файл, подключённый к контейнеру бота. Для применения обычно нужен рестарт бота.',
+    technicalPath,
+    false
+  );
+}
+
+function buildRuntimeSource() {
+  return buildConfigSource(
+    'database',
+    'Runtime-настройка',
+    'Хранится в базе данных и применяется без перезапуска бота.',
+    'bot_settings.AI_MODEL_PRESET',
+    true
+  );
 }
 
 function writeEnvFile(updates) {
@@ -269,18 +287,66 @@ app.get('/api/config', requireAuth, async (req, res) => {
   for (const [key, value] of Object.entries(runtimeSettings)) {
     result[key] = { value, masked: false, source: 'bot_settings' };
   }
-
-  Object.assign(result, buildOpenAIModelEntries(vars, BOT_ENV_FILE));
   res.json(result);
 });
 
-app.get('/api/model-presets', requireAuth, (req, res) => {
+async function ensureBotSettingsTable(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bot_settings (
+      key text PRIMARY KEY,
+      value text NOT NULL,
+      "updatedAt" timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+}
+
+app.get('/api/ai-preset', requireAuth, async (_req, res) => {
   const vars = readEnvFile();
-  res.json({
-    presets: OPENAI_MODEL_PRESETS,
-    activePresetId: findActiveModelPresetId(vars),
-    configPath: BOT_ENV_FILE,
-  });
+  const envDefaultPreset = parseAiPresetName(vars.AI_MODEL_PRESET || process.env.AI_MODEL_PRESET) || 'gpt-balanced';
+  const pool = createDbPool();
+  try {
+    await ensureBotSettingsTable(pool);
+    const result = await pool.query('SELECT value FROM bot_settings WHERE key = $1', ['AI_MODEL_PRESET']);
+    const storedPreset = parseAiPresetName(result.rows[0]?.value);
+    res.json({
+      activePresetName: storedPreset || envDefaultPreset,
+      storedPresetName: storedPreset,
+      envDefaultPreset,
+      availablePresets: AI_PRESET_NAMES.map((name) => AI_PRESETS[name]),
+      source: storedPreset ? buildRuntimeSource() : buildConfigSource(
+        'env_fallback',
+        'Значение по умолчанию',
+        'Runtime-настройка ещё не задана, поэтому используется env/default значение.',
+        'AI_MODEL_PRESET',
+        false
+      ),
+    });
+  } catch (err) {
+    res.status(500).json({ error: `Ошибка БД: ${err.message}` });
+  } finally {
+    await pool.end();
+  }
+});
+
+app.post('/api/ai-preset', requireAuth, async (req, res) => {
+  const preset = parseAiPresetName(req.body?.preset);
+  if (!preset) {
+    return res.status(400).json({ error: 'Неизвестный AI preset' });
+  }
+
+  const pool = createDbPool();
+  try {
+    await ensureBotSettingsTable(pool);
+    await pool.query(
+      'INSERT INTO bot_settings (key, value, "updatedAt") VALUES ($1, $2, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = now()',
+      ['AI_MODEL_PRESET', preset]
+    );
+    res.json({ success: true, activePresetName: preset, message: '✅ AI preset сохранён и применяется без перезапуска.' });
+  } catch (err) {
+    res.status(500).json({ error: `Ошибка БД: ${err.message}` });
+  } finally {
+    await pool.end();
+  }
 });
 
 app.post('/api/config', requireAuth, async (req, res) => {

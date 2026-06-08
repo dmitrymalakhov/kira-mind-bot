@@ -1,6 +1,6 @@
 import { Bot, InlineKeyboard, Keyboard } from 'grammy';
 import { BotContext } from '../types';
-import { getMemoryStats, cleanupOldMemories, searchAllDomainsMemories, getRecentMemories, getLastSaveError, generateMemoryBiography, findMemoryByContent, deleteMemoryById, generateMemoryInsights, compressOldMemories, getMemoryHealthReport } from '../utils/enhancedDomainMemory';
+import { getMemoryStats, cleanupOldMemories, searchAllDomainsMemoriesWithFallback, getRecentMemories, getLastSaveError, generateMemoryBiography, findMemoryByContent, deleteMemoryById, generateMemoryInsights, compressOldMemories, getMemoryHealthReport } from '../utils/enhancedDomainMemory';
 import { getVectorService } from '../services/VectorServiceFactory';
 import { factAnalysisManager } from '../utils/factAnalysisTimer';
 import { config } from '../config';
@@ -19,6 +19,7 @@ function getMemoryAdminKeyboard() {
     return new Keyboard()
         .text('/memory_stats')
         .text('/memory_cleanup')
+        .text('/memory_last_insight')
         .row()
         .text('/debug_facts')
         .text('/admin_menu')
@@ -63,7 +64,8 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
                 '',
                 'Команды раздела:',
                 '/memory_stats — статистика + последние 5 сохраненных фактов',
-                '/memory_search <запрос> — ручная проверка векторного поиска',
+                '/memory_search <запрос> — ручная проверка поиска памяти (векторный + текстовый fallback)',
+                '/memory_last_insight — последнее проактивное сообщение и его источники',
                 '/memory_cleanup — очистка старых фактов',
                 '/memory_consolidate [домен] — собрать сводные главы, модели и индексы памяти',
                 '/personal_chat_memory_status — статус фонового изучения личных переписок',
@@ -122,7 +124,7 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
             return;
         }
 
-        const found = await searchAllDomainsMemories(ctx, query, 5);
+        const found = await searchAllDomainsMemoriesWithFallback(ctx, query, 5);
         if (found.length === 0) {
             console.warn(`⚠️ [memory_search] По запросу ничего не найдено: "${query}"`);
             await ctx.reply(`По запросу "${query}" ничего не найдено.`);
@@ -147,6 +149,42 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
             .join('\n\n');
 
         await ctx.reply(`🔎 Результаты поиска для: "${query}"\n\n${response}`);
+    });
+
+
+    bot.command('memory_last_insight', async (ctx) => {
+        if (!isAdmin(ctx)) {
+            await ctx.reply('⛔️ Доступ только для администратора.');
+            return;
+        }
+
+        const insight = ctx.session.lastProactiveInsight;
+        if (!insight) {
+            await ctx.reply('Последней проактивной подсказки в сессии нет или она уже протухла.');
+            return;
+        }
+
+        const createdAt = new Date(insight.createdAt).toLocaleString('ru-RU', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+        });
+        const sources = insight.sourceMemories.length > 0
+            ? insight.sourceMemories.map((memory, index) => `${index + 1}. ${memory}`).join('\n\n')
+            : 'Источник не сохранён.';
+
+        await ctx.reply([
+            `🧭 Последняя проактивная подсказка (${insight.kind}, ${createdAt}):`,
+            '',
+            insight.message,
+            '',
+            'Источники, на которых она была основана:',
+            sources,
+            '',
+            'Если источник выглядит лишним, попробуй /memory_search по точной фразе из источника.',
+        ].join('\n'));
     });
 
     bot.command('memory_cleanup', async (ctx) => {

@@ -5,7 +5,7 @@ import { detectDomain, getDomainContext } from "../utils/domainMemory";
 import { AgentMemoryContext } from "../utils/agentMemoryContext";
 import { getBotPersona, getCommunicationStyle, getBotBiography } from "../persona";
 import { config } from "../config";
-import openai, { openAiModels } from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { getKiraSelfMemoryState, getRecentKiraSelfEvents, searchKiraSelfEventsByQuery } from "../utils/kiraSelfMemory";
 import { buildGroupChatContext } from "../utils/groupChatContext";
 import { isGroupChatContextEnabled } from "../services/groupChatFeatureSettings";
@@ -203,8 +203,7 @@ ${domainContext ? `Факты из памяти о пользователе:\n${
         `;
 
         // Отправка запроса к API OpenAI
-        const response = await openai.chat.completions.create({
-            model: openAiModels.conversationModel,
+        const response = await createChatCompletionForTask('conversation', {
             messages: [
                 {
                     role: "system",

@@ -51,6 +51,7 @@ import { getTelegramVoiceReadinessIssue, withTelegramVoiceFile } from "./service
 import { stripVoiceReplyDirective, wantsVoiceReply } from "./utils/voiceReply";
 import { addTargetNotificationButtons, appendTargetNotificationPrompt, buildDefaultTargetReminderMessage } from "./utils/reminderTargetNotification";
 import { normalizeNumbersForVoiceMessage } from "./utils/russianSpeechNumbers";
+import { warmAiPresetCache } from "./services/aiRuntimeConfigService";
 
 
 // Загрузка переменных окружения
@@ -1847,6 +1848,10 @@ async function startBot() {
         console.log("🗄️  Инициализация базы данных...");
         await AppDataSource.initialize();
         console.log("✅ База данных подключена");
+
+        console.log("🤖 Загрузка runtime AI preset...");
+        const activeAiPreset = await warmAiPresetCache();
+        console.log("✅ Runtime AI preset загружен:", activeAiPreset);
 
         console.log("📅 Загрузка активных напоминаний из БД...");
         const activeReminders = await ReminderRepository.loadActive();
