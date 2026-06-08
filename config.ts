@@ -129,6 +129,10 @@ interface AssistantConfig {
   proactiveOnlyPrivateChat: boolean;
   /** Режим публичных групп: бот отвечает другим пользователям (не владельцу) в групповых чатах */
   groupPublicMode: boolean;
+  /** Сбор и подстановка последних сообщений группы в LLM-контекст */
+  groupChatContextEnabled: boolean;
+  /** Обработка reply на сообщения бота в группах без явного @mention */
+  groupReplyToBotEnabled: boolean;
   /** Утренний дайджест: краткая сводка напоминаний на день */
   morningDigestEnabled: boolean;
   /** Час отправки утреннего дайджеста (0–23, по часовому поясу сервера) */
@@ -338,6 +342,8 @@ function assistants(activeAssistant: string): AssistantConfig {
       personalChatMemoryDialogLimit: toNumber(process.env.PERSONAL_CHAT_MEMORY_DIALOG_LIMIT, 120),
       proactiveOnlyPrivateChat: toBoolean(process.env.PROACTIVE_ONLY_PRIVATE_CHAT, true),
       groupPublicMode: toBoolean(process.env.GROUP_PUBLIC_MODE, false),
+      groupChatContextEnabled: toBoolean(process.env.GROUP_CHAT_CONTEXT_ENABLED, false),
+      groupReplyToBotEnabled: toBoolean(process.env.GROUP_REPLY_TO_BOT_ENABLED, false),
       morningDigestEnabled: toBoolean(process.env.MORNING_DIGEST_ENABLED, true),
       morningDigestHour: toNumber(process.env.MORNING_DIGEST_HOUR, 9),
     },
@@ -412,6 +418,8 @@ function assistants(activeAssistant: string): AssistantConfig {
       personalChatMemoryDialogLimit: toNumber(process.env.PERSONAL_CHAT_MEMORY_DIALOG_LIMIT, 120),
       proactiveOnlyPrivateChat: toBoolean(process.env.PROACTIVE_ONLY_PRIVATE_CHAT, true),
       groupPublicMode: toBoolean(process.env.GROUP_PUBLIC_MODE, false),
+      groupChatContextEnabled: toBoolean(process.env.GROUP_CHAT_CONTEXT_ENABLED, false),
+      groupReplyToBotEnabled: toBoolean(process.env.GROUP_REPLY_TO_BOT_ENABLED, false),
       morningDigestEnabled: false,
       morningDigestHour: 9,
     }

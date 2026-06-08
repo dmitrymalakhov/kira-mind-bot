@@ -120,6 +120,20 @@ export const BOT_COMMANDS: BotCommandDescription[] = [
         usage: "/public_mode",
     },
     {
+        command: "group_context",
+        description: "Включить или выключить сбор контекста групповых чатов",
+        scope: "owner",
+        usage: "/group_context [on|off]",
+        examples: ["/group_context", "/group_context off", "/group_context on"],
+    },
+    {
+        command: "group_reply_to_bot",
+        description: "Включить или выключить ответы на reply к боту без @упоминания",
+        scope: "owner",
+        usage: "/group_reply_to_bot [on|off]",
+        examples: ["/group_reply_to_bot", "/group_reply_to_bot off", "/group_reply_to_bot on"],
+    },
+    {
         command: "telegram_unread",
         description: "Непрочитанные сообщения Telegram за 24 часа",
         scope: "owner",
@@ -400,7 +414,7 @@ export const BOT_CAPABILITIES: BotCapabilityDescription[] = [
             "Включи публичный режим в этой группе",
             "Что ты умеешь в публичном чате?",
         ],
-        commands: ["/public_mode"],
+        commands: ["/public_mode", "/group_context", "/group_reply_to_bot"],
         limitations: ["В публичном режиме недоступны личные напоминания, чтение личных переписок, отправка сообщений и переговоры от имени владельца."],
     },
 ];

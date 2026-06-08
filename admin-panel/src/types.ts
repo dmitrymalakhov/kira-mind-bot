@@ -3,7 +3,7 @@ export interface ConfigEntry {
   masked: boolean;
   rawValue?: string | null;
   rawState?: 'missing' | 'empty' | 'value';
-  source?: 'env_file' | 'inherited_default_text' | 'system_default';
+  source?: 'env_file' | 'inherited_default_text' | 'system_default' | 'bot_settings';
   configPath?: string;
 }
 

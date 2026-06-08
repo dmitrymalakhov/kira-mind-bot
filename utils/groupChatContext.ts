@@ -27,6 +27,7 @@ export interface BuildGroupChatContextOptions {
     limit?: number;
     triggerReasons?: GroupChatTriggerReason[];
     botUsername?: string;
+    enabled?: boolean;
 }
 
 const DEFAULT_RECENT_LIMIT = 15;
@@ -157,6 +158,14 @@ export async function buildGroupChatContext(
     };
 
     if (!isGroupChat(ctx) || !ctx.chat?.id) return empty;
+
+    if (options.enabled === false) {
+        return {
+            ...empty,
+            isGroupChat: true,
+            debugSummary: `groupContext: disabled chat=${ctx.chat.id}`,
+        };
+    }
 
     const message = ctx.message as any;
     const reply = message?.reply_to_message;

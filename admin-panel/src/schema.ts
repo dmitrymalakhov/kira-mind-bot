@@ -243,6 +243,18 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         label: 'Публичный режим в группах (отвечать всем)',
         type: 'toggle',
       },
+      {
+        key: 'GROUP_CHAT_CONTEXT_ENABLED',
+        label: 'Собирать контекст групповых чатов',
+        type: 'toggle',
+        hint: 'Если выключено, бот не сохраняет последние сообщения группы и не добавляет их в LLM-промпт',
+      },
+      {
+        key: 'GROUP_REPLY_TO_BOT_ENABLED',
+        label: 'Отвечать на reply к боту без @упоминания',
+        type: 'toggle',
+        hint: 'Если выключено, в группе бот реагирует только на команды или явное @упоминание',
+      },
     ],
   },
   {

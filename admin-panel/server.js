@@ -67,6 +67,9 @@ const SENSITIVE_KEYS = new Set([
   'TELEGRAM_SESSION_STRING', 'IDEOGRAM_API_KEY', 'GOOGLE_MAPS_API_KEY',
 ]);
 
+const GROUP_RUNTIME_SETTING_KEYS = new Set(['GROUP_CHAT_CONTEXT_ENABLED', 'GROUP_REPLY_TO_BOT_ENABLED']);
+const GLOBAL_SETTING_PREFIX = 'global:';
+
 const EDITABLE_KEYS = new Set([
   'OPENAI_API_KEY', 'KIRA_BOT_TOKEN', 'SERGEY_BOT_TOKEN',
   ...OPENAI_MODEL_KEYS,
@@ -81,7 +84,7 @@ const EDITABLE_KEYS = new Set([
   'TELEGRAM_API_ID', 'TELEGRAM_API_HASH', 'TELEGRAM_SESSION_STRING',
   'GOOGLE_MAPS_API_KEY', 'IDEOGRAM_API_KEY',
   'USER_TIMEZONE', 'REMINDER_EXPIRY_TIME_MS',
-  'PROACTIVE_ONLY_PRIVATE_CHAT', 'GROUP_PUBLIC_MODE',
+  'PROACTIVE_ONLY_PRIVATE_CHAT', 'GROUP_PUBLIC_MODE', 'GROUP_CHAT_CONTEXT_ENABLED', 'GROUP_REPLY_TO_BOT_ENABLED',
   'KIRA_PROACTIVE_ENABLED', 'KIRA_PROACTIVE_INTERVAL_MS',
   'KIRA_PROACTIVE_QUIET_HOURS_ENABLED', 'KIRA_PROACTIVE_QUIET_HOUR_START', 'KIRA_PROACTIVE_QUIET_HOUR_END',
   'DM_REPORT_ENABLED', 'DM_REPORT_INTERVAL_MS', 'DM_REPORT_QUIET_HOURS_ENABLED',
@@ -138,6 +141,55 @@ function writeEnvFile(updates) {
 
   fs.writeFileSync(BOT_ENV_FILE, newLines.join('\n'));
   return true;
+}
+
+function runtimeSettingDbKey(key) {
+  return `${GLOBAL_SETTING_PREFIX}${key}`;
+}
+
+async function readRuntimeGroupSettings(vars) {
+  const defaults = Object.fromEntries(
+    [...GROUP_RUNTIME_SETTING_KEYS].map(key => [key, vars[key] ?? 'false'])
+  );
+  const dbKeys = Object.keys(defaults).map(runtimeSettingDbKey);
+  const pool = createDbPool();
+  try {
+    const rows = await pool.query(
+      'SELECT key, value FROM bot_settings WHERE key = ANY($1)',
+      [dbKeys]
+    );
+    const result = { ...defaults };
+    for (const row of rows.rows) {
+      const key = String(row.key).replace(GLOBAL_SETTING_PREFIX, '');
+      if (GROUP_RUNTIME_SETTING_KEYS.has(key)) result[key] = row.value;
+    }
+    return result;
+  } catch (err) {
+    console.error('[admin] Failed to read runtime group settings:', err.message);
+    return defaults;
+  } finally {
+    await pool.end().catch(() => {});
+  }
+}
+
+async function writeRuntimeGroupSettings(updates) {
+  const entries = Object.entries(updates).filter(([key]) => GROUP_RUNTIME_SETTING_KEYS.has(key));
+  if (entries.length === 0) return true;
+  const pool = createDbPool();
+  try {
+    for (const [key, value] of entries) {
+      await pool.query(
+        'INSERT INTO bot_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = NOW()',
+        [runtimeSettingDbKey(key), String(value)]
+      );
+    }
+    return true;
+  } catch (err) {
+    console.error('[admin] Failed to write runtime group settings:', err.message);
+    return false;
+  } finally {
+    await pool.end().catch(() => {});
+  }
 }
 
 // ── Docker socket ─────────────────────────────────────────────────────────────
@@ -202,7 +254,7 @@ app.post('/api/logout', (req, res) => {
   req.session.destroy(() => res.json({ success: true }));
 });
 
-app.get('/api/config', requireAuth, (req, res) => {
+app.get('/api/config', requireAuth, async (req, res) => {
   const vars = readEnvFile();
   const result = {};
   for (const [key, value] of Object.entries(vars)) {
@@ -212,6 +264,12 @@ app.get('/api/config', requireAuth, (req, res) => {
       result[key] = { value, masked: false };
     }
   }
+
+  const runtimeSettings = await readRuntimeGroupSettings(vars);
+  for (const [key, value] of Object.entries(runtimeSettings)) {
+    result[key] = { value, masked: false, source: 'bot_settings' };
+  }
+
   Object.assign(result, buildOpenAIModelEntries(vars, BOT_ENV_FILE));
   res.json(result);
 });
@@ -225,19 +283,32 @@ app.get('/api/model-presets', requireAuth, (req, res) => {
   });
 });
 
-app.post('/api/config', requireAuth, (req, res) => {
-  const updates = {};
+app.post('/api/config', requireAuth, async (req, res) => {
+  const envUpdates = {};
+  const runtimeUpdates = {};
   for (const [key, value] of Object.entries(req.body)) {
     if (!EDITABLE_KEYS.has(key)) continue;
     if (typeof value === 'string' && value.includes('••••')) continue;
-    updates[key] = value;
+    if (GROUP_RUNTIME_SETTING_KEYS.has(key)) {
+      runtimeUpdates[key] = value;
+    } else {
+      envUpdates[key] = value;
+    }
   }
 
-  const ok = writeEnvFile(updates);
-  if (ok) {
-    res.json({ success: true, message: '✅ Сохранено. Перезапустите боты для применения.' });
-  } else {
+  const hasEnvUpdates = Object.keys(envUpdates).length > 0;
+  const envOk = !hasEnvUpdates || writeEnvFile(envUpdates);
+  const runtimeOk = await writeRuntimeGroupSettings(runtimeUpdates);
+
+  if (envOk && runtimeOk) {
+    const message = hasEnvUpdates
+      ? '✅ Сохранено. Перезапустите боты для применения env-настроек; настройки групп применяются без рестарта.'
+      : '✅ Сохранено. Настройки групп применяются без рестарта.';
+    res.json({ success: true, message });
+  } else if (!envOk) {
     res.status(500).json({ error: 'Файл конфигурации не найден. Проверьте volume.' });
+  } else {
+    res.status(500).json({ error: 'Не удалось сохранить runtime-настройки групп в БД.' });
   }
 });
 
