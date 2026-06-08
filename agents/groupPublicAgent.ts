@@ -21,6 +21,7 @@ import { devLog, parseLLMJson } from "../utils";
 import { searchMemories } from "../utils/enhancedDomainMemory";
 import { getChatAllowedDomains, getChatForbiddenTopics } from "../services/chatRegistry";
 import { buildGroupChatContext } from "../utils/groupChatContext";
+import { isGroupChatContextEnabled } from "../services/groupChatFeatureSettings";
 
 type PublicIntent = "CONVERSATION" | "WEB_SEARCH" | "MAPS" | "IMAGE_GENERATION" | "CAPABILITIES";
 
@@ -175,6 +176,7 @@ async function handlePublicConversation(
     const groupContext = await buildGroupChatContext(ctx, message, {
         botUsername: config.botUsername,
         limit: 15,
+        enabled: await isGroupChatContextEnabled(),
     });
     devLog(groupContext.debugSummary);
     const memoryContext = await buildMemoryContext(ctx, message, allowedDomains);

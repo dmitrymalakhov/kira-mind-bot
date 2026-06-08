@@ -13,6 +13,7 @@ import { config } from "./config";
 import { pushGroupChatMessage } from "./stores/GroupChatBuffer";
 import { isBotMentioned, isMessageReplyToBot } from "./utils/groupChatContext";
 import { GroupChatMessageRepository } from "./services/GroupChatMessageRepository";
+import { isGroupChatContextEnabled, isGroupReplyToBotEnabled } from "./services/groupChatFeatureSettings";
 
 const DISMISSAL_VARIANTS = [
   "занята важными делами",
@@ -215,11 +216,11 @@ function setupBot(bot: Bot<BotContext>, config: any) {
 
       const botUsername = config.botUsername.toLowerCase();
 
-      // Сохраняем все сообщения в буфер для контекста (до фильтра по упоминанию).
-      // Сообщения других ботов тоже важны: в группах часто спрашивают мнение Киры о них.
+      // Сохраняем групповые сообщения только если явно включён групповой контекст.
+      const groupChatContextEnabled = await isGroupChatContextEnabled();
       const senderUsername = ctx.from?.username?.toLowerCase();
       const isOwnBotMessage = Boolean(ctx.from?.is_bot && senderUsername && senderUsername === botUsername);
-      if (text && ctx.from && !isOwnBotMessage) {
+      if (groupChatContextEnabled && text && ctx.from && !isOwnBotMessage) {
         const groupMessage = {
           senderName: ctx.from.first_name || ctx.from.username || 'Участник',
           text,
@@ -235,7 +236,7 @@ function setupBot(bot: Bot<BotContext>, config: any) {
       }
 
       const isMentioned = isBotMentioned(ctx, text, botUsername);
-      const isReplyToBot = isMessageReplyToBot(ctx, botUsername);
+      const isReplyToBot = await isGroupReplyToBotEnabled() && isMessageReplyToBot(ctx, botUsername);
       if (!isMentioned && !isReplyToBot) return;
     }
     await next();

@@ -74,6 +74,8 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
                 '/memory_repair_contacts — проставить contact_id старым контактным фактам',
                 '/chats — список чатов, в которых присутствует бот',
                 '/public_mode — вкл/выкл публичный режим в текущей группе',
+                '/group_context [on|off] — сбор группового контекста для LLM',
+                '/group_reply_to_bot [on|off] — ответы на reply к боту без @упоминания',
             ].join('\n'),
             { reply_markup: getMemoryAdminKeyboard() },
         );

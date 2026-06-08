@@ -5,6 +5,9 @@ import type {
   HealthLogsResponse,
   AiPresetName,
   AiPresetResponse,
+  MemoryFormPayload,
+  MemoryQuery,
+  MemoryResponse,
   PersonalityConfig,
 } from './types';
 
@@ -163,7 +166,7 @@ export async function updateMemory(domain: string, id: string, payload: MemoryFo
   return body as { success: boolean; record?: import('./types').MemoryRecord };
 }
 
-export async function deleteMemory(domain: string, id: string, query: Pick<MemoryQuery, 'profile' | 'userId'> = {}) {
+export async function deleteMemory(domain: string, id: string, query: Partial<Pick<MemoryQuery, 'profile' | 'userId'>> = {}) {
   const params = toSearchParams(query);
   const url = `/api/memory/${encodeURIComponent(domain)}/${encodeURIComponent(id)}${params.toString() ? `?${params}` : ''}`;
   const r = await fetch(url, { method: 'DELETE' });
