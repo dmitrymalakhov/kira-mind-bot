@@ -119,7 +119,37 @@ async function main() {
         assert.equal(snapshot.isGroupChat, true);
         assert.equal(snapshot.promptBlock, "");
         assert.equal(snapshot.recentMessages.length, 0);
-        assert(snapshot.debugSummary.includes("disabled"));
+        assert(snapshot.debugSummary.includes("recent-disabled"));
+    }
+
+    {
+        const chatId = -1001005;
+        const text = "а почему?";
+        const ctx: any = {
+            chat: { id: chatId, type: "supergroup" },
+            from: { id: 42, first_name: "Лена" },
+            message: {
+                message_id: 51,
+                text,
+                reply_to_message: {
+                    message_id: 50,
+                    text: "Потому что до этого бот уже выбрал мягкий вариант.",
+                    from: { id: 777, first_name: "Kira", username: "KiraMindBot", is_bot: true },
+                },
+            },
+            session: {},
+        };
+
+        const snapshot = await buildGroupChatContext(ctx, text, {
+            botUsername: "KiraMindBot",
+            enabled: false,
+        });
+        assert.equal(snapshot.isGroupChat, true);
+        assert.equal(snapshot.recentMessages.length, 0);
+        assert(snapshot.triggerReasons.includes("reply_to_bot"));
+        assert(snapshot.promptBlock.includes("Пользователь отвечает на сообщение"));
+        assert(snapshot.promptBlock.includes("мягкий вариант"));
+        assert(snapshot.debugSummary.includes("recent=disabled"));
     }
 
     {
