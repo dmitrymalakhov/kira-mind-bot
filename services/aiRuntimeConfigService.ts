@@ -54,6 +54,10 @@ export async function getActiveAiPresetName(): Promise<AiPresetName> {
     }
 }
 
+export async function warmAiPresetCache(): Promise<AiPresetName> {
+    return getActiveAiPresetName();
+}
+
 export async function setActiveAiPresetName(preset: AiPresetName): Promise<void> {
     setCachedPresetName(preset);
 
