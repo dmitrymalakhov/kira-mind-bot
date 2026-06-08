@@ -2,6 +2,7 @@ import * as dotenv from "dotenv";
 import * as fs from "fs";
 import { aiPresets, parseAiPresetName, type AiTaskKey } from "./ai/modelPresets";
 import { getFallbackModel } from "./ai/fallbackModels";
+import { getCachedAiPresetName } from "./services/aiRuntimeConfigService";
 
 // ── Загрузка personality.json (редактируется через admin panel) ───────────────
 interface PersonalityOverride {
@@ -166,8 +167,7 @@ const LEGACY_OPENAI_CONFIG_TASKS = {
   transcriptionModel: 'transcription',
 } satisfies Record<keyof OpenAIModelsConfig, AiTaskKey>;
 
-function resolveOpenAIModelsFromAiPreset(): OpenAIModelsConfig {
-  const presetName = parseAiPresetName(process.env.AI_MODEL_PRESET) ?? 'gpt-balanced';
+export function resolveOpenAIModelsFromAiPreset(presetName = getCachedAiPresetName()): OpenAIModelsConfig {
   const preset = aiPresets[presetName];
   const resolved = {} as OpenAIModelsConfig;
 

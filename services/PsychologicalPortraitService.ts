@@ -3,6 +3,7 @@ import { BotContext } from '../types';
 import { getVectorService } from './VectorServiceFactory';
 import { devLog } from '../utils';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
+import { getActiveMemoryBotId } from '../utils/botIdentity';
 
 const PORTRAIT_DOMAIN = 'contacts';
 const PORTRAIT_IMPORTANCE = 0.92;
