@@ -905,7 +905,9 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         reminderId,
                         messageId: msgId ?? 0,
                         chatId: cid,
+                        // Когда начали ждать текстовую правку пользователя.
                         createdAt: Date.now(),
+                        // Через 10 минут сценарий редактирования протухает, чтобы не цеплять случайные сообщения позже.
                         expiresAt: Date.now() + 10 * 60 * 1000,
                     };
                     await ctx.answerCallbackQuery({ text: "Жду правку" });
@@ -930,11 +932,13 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 if (postponeTime === "custom") {
                     const msgId = ctx.callbackQuery.message?.message_id;
                     const cid = ctx.callbackQuery.message?.chat.id ?? ctx.chat!.id;
-                    ctx.session.pendingReminderEdit = undefined;
-                    ctx.session.pendingPostpone = {
+                    ctx.session.pendingPostpone = undefined;
+                    ctx.session.pendingReminderEdit = {
                         reminderId,
                         messageId: msgId ?? 0,
                         chatId: cid,
+                        createdAt: Date.now(),
+                        expiresAt: Date.now() + 10 * 60 * 1000,
                     };
                     await ctx.answerCallbackQuery();
                     await ctx.reply('⏰ Напиши, на какое время перенести:\nНапример: «в пятницу в 10», «через 2 часа», «завтра в 9:30»');

@@ -4,7 +4,7 @@ import { isUserInContacts } from "../services/telegram";
 import { devLog } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { config } from "../config";
-import openai, { openAiModels } from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 
 // Максимальное количество вопросов от бота
 const MAX_BOT_QUESTIONS = 2;
@@ -286,8 +286,7 @@ async function generateFirstQuestion(ctx: BotContext): Promise<string> {
     const firstName = chat.firstName || "Пользователь";
 
     try {
-        const response = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const response = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: "system",
@@ -340,8 +339,7 @@ async function generateSecondQuestion(ctx: BotContext): Promise<string> {
     const ownerName = config.ownerName || "руководитель";
 
     try {
-        const response = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const response = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: "system",

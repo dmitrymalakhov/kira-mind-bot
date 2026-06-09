@@ -1,7 +1,7 @@
 import { Bot } from "grammy";
 import { config } from "../config";
 import { USER_TIMEZONE } from "../constants";
-import openai, { openAiModels } from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { MessageStore, StoredMessage } from "../stores/MessageStore";
 import { BotContext } from "../types";
 import { parseLLMJson } from "../utils";
@@ -268,8 +268,7 @@ async function analyzeThreads(threads: InboxThreadCandidate[]): Promise<InboxGua
     if (threads.length === 0) return [];
 
     try {
-        const response = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const response = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: "system",

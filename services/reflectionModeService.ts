@@ -34,7 +34,7 @@ import { runUpdateLongTermMemoryAgentDetailed } from '../agents/updateLongTermMe
 import { searchAllDomainsMemories } from '../utils/enhancedDomainMemory';
 import { getSetting, setSetting } from './botSettingsService';
 import { devLog, parseLLMJson } from '../utils';
-import openai, { openAiModels } from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { getProactiveChatId } from '../utils/allowedUserChatStore';
 import { MessageStore } from '../stores/MessageStore';
 import { getVectorService } from './VectorServiceFactory';
@@ -276,8 +276,7 @@ async function triageForHighPriority(chatId: string, senderName: string, text: s
 JSON: {"urgent": true/false}`;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -469,8 +468,7 @@ ${snippet}
 JSON: {"useful": true/false, "emotion": "neutral|stress|conflict|grief|joy|anxiety"}`;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -557,8 +555,7 @@ async function classifyChat(chatId: string, chatTitle: string, messages: Buffere
     const prompt = `Чат с "${chatTitle}". Примеры сообщений:\n${snippet}\n\nОпредели домен (work/personal/family/health/finance/general) и тип отношений (коллега/друг/партнёр/родственник/знакомый/другое).\nJSON: {"domain": "...", "relationship": "..."}`;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },

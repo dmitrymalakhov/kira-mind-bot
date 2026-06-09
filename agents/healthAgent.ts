@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ChatCompletionContentPart } from 'openai/resources/chat';
 import type { ProcessingResult } from '../orchestrator';
 import type { BotContext, MessageHistory } from '../types';
-import openai, { openAiModels } from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { USER_TIMEZONE } from '../constants';
 import { parseLLMJson } from '../utils';
 import { HealthLogKind, HealthLogRecord, HealthLogRepository, HealthTimeOfDay } from '../services/HealthLogRepository';
@@ -514,8 +514,7 @@ async function analyzeHealthPhoto(
 
     let analysisFailure: unknown;
     try {
-        const response = await openai.chat.completions.create({
-            model: openAiModels.conversationModel,
+        const response = await createChatCompletionForTask('conversation', {
             messages: [
                 {
                     role: 'system',
@@ -643,8 +642,7 @@ async function analyzeHealthRequest(
     }
 
     try {
-        const response = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const response = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: 'system',
@@ -914,8 +912,7 @@ async function extractDiscomfortLevel(message: string): Promise<DiscomfortExtrac
     }
 
     try {
-        const response = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const response = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: 'system',
@@ -973,8 +970,7 @@ async function buildAIHealthAnalysis(
     }));
 
     try {
-        const response = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const response = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: 'system',

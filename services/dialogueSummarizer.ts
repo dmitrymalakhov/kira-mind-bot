@@ -2,7 +2,7 @@ import { MessageHistory, SessionData, DomainMemory } from "../types";
 import { devLog } from "../utils";
 import { getBotPersona } from "../persona";
 import { config } from "../config";
-import openai, { openAiModels } from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 
 
 // Расширенный интерфейс для хранения истории сообщений с суммаризацией
@@ -62,8 +62,7 @@ export async function summarizeDialogue(
         `;
 
         // Отправка запроса к API OpenAI
-        const response = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const response = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: "system",

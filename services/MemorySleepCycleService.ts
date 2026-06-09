@@ -2,7 +2,7 @@ import { config } from '../config';
 import { PREDEFINED_DOMAINS } from '../constants/domains';
 import { MemoryEntry } from '../types';
 import { getVectorService } from './VectorServiceFactory';
-import openai, { openAiModels } from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { devLog, parseLLMJson } from '../utils';
 
 const OPEN_LOOP_INDEX_TAG = 'sleep_open_loop_index';
@@ -216,8 +216,7 @@ function formatUncertaintySource(memory: MemoryEntry, index: number): string {
 
 async function synthesizeOpenLoopIndex(sources: MemoryEntry[]): Promise<OpenLoopIndexResponse | null> {
     const sourceText = sources.map(formatOpenLoopSource).join('\n');
-    const resp = await openai.chat.completions.create({
-        model: openAiModels.memoryExtractionModel,
+    const resp = await createChatCompletionForTask('memoryExtraction', {
         messages: [
             { role: 'system', content: 'Ты собираешь индекс незакрытых линий долговременной памяти. Отвечай только JSON.' },
             {
@@ -246,8 +245,7 @@ JSON:
 
 async function synthesizeUncertaintyIndex(sources: MemoryEntry[]): Promise<UncertaintyIndexResponse | null> {
     const sourceText = sources.map(formatUncertaintySource).join('\n');
-    const resp = await openai.chat.completions.create({
-        model: openAiModels.memoryExtractionModel,
+    const resp = await createChatCompletionForTask('memoryExtraction', {
         messages: [
             { role: 'system', content: 'Ты собираешь индекс метапамяти: что ассистент помнит неуверенно или что может устареть. Отвечай только JSON.' },
             {

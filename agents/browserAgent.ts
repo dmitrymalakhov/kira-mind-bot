@@ -7,7 +7,7 @@ import * as path from 'path';
 import { InlineKeyboard, InputFile } from 'grammy';
 import type { BotContext, MessageHistory } from '../types';
 import type { ProcessingResult, MessageClassification } from '../orchestrator';
-import openai, { openAiModels } from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { devLog, parseLLMJson } from '../utils';
 import { fetchAgentMemoryContext, buildMemoryContextBlock } from '../utils/agentMemoryContext';
 import { BrowserSessionStore } from '../services/BrowserSessionStore';
@@ -19,7 +19,6 @@ const MAX_MEMORY_LOOKUPS = 6;
 const MAX_CONSECUTIVE_ACTION_FAILURES = 4;
 const ACTION_TIMEOUT_MS = 10_000;
 const NAVIGATION_TIMEOUT_MS = 20_000;
-const VISION_MODEL = openAiModels.browserVisionModel;
 const SCREENSHOT_INTERVAL = 6;
 const PENDING_BROWSER_TTL_MS = 15 * 60 * 1000;
 const LAST_BROWSER_TASK_TTL_MS = 45 * 60 * 1000;
@@ -6276,8 +6275,7 @@ async function extractSemanticFormValuesWithLlm(
     let lastError: any;
     for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-            const response = await openai.chat.completions.create({
-                model: openAiModels.browserPlanningModel,
+            const response = await createChatCompletionForTask('browserPlanning', {
                 max_tokens: 600,
                 temperature: 0,
                 messages: [
@@ -7091,8 +7089,7 @@ async function repairBrowserActionJson(text: string): Promise<BrowserAction | nu
     if (!source) return null;
 
     try {
-        const response = await openai.chat.completions.create({
-            model: openAiModels.browserPlanningModel,
+        const response = await createChatCompletionForTask('browserPlanning', {
             max_tokens: 260,
             temperature: 0,
             messages: [
@@ -7243,8 +7240,7 @@ async function inferTaskContractWithLlm(
     ].join('\n');
 
     try {
-        const response = await openai.chat.completions.create({
-            model: VISION_MODEL,
+        const response = await createChatCompletionForTask('browserVision', {
             max_tokens: 720,
             temperature: 0,
             messages: [
@@ -7565,8 +7561,7 @@ async function understandPageStateWithLlm(
     ].join('\n');
 
     try {
-        const response = await openai.chat.completions.create({
-            model: VISION_MODEL,
+        const response = await createChatCompletionForTask('browserVision', {
             max_tokens: 600,
             temperature: 0,
             messages: [
@@ -7734,8 +7729,7 @@ async function critiqueDecisionWithLlm(
     ].join('\n');
 
     try {
-        const response = await openai.chat.completions.create({
-            model: VISION_MODEL,
+        const response = await createChatCompletionForTask('browserVision', {
             max_tokens: 320,
             temperature: 0,
             messages: [
@@ -7790,8 +7784,7 @@ async function verifyActionOutcomeWithLlm(
     ].join('\n');
 
     try {
-        const response = await openai.chat.completions.create({
-            model: VISION_MODEL,
+        const response = await createChatCompletionForTask('browserVision', {
             max_tokens: 360,
             temperature: 0,
             messages: [
@@ -7905,8 +7898,7 @@ async function reviewTaskCompletionWithLlm(
     ].join('\n');
 
     try {
-        const response = await openai.chat.completions.create({
-            model: VISION_MODEL,
+        const response = await createChatCompletionForTask('browserVision', {
             max_tokens: 520,
             temperature: 0,
             messages: [
@@ -8193,8 +8185,7 @@ ${observation.runtimeSignals || '(нет ошибок/предупреждени
     let lastError: any;
     for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
-            const response = await openai.chat.completions.create({
-                model: VISION_MODEL,
+            const response = await createChatCompletionForTask('browserVision', {
                 max_tokens: 650,
                 temperature: 0.1,
                 messages: [
@@ -11321,8 +11312,7 @@ async function chooseVisualClickCandidateWithLlm(
     let lastError: any;
     for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-            const response = await openai.chat.completions.create({
-                model: VISION_MODEL,
+            const response = await createChatCompletionForTask('browserVision', {
                 max_tokens: 300,
                 temperature: 0,
                 messages: [
@@ -11458,8 +11448,7 @@ async function chooseTaskScopedCandidateWithLlm(
     };
 
     try {
-        const response = await openai.chat.completions.create({
-            model: openAiModels.browserPlanningModel,
+        const response = await createChatCompletionForTask('browserPlanning', {
             max_tokens: 240,
             temperature: 0,
             messages: [
@@ -11985,8 +11974,7 @@ async function chooseContextualCandidateWithLlm(
     };
 
     try {
-        const response = await openai.chat.completions.create({
-            model: openAiModels.browserPlanningModel,
+        const response = await createChatCompletionForTask('browserPlanning', {
             max_tokens: 260,
             temperature: 0,
             messages: [

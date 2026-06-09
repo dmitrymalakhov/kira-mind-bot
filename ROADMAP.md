@@ -2,24 +2,15 @@
 
 ## AI Model Presets
 
-- Единый источник истины для модельной конфигурации — provider-aware AI preset registry (`ai-model-presets.json`).
-- Не возвращать отдельные OpenAI-only registry/пресеты: это создаёт дублирование, скрытые overrides и риск незаметного расхода токенов.
-- Runtime-переключение активного preset выполняется через админку и хранится в БД, чтобы изменения применялись без redeploy.
-- Legacy-поля `openAiModels` допустимы только как совместимый read-only слой для старых прямых OpenAI-вызовов и должны вычисляться из AI preset registry + fallback policy.
-- Новые LLM-вызовы должны идти через task-aware wrapper (`createChatCompletionForTask` / `createResponseForTask`), а не напрямую через вручную выбранные модели.
+- Добить сценарные проверки для hybrid preset-ов на реальных runtime-путях:
+  - `conversation`
+  - `messageAnalysis`
+  - `browserVision`
+  - `browserPlanning`
+- Зафиксировать smoke/e2e-покрытие для runtime-переключения preset-а без redeploy.
 
 ## LLM Provider Abstraction
 
-- Поддержать второй текстовый LLM-провайдер, не ломая текущий OpenAI-only путь.
-- Вынести выбор не только модели, но и провайдера на уровень конфигурации задач:
-  - `intentClassification`
-  - `intentDedup`
-  - `conversation`
-  - `messageAnalysis`
-  - `memoryExtraction`
-  - `memoryConsolidation`
-  - `webSearchReasoning`
-  - `browserPlanning`
 - Ввести абстракцию поверх провайдеров:
   - единый интерфейс text completion / structured output;
   - адаптер OpenAI;
@@ -36,12 +27,5 @@
 
 ## Model Presets
 
-- Поддерживать единый список preset-ов:
-  - `GPT Max`
-  - `GPT Balanced`
-  - `GPT Lean`
-  - `Hybrid DeepSeek + GPT`
-  - `Hybrid Gemini + GPT`
-- Для каждого preset хранить полный task-aware mapping `provider + model`, описание и fallback-политику.
-- UI админки должен показывать активный runtime preset, понятный человекочитаемый источник значения и перечень моделей по задачам.
-- Не добавлять отдельные OpenAI-only пресеты, ручные model overrides и второй registry рядом с AI preset registry.
+- Не добавлять обратно OpenAI-only registry, ручные model overrides и параллельные preset-слои рядом с AI preset registry.
+- Если legacy `pendingPostpone` больше не нужен после унификации с `pendingReminderEdit`, удалить его отдельным cleanup-изменением вместе с типами и fallback-веткой.

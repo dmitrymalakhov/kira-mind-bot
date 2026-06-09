@@ -775,46 +775,18 @@ bot.on("message:text", async (ctx, next) => {
                     ctx.session.pendingPostpone = undefined;
                     const reminder = ReminderRegistry.getInstance().get(reminderId);
                     if (reminder) {
-                        const now = new Date();
-                        let newDueDate: Date | null = null;
-                        try {
-                            const { default: openaiClient, openAiModels } = await import('./openai');
-                            const { parseLLMJson: parse } = await import('./utils');
-                            const resp = await openaiClient.chat.completions.create({
-                                model: openAiModels.memoryExtractionModel,
-                                messages: [
-                                    {
-                                        role: 'system',
-                                        content: `Текущая дата и время: ${now.toLocaleString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: 'numeric', weekday: 'long' })}. Рассчитай абсолютную дату и время из запроса пользователя. Верни только JSON: {"newDueDate": "ISO 8601 или null"}`,
-                                    },
-                                    { role: 'user', content: message.slice(0, 300) },
-                                ],
-                                temperature: 1,
-                            });
-                            const parsed = parse<{ newDueDate?: string | null }>(resp.choices[0]?.message?.content || '');
-                            if (parsed?.newDueDate) {
-                                const d = new Date(parsed.newDueDate);
-                                if (!isNaN(d.getTime())) newDueDate = d;
-                            }
-                        } catch (e) {
-                            console.error('[pendingPostpone] LLM parse failed', e);
-                        }
-
-                        if (newDueDate) {
-                            const updated = await postponeReminderUntil(bot, reminder, newDueDate);
-                            if (!updated) {
-                                await ctx.reply('Не смогла перенести напоминание. Попробуй ещё раз.');
-                                return;
-                            }
-                            ReminderRegistry.getInstance().add(updated);
-                            const sessIdx = ctx.session.reminders.findIndex(r => r.id === reminderId);
-                            if (sessIdx >= 0) ctx.session.reminders[sessIdx] = updated;
-                            const dateStr = newDueDate.toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: 'numeric', minute: 'numeric' });
-                            await ctx.reply(`✅ Напоминание перенесено на ${dateStr}`);
-                        } else {
+                        const editResult = await applyReminderEditInput(reminder, message);
+                        if (!editResult.ok || !editResult.reminder || !editResult.changedTime) {
                             await ctx.reply('Не смогла распознать дату и время. Попробуй ещё раз, например: «завтра в 10» или «в пятницу в 15:30».');
                             ctx.session.pendingPostpone = { reminderId, messageId, chatId };
+                            return;
                         }
+
+                        const updated = editResult.reminder;
+                        ReminderRegistry.getInstance().add(updated);
+                        const sessIdx = ctx.session.reminders.findIndex(r => r.id === reminderId);
+                        if (sessIdx >= 0) ctx.session.reminders[sessIdx] = updated;
+                        await ctx.reply(editResult.responseText);
                     }
                     return;
                 }

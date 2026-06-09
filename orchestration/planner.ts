@@ -1,6 +1,6 @@
 import type { Plan, PlanStep, PlanningInput } from './types';
 import { devLog, parseLLMJson } from '../utils';
-import openai, { openAiModels } from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { llmCache, LLM_CACHE_TTL } from '../utils/llmCache';
 
 const AVAILABLE_STEPS = `
@@ -128,8 +128,7 @@ ${AVAILABLE_STEPS}
 - Минимум один шаг. params можно опустить или передать пустой объект.`;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const resp = await createChatCompletionForTask('browserPlanning', {
             messages: [
                 {
                     role: 'system',

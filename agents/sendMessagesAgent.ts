@@ -14,7 +14,7 @@ import { Contact, ContactsStore } from "../stores/ContactsStore";
 import { devLog, notifyUser } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { config } from "../config";
-import openai, { openAiModels } from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { getContactPortrait } from "../services/PsychologicalPortraitService";
 import { getTelegramVoiceReadinessIssue, withTelegramVoiceFile } from "../services/elevenLabsTts";
 import { normalizeNumbersForVoiceMessage } from "../utils/russianSpeechNumbers";
@@ -209,8 +209,7 @@ async function analyzeAndGenerateMessage(
         }
         `;
 
-        const response = await openai.chat.completions.create({
-            model: openAiModels.conversationModel,
+        const response = await createChatCompletionForTask('conversation', {
             messages: [
                 {
                     role: "system",

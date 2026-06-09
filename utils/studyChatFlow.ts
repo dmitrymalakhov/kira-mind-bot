@@ -1,6 +1,6 @@
 import { Api } from 'telegram';
 import { initTelegramClient } from '../services/telegram';
-import openai, { openAiModels } from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { config } from '../config';
 import { parseLLMJson } from '../utils';
 import type { MemoryStatus } from '../types';
@@ -447,16 +447,14 @@ async function extractRawFactsFromChunk(
 ): Promise<ExtractedFactAboutUser[]> {
     // Два параллельных запроса — каждый про одного человека
     const [userResp, contactResp] = await Promise.allSettled([
-        openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        createChatCompletionForTask('memoryExtraction', {
             messages: [
                 { role: 'system', content: EXTRACTION_SYSTEM },
                 { role: 'user', content: buildUserFactsPrompt(chunk, contactName, periodLabel) },
             ],
             temperature: 1,
         }),
-        openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        createChatCompletionForTask('memoryExtraction', {
             messages: [
                 { role: 'system', content: EXTRACTION_SYSTEM },
                 { role: 'user', content: buildContactFactsPrompt(chunk, contactName, periodLabel) },
@@ -565,8 +563,7 @@ async function synthesizeGroup(
     if (facts.length === 1) return facts;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.messageAnalysisModel,
+        const resp = await createChatCompletionForTask('messageAnalysis', {
             messages: [
                 { role: 'system', content: SYNTHESIS_SYSTEM },
                 { role: 'user', content: buildSynthesisPrompt(facts, personName) },
@@ -807,8 +804,7 @@ async function critiqueFactsAgainstConversation(
     for (let i = 0; i < gated.length; i += FACT_CRITIC_BATCH_SIZE) {
         const batch = gated.slice(i, i + FACT_CRITIC_BATCH_SIZE);
         try {
-            const resp = await openai.chat.completions.create({
-                model: openAiModels.memoryExtractionModel,
+            const resp = await createChatCompletionForTask('memoryExtraction', {
                 messages: [
                     {
                         role: 'system',

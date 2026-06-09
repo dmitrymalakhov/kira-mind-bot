@@ -2,7 +2,7 @@ import { Bot } from "grammy";
 import { BotContext } from "../types";
 import { config } from "../config";
 import { getBotPersona, getCommunicationStyle, getBotBiography } from "../persona";
-import openai, { openAiModels } from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 import {
   addKiraSelfEvent,
   getKiraSelfMemoryState,
@@ -108,8 +108,7 @@ async function maybeGenerateLifeEvent(): Promise<KiraSelfEvent> {
     .map((e) => `${new Date(e.date).toLocaleDateString("ru-RU", { weekday: "short", day: "numeric" })}: ${e.description}`)
     .join(" | ");
 
-  const response = await openai.chat.completions.create({
-    model: openAiModels.conversationModel,
+  const response = await createChatCompletionForTask('conversation', {
     messages: [
       {
         role: "system",
@@ -164,8 +163,7 @@ async function buildProactiveMessage(): Promise<string> {
   const state = await getKiraSelfMemoryState();
   const formatHint = PROACTIVE_MESSAGE_FORMATS[Math.floor(Math.random() * PROACTIVE_MESSAGE_FORMATS.length)];
 
-  const response = await openai.chat.completions.create({
-    model: openAiModels.conversationModel,
+  const response = await createChatCompletionForTask('conversation', {
     messages: [
       {
         role: "system",

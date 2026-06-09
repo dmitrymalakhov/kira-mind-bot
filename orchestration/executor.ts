@@ -22,7 +22,7 @@ import { cancelReminder, rescheduleReminder } from '../reminder';
 import { ReminderRepository } from '../services/ReminderRepository';
 import { devLog, parseLLMJson } from '../utils';
 import { buildQuickChoiceKeyboard } from '../utils/quickChoice';
-import openai, { openAiModels } from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { applyReminderEditInput } from '../utils/reminderEditor';
 
 /**
@@ -218,8 +218,7 @@ async function updateAllReminders(
     let shiftMinutes: number | null = null;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: 'system',
