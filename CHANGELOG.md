@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-10
+
+- Все прикладные вызовы `openai.chat.completions.create` переведены на task-aware wrapper `createChatCompletionForTask(...)`; legacy-слой `openAiModels` удалён из runtime-конфига.
+- Browser planning и browser vision теперь тоже резолвят модель через task-aware preset runtime, а не через прямой OpenAI chat completion.
+- Для `embeddings` и `audio.transcriptions` сохранён low-level OpenAI client, но выбор модели теперь берётся из активного preset-а без возврата compat-проекции `openAiModels`.
+- Кнопка `Своё время` у напоминаний унифицирована с общим сценарием редактирования: кастомный перенос теперь использует тот же разбор `applyReminderEditInput(...)`, что и обычное изменение напоминания.
+
 ## 2026-06-09
 
 - `server-common.sh` теперь определяет адрес хоста кроссплатформенно: Linux через `hostname -I`/`ip`, macOS через `route`/`ifconfig`, с fallback на `localhost` вместо заглушки `YOUR_VPS_IP`.
