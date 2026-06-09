@@ -106,7 +106,7 @@ full — вопрос о пользователе, его жизни, плана
                 },
             ],
             temperature: 0,
-            max_tokens: 5,
+            max_completion_tokens: 5,
         });
         const raw = resp.choices[0]?.message?.content?.trim().toLowerCase() || '';
         const result: MemoryNeed = raw === 'none' ? 'none' : raw === 'light' ? 'light' : 'full';
@@ -1171,7 +1171,7 @@ ${factsBlock}
                 },
             ],
             temperature: 0,
-            max_tokens: 100,
+            max_completion_tokens: 100,
         });
 
         const text = resp.choices[0]?.message?.content?.trim() || '';

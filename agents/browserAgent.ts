@@ -6276,7 +6276,7 @@ async function extractSemanticFormValuesWithLlm(
     for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
             const response = await createChatCompletionForTask('browserPlanning', {
-                max_tokens: 600,
+                max_completion_tokens: 600,
                 temperature: 0,
                 messages: [
                     {
@@ -7090,7 +7090,7 @@ async function repairBrowserActionJson(text: string): Promise<BrowserAction | nu
 
     try {
         const response = await createChatCompletionForTask('browserPlanning', {
-            max_tokens: 260,
+            max_completion_tokens: 260,
             temperature: 0,
             messages: [
                 {
@@ -11449,7 +11449,7 @@ async function chooseTaskScopedCandidateWithLlm(
 
     try {
         const response = await createChatCompletionForTask('browserPlanning', {
-            max_tokens: 240,
+            max_completion_tokens: 240,
             temperature: 0,
             messages: [
                 {
@@ -11975,7 +11975,7 @@ async function chooseContextualCandidateWithLlm(
 
     try {
         const response = await createChatCompletionForTask('browserPlanning', {
-            max_tokens: 260,
+            max_completion_tokens: 260,
             temperature: 0,
             messages: [
                 {

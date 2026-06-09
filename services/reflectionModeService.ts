@@ -282,7 +282,7 @@ JSON: {"urgent": true/false}`;
                 { role: 'user', content: prompt },
             ],
             temperature: 0,
-            max_tokens: 15,
+            max_completion_tokens: 15,
         });
         const raw = resp.choices[0]?.message?.content?.trim() || '';
         const data = parseLLMJson<{ urgent?: boolean }>(raw);
@@ -474,7 +474,7 @@ JSON: {"useful": true/false, "emotion": "neutral|stress|conflict|grief|joy|anxie
                 { role: 'user', content: prompt },
             ],
             temperature: 0,
-            max_tokens: 30,
+            max_completion_tokens: 30,
         });
         const text = resp.choices[0]?.message?.content?.trim() || '';
         const data = parseLLMJson<{ useful?: boolean; emotion?: string }>(text);
@@ -561,7 +561,7 @@ async function classifyChat(chatId: string, chatTitle: string, messages: Buffere
                 { role: 'user', content: prompt },
             ],
             temperature: 0,
-            max_tokens: 30,
+            max_completion_tokens: 30,
         });
         const text = resp.choices[0]?.message?.content?.trim() || '';
         const data = parseLLMJson<{ domain?: string; relationship?: string }>(text);
