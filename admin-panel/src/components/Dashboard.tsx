@@ -185,23 +185,18 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
       {activeTab === 1 && (
         <Box sx={{ flexGrow: 1, overflow: 'auto', py: 1 }}>
           <List dense disablePadding>
-            {['🌸 Kira', '🧑‍💼 Sergey'].map((label, i) => (
-              <ListItemButton
-                key={i}
-                onClick={() => {
-                  const el = document.getElementById(
-                    i === 0 ? 'personality-kira-—-личность-и-характер' : 'personality-sergey-—-личность-и-характер'
-                  );
-                  el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                }}
-                sx={{ mx: 1, borderRadius: 1.5 }}
-              >
-                <ListItemText
-                  primary={label}
-                  primaryTypographyProps={{ fontSize: '12px', fontWeight: 500 }}
-                />
-              </ListItemButton>
-            ))}
+            <ListItemButton
+              onClick={() => {
+                const el = document.getElementById('personality-kira-—-личность-и-характер');
+                el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+              sx={{ mx: 1, borderRadius: 1.5 }}
+            >
+              <ListItemText
+                primary="🌸 Kira"
+                primaryTypographyProps={{ fontSize: '12px', fontWeight: 500 }}
+              />
+            </ListItemButton>
           </List>
         </Box>
       )}
@@ -247,10 +242,7 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
         >
           Перезапуск
         </Typography>
-        {[
-          { id: 'kira-mind-bot', label: '🌸 Kira' },
-          { id: 'sergey-brain-bot', label: '🧑‍💼 Sergey' },
-        ].map(({ id, label }) => (
+        {[{ id: 'kira-mind-bot', label: '🌸 Kira' }].map(({ id, label }) => (
           <Button
             key={id}
             fullWidth

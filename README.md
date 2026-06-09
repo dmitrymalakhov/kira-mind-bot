@@ -30,12 +30,6 @@ cd kira-mind-bot
 git pull origin main && ./server-deploy.sh deploy
 ```
 
-Если нужен второй бот `SergeyBrainBot`, используй:
-
-```bash
-./server-install.sh --with-sergey
-```
-
 Если Docker-кэш или место на диске развалили сборку, используй аварийный redeploy:
 
 ```bash
@@ -100,7 +94,7 @@ git pull origin main && ./server-deploy.sh deploy --clean
 ### Telegram User Client
 
 Если настроить `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` и `TELEGRAM_SESSION_STRING`, бот получает доступ к вашему Telegram-аккаунту через пользовательскую сессию.
-Имя ассистента для профиля задаётся через `personality.json` или admin panel; если поле пустое, бот использует профильный fallback: `ассистентка` для `KiraMindBot` и `ассистент` для `SergeyBrainBot`. Для имени владельца по умолчанию используются профильные fallback-формы `владелец` / `владелица`.
+Имя ассистента задаётся через `personality.json` или admin panel; если поле пустое, бот использует fallback `ассистентка`. Для имени владельца по умолчанию используется форма `владелец`.
 
 Возможности:
 
@@ -397,15 +391,6 @@ git update-index --assume-unchanged personality.json
 | `KIRA_BOT_TOKEN` | Токен Telegram-бота Kira |
 | `KIRA_ALLOWED_USER_ID` | Telegram User ID владельца Kira |
 | `DB_PASSWORD` | Пароль PostgreSQL |
-
-### Второй бот
-
-| Переменная | Описание |
-|------------|----------|
-| `SERGEY_BOT_TOKEN` | Токен второго бота |
-| `SERGEY_ALLOWED_USER_ID` | Telegram User ID владельца второго бота |
-
-В Docker Compose поднимаются два профиля из одной кодовой базы: `KiraMindBot` и `SergeyBrainBot`.
 
 ### Голосовые ответы ElevenLabs
 

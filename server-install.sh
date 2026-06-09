@@ -5,7 +5,6 @@
 # Использование:
 #   ./server-install.sh
 #   ./server-install.sh --skip-config
-#   ./server-install.sh --with-sergey
 #
 # Что делает:
 #   1. Проверяет Docker и docker compose на самой VPS
@@ -33,13 +32,11 @@ cd "$SCRIPT_DIR"
 source "$SCRIPT_DIR/server-common.sh"
 
 SKIP_CONFIG=false
-DEPLOY_SERGEY=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --skip-config) SKIP_CONFIG=true; shift ;;
-        --with-sergey) DEPLOY_SERGEY=true; shift ;;
-        *) echo "Usage: $0 [--skip-config] [--with-sergey]"; exit 1 ;;
+        *) echo "Usage: $0 [--skip-config]"; exit 1 ;;
     esac
 done
 
@@ -98,8 +95,6 @@ OPENAI_API_KEY=${OPENAI_API_KEY}
 
 KIRA_BOT_TOKEN=${KIRA_BOT_TOKEN}
 KIRA_ALLOWED_USER_ID=${KIRA_ALLOWED_USER_ID}
-SERGEY_BOT_TOKEN=${SERGEY_BOT_TOKEN:-}
-SERGEY_ALLOWED_USER_ID=${SERGEY_ALLOWED_USER_ID:-}
 
 DB_HOST=postgres
 DB_PORT=5432
@@ -171,19 +166,6 @@ ensure_personality_file() {
     "ownerName": "${OWNER_NAME}",
     "ownerUsername": "",
     "userName": "${OWNER_NAME}",
-    "userBirthDate": "",
-    "moodVariants": "",
-    "defaultMood": "",
-    "proactiveMessageHint": ""
-  },
-  "SergeyBrainBot": {
-    "characterName": "Сергей",
-    "persona": "",
-    "communicationStyle": "",
-    "biography": "",
-    "ownerName": "",
-    "ownerUsername": "",
-    "userName": "",
     "userBirthDate": "",
     "moodVariants": "",
     "defaultMood": "",

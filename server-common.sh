@@ -98,20 +98,8 @@ ensure_admin_state() {
     save_admin_state
 }
 
-sergey_enabled() {
-    if [ "${DEPLOY_SERGEY:-false}" = "true" ]; then
-        return 0
-    fi
-
-    load_env_if_present
-    [ -n "${SERGEY_BOT_TOKEN:-}" ]
-}
-
 collect_app_services() {
     APP_SERVICES=("kira-mind-bot" "admin-panel")
-    if sergey_enabled; then
-        APP_SERVICES+=("sergey-brain-bot")
-    fi
 }
 
 safe_docker_cleanup() {

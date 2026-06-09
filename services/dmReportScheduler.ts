@@ -3,6 +3,7 @@ import { config } from "../config";
 import { BotContext } from "../types";
 import { MessageStore, StoredMessage } from "../stores/MessageStore";
 import { getProactiveChatId } from "../utils/allowedUserChatStore";
+import { getActiveBotProfile } from "../utils/botIdentity";
 
 const REPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -153,7 +154,7 @@ async function runCycle(bot: Bot<BotContext>): Promise<void> {
 }
 
 export function startDmReportScheduler(bot: Bot<BotContext>): void {
-  if (process.env.ASSISTANT_PROFILE !== "KiraMindBot") {
+  if (getActiveBotProfile() !== "KiraMindBot") {
     return;
   }
 

@@ -61,29 +61,6 @@ services:
         condition: service_started
     logging: *default-logging
 
-  sergey-brain-bot:
-    build:
-      context: .
-      dockerfile: Dockerfile.server
-      args:
-        NODE_ENV: ${NODE_ENV:-production}
-    container_name: sergey-brain-bot
-    <<: *default-restart
-    env_file:
-      - ./.env.production
-    environment:
-      - NODE_ENV=${NODE_ENV:-production}
-      - ASSISTANT_PROFILE=SergeyBrainBot
-      - PERSONALITY_FILE=/app/personality/personality.json
-    volumes:
-      - ./personality.json:/app/personality/personality.json:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-      qdrant:
-        condition: service_started
-    logging: *default-logging
-
   admin-panel:
     build:
       context: ./admin-panel
