@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-06-09
+
+- `server-common.sh` теперь определяет адрес хоста кроссплатформенно: Linux через `hostname -I`/`ip`, macOS через `route`/`ifconfig`, с fallback на `localhost` вместо заглушки `YOUR_VPS_IP`.
+- README уточнён: адрес админ-панели в конце деплоя теперь зависит от окружения, а не всегда показывается как `YOUR_VPS_IP`.
+- В `server-deploy.sh` добавлена команда `pause`, которая останавливает только app-сервисы без остановки `postgres` и `qdrant`.
+
 ## 2026-06-01
 
 - Добавлен `server-install.sh` для установки и redeploy прямо на VPS из текущего git-checkout.

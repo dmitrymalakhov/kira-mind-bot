@@ -126,10 +126,62 @@ verify_services_running() {
     return 0
 }
 
+detect_linux_host_ip() {
+    local host_ip=""
+
+    if command -v hostname >/dev/null 2>&1; then
+        host_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    fi
+
+    if [ -z "$host_ip" ] && command -v ip >/dev/null 2>&1; then
+        host_ip=$(ip route get 1 2>/dev/null | awk '/src/ {for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}')
+    fi
+
+    echo "$host_ip"
+}
+
+detect_macos_host_ip() {
+    local default_iface=""
+
+    if ! command -v route >/dev/null 2>&1 || ! command -v ifconfig >/dev/null 2>&1; then
+        return
+    fi
+
+    default_iface=$(route get default 2>/dev/null | awk '/interface: / {print $2; exit}')
+    if [ -z "$default_iface" ]; then
+        return
+    fi
+
+    ifconfig "$default_iface" 2>/dev/null | awk '/inet / && $2 != "127.0.0.1" {print $2; exit}'
+}
+
 detect_host_ip() {
-    local host_ip
-    host_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
-    echo "${host_ip:-YOUR_VPS_IP}"
+    local os_name=""
+    local host_ip=""
+
+    os_name=$(uname -s 2>/dev/null || echo "")
+
+    case "$os_name" in
+        Darwin)
+            host_ip=$(detect_macos_host_ip)
+            ;;
+        Linux)
+            host_ip=$(detect_linux_host_ip)
+            ;;
+    esac
+
+    if [ -z "$host_ip" ]; then
+        case "$os_name" in
+            Darwin)
+                host_ip=$(detect_linux_host_ip)
+                ;;
+            Linux)
+                host_ip=$(detect_macos_host_ip)
+                ;;
+        esac
+    fi
+
+    echo "${host_ip:-localhost}"
 }
 
 show_admin_panel_access() {

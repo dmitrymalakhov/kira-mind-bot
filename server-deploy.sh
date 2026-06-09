@@ -19,6 +19,7 @@ Usage:
   ./server-deploy.sh deploy [--clean]
   ./server-deploy.sh status
   ./server-deploy.sh logs [-f|--follow] [service]
+  ./server-deploy.sh pause [service]
   ./server-deploy.sh restart [service]
   ./server-deploy.sh stop [service]
   ./server-deploy.sh help
@@ -27,6 +28,7 @@ Commands:
   deploy        Redeploy app-сервисы на VPS. По умолчанию использует Docker cache.
   status        Показать статус сервисов из docker-compose.server.yml.
   logs          Показать последние логи всего стека или одного сервиса.
+  pause         Остановить app-сервисы или один конкретный сервис, не трогая зависимости.
   restart       Перезапустить app-сервисы или один конкретный сервис.
   stop          Остановить весь стек или один конкретный сервис без удаления volumes.
   help          Показать эту справку.
@@ -87,7 +89,7 @@ case "$COMMAND" in
             esac
         done
         ;;
-    restart|stop)
+    pause|restart|stop)
         if [[ $# -gt 1 ]]; then
             error "Слишком много аргументов для команды $COMMAND"
         fi
@@ -151,6 +153,20 @@ show_logs() {
     compose "${args[@]}"
 }
 
+pause_services() {
+    header "Pause"
+
+    if [ -n "$TARGET_SERVICE" ]; then
+        validate_service_name "$TARGET_SERVICE"
+        compose stop "$TARGET_SERVICE"
+        success "Сервис $TARGET_SERVICE поставлен на паузу"
+        return
+    fi
+
+    compose stop "${APP_SERVICES[@]}"
+    success "App-сервисы поставлены на паузу; postgres и qdrant продолжают работать"
+}
+
 restart_services() {
     header "Restart"
 
@@ -189,6 +205,7 @@ case "$COMMAND" in
     deploy) deploy_stack ;;
     status) compose ps ;;
     logs) show_logs ;;
+    pause) pause_services ;;
     restart) restart_services ;;
     stop) stop_services ;;
     help) show_help ;;

@@ -212,7 +212,7 @@ git pull origin main && ./server-deploy.sh deploy --clean
 
 ## Веб-панель управления
 
-После деплоя панель доступна по адресу вида `http://YOUR_VPS_IP:PORT`. Порт, логин и пароль выводятся в конце установки и сохраняются на сервере в `~/.kira-admin-state`.
+После деплоя панель доступна по адресу, который скрипт выводит в конце установки: на VPS это будет IP хоста, а при локальном запуске на macOS fallback-адресом будет `http://localhost:PORT`. Порт, логин и пароль также сохраняются в `~/.kira-admin-state`.
 
 В панели можно:
 
@@ -520,7 +520,7 @@ Telegram Bot API / Telegram User Client
 - `Dockerfile.server` - server-only образ для VPS-first сценария с компиляцией TypeScript в `dist/`.
 - `tsconfig.server.json` - server-only конфиг TypeScript, который исключает `admin-panel` из сборки бота на VPS.
 - `server-install.sh` - первый запуск и конфигурирование на VPS.
-- `server-deploy.sh` - обычный redeploy, логи, статус и restart для VPS-first сценария.
+- `server-deploy.sh` - обычный redeploy, логи, статус, pause и restart для VPS-first сценария.
 
 ---
 
@@ -530,6 +530,8 @@ Telegram Bot API / Telegram User Client
 ./server-deploy.sh status
 ./server-deploy.sh logs
 ./server-deploy.sh logs kira-mind-bot
+./server-deploy.sh pause
+./server-deploy.sh pause admin-panel
 ./server-deploy.sh restart
 ./server-deploy.sh restart admin-panel
 ./server-deploy.sh stop
@@ -538,6 +540,7 @@ Telegram Bot API / Telegram User Client
 Безопасность данных:
 
 - `server-deploy.sh deploy --clean` не использует `down -v` и не удаляет Docker volumes.
+- `server-deploy.sh pause` останавливает только `kira-mind-bot` и `admin-panel`, оставляя `postgres` и `qdrant` запущенными.
 - Скрипт не использует `docker network prune`, чтобы не задевать соседние контейнеры вне этого compose-файла.
 
 ---
