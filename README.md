@@ -42,14 +42,14 @@ make install-server
 
 Есть два пути запуска:
 
-1. На самой VPS: заходишь на сервер, запускаешь `make install-server`, дальше живёшь через `make deploy`, `make logs`, `make pause`.
+1. На самой VPS: заходишь на сервер, запускаешь `make install-server`, дальше живёшь через `make deploy`, `make logs`, `make logs-follow`, `make pause`.
    Это основной и самый прямой путь, если у тебя есть shell-доступ к серверу.
 2. С локальной машины на удалённый VPS: запускаешь `make remote-install SERVER_IP=<ip>` у себя локально, а установка и деплой идут по SSH.
    Этот путь нужен, если удобнее управлять сервером с ноутбука и не работать внутри shell на VPS.
 
 Если `make` нет:
 
-1. На самой VPS используй `./scripts/ops/server-install.sh`, `./scripts/ops/server-deploy.sh deploy`, `./scripts/ops/server-deploy.sh logs`.
+1. На самой VPS используй `./scripts/ops/server-install.sh`, `./scripts/ops/server-deploy.sh deploy`, `./scripts/ops/server-deploy.sh logs`, `./scripts/ops/server-deploy.sh logs -f`.
 2. С локальной машины используй `./scripts/ops/install.sh --server-ip <ip>` и `./scripts/ops/deploy.sh --kira-mind-bot --admin-panel --server-ip <ip>`.
 
 Если проект уже поднят и нужно просто обновить код:
@@ -74,7 +74,8 @@ make deploy-clean
 | Поставить с локальной машины на удалённый VPS | `make remote-install SERVER_IP=<ip>` |
 | Сделать то же самое без `make` | `./scripts/ops/...` напрямую |
 | Обновить после `git pull` | `make deploy` |
-| Посмотреть статус и логи | `make status`, `make logs` |
+| Посмотреть статус и последние логи | `make status`, `make logs` |
+| Смотреть live-логи в реальном времени | `make logs-follow` |
 | Временно остановить приложение | `make pause` |
 | Настроить Telegram User Client | раздел `Установка на VPS` -> `Получить Telegram Session String` |
 | Включить публичный режим в группе | раздел `Установка на VPS` -> `Включить публичный режим в группе` |
@@ -96,7 +97,8 @@ make deploy-clean
 | `make deploy` | Обычный redeploy |
 | `make deploy-clean` | Redeploy с безопасной очисткой Docker cache |
 | `make status` | Статус сервисов |
-| `make logs` | Логи всего стека |
+| `make logs` | Последние логи всего стека |
+| `make logs-follow` | Live-логи всего стека |
 | `make pause` | Остановить только `kira-mind-bot` и `admin-panel` |
 | `make restart` | Перезапустить app-сервисы |
 | `make stop` | Остановить весь стек |
@@ -107,7 +109,8 @@ make deploy-clean
 - первый запуск на VPS: `make install-server`
 - обычное обновление: `make deploy`
 - временно притушить приложение: `make pause`
-- посмотреть логи: `make logs`
+- посмотреть последние логи: `make logs`
+- смотреть live-логи: `make logs-follow`
 
 Два пути установки и деплоя:
 
@@ -117,6 +120,7 @@ make deploy-clean
    Подходит, если удобнее деплоить по SSH с локального компьютера, не заходя в shell сервера для каждого шага.
 
 `make` нужен только как shortcut на хосте. Docker-контейнерам он не нужен.
+`make logs -f` не подойдёт, потому что `-f` обрабатывает сам `make`; для follow-режима используй `make logs-follow`.
 
 ---
 

@@ -3,7 +3,7 @@
 .PHONY: \
 	help \
 	install-server remote-install remote-deploy-bot remote-deploy-admin remote-deploy-all \
-	deploy deploy-clean status logs logs-bot logs-admin pause pause-bot pause-admin restart restart-bot restart-admin stop \
+	deploy deploy-clean status logs logs-follow logs-bot logs-bot-follow logs-admin logs-admin-follow pause pause-bot pause-admin restart restart-bot restart-admin stop \
 	install install-admin build build-admin build-all test lint dev dev-admin
 
 help:
@@ -19,9 +19,12 @@ help:
 		'  make deploy          # обычный redeploy' \
 		'  make deploy-clean    # redeploy с безопасной очисткой Docker cache' \
 		'  make status          # статус сервисов' \
-		'  make logs            # логи всего стека' \
-		'  make logs-bot        # логи kira-mind-bot' \
-		'  make logs-admin      # логи admin-panel' \
+		'  make logs            # последние логи всего стека' \
+		'  make logs-follow     # live-логи всего стека' \
+		'  make logs-bot        # последние логи kira-mind-bot' \
+		'  make logs-bot-follow # live-логи kira-mind-bot' \
+		'  make logs-admin      # последние логи admin-panel' \
+		'  make logs-admin-follow # live-логи admin-panel' \
 		'  make pause           # пауза app-сервисов' \
 		'  make pause-bot       # пауза kira-mind-bot' \
 		'  make pause-admin     # пауза admin-panel' \
@@ -70,11 +73,20 @@ status:
 logs:
 	./scripts/ops/server-deploy.sh logs
 
+logs-follow:
+	./scripts/ops/server-deploy.sh logs -f
+
 logs-bot:
 	./scripts/ops/server-deploy.sh logs kira-mind-bot
 
+logs-bot-follow:
+	./scripts/ops/server-deploy.sh logs -f kira-mind-bot
+
 logs-admin:
 	./scripts/ops/server-deploy.sh logs admin-panel
+
+logs-admin-follow:
+	./scripts/ops/server-deploy.sh logs -f admin-panel
 
 pause:
 	./scripts/ops/server-deploy.sh pause
