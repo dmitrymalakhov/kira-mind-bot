@@ -104,7 +104,8 @@ case "$COMMAND" in
 esac
 
 load_env_if_present
-load_admin_state_if_present
+ensure_admin_state
+write_compose_env
 collect_app_services
 
 deploy_stack() {

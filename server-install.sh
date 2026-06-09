@@ -90,37 +90,6 @@ load_existing_env() {
     fi
 }
 
-load_admin_state() {
-    if [ -f "$ADMIN_STATE_FILE" ]; then
-        set -a
-        # shellcheck disable=SC1090
-        source "$ADMIN_STATE_FILE"
-        set +a
-    fi
-}
-
-save_admin_state() {
-    cat > "$ADMIN_STATE_FILE" << EOF
-ADMIN_PORT=${ADMIN_PORT}
-ADMIN_USERNAME=${ADMIN_USERNAME}
-ADMIN_PASSWORD=${ADMIN_PASSWORD}
-EOF
-}
-
-write_compose_env() {
-    cat > "$COMPOSE_ENV_FILE" << EOF
-DB_HOST=postgres
-DB_PORT=5432
-DB_USER=postgres
-DB_PASSWORD=${DB_PASSWORD}
-DB_NAME=KiraMind
-NODE_ENV=production
-ADMIN_PORT=${ADMIN_PORT}
-ADMIN_USERNAME=${ADMIN_USERNAME}
-ADMIN_PASSWORD=${ADMIN_PASSWORD}
-EOF
-}
-
 write_env_production() {
     cat > "$ENV_FILE" << EOF
 # Сгенерировано server-install.sh $(date '+%Y-%m-%d %H:%M:%S')
@@ -320,20 +289,6 @@ validate_existing_config() {
     [ -n "${KIRA_BOT_TOKEN:-}" ] || error "В $ENV_FILE отсутствует KIRA_BOT_TOKEN"
     [ -n "${KIRA_ALLOWED_USER_ID:-}" ] || error "В $ENV_FILE отсутствует KIRA_ALLOWED_USER_ID"
     [ -n "${DB_PASSWORD:-}" ] || error "В $ENV_FILE отсутствует DB_PASSWORD"
-}
-
-ensure_admin_state() {
-    load_admin_state
-    if [ -z "${ADMIN_PORT:-}" ]; then
-        ADMIN_PORT=$(( (RANDOM % 2000) + 7000 ))
-    fi
-    if [ -z "${ADMIN_USERNAME:-}" ]; then
-        ADMIN_USERNAME="admin"
-    fi
-    if [ -z "${ADMIN_PASSWORD:-}" ]; then
-        ADMIN_PASSWORD=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 20 2>/dev/null || openssl rand -hex 10)
-    fi
-    save_admin_state
 }
 
 deploy_stack() {
