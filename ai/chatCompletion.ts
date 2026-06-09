@@ -10,6 +10,10 @@ type ChatCompletionCreateParams = OpenAI.Chat.Completions.ChatCompletionCreatePa
 type ChatCompletion = OpenAI.Chat.Completions.ChatCompletion;
 
 type ParamsWithoutModel = Omit<ChatCompletionCreateParams, 'model'>;
+type ChatCompletionCreateParamsWithLegacyMaxTokens = ChatCompletionCreateParams & {
+    max_tokens?: number;
+    max_completion_tokens?: number;
+};
 
 
 function recordAiUsage(payload: Parameters<typeof logAiUsage>[0]): void {
@@ -25,6 +29,25 @@ function errorToMessage(error: unknown): string {
     }
 }
 
+function normalizeOpenAiChatParams(
+    provider: AiModelRef['provider'],
+    model: string,
+    params: ParamsWithoutModel,
+): ChatCompletionCreateParamsWithLegacyMaxTokens {
+    const normalized = { ...params } as ChatCompletionCreateParamsWithLegacyMaxTokens;
+
+    if (provider !== 'openai' || !model.startsWith('gpt-5')) {
+        return normalized;
+    }
+
+    if (normalized.max_completion_tokens === undefined && normalized.max_tokens !== undefined) {
+        normalized.max_completion_tokens = normalized.max_tokens;
+    }
+
+    delete normalized.max_tokens;
+    return normalized;
+}
+
 async function createChatCompletionWithModel(
     taskKey: AiTaskKey,
     params: ParamsWithoutModel,
@@ -35,10 +58,11 @@ async function createChatCompletionWithModel(
 ): Promise<ChatCompletion> {
     const startedAt = Date.now();
     const client = getAiClient(modelRef.provider);
+    const normalizedParams = normalizeOpenAiChatParams(modelRef.provider, modelRef.model, params);
 
     try {
         const result = await client.chat.completions.create({
-            ...params,
+            ...normalizedParams,
             model: modelRef.model,
         });
 

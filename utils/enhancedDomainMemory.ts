@@ -464,7 +464,7 @@ async function isStateChangeFact(content: string): Promise<boolean> {
                 { role: 'user', content: prompt },
             ],
             temperature: 0,
-            max_tokens: 15,
+            max_completion_tokens: 15,
         });
         const data = parseLLMJson<{ state_change?: boolean }>(resp.choices[0]?.message?.content?.trim() || '');
         const result = data?.state_change === true;
@@ -493,7 +493,7 @@ async function isPlanningFact(content: string): Promise<boolean> {
                 { role: 'user', content: prompt },
             ],
             temperature: 0,
-            max_tokens: 15,
+            max_completion_tokens: 15,
         });
         const data = parseLLMJson<{ planning?: boolean }>(resp.choices[0]?.message?.content?.trim() || '');
         const result = data?.planning === true;
