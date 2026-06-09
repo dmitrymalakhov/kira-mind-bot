@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { BotContext, MemoryEpisode, MemorySourceMessage, MessageHistory, WorkingMemoryState } from '../types';
 import { PREDEFINED_DOMAINS } from '../constants/domains';
 import { getVectorService } from './VectorServiceFactory';
-import openai, { openAiModels } from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { devLog, parseLLMJson } from '../utils';
 import { getActiveMemoryBotId } from '../utils/botIdentity';
 
@@ -91,8 +91,7 @@ async function analyzeEpisode(messages: MemorySourceMessage[]): Promise<EpisodeL
         .join('\n');
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: 'system',
@@ -214,8 +213,7 @@ export async function updateWorkingMemoryFromMessages(
         .join('\n');
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 { role: 'system', content: 'Ты обновляешь краткую рабочую память ассистента. Отвечай только JSON.' },
                 {

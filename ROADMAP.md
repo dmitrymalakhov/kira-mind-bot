@@ -5,7 +5,6 @@
 - Единый источник истины для модельной конфигурации — provider-aware AI preset registry (`ai-model-presets.json`).
 - Не возвращать отдельные OpenAI-only registry/пресеты: это создаёт дублирование, скрытые overrides и риск незаметного расхода токенов.
 - Runtime-переключение активного preset выполняется через админку и хранится в БД, чтобы изменения применялись без redeploy.
-- Legacy-поля `openAiModels` допустимы только как совместимый read-only слой для старых прямых OpenAI-вызовов и должны вычисляться из AI preset registry + fallback policy.
 - Новые LLM-вызовы должны идти через task-aware wrapper (`createChatCompletionForTask` / `createResponseForTask`), а не напрямую через вручную выбранные модели.
 
 ## LLM Provider Abstraction

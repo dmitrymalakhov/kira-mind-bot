@@ -1,6 +1,6 @@
 import { BotContext, MemoryEntry, MemoryStatus } from '../types';
 import { getVectorService } from './VectorServiceFactory';
-import openai, { openAiModels } from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { devLog, parseLLMJson } from '../utils';
 import { estimateHumanMemoryMetrics, inferMemoryKind } from '../utils/enhancedDomainMemory';
 import { RecalledMemoryRef } from '../utils/multiQueryMemory';
@@ -74,8 +74,7 @@ async function askReconsolidationLlm(
     recalled: RecalledMemoryRef[]
 ): Promise<ReconsolidationDecision[]> {
     const memories = recalled.map(compactMemoryForPrompt).join('\n');
-    const resp = await openai.chat.completions.create({
-        model: openAiModels.memoryExtractionModel,
+    const resp = await createChatCompletionForTask('memoryExtraction', {
         messages: [
             {
                 role: 'system',

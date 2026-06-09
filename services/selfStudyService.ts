@@ -1,6 +1,6 @@
 import { BOT_CAPABILITIES, BOT_COMMANDS, getCapabilitiesKnowledgeBase } from "../capabilities";
 import { config } from "../config";
-import openai, { openAiModels } from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { MessageHistory } from "../types";
 import { getAsyncTaskErrors } from "../utils/enhancedDomainMemory";
 import {
@@ -200,8 +200,7 @@ export async function runKiraSelfStudy(options: RunSelfStudyOptions): Promise<Ki
 
   let payload: Required<SelfStudyPayload>;
   try {
-    const response = await openai.chat.completions.create({
-      model: openAiModels.conversationModel,
+    const response = await createChatCompletionForTask('conversation', {
       messages: [
         {
           role: "system",

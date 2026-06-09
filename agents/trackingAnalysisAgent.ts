@@ -1,4 +1,4 @@
-import openai, { openAiModels } from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { getVectorService } from '../services/VectorServiceFactory';
 import { config } from '../config';
 import { getBotPersona, getCommunicationStyle } from '../persona';
@@ -72,8 +72,7 @@ ${contextText}
 ${messagesText}`;
 
     try {
-        const response = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const response = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt },

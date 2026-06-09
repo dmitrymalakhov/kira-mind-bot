@@ -7,7 +7,7 @@ import { handleGroupPublicUserMessage } from "./agents/groupPublicAgent";
 import { devLog } from "./utils";
 import { saveAllowedUserChatId } from "./utils/allowedUserChatStore";
 import { upsertChat, isChatPublicMode } from "./services/chatRegistry";
-import openai, { openAiModels } from "./openai";
+import { createChatCompletionForTask } from "./ai/chatCompletion";
 import { getBotPersona } from "./persona";
 import { config } from "./config";
 import { pushGroupChatMessage } from "./stores/GroupChatBuffer";
@@ -32,8 +32,7 @@ async function handleGroupPrivateDismissal(ctx: BotContext): Promise<void> {
   const hint = DISMISSAL_VARIANTS[Math.floor(Math.random() * DISMISSAL_VARIANTS.length)];
 
   try {
-    const resp = await openai.chat.completions.create({
-      model: openAiModels.memoryExtractionModel,
+    const resp = await createChatCompletionForTask('memoryExtraction', {
       messages: [
         {
           role: "system",

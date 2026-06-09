@@ -1,7 +1,7 @@
 import { BotContext } from '../types';
 import { searchAllDomainsMemories } from './enhancedDomainMemory';
 import { devLog } from '../utils';
-import openai, { openAiModels } from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 
 const MAX_QUERIES = 5;
 
@@ -10,8 +10,7 @@ export async function detectRelationshipInMessage(message: string): Promise<stri
     const trimmed = message.trim();
     if (trimmed.length < 2) return null;
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: 'system',
@@ -51,8 +50,7 @@ async function generateMemorySearchQueries(
 Только фразы, по одной на строку, без нумерации и пояснений.`;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: 'system',
@@ -93,8 +91,7 @@ ${factsText.slice(0, 3000)}
 Определи имя этого человека так, как оно скорее всего записано в контактах (обычно имя или имя и фамилия). Ответь ОДНИМ словом или двумя словами — только имя, без кавычек и пояснений. Если по фактам нельзя однозначно понять, кто это, ответь: NOT_FOUND`;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: 'system',

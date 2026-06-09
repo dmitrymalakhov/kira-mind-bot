@@ -1,4 +1,4 @@
-import openai, { openAiModels } from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { llmCache, LLM_CACHE_TTL } from './llmCache';
 import { parseLLMJson } from '../utils';
 import { EmotionalTag } from '../types';
@@ -20,8 +20,7 @@ export async function detectEmotionalTag(content: string): Promise<EmotionalTag 
     if (cached) return cached;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON без пояснений.' },
                 {

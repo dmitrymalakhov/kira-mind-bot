@@ -1,8 +1,6 @@
 import * as dotenv from "dotenv";
 import * as fs from "fs";
-import { aiPresets, parseAiPresetName, type AiTaskKey } from "./ai/modelPresets";
-import { getFallbackModel } from "./ai/fallbackModels";
-import { getCachedAiPresetName } from "./services/aiRuntimeConfigService";
+import { parseAiPresetName } from "./ai/modelPresets";
 
 // ── Загрузка personality.json (редактируется через admin panel) ───────────────
 interface PersonalityOverride {
@@ -140,53 +138,8 @@ interface AssistantConfig {
   morningDigestHour: number;
 }
 
-export interface OpenAIModelsConfig {
-  defaultTextModel: string;
-  intentClassificationModel: string;
-  intentDedupModel: string;
-  conversationModel: string;
-  memoryExtractionModel: string;
-  memoryConsolidationModel: string;
-  messageAnalysisModel: string;
-  webSearchReasoningModel: string;
-  browserPlanningModel: string;
-  browserVisionModel: string;
-  embeddingModel: string;
-  transcriptionModel: string;
-}
-
-const LEGACY_OPENAI_CONFIG_TASKS = {
-  defaultTextModel: 'defaultText',
-  intentClassificationModel: 'intentClassification',
-  intentDedupModel: 'intentDedup',
-  conversationModel: 'conversation',
-  memoryExtractionModel: 'memoryExtraction',
-  memoryConsolidationModel: 'memoryConsolidation',
-  messageAnalysisModel: 'messageAnalysis',
-  webSearchReasoningModel: 'webSearchReasoning',
-  browserPlanningModel: 'browserPlanning',
-  browserVisionModel: 'browserVision',
-  embeddingModel: 'embedding',
-  transcriptionModel: 'transcription',
-} satisfies Record<keyof OpenAIModelsConfig, AiTaskKey>;
-
-export function resolveOpenAIModelsFromAiPreset(presetName = getCachedAiPresetName()): OpenAIModelsConfig {
-  const preset = aiPresets[presetName];
-  const resolved = {} as OpenAIModelsConfig;
-
-  for (const [configKey, taskKey] of Object.entries(LEGACY_OPENAI_CONFIG_TASKS) as Array<[keyof OpenAIModelsConfig, AiTaskKey]>) {
-    const modelRef = preset.models[taskKey];
-    resolved[configKey] = modelRef.provider === 'openai'
-      ? modelRef.model
-      : getFallbackModel(taskKey).model;
-  }
-
-  return resolved;
-}
-
 export interface Config extends AssistantConfig {
   openAiApiKey: string;
-  openAiModels: OpenAIModelsConfig;
   elevenLabsApiKey: string;
   elevenLabsVoiceId?: string;
   elevenLabsVoiceName?: string;
@@ -376,11 +329,8 @@ function createConfig() {
       }
       : undefined;
 
-  const openAiModels = resolveOpenAIModelsFromAiPreset();
-
   return {
     openAiApiKey: process.env.OPENAI_API_KEY || "",
-    openAiModels,
     elevenLabsApiKey: process.env.ELEVENLABS_API_KEY || "",
     elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID || undefined,
     elevenLabsVoiceName: process.env.ELEVENLABS_VOICE_NAME || "Nastya",

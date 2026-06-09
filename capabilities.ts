@@ -1,4 +1,4 @@
-import openai, { openAiModels } from "./openai";
+import { createChatCompletionForTask } from "./ai/chatCompletion";
 import { config } from "./config";
 import { getBotPersona, getCommunicationStyle } from "./persona";
 
@@ -487,8 +487,7 @@ export async function answerCapabilitiesQuestion(
         : "Ты отвечаешь владельцу в личном контексте. Можно говорить о личных функциях, но упоминай настройки, если они нужны.";
 
     try {
-        const response = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const response = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: "system",

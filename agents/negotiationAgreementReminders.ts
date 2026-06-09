@@ -1,5 +1,5 @@
 import { Bot } from "grammy";
-import openai, { openAiModels } from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { USER_TIMEZONE } from "../constants";
 import { devLog, processReminderTime } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
@@ -90,8 +90,7 @@ ${historyText}
 }
 `;
 
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.conversationModel,
+        const resp = await createChatCompletionForTask('conversation', {
             messages: [
                 {
                     role: "system",

@@ -1,7 +1,7 @@
 import { BotContext, MemoryRelation, MemoryRelationType } from '../types';
 import { searchAllDomainsMemories, getAnchorMemories, getRecentMemories } from './enhancedDomainMemory';
 import { devLog } from '../utils';
-import openai, { openAiModels } from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { getVectorService } from '../services/VectorServiceFactory';
 import { llmCache, LLM_CACHE_TTL } from './llmCache';
 import { Contact } from '../stores/ContactsStore';
@@ -89,8 +89,7 @@ export async function classifyMemoryNeed(message: string): Promise<MemoryNeed> {
     if (cached) return cached;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 { role: 'system', content: 'Отвечай только одним словом: none, light или full.' },
                 {
@@ -805,8 +804,7 @@ CONTEXT:
 Только фразы на русском, без нумерации и пояснений.`;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: 'system',
@@ -1153,8 +1151,7 @@ async function rerankFacts(
         .join('\n');
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: openAiModels.memoryExtractionModel,
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: 'system',

@@ -4,7 +4,7 @@ import { get as levenshtein } from "fast-levenshtein";
 import { DoubleMetaphone, JaroWinklerDistance } from "natural";
 import { transliterate as toLatin } from "transliteration";
 import { devLog } from "../utils";
-import openai from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 
 // Интерфейс для хранения информации о контакте
 export interface Contact {
@@ -194,8 +194,7 @@ export class ContactsStore {
             devLog("sendMessagesAgent", "Отправляем запрос к OpenAI для выбора контакта");
 
             // Запрос к OpenAI
-            const response = await openai.chat.completions.create({
-                model: 'gpt-5.4-nano',
+            const response = await createChatCompletionForTask('memoryExtraction', {
                 messages: [
                     { role: 'system', content: systemMessage },
                     { role: 'user', content: userMessage }
@@ -236,34 +235,6 @@ export class ContactsStore {
      * @param query Строка для поиска
      * @returns Массив найденных контактов
      */
-    // public async searchContact(query: string): Promise<Contact | null> {
-    //     // Системное сообщение для ИИ
-    //     const systemMessage = `Ты — аналитический помощник который умеет находить контакты`;
-
-    //     // Формируем пользовательское сообщение, включая запрос и список контактов в виде JSON
-    //     const userMessage = `Найди контакт по запросу и верни его id в виде цифры` +
-    //         `Запрос: "${query}"\n` +
-    //         `Список контактов: ${JSON.stringify(this.contacts)}`;
-
-    //     // Запрос к OpenAI
-    //     const response = await openai.chat.completions.create({
-    //         model: 'gpt-5.4-nano',
-    //         messages: [
-    //             { role: 'system', content: systemMessage },
-    //             { role: 'user', content: userMessage }
-    //         ],
-    //         temperature: 0.3,
-    //     });
-
-    //     // Выделяем текстовый контент ответа
-    //     const id = this.getContact(Number(response.choices?.[0]?.message?.content));
-    //     if (!id) {
-    //         return null;
-    //     }
-
-    //     return id;
-    // }
-
 
     /**
      * Удаляет контакт из хранилища
