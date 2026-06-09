@@ -16,13 +16,13 @@ header()  { echo -e "\n${BOLD}${BLUE}── $* ───────────
 show_help() {
     cat <<'EOF'
 Usage:
-  ./server-deploy.sh deploy [--clean]
-  ./server-deploy.sh status
-  ./server-deploy.sh logs [-f|--follow] [service]
-  ./server-deploy.sh pause [service]
-  ./server-deploy.sh restart [service]
-  ./server-deploy.sh stop [service]
-  ./server-deploy.sh help
+  ./scripts/ops/server-deploy.sh deploy [--clean]
+  ./scripts/ops/server-deploy.sh status
+  ./scripts/ops/server-deploy.sh logs [-f|--follow] [service]
+  ./scripts/ops/server-deploy.sh pause [service]
+  ./scripts/ops/server-deploy.sh restart [service]
+  ./scripts/ops/server-deploy.sh stop [service]
+  ./scripts/ops/server-deploy.sh help
 
 Commands:
   deploy        Redeploy app-сервисы на VPS. По умолчанию использует Docker cache.
@@ -40,7 +40,8 @@ EOF
 }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$REPO_ROOT"
 
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/server-common.sh"

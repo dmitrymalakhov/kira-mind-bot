@@ -3,15 +3,15 @@
 # Kira Mind Bot — Установка и первичный запуск прямо на VPS
 #
 # Использование:
-#   ./server-install.sh
-#   ./server-install.sh --skip-config
+#   ./scripts/ops/server-install.sh
+#   ./scripts/ops/server-install.sh --skip-config
 #
 # Что делает:
 #   1. Проверяет Docker и docker compose на самой VPS
 #   2. Генерирует или обновляет .env.production
 #   3. Создаёт personality.json при первом запуске
 #   4. Собирает и запускает контейнеры локально через docker compose
-#   5. Для обычного redeploy после git pull используется ./server-deploy.sh
+#   5. Для обычного redeploy после git pull используется ./scripts/ops/server-deploy.sh
 # =============================================================================
 
 set -euo pipefail
@@ -26,7 +26,8 @@ error()   { echo -e "${RED}❌ $*${NC}"; exit 1; }
 header()  { echo -e "\n${BOLD}${BLUE}── $* ──────────────────────────────────────${NC}"; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$REPO_ROOT"
 
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/server-common.sh"

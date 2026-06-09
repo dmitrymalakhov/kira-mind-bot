@@ -3,7 +3,7 @@
 # Kira Mind Bot — Установщик
 #
 # Использование:
-#   ./install.sh --server-ip <IP>
+#   ./scripts/ops/install.sh --server-ip <IP>
 #
 # Что делает:
 #   1. Устанавливает Docker на VPS (если не установлен)
@@ -174,7 +174,11 @@ prompt_default USER_TIMEZONE "Часовой пояс" "Europe/Moscow"
 # ── Запись .env.production ────────────────────────────────────────────────────
 header "Создание .env.production"
 
-ENV_FILE="$(dirname "$0")/.env.production"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$REPO_ROOT"
+
+ENV_FILE="$REPO_ROOT/.env.production"
 
 cat > "$ENV_FILE" << EOF
 # Сгенерировано install.sh $(date '+%Y-%m-%d %H:%M:%S')
@@ -242,7 +246,7 @@ fi
 success ".env.production создан"
 
 # ── Personality.json для имени владельца ──────────────────────────────────────
-PERSONALITY_FILE="$(dirname "$0")/personality.json"
+PERSONALITY_FILE="$REPO_ROOT/personality.json"
 if [ ! -f "$PERSONALITY_FILE" ]; then
     cat > "$PERSONALITY_FILE" << EOF
 {
@@ -260,5 +264,5 @@ header "Деплой"
 info "Запускаю deploy.sh..."
 echo ""
 
-chmod +x "$(dirname "$0")/deploy.sh"
-"$(dirname "$0")/deploy.sh" --kira-mind-bot --server-ip "$SERVER_IP"
+chmod +x "$SCRIPT_DIR/deploy.sh"
+"$SCRIPT_DIR/deploy.sh" --kira-mind-bot --server-ip "$SERVER_IP"
