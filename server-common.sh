@@ -5,6 +5,8 @@ ENV_FILE="${ENV_FILE:-.env.production}"
 COMPOSE_ENV_FILE="${COMPOSE_ENV_FILE:-.env}"
 PERSONALITY_FILE="${PERSONALITY_FILE:-personality.json}"
 ADMIN_STATE_FILE="${ADMIN_STATE_FILE:-${HOME}/.kira-admin-state}"
+DEFAULT_ADMIN_USERNAME="${DEFAULT_ADMIN_USERNAME:-admin}"
+ADMIN_PORT_FALLBACK="${ADMIN_PORT_FALLBACK:-8080}"
 COMPOSE_CMD=()
 DOCKER_CMD=()
 
@@ -50,6 +52,50 @@ load_admin_state_if_present() {
         source "$ADMIN_STATE_FILE"
         set +a
     fi
+}
+
+generate_admin_password() {
+    cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 20 2>/dev/null || openssl rand -hex 10
+}
+
+save_admin_state() {
+    cat > "$ADMIN_STATE_FILE" << EOF
+ADMIN_PORT=${ADMIN_PORT}
+ADMIN_USERNAME=${ADMIN_USERNAME}
+ADMIN_PASSWORD=${ADMIN_PASSWORD}
+EOF
+}
+
+write_compose_env() {
+    cat > "$COMPOSE_ENV_FILE" << EOF
+DB_HOST=postgres
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=${DB_PASSWORD}
+DB_NAME=KiraMind
+NODE_ENV=production
+ADMIN_PORT=${ADMIN_PORT}
+ADMIN_USERNAME=${ADMIN_USERNAME}
+ADMIN_PASSWORD=${ADMIN_PASSWORD}
+EOF
+}
+
+ensure_admin_state() {
+    load_admin_state_if_present
+
+    if [ -z "${ADMIN_PORT:-}" ]; then
+        ADMIN_PORT=$(( (RANDOM % 2000) + 7000 ))
+    fi
+
+    if [ -z "${ADMIN_USERNAME:-}" ]; then
+        ADMIN_USERNAME="$DEFAULT_ADMIN_USERNAME"
+    fi
+
+    if [ -z "${ADMIN_PASSWORD:-}" ]; then
+        ADMIN_PASSWORD="$(generate_admin_password)"
+    fi
+
+    save_admin_state
 }
 
 sergey_enabled() {
@@ -100,13 +146,16 @@ detect_host_ip() {
 
 show_admin_panel_access() {
     local host_ip="$1"
+    local admin_port="${ADMIN_PORT:-$ADMIN_PORT_FALLBACK}"
+    local admin_username="${ADMIN_USERNAME:-$DEFAULT_ADMIN_USERNAME}"
+    local admin_password="${ADMIN_PASSWORD:-changeme}"
 
     echo ""
     echo "╔══════════════════════════════════════════╗"
     echo "║        🌐 ПАНЕЛЬ УПРАВЛЕНИЯ              ║"
     echo "╠══════════════════════════════════════════╣"
-    echo "║  URL:     http://${host_ip}:${ADMIN_PORT}"
-    echo "║  Логин:   ${ADMIN_USERNAME}"
-    echo "║  Пароль:  ${ADMIN_PASSWORD}"
+    echo "║  URL:     http://${host_ip}:${admin_port}"
+    echo "║  Логин:   ${admin_username}"
+    echo "║  Пароль:  ${admin_password}"
     echo "╚══════════════════════════════════════════╝"
 }
