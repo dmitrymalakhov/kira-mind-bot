@@ -29,7 +29,9 @@ if [ "$DEPLOY_KIRA_MIND_BOT" = false ] && [ "$DEPLOY_ADMIN_PANEL" = false ]; the
     show_help
 fi
 
-cd "$(dirname "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$REPO_ROOT"
 DEPLOY_STARTED_AT=$(date '+%Y-%m-%d %H:%M:%S')
 
 echo ""
