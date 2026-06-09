@@ -16,7 +16,6 @@ interface StatusResponse {
 
 const LABELS: Record<string, string> = {
   'kira-mind-bot': '🌸 Kira',
-  'sergey-brain-bot': '🧑‍💼 Sergey',
 };
 
 function formatUptime(startedAt: string | null): string {

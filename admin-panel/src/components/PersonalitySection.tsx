@@ -31,7 +31,6 @@ const EMPTY_PROFILE: PersonalityProfile = {
 };
 
 interface ProfileEditorProps {
-  botKey: 'KiraMindBot' | 'SergeyBrainBot';
   icon: string;
   title: string;
   values: PersonalityProfile;
@@ -40,7 +39,7 @@ interface ProfileEditorProps {
   saving: boolean;
 }
 
-function ProfileEditor({ botKey, icon, title, values, onChange, onSave, saving }: ProfileEditorProps) {
+function ProfileEditor({ icon, title, values, onChange, onSave, saving }: ProfileEditorProps) {
   return (
     <Card id={`personality-${title.toLowerCase().replace(/\s+/g, '-')}`} sx={{ mb: 2 }}>
       <CardHeader
@@ -73,7 +72,7 @@ function ProfileEditor({ botKey, icon, title, values, onChange, onSave, saving }
               onChange={(e) => onChange('characterName', e.target.value)}
               fullWidth
               placeholder="например, Эни"
-              helperText={`Имя ассистента задаётся вручную. Если оставить пустым, используется ${botKey === 'SergeyBrainBot' ? '«ассистент»' : '«ассистентка»'}.`}
+              helperText="Имя ассистента задаётся вручную. Если оставить пустым, используется «ассистентка»."
               FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px' } }}
             />
           </Grid>
@@ -83,7 +82,7 @@ function ProfileEditor({ botKey, icon, title, values, onChange, onSave, saving }
               value={values.ownerName}
               onChange={(e) => onChange('ownerName', e.target.value)}
               fullWidth
-              placeholder={botKey === 'SergeyBrainBot' ? 'владелица' : 'владелец'}
+              placeholder="владелец"
               helperText="Как бот обращается к владельцу"
               FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px' } }}
             />
@@ -105,7 +104,7 @@ function ProfileEditor({ botKey, icon, title, values, onChange, onSave, saving }
               value={values.userName}
               onChange={(e) => onChange('userName', e.target.value)}
               fullWidth
-              placeholder={botKey === 'SergeyBrainBot' ? 'владелица' : 'владелец'}
+              placeholder="владелец"
             />
           </Grid>
           <Grid item xs={12} sm={3}>
@@ -215,11 +214,9 @@ interface Props {
 export function PersonalitySection({ onToast }: Props) {
   const [data, setData] = useState<PersonalityConfig>({
     KiraMindBot: { ...EMPTY_PROFILE },
-    SergeyBrainBot: { ...EMPTY_PROFILE },
   });
   const [loading, setLoading] = useState(true);
   const [savingKira, setSavingKira] = useState(false);
-  const [savingSergey, setSavingSergey] = useState(false);
 
   useEffect(() => {
     fetchPersonality()
@@ -229,7 +226,7 @@ export function PersonalitySection({ onToast }: Props) {
   }, []);
 
   const handleChange = (
-    profile: 'KiraMindBot' | 'SergeyBrainBot',
+    profile: 'KiraMindBot',
     key: keyof PersonalityProfile,
     value: string
   ) => {
@@ -239,9 +236,8 @@ export function PersonalitySection({ onToast }: Props) {
     }));
   };
 
-  const handleSave = async (profile: 'KiraMindBot' | 'SergeyBrainBot') => {
-    const setSaving = profile === 'KiraMindBot' ? setSavingKira : setSavingSergey;
-    setSaving(true);
+  const handleSave = async () => {
+    setSavingKira(true);
     try {
       const result = await savePersonality(data);
       if (result.success) {
@@ -252,7 +248,7 @@ export function PersonalitySection({ onToast }: Props) {
     } catch {
       onToast('Ошибка соединения', 'error');
     } finally {
-      setSaving(false);
+      setSavingKira(false);
     }
   };
 
@@ -274,26 +270,16 @@ export function PersonalitySection({ onToast }: Props) {
       </Alert>
 
       <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.8 }}>
-        Личность ботов
+        Личность бота
       </Typography>
 
       <ProfileEditor
-        botKey="KiraMindBot"
         icon="🌸"
         title="Kira — Личность и характер"
         values={data.KiraMindBot}
         onChange={(key, value) => handleChange('KiraMindBot', key, value)}
-        onSave={() => handleSave('KiraMindBot')}
+        onSave={handleSave}
         saving={savingKira}
-      />
-      <ProfileEditor
-        botKey="SergeyBrainBot"
-        icon="🧑‍💼"
-        title="Sergey — Личность и характер"
-        values={data.SergeyBrainBot}
-        onChange={(key, value) => handleChange('SergeyBrainBot', key, value)}
-        onSave={() => handleSave('SergeyBrainBot')}
-        saving={savingSergey}
       />
     </Box>
   );

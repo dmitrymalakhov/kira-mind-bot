@@ -51,7 +51,6 @@ import type {
 
 const PROFILE_OPTIONS: Array<{ value: MemoryProfile; label: string }> = [
   { value: 'KiraMindBot', label: 'Kira' },
-  { value: 'SergeyBrainBot', label: 'Sergey' },
 ];
 
 const DOMAIN_LABELS: Record<string, string> = {

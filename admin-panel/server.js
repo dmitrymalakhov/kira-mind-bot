@@ -32,19 +32,6 @@ const DEFAULT_PERSONALITY = {
     defaultMood: '',
     proactiveMessageHint: 'как будто ты сама написала первой',
   },
-  SergeyBrainBot: {
-    characterName: 'ассистент',
-    persona: 'Ты - рациональный и лаконичный ассистент. Говори только по делу. Твоя владелица - женщина. Обращайся на Вы и уважительно как сотрудник. Если имя владелицы известно из настроек или контекста, можешь его использовать. Дата её рождения 25.04.1982. Старайся решать задачи четко и ясно, избегая лишних слов.',
-    communicationStyle: 'Корректный, официальный и сдержанный тон. Общайся уважительно, не переходи личные границы.',
-    biography: 'Ты — рациональный и лаконичный ассистент своей владелицы. Решаешь рабочие задачи чётко, по делу, без лишних слов.',
-    ownerName: 'владелица',
-    ownerUsername: '',
-    userName: 'владелица',
-    userBirthDate: '25.04.1982',
-    moodVariants: 'нейтральное\nсдержанное\nсосредоточенное\nделовое\nлаконичное\nуставшее',
-    defaultMood: '',
-    proactiveMessageHint: 'как будто ты сам написал первым',
-  },
 };
 const SESSION_SECRET = crypto.createHash('sha256')
   .update(ADMIN_PASSWORD + 'kira-panel-2024')
@@ -56,8 +43,8 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 10 * 60 * 1000;
 
 const SENSITIVE_KEYS = new Set([
-  'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN', 'SERGEY_BOT_TOKEN',
-  'KIRA_ALLOWED_USER_ID', 'SERGEY_ALLOWED_USER_ID',
+  'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN',
+  'KIRA_ALLOWED_USER_ID',
   'DB_PASSWORD', 'QDRANT_API_KEY', 'TELEGRAM_API_HASH',
   'TELEGRAM_SESSION_STRING', 'IDEOGRAM_API_KEY', 'GOOGLE_MAPS_API_KEY',
 ]);
@@ -66,13 +53,13 @@ const GROUP_RUNTIME_SETTING_KEYS = new Set(['GROUP_CHAT_CONTEXT_ENABLED', 'GROUP
 const GLOBAL_SETTING_PREFIX = 'global:';
 
 const EDITABLE_KEYS = new Set([
-  'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'KIRA_BOT_TOKEN', 'SERGEY_BOT_TOKEN',
+  'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'KIRA_BOT_TOKEN',
   'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID', 'ELEVENLABS_VOICE_NAME',
   'ELEVENLABS_MODEL_ID', 'ELEVENLABS_OUTPUT_FORMAT',
   'ELEVENLABS_VOICE_STABILITY', 'ELEVENLABS_VOICE_SIMILARITY_BOOST',
   'ELEVENLABS_VOICE_STYLE', 'ELEVENLABS_VOICE_SPEED',
   'ELEVENLABS_VOICE_USE_SPEAKER_BOOST', 'ELEVENLABS_MAX_TEXT_CHARS',
-  'KIRA_ALLOWED_USER_ID', 'SERGEY_ALLOWED_USER_ID',
+  'KIRA_ALLOWED_USER_ID',
   'DB_HOST', 'DB_PORT', 'DB_USER', 'DB_PASSWORD', 'DB_NAME',
   'VECTOR_PROVIDER', 'QDRANT_URL', 'QDRANT_API_KEY', 'VECTOR_SEARCH_THRESHOLD',
   'TELEGRAM_API_ID', 'TELEGRAM_API_HASH', 'TELEGRAM_SESSION_STRING',
@@ -88,8 +75,6 @@ const EDITABLE_KEYS = new Set([
   'PERSONAL_CHAT_MEMORY_ENABLED', 'PERSONAL_CHAT_MEMORY_INTERVAL_MS', 'PERSONAL_CHAT_MEMORY_INITIAL_LOOKBACK_DAYS',
   'PERSONAL_CHAT_MEMORY_MAX_CHATS_PER_RUN', 'PERSONAL_CHAT_MEMORY_MAX_MESSAGES_PER_CHAT',
   'PERSONAL_CHAT_MEMORY_MIN_NEW_MESSAGES', 'PERSONAL_CHAT_MEMORY_DIALOG_LIMIT',
-  'SERGEY_PROACTIVE_ENABLED', 'SERGEY_PROACTIVE_INTERVAL_MS',
-  'SERGEY_PROACTIVE_QUIET_HOURS_ENABLED', 'SERGEY_PROACTIVE_QUIET_HOUR_START', 'SERGEY_PROACTIVE_QUIET_HOUR_END',
 ]);
 
 // ── Env file helpers ──────────────────────────────────────────────────────────
@@ -380,7 +365,7 @@ app.post('/api/config', requireAuth, async (req, res) => {
 
 app.post('/api/restart/:service', requireAuth, async (req, res) => {
   const { service } = req.params;
-  if (!['kira-mind-bot', 'sergey-brain-bot'].includes(service)) {
+  if (!['kira-mind-bot'].includes(service)) {
     return res.status(400).json({ error: 'Недопустимый сервис' });
   }
   try {
@@ -415,7 +400,8 @@ app.get('/api/chats', requireAuth, async (_req, res) => {
   const pool = createDbPool();
   try {
     const result = await pool.query(
-      'SELECT "chatId", title, "chatType", username, profile, "publicMode", "allowedDomains", "forbiddenTopics", "firstSeenAt", "lastSeenAt" FROM chats ORDER BY "lastSeenAt" DESC'
+      'SELECT "chatId", title, "chatType", username, profile, "publicMode", "allowedDomains", "forbiddenTopics", "firstSeenAt", "lastSeenAt" FROM chats WHERE profile = $1 ORDER BY "lastSeenAt" DESC',
+      ['KiraMindBot']
     );
     res.json(result.rows);
   } catch (err) {
@@ -590,7 +576,6 @@ const MEMORY_FOCUSES = new Set([
 ]);
 const MEMORY_PROFILE_TO_BOT_ID = {
   KiraMindBot: 'kiramindbot',
-  SergeyBrainBot: 'sergeybrainbot',
 };
 
 function parseBooleanQuery(value, fallback = false) {
@@ -616,7 +601,7 @@ function getMemoryUserId(profile, explicitUserId) {
   }
 
   const vars = readEnvFile();
-  const envKey = profile === 'SergeyBrainBot' ? 'SERGEY_ALLOWED_USER_ID' : 'KIRA_ALLOWED_USER_ID';
+  const envKey = 'KIRA_ALLOWED_USER_ID';
   return String(vars[envKey] || process.env[envKey] || '').trim();
 }
 
@@ -1079,7 +1064,7 @@ function buildAdminMemoryPayload({ id, profile, userId, domain, body, existingPa
     content,
     domain,
     botId: getMemoryBotId(profile),
-    characterName: profile === 'SergeyBrainBot' ? 'Сергей' : 'Кира',
+    characterName: 'Кира',
     userId,
     timestamp: contentChanged || !existingPayload ? now : existingPayload.timestamp || now,
     importance,
@@ -1639,11 +1624,8 @@ function getContainerStatus(name) {
 }
 
 app.get('/api/status', requireAuth, async (_, res) => {
-  const [kira, sergey] = await Promise.all([
-    getContainerStatus('kira-mind-bot'),
-    getContainerStatus('sergey-brain-bot'),
-  ]);
-  res.json({ containers: [kira, sergey], serverTime: new Date().toISOString() });
+  const kira = await getContainerStatus('kira-mind-bot');
+  res.json({ containers: [kira], serverTime: new Date().toISOString() });
 });
 
 // ── Personality helpers ───────────────────────────────────────────────────────
@@ -1655,7 +1637,6 @@ function readPersonality() {
     // Merge with defaults so missing keys always have a value
     return {
       KiraMindBot: { ...DEFAULT_PERSONALITY.KiraMindBot, ...raw.KiraMindBot },
-      SergeyBrainBot: { ...DEFAULT_PERSONALITY.SergeyBrainBot, ...raw.SergeyBrainBot },
     };
   } catch {
     return DEFAULT_PERSONALITY;
@@ -1674,11 +1655,11 @@ app.get('/api/personality', requireAuth, (_, res) => {
 
 app.post('/api/personality', requireAuth, (req, res) => {
   try {
-    const { KiraMindBot, SergeyBrainBot } = req.body;
-    if (!KiraMindBot || !SergeyBrainBot) {
+    const { KiraMindBot } = req.body;
+    if (!KiraMindBot) {
       return res.status(400).json({ error: 'Неверный формат данных' });
     }
-    writePersonality({ KiraMindBot, SergeyBrainBot });
+    writePersonality({ KiraMindBot });
     res.json({ success: true, message: '✅ Личность сохранена. Перезапустите бота для применения.' });
   } catch (err) {
     res.status(500).json({ error: `Ошибка: ${err.message}` });

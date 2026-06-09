@@ -334,7 +334,7 @@ export class QdrantVectorService implements IDomainVectorService {
         console.log('🔧 Инициализация QdrantVectorService...');
 
         // Используем botUsername из конфигурации для уникальной идентификации
-        this.botId = config.botUsername.toLowerCase(); // 'kiramindbot' или 'sergeybrainbot'
+        this.botId = config.botUsername.toLowerCase(); // 'kiramindbot'
         this.memoryPrefix = `${this.botId}_memories_`;
         this.configCollection = `${this.botId}_domain_configs`;
         const envThreshold = Number(process.env.VECTOR_SEARCH_THRESHOLD);

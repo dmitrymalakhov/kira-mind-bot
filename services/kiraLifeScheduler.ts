@@ -10,6 +10,7 @@ import {
   KiraSelfEvent,
 } from "../utils/kiraSelfMemory";
 import { getProactiveChatId } from "../utils/allowedUserChatStore";
+import { getActiveBotProfile } from "../utils/botIdentity";
 import { getSetting, setSetting } from "./botSettingsService";
 import { appendPersistedHistory } from "./SessionStorage";
 
@@ -26,7 +27,7 @@ let timer: NodeJS.Timeout | undefined;
 let isRunning = false;
 let lastSentAt = 0;
 
-const LAST_SENT_SETTING_KEY = `${process.env.ASSISTANT_PROFILE || "KiraMindBot"}:kiraLife:lastSentAt`;
+const LAST_SENT_SETTING_KEY = `${getActiveBotProfile()}:kiraLife:lastSentAt`;
 
 async function loadLastSentAt(): Promise<number> {
   const raw = await getSetting(LAST_SENT_SETTING_KEY, "0");

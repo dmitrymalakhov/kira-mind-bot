@@ -140,8 +140,7 @@ function pruneChatAnalysisPeriodRequest(
 /**
  * Grammy StorageAdapter backed by PostgreSQL via TypeORM.
  * Persists only the context-critical subset of SessionData (history, summary, domain facts).
- * The stored key is namespaced by ASSISTANT_PROFILE so two bots can share one DB
- * without sharing per-chat memory.
+ * The stored key is namespaced by the active bot profile to keep session data stable.
  * Non-serializable fields (Map, timers) and reminders are excluded — reminders live in ReminderRegistry/DB.
  */
 export class TypeORMSessionStorage implements StorageAdapter<SessionData> {

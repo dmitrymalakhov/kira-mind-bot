@@ -102,17 +102,6 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         hint: 'Узнать свой ID: напиши @userinfobot в Telegram',
         required: true,
       },
-      {
-        key: 'SERGEY_BOT_TOKEN',
-        label: 'Sergey Bot Token',
-        type: 'password',
-      },
-      {
-        key: 'SERGEY_ALLOWED_USER_ID',
-        label: 'Sergey — Telegram User ID владельца',
-        type: 'text',
-        hint: 'Telegram ID пользователя для бота Sergey',
-      },
     ],
   },
   {
@@ -331,37 +320,6 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         label: 'Интервал проверки памяти',
         type: 'duration',
         hint: 'Как часто бот проверяет память на наличие актуальных напоминаний и планов',
-      },
-    ],
-  },
-  {
-    id: 'sergey',
-    title: 'Sergey — Расписание',
-    icon: '🧑‍💼',
-    fields: [
-      { key: 'SERGEY_PROACTIVE_ENABLED', label: 'Проактивные сообщения включены', type: 'toggle' },
-      {
-        key: 'SERGEY_PROACTIVE_INTERVAL_MS',
-        label: 'Интервал проактивных сообщений',
-        type: 'duration',
-        hint: 'Как часто Ассистент пишет первым',
-      },
-      {
-        key: 'SERGEY_PROACTIVE_QUIET_HOURS_ENABLED',
-        label: 'Тихие часы включены',
-        type: 'toggle',
-      },
-      {
-        key: 'SERGEY_PROACTIVE_QUIET_HOUR_START',
-        label: 'Начало тихих часов (0–23)',
-        type: 'number',
-        placeholder: '23',
-      },
-      {
-        key: 'SERGEY_PROACTIVE_QUIET_HOUR_END',
-        label: 'Конец тихих часов (0–23)',
-        type: 'number',
-        placeholder: '8',
       },
     ],
   },

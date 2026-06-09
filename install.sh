@@ -183,8 +183,6 @@ OPENAI_API_KEY=${OPENAI_API_KEY}
 
 KIRA_BOT_TOKEN=${KIRA_BOT_TOKEN}
 KIRA_ALLOWED_USER_ID=${KIRA_ALLOWED_USER_ID}
-SERGEY_BOT_TOKEN=${SERGEY_BOT_TOKEN:-}
-SERGEY_ALLOWED_USER_ID=${SERGEY_ALLOWED_USER_ID:-}
 
 DB_HOST=postgres
 DB_PORT=5432
@@ -251,8 +249,7 @@ if [ ! -f "$PERSONALITY_FILE" ]; then
   "KiraMindBot": {
     "ownerName": "${OWNER_NAME}",
     "userName": "${OWNER_NAME}"
-  },
-  "SergeyBrainBot": {}
+  }
 }
 EOF
     success "personality.json создан"
