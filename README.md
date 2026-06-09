@@ -22,7 +22,7 @@ cd kira-mind-bot
 2. установит Docker, если он ещё не установлен;
 3. спросит ключи и базовые настройки;
 4. сгенерирует `.env.production` и `personality.json`;
-5. задеплоит PostgreSQL, Qdrant, ботов и админ-панель;
+5. задеплоит PostgreSQL, Qdrant, бота и админ-панель;
 6. выведет URL, логин и пароль панели управления.
 
 Повторный деплой:
@@ -369,15 +369,6 @@ git update-index --assume-unchanged personality.json
 | `KIRA_ALLOWED_USER_ID` | Telegram User ID владельца Kira |
 | `DB_PASSWORD` | Пароль PostgreSQL |
 
-### Второй бот
-
-| Переменная | Описание |
-|------------|----------|
-| `SERGEY_BOT_TOKEN` | Токен второго бота |
-| `SERGEY_ALLOWED_USER_ID` | Telegram User ID владельца второго бота |
-
-В Docker Compose поднимаются два профиля из одной кодовой базы: `KiraMindBot` и `SergeyBrainBot`.
-
 ### Голосовые ответы ElevenLabs
 
 | Переменная | Описание |
@@ -499,7 +490,7 @@ Telegram Bot API / Telegram User Client
 - `services/*` - интеграции, планировщики, репозитории и инфраструктурные сервисы.
 - `utils/enhancedDomainMemory.ts` и `services/QdrantVectorService.ts` - долговременная память.
 - `admin-panel/*` - React/Vite UI и Node.js backend панели управления.
-- `docker-compose.yml` - PostgreSQL, Qdrant, два профиля бота и админ-панель.
+- `docker-compose.yml` - PostgreSQL, Qdrant, бот и админ-панель.
 
 ---
 

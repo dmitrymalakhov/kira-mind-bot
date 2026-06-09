@@ -6,12 +6,13 @@ import { MessageStore, StoredMessage } from "../stores/MessageStore";
 import { BotContext } from "../types";
 import { parseLLMJson } from "../utils";
 import { getProactiveChatId } from "../utils/allowedUserChatStore";
+import { getActiveBotProfile } from "../utils/botIdentity";
 import { getSetting, setSetting } from "./botSettingsService";
 
 const CHECK_INTERVAL_MS = 60_000;
 const MAX_THREADS_PER_RUN = 30;
 const MAX_MESSAGES_PER_THREAD = 12;
-const LAST_RUN_SETTING_KEY = `${process.env.ASSISTANT_PROFILE || "KiraMindBot"}:inboxGuardian:lastRunDate`;
+const LAST_RUN_SETTING_KEY = `${getActiveBotProfile()}:inboxGuardian:lastRunDate`;
 
 interface InboxThreadCandidate {
     chatId: string;
@@ -348,7 +349,7 @@ async function runGuardian(bot: Bot<BotContext>): Promise<void> {
 }
 
 export function startInboxGuardianScheduler(bot: Bot<BotContext>): void {
-    if (process.env.ASSISTANT_PROFILE !== "KiraMindBot") {
+    if (getActiveBotProfile() !== "KiraMindBot") {
         return;
     }
 

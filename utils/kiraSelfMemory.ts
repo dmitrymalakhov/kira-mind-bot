@@ -1,6 +1,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import { config } from "../config";
+import { getActiveBotProfile } from "./botIdentity";
 
 export type KiraSelfEventType = "mood" | "activity" | "thought" | "event";
 
@@ -39,7 +40,7 @@ interface KiraSelfMemoryData {
 }
 
 const DATA_DIR = path.join(__dirname, "..", "data");
-const PROFILE = process.env.ASSISTANT_PROFILE || "KiraMindBot";
+const PROFILE = getActiveBotProfile();
 const MEMORY_PATH = path.join(DATA_DIR, `${PROFILE}-self-memory.json`);
 
 function getDefaultState(): KiraSelfState {

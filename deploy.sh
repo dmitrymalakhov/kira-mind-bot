@@ -3,32 +3,29 @@
 # Требования на локальной машине: Node.js, npm, ssh, scp.
 
 show_help() {
-    echo "Usage: $0 [--kira-mind-bot] [--sergey-brain-bot] [--admin-panel] [--server-ip <ip>]"
+    echo "Usage: $0 [--kira-mind-bot] [--admin-panel] [--server-ip <ip>]"
     echo
     echo "Options:"
     echo "  --kira-mind-bot              Deploy the Kira-Mind bot"
-    echo "  --sergey-brain-bot           Deploy the Sergey-Brain bot"
     echo "  --admin-panel                Deploy the admin panel"
     echo "  --server-ip <ip>             Target server IP address"
     exit 1
 }
 
 DEPLOY_KIRA_MIND_BOT=false
-DEPLOY_SERGEY_BRAIN_BOT=false
 DEPLOY_ADMIN_PANEL=false
 SERVER_IP="165.232.120.123"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --kira-mind-bot)    DEPLOY_KIRA_MIND_BOT=true; shift ;;
-        --sergey-brain-bot) DEPLOY_SERGEY_BRAIN_BOT=true; shift ;;
         --admin-panel)      DEPLOY_ADMIN_PANEL=true; shift ;;
         --server-ip)        SERVER_IP="$2"; shift 2 ;;
         *)                  show_help ;;
     esac
 done
 
-if [ "$DEPLOY_KIRA_MIND_BOT" = false ] && [ "$DEPLOY_SERGEY_BRAIN_BOT" = false ] && [ "$DEPLOY_ADMIN_PANEL" = false ]; then
+if [ "$DEPLOY_KIRA_MIND_BOT" = false ] && [ "$DEPLOY_ADMIN_PANEL" = false ]; then
     show_help
 fi
 
@@ -42,7 +39,6 @@ echo "=============================================="
 echo "📍 Сервер: ${SERVER_IP}"
 echo "📦 Проекты:"
 [ "$DEPLOY_KIRA_MIND_BOT" = true ]    && echo "  • kira-mind-bot"
-[ "$DEPLOY_SERGEY_BRAIN_BOT" = true ] && echo "  • sergey-brain-bot"
 [ "$DEPLOY_ADMIN_PANEL" = true ]      && echo "  • admin-panel"
 echo "=============================================="
 echo ""
@@ -62,25 +58,6 @@ if [ "$DEPLOY_KIRA_MIND_BOT" = true ]; then
     if [ -f ".env.production" ]; then
         cp .env.production _deploy/kira-mind-bot/
         echo "✅ Скопирован .env.production для kira-mind-bot"
-    else
-        echo "⚠️  .env.production не найден"
-    fi
-    rm -rf dist
-fi
-
-# ── Сборка sergey-brain-bot ───────────────────────────────────────────────────
-if [ "$DEPLOY_SERGEY_BRAIN_BOT" = true ]; then
-    echo "🔨 Сборка sergey-brain-bot (ASSISTANT_PROFILE=SergeyBrainBot)..."
-    ASSISTANT_PROFILE=SergeyBrainBot npm run build
-
-    # sergey использует ту же директорию kira-mind-bot (один Dockerfile)
-    mkdir -p _deploy/kira-mind-bot
-    cp -r dist/* _deploy/kira-mind-bot/
-    cp Dockerfile package.json package-lock.json _deploy/kira-mind-bot/
-
-    if [ -f ".env.production" ]; then
-        cp .env.production _deploy/kira-mind-bot/
-        echo "✅ Скопирован .env.production для sergey-brain-bot"
     else
         echo "⚠️  .env.production не найден"
     fi
@@ -148,8 +125,8 @@ ssh root@${SERVER_IP} << EOF
     docker-compose -f docker-compose.yml rm -f "\$name" 2>/dev/null && echo "  rm \$name: ok" || true
   }
   if [ "$DEPLOY_KIRA_MIND_BOT" = true ];    then stop_and_remove kira-mind-bot; fi
-  if [ "$DEPLOY_SERGEY_BRAIN_BOT" = true ]; then stop_and_remove sergey-brain-bot; fi
   if [ "$DEPLOY_ADMIN_PANEL" = true ];      then stop_and_remove admin-panel; fi
+  docker rm -f sergey-brain-bot 2>/dev/null && echo "  legacy rm sergey-brain-bot: ok" || true
   echo ""
 
   echo "🗑️  Очистка Docker..."
@@ -171,7 +148,7 @@ ssh root@${SERVER_IP} << EOF
       cp /root/source/personality.json.template /root/source/personality.json
       echo "✅ Создан personality.json из шаблона"
     else
-      echo '{"KiraMindBot":{},"SergeyBrainBot":{}}' > /root/source/personality.json
+      echo '{"KiraMindBot":{}}' > /root/source/personality.json
       echo "✅ Создан пустой personality.json"
     fi
   else
@@ -218,7 +195,6 @@ ssh root@${SERVER_IP} << EOF
   }
 
   if [ "$DEPLOY_KIRA_MIND_BOT" = true ];    then deploy_service kira-mind-bot; fi
-  if [ "$DEPLOY_SERGEY_BRAIN_BOT" = true ]; then deploy_service sergey-brain-bot; fi
   if [ "$DEPLOY_ADMIN_PANEL" = true ];      then deploy_service admin-panel; fi
 
   echo ""

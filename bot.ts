@@ -86,9 +86,7 @@ function ensureConfigLoaded() {
     console.log("🔄 Trying fallback config creation...");
 
     const activeAssistant = process.env.ASSISTANT_PROFILE || "KiraMindBot";
-    const botToken = activeAssistant === "SergeyBrainBot"
-      ? process.env.SERGEY_BOT_TOKEN
-      : process.env.KIRA_BOT_TOKEN;
+    const botToken = process.env.KIRA_BOT_TOKEN;
 
     if (!botToken) {
       throw new Error(`No bot token found for profile: ${activeAssistant}`);
@@ -96,8 +94,8 @@ function ensureConfigLoaded() {
 
     return {
       botToken,
-      characterName: activeAssistant === "SergeyBrainBot" ? "Сергей" : "Кира",
-      allowedUserId: activeAssistant === "SergeyBrainBot" ? 108595356 : 92174505,
+      characterName: "Кира",
+      allowedUserId: 92174505,
       openAiApiKey: process.env.OPENAI_API_KEY || "",
     };
   }
@@ -133,7 +131,6 @@ export function createBot() {
   console.log("🔍 Bot.ts Debug:");
   console.log("NODE_ENV:", process.env.NODE_ENV);
   console.log("ASSISTANT_PROFILE:", process.env.ASSISTANT_PROFILE);
-  console.log("SERGEY_BOT_TOKEN exists:", !!process.env.SERGEY_BOT_TOKEN);
   console.log("KIRA_BOT_TOKEN exists:", !!process.env.KIRA_BOT_TOKEN);
 
   // Маскируем токены для безопасности
@@ -143,7 +140,6 @@ export function createBot() {
     return `${token.substring(0, 4)}...${token.substring(token.length - 4)}`;
   };
 
-  console.log("SERGEY_BOT_TOKEN value:", maskToken(process.env.SERGEY_BOT_TOKEN || ""));
   console.log("KIRA_BOT_TOKEN value:", maskToken(process.env.KIRA_BOT_TOKEN || ""));
   console.log("config.botToken:", maskToken(config.botToken));
   console.log("config object keys:", Object.keys(config));
@@ -163,13 +159,10 @@ export function createBot() {
 
     // Пробуем прямую проверку переменных окружения
     console.error("Прямая проверка env переменных:");
-    console.error("process.env.SERGEY_BOT_TOKEN:", !!process.env.SERGEY_BOT_TOKEN);
     console.error("process.env.KIRA_BOT_TOKEN:", !!process.env.KIRA_BOT_TOKEN);
 
     // Попробуем использовать токен напрямую из env
-    const directToken = process.env.ASSISTANT_PROFILE === "SergeyBrainBot"
-      ? process.env.SERGEY_BOT_TOKEN
-      : process.env.KIRA_BOT_TOKEN;
+    const directToken = process.env.KIRA_BOT_TOKEN;
 
     console.error("Попытка использовать токен напрямую:", maskToken(directToken || ""));
 

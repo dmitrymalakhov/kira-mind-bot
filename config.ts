@@ -48,7 +48,6 @@ function ensureEnvironmentLoaded() {
   console.log("- NODE_ENV:", process.env.NODE_ENV);
   console.log("- ASSISTANT_PROFILE:", process.env.ASSISTANT_PROFILE);
   console.log("- KIRA_BOT_TOKEN exists:", !!process.env.KIRA_BOT_TOKEN);
-  console.log("- SERGEY_BOT_TOKEN exists:", !!process.env.SERGEY_BOT_TOKEN);
 }
 
 // Синхронная загрузка переменных окружения
@@ -164,18 +163,15 @@ function toOptionalNumber(value: string | undefined): number | undefined {
 }
 
 function assistants(activeAssistant: string): AssistantConfig {
-  const envResult = dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
-
   // Load personality overrides from personality.json (edited via admin panel)
   const kiraP = loadPersonalityOverride("KiraMindBot");
-  const sergeyP = loadPersonalityOverride("SergeyBrainBot");
 
   const parseMoods = (raw: string | undefined, fallback: string[]): string[] => {
     if (!raw || !raw.trim()) return fallback;
     return raw.split("\n").map(s => s.trim()).filter(Boolean);
   };
 
-  const assistantsObj: Record<string, AssistantConfig> = {
+  const assistantsObj: Record<"KiraMindBot", AssistantConfig> = {
     KiraMindBot: {
       botToken: process.env.KIRA_BOT_TOKEN || "",
       ownerName: kiraP.ownerName || "Дмитрий",
@@ -254,92 +250,19 @@ function assistants(activeAssistant: string): AssistantConfig {
       groupPublicMode: toBoolean(process.env.GROUP_PUBLIC_MODE, false),
       morningDigestEnabled: toBoolean(process.env.MORNING_DIGEST_ENABLED, true),
       morningDigestHour: toNumber(process.env.MORNING_DIGEST_HOUR, 9),
-    },
-    SergeyBrainBot: {
-      botToken: envResult.parsed?.SERGEY_BOT_TOKEN || process.env.SERGEY_BOT_TOKEN || "",
-      ownerName: sergeyP.ownerName || "Юлия",
-      ownerUsername: sergeyP.ownerUsername || undefined,
-      characterName: "Сергей",
-      userName: sergeyP.userName || "Юлия",
-      userBirthDate: sergeyP.userBirthDate || "25.04.1982",
-      botUsername: "SergeyBrainBot",
-      allowedUserId: toNumber(process.env.SERGEY_ALLOWED_USER_ID, 108595356),
-      adminUserId: toNumber(process.env.SERGEY_ALLOWED_USER_ID, 108595356),
-      reactionsEnabled: false,
-      allowedReactions: [
-        "👍", "👎", "❤️", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱",
-        "🤬", "😢", "🎉", "🤩", "🤮", "💩", "🙏", "👌", "🕊", "🤡",
-        "🥱", "🥴", "😍", "🐳", "❤️‍🔥", "🌚", "🌭", "💯", "🤣", "⚡️",
-        "🍌", "🏆", "💔", "🤨", "😐", "🍓", "🍾", "💋", "🖕", "😈",
-        "😴", "😭", "🤓", "👻", "👨‍💻", "👀", "🎃", "🙈", "😇", "😨",
-        "🤝", "✍️", "🤗", "🫡", "🎅", "🎄", "☃️", "💅", "🤪", "🗿",
-        "🆒", "💘", "🙉", "🦄", "😘", "💊", "🙊", "😎", "👾", "🤷‍♂️",
-        "🤷", "🤷‍♀️", "😡"
-      ],
-      persona:
-        sergeyP.persona ||
-        "Ты - Сергей, рациональный и лаконичный ассистент. Говори только по делу. " +
-        "Твой пользователь - женщина, его имя Юлия (обращайся на Вы и уважительно как сотрудник), " +
-        "дата его рождения 25.04.1982. Старайся решать задачи четко и ясно, избегая лишних слов.",
-      communicationStyle:
-        sergeyP.communicationStyle ||
-        "Корректный, официальный и сдержанный тон. Общайся уважительно, не переходи личные границы.",
-      biography:
-        sergeyP.biography ||
-        "Сергей — рациональный и лаконичный ассистент Юлии. Решает рабочие задачи чётко, по делу, без лишних слов.",
-      moodVariants: parseMoods(sergeyP.moodVariants, [
-        "нейтральное",
-        "сдержанное",
-        "сосредоточенное",
-        "деловое",
-        "лаконичное",
-        "уставшее",
-      ]),
-      defaultMood: sergeyP.defaultMood || undefined,
-      proactiveMessageHint: sergeyP.proactiveMessageHint || "как будто ты сам написал первым",
-      eventDescriptionGender: "мужской",
-      kiraLifeProactiveEnabled: toBoolean(process.env.SERGEY_PROACTIVE_ENABLED, false),
-      kiraLifeProactiveIntervalMs: toNumber(process.env.SERGEY_PROACTIVE_INTERVAL_MS, 1000 * 60 * 60 * 24),
-      kiraLifeProactiveQuietHoursEnabled: toBoolean(process.env.SERGEY_PROACTIVE_QUIET_HOURS_ENABLED, true),
-      kiraLifeProactiveQuietHourStart: toNumber(process.env.SERGEY_PROACTIVE_QUIET_HOUR_START, 23),
-      kiraLifeProactiveQuietHourEnd: toNumber(process.env.SERGEY_PROACTIVE_QUIET_HOUR_END, 8),
-      dmReportEnabled: false,
-      dmReportIntervalMs: toNumber(process.env.DM_REPORT_INTERVAL_MS, 30 * 60 * 1000),
-      dmReportQuietHoursEnabled: false,
-      inboxGuardianEnabled: false,
-      inboxGuardianHour: toNumber(process.env.INBOX_GUARDIAN_HOUR, 21),
-      inboxGuardianLookbackHours: toNumber(process.env.INBOX_GUARDIAN_LOOKBACK_HOURS, 24),
-      inboxGuardianMinAgeMinutes: toNumber(process.env.INBOX_GUARDIAN_MIN_AGE_MINUTES, 60),
-      memoryInsightEnabled: toBoolean(process.env.MEMORY_INSIGHT_ENABLED, false),
-      memoryInsightIntervalMs: toNumber(process.env.MEMORY_INSIGHT_INTERVAL_MS, 3 * 60 * 60 * 1000),
-      memoryConsolidationEnabled: toBoolean(process.env.MEMORY_CONSOLIDATION_ENABLED, false),
-      memoryConsolidationIntervalMs: toNumber(process.env.MEMORY_CONSOLIDATION_INTERVAL_MS, 24 * 60 * 60 * 1000),
-      memoryConsolidationMinFacts: toNumber(process.env.MEMORY_CONSOLIDATION_MIN_FACTS, 8),
-      personalChatMemoryEnabled: toBoolean(process.env.PERSONAL_CHAT_MEMORY_ENABLED, false),
-      personalChatMemoryIntervalMs: toNumber(process.env.PERSONAL_CHAT_MEMORY_INTERVAL_MS, 6 * 60 * 60 * 1000),
-      personalChatMemoryInitialLookbackDays: toNumber(process.env.PERSONAL_CHAT_MEMORY_INITIAL_LOOKBACK_DAYS, 7),
-      personalChatMemoryMaxChatsPerRun: toNumber(process.env.PERSONAL_CHAT_MEMORY_MAX_CHATS_PER_RUN, 5),
-      personalChatMemoryMaxMessagesPerChat: toNumber(process.env.PERSONAL_CHAT_MEMORY_MAX_MESSAGES_PER_CHAT, 120),
-      personalChatMemoryMinNewMessages: toNumber(process.env.PERSONAL_CHAT_MEMORY_MIN_NEW_MESSAGES, 6),
-      personalChatMemoryDialogLimit: toNumber(process.env.PERSONAL_CHAT_MEMORY_DIALOG_LIMIT, 120),
-      proactiveOnlyPrivateChat: toBoolean(process.env.PROACTIVE_ONLY_PRIVATE_CHAT, true),
-      groupPublicMode: toBoolean(process.env.GROUP_PUBLIC_MODE, false),
-      morningDigestEnabled: false,
-      morningDigestHour: 9,
     }
   }
 
-  console.log("🔍 Assistant configuration loaded for:", activeAssistant)
-  console.log("👤 ownerName:", assistantsObj[activeAssistant]?.ownerName)
-  console.log("🔖 ownerUsername:", assistantsObj[activeAssistant]?.ownerUsername ?? "(не задан)")
-
-  if (!assistantsObj[activeAssistant]) {
-    console.error("❌ Unknown assistant profile:", activeAssistant);
-    console.error("Available profiles:", Object.keys(assistants));
+  const selectedAssistant = activeAssistant === "KiraMindBot" ? activeAssistant : "KiraMindBot";
+  if (activeAssistant !== selectedAssistant) {
+    console.warn("⚠️ Unsupported assistant profile ignored:", activeAssistant);
   }
 
+  console.log("🔍 Assistant configuration loaded for:", selectedAssistant)
+  console.log("👤 ownerName:", assistantsObj[selectedAssistant].ownerName)
+  console.log("🔖 ownerUsername:", assistantsObj[selectedAssistant].ownerUsername ?? "(не задан)")
 
-  return assistantsObj[activeAssistant];
+  return assistantsObj[selectedAssistant];
 };
 
 console.log("✅ Config loaded successfully");
@@ -348,13 +271,11 @@ console.log("✅ Config loaded successfully");
 function createConfig() {
   console.log("🔧 Creating configuration...");
 
-  const activeAssistant: keyof typeof assistants =
-    (process.env.ASSISTANT_PROFILE as keyof typeof assistants) || "KiraMindBot";
+  const activeAssistant = process.env.ASSISTANT_PROFILE || "KiraMindBot";
 
-  console.log("� Config creation details:");
+  console.log("🔧 Config creation details:");
   console.log("- Active assistant:", activeAssistant);
-  console.log("- Available assistants:", Object.keys(assistants));
-  console.log("- Selected config exists:", !!assistants[activeAssistant]);
+  console.log("- Available assistants:", ["KiraMindBot"].join(", "));
 
   const selectedConfig = assistants(activeAssistant);
 
@@ -367,14 +288,13 @@ function createConfig() {
 
   console.log("🔑 Token validation:");
   console.log("- KIRA_BOT_TOKEN:", maskToken(process.env.KIRA_BOT_TOKEN || ""));
-  console.log("- SERGEY_BOT_TOKEN:", maskToken(process.env.SERGEY_BOT_TOKEN || ""));
   console.log("- Selected bot token:", maskToken(selectedConfig.botToken));
 
   // Критическая проверка токена
   if (!selectedConfig.botToken) {
     console.error("❌ КРИТИЧЕСКАЯ ОШИБКА: Bot token пустой!");
     console.error("Выбранный ассистент:", activeAssistant);
-    console.error("Ожидаемая переменная:", activeAssistant === "KiraMindBot" ? "KIRA_BOT_TOKEN" : "SERGEY_BOT_TOKEN");
+    console.error("Ожидаемая переменная: KIRA_BOT_TOKEN");
     console.error("Доступные переменные окружения:");
     Object.keys(process.env).filter(key => key.includes('BOT')).forEach(key => {
       console.error(`  ${key}: ${process.env[key] ? 'SET' : 'NOT SET'}`);

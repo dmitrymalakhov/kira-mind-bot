@@ -74,12 +74,9 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
         const result = await saveConfig(updates);
         if (result.success) {
           if (autoRestart) {
-            onToast('💾 Сохранено. Перезапускаю ботов...', 'success');
-            await Promise.all([
-              restartService('kira-mind-bot'),
-              restartService('sergey-brain-bot'),
-            ]);
-            onToast('✅ Сохранено и боты перезапущены', 'success');
+            onToast('💾 Сохранено. Перезапускаю бота...', 'success');
+            await restartService('kira-mind-bot');
+            onToast('✅ Сохранено и бот перезапущен', 'success');
           } else {
             onToast(result.message || '✅ Сохранено', 'success');
           }
@@ -108,7 +105,7 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
           titleTypographyProps={{ variant: 'subtitle1', fontWeight: 600, color: 'secondary.main' }}
           action={
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Tooltip title="Автоматически перезапустить ботов после сохранения">
+              <Tooltip title="Автоматически перезапустить бота после сохранения">
                 <FormControlLabel
                   control={
                     <Checkbox

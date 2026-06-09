@@ -45,7 +45,6 @@ export interface PersonalityProfile {
 
 export interface PersonalityConfig {
   KiraMindBot: PersonalityProfile;
-  SergeyBrainBot: PersonalityProfile;
 }
 
 export interface ChatInfo {
@@ -132,7 +131,7 @@ export interface HealthLogQuery {
 
 export type HealthExportFormat = 'txt' | 'csv' | 'json';
 
-export type MemoryProfile = 'KiraMindBot' | 'SergeyBrainBot';
+export type MemoryProfile = 'KiraMindBot';
 
 export type MemoryStatus = 'active' | 'planned' | 'done' | 'superseded' | 'expired' | 'unknown';
 

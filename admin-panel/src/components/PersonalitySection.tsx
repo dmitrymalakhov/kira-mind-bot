@@ -30,7 +30,6 @@ const EMPTY_PROFILE: PersonalityProfile = {
 };
 
 interface ProfileEditorProps {
-  botKey: 'KiraMindBot' | 'SergeyBrainBot';
   icon: string;
   title: string;
   values: PersonalityProfile;
@@ -203,11 +202,9 @@ interface Props {
 export function PersonalitySection({ onToast }: Props) {
   const [data, setData] = useState<PersonalityConfig>({
     KiraMindBot: { ...EMPTY_PROFILE },
-    SergeyBrainBot: { ...EMPTY_PROFILE },
   });
   const [loading, setLoading] = useState(true);
   const [savingKira, setSavingKira] = useState(false);
-  const [savingSergey, setSavingSergey] = useState(false);
 
   useEffect(() => {
     fetchPersonality()
@@ -217,7 +214,7 @@ export function PersonalitySection({ onToast }: Props) {
   }, []);
 
   const handleChange = (
-    profile: 'KiraMindBot' | 'SergeyBrainBot',
+    profile: 'KiraMindBot',
     key: keyof PersonalityProfile,
     value: string
   ) => {
@@ -227,9 +224,8 @@ export function PersonalitySection({ onToast }: Props) {
     }));
   };
 
-  const handleSave = async (profile: 'KiraMindBot' | 'SergeyBrainBot') => {
-    const setSaving = profile === 'KiraMindBot' ? setSavingKira : setSavingSergey;
-    setSaving(true);
+  const handleSave = async () => {
+    setSavingKira(true);
     try {
       const result = await savePersonality(data);
       if (result.success) {
@@ -240,7 +236,7 @@ export function PersonalitySection({ onToast }: Props) {
     } catch {
       onToast('Ошибка соединения', 'error');
     } finally {
-      setSaving(false);
+      setSavingKira(false);
     }
   };
 
@@ -262,26 +258,16 @@ export function PersonalitySection({ onToast }: Props) {
       </Alert>
 
       <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.8 }}>
-        Личность ботов
+        Личность бота
       </Typography>
 
       <ProfileEditor
-        botKey="KiraMindBot"
         icon="🌸"
         title="Kira — Личность и характер"
         values={data.KiraMindBot}
         onChange={(key, value) => handleChange('KiraMindBot', key, value)}
-        onSave={() => handleSave('KiraMindBot')}
+        onSave={handleSave}
         saving={savingKira}
-      />
-      <ProfileEditor
-        botKey="SergeyBrainBot"
-        icon="🧑‍💼"
-        title="Sergey — Личность и характер"
-        values={data.SergeyBrainBot}
-        onChange={(key, value) => handleChange('SergeyBrainBot', key, value)}
-        onSave={() => handleSave('SergeyBrainBot')}
-        saving={savingSergey}
       />
     </Box>
   );

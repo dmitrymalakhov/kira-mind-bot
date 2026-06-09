@@ -124,7 +124,7 @@ function DomainRow({ chat, onUpdate }: { chat: ChatInfo; onUpdate: (updated: Cha
         </TableCell>
         <TableCell>
           <Typography variant="caption" color="text.secondary">
-            {chat.profile === 'KiraMindBot' ? '🌸 Kira' : '🧑‍💼 Sergey'}
+            {chat.profile === 'KiraMindBot' ? '🌸 Kira' : chat.profile}
           </Typography>
         </TableCell>
         <TableCell>
