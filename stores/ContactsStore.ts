@@ -194,7 +194,7 @@ export class ContactsStore {
             devLog("sendMessagesAgent", "Отправляем запрос к OpenAI для выбора контакта");
 
             // Запрос к OpenAI
-            const response = await createChatCompletionForTask('memoryExtraction', {
+            const response = await createChatCompletionForTask('intentClassification', {
                 messages: [
                     { role: 'system', content: systemMessage },
                     { role: 'user', content: userMessage }
