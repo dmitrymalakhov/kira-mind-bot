@@ -1,6 +1,6 @@
 import type { BotContext } from '../types';
 import { InlineKeyboard } from 'grammy';
-import openai from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { parseLLMJson } from '../utils';
 
 /** Минимальный интервал между предложениями (15 минут) */
@@ -48,8 +48,7 @@ export async function maybeDetectImplicitReminder(
     if (Date.now() - lastAt < COOLDOWN_MS) return;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: 'system',

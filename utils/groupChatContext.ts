@@ -27,6 +27,8 @@ export interface BuildGroupChatContextOptions {
     limit?: number;
     triggerReasons?: GroupChatTriggerReason[];
     botUsername?: string;
+    // Controls whether recent group messages are loaded into prompt context.
+    enabled?: boolean;
 }
 
 const DEFAULT_RECENT_LIMIT = 15;
@@ -178,13 +180,26 @@ export async function buildGroupChatContext(
     }
     if (replyContext) triggerReasons.add("reply");
 
+    const recentMessagesEnabled = options.enabled !== false;
+    const currentSenderName = displayName(ctx.from);
+    if (!recentMessagesEnabled && !replyContext) {
+        return {
+            ...empty,
+            isGroupChat: true,
+            currentSenderName,
+            triggerReasons: [...triggerReasons],
+            debugSummary: `groupContext: recent-disabled chat=${ctx.chat.id} reply=no triggers=${[...triggerReasons].join(",") || "none"}`,
+        };
+    }
+
     const recentOptions = {
         excludeText: currentText,
         excludeMessageId: message?.message_id,
         limit: options.limit ?? DEFAULT_RECENT_LIMIT,
     };
-    const recentMessages = await getRecentMessagesWithPersistence(ctx.chat.id, recentOptions);
-    const currentSenderName = displayName(ctx.from);
+    const recentMessages = recentMessagesEnabled
+        ? await getRecentMessagesWithPersistence(ctx.chat.id, recentOptions)
+        : [];
     const isContextDependent = isContextDependentGroupMessage(currentText) || Boolean(replyContext);
 
     const sections: string[] = ["Контекст текущего группового чата:"];
@@ -224,6 +239,6 @@ export async function buildGroupChatContext(
         triggerReasons: [...triggerReasons],
         promptBlock: sections.join("\n\n"),
         systemHint,
-        debugSummary: `groupContext: chat=${ctx.chat.id} recent=${recentMessages.length} reply=${replyContext ? "yes" : "no"} dependent=${isContextDependent ? "yes" : "no"} triggers=${[...triggerReasons].join(",") || "none"}`,
+        debugSummary: `groupContext: chat=${ctx.chat.id} recent=${recentMessagesEnabled ? recentMessages.length : "disabled"} reply=${replyContext ? "yes" : "no"} dependent=${isContextDependent ? "yes" : "no"} triggers=${[...triggerReasons].join(",") || "none"}`,
     };
 }

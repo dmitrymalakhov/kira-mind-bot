@@ -1,6 +1,6 @@
 import * as dotenv from "dotenv";
 import { devLog } from "../utils";
-import openai from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
 
@@ -16,8 +16,7 @@ export async function reactionAgent(userReaction: string, botMessage: string): P
             `Нужно решить, стоит ли ответить ему текстом и нужно ли поставить ответную реакцию на его сообщение.\n` +
             `Ответ верни строго в JSON формате {"reply":"текст или пустая строка","botReaction":"эмодзи или пустая строка"}`;
 
-        const response = await openai.chat.completions.create({
-            model: "gpt-5.4-nano",
+        const response = await createChatCompletionForTask('memoryExtraction', {
             messages: [{ role: "user", content: prompt }],
             temperature: 0.7,
         });
@@ -33,4 +32,3 @@ export async function reactionAgent(userReaction: string, botMessage: string): P
     }
     return {};
 }
-

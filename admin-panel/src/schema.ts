@@ -11,7 +11,19 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         label: 'OpenAI API Key',
         type: 'password',
         required: true,
-        hint: 'Используется для ChatGPT, генерации изображений и распознавания речи',
+        hint: 'Используется для GPT fallback, web reasoning, embeddings, vision и whisper.',
+      },
+      {
+        key: 'DEEPSEEK_API_KEY',
+        label: 'DeepSeek API Key',
+        type: 'password',
+        hint: 'Нужен для пресета Hybrid DeepSeek + GPT. Применяется после рестарта процесса.',
+      },
+      {
+        key: 'GEMINI_API_KEY',
+        label: 'Gemini API Key',
+        type: 'password',
+        hint: 'Нужен для пресета Hybrid Gemini + GPT. Применяется после рестарта процесса.',
       },
       {
         key: 'IDEOGRAM_API_KEY',
@@ -232,6 +244,18 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         label: 'Публичный режим в группах (отвечать всем)',
         type: 'toggle',
       },
+      {
+        key: 'GROUP_CHAT_CONTEXT_ENABLED',
+        label: 'Собирать контекст групповых чатов',
+        type: 'toggle',
+        hint: 'Если выключено, бот не сохраняет последние сообщения группы и не добавляет их в LLM-промпт',
+      },
+      {
+        key: 'GROUP_REPLY_TO_BOT_ENABLED',
+        label: 'Отвечать на reply к боту без @упоминания',
+        type: 'toggle',
+        hint: 'Если выключено, в группе бот реагирует только на команды или явное @упоминание',
+      },
     ],
   },
   {
@@ -244,7 +268,7 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         key: 'KIRA_PROACTIVE_INTERVAL_MS',
         label: 'Интервал проактивных сообщений',
         type: 'duration',
-        hint: 'Как часто Кира пишет первой',
+        hint: 'Как часто Ассистентка пишет первой',
       },
       {
         key: 'KIRA_PROACTIVE_QUIET_HOURS_ENABLED',
@@ -268,7 +292,7 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         key: 'DM_REPORT_INTERVAL_MS',
         label: 'Интервал отчётов о сообщениях',
         type: 'duration',
-        hint: 'Как часто Кира присылает дайджест непрочитанных',
+        hint: 'Как часто Ассистентка присылает дайджест непрочитанных',
       },
       { key: 'DM_REPORT_QUIET_HOURS_ENABLED', label: 'Тихие часы для отчётов', type: 'toggle' },
       { key: 'INBOX_GUARDIAN_ENABLED', label: 'Вечерний Inbox Guardian включён', type: 'toggle' },

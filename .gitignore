@@ -6,11 +6,11 @@ _deploy/
 node_modules/
 npm-debug.log
 yarn-error.log
+*.tsbuildinfo
 
 # Docker
 *.log
 docker-compose.override.yml
-.dockerignore
 
 # Environment variables
 .env

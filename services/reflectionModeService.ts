@@ -34,7 +34,7 @@ import { runUpdateLongTermMemoryAgentDetailed } from '../agents/updateLongTermMe
 import { searchAllDomainsMemories } from '../utils/enhancedDomainMemory';
 import { getSetting, setSetting } from './botSettingsService';
 import { devLog, parseLLMJson } from '../utils';
-import openai from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { getProactiveChatId } from '../utils/allowedUserChatStore';
 import { MessageStore } from '../stores/MessageStore';
 import { getVectorService } from './VectorServiceFactory';
@@ -276,14 +276,13 @@ async function triageForHighPriority(chatId: string, senderName: string, text: s
 JSON: {"urgent": true/false}`;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
             ],
             temperature: 0,
-            max_tokens: 15,
+            max_completion_tokens: 15,
         });
         const raw = resp.choices[0]?.message?.content?.trim() || '';
         const data = parseLLMJson<{ urgent?: boolean }>(raw);
@@ -469,14 +468,13 @@ ${snippet}
 JSON: {"useful": true/false, "emotion": "neutral|stress|conflict|grief|joy|anxiety"}`;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
             ],
             temperature: 0,
-            max_tokens: 30,
+            max_completion_tokens: 30,
         });
         const text = resp.choices[0]?.message?.content?.trim() || '';
         const data = parseLLMJson<{ useful?: boolean; emotion?: string }>(text);
@@ -503,7 +501,7 @@ function getContextMessages(chatId: string, beforeDate: Date): BufferedMessage[]
         .slice(0, CONTEXT_MAX_MESSAGES)
         .reverse()
         .map(m => ({
-            // Исходящие помечаем именем владельца ("Я" / Дмитрий), входящие — именем контакта
+            // Исходящие помечаем именем владельца ("Я" / имя владельца), входящие — именем контакта
             senderName: m.isOwn ? ownerLabel : m.senderName,
             text: m.text,
             date: m.date,
@@ -557,14 +555,13 @@ async function classifyChat(chatId: string, chatTitle: string, messages: Buffere
     const prompt = `Чат с "${chatTitle}". Примеры сообщений:\n${snippet}\n\nОпредели домен (work/personal/family/health/finance/general) и тип отношений (коллега/друг/партнёр/родственник/знакомый/другое).\nJSON: {"domain": "...", "relationship": "..."}`;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
             ],
             temperature: 0,
-            max_tokens: 30,
+            max_completion_tokens: 30,
         });
         const text = resp.choices[0]?.message?.content?.trim() || '';
         const data = parseLLMJson<{ domain?: string; relationship?: string }>(text);

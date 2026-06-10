@@ -28,6 +28,7 @@ import MemoryIcon from '@mui/icons-material/Memory';
 import { StatusBar } from './StatusBar';
 import { CONFIG_SCHEMA } from '../schema';
 import { ConfigSection, type ConfigSectionHandle } from './ConfigSection';
+import { ModelSettingsSection } from './ModelSettingsSection';
 import { PersonalitySection } from './PersonalitySection';
 import { ChatsSection } from './ChatsSection';
 import { HealthSection } from './HealthSection';
@@ -83,11 +84,12 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
     setSavingAll(true);
     try {
       // Collect all pending updates from each section via their exposed ref
-      const allUpdates: Record<string, string> = {};
+      const allUpdates: Record<string, string | null> = {};
       for (const section of CONFIG_SCHEMA) {
         const sectionUpdates = sectionRefs.current[section.id]?.getUpdates() ?? {};
         Object.assign(allUpdates, sectionUpdates);
       }
+      Object.assign(allUpdates, sectionRefs.current['model-presets']?.getUpdates() ?? {});
       const result = await saveConfig(allUpdates);
       if (result.success) {
         showToast(result.message || '✅ Все настройки сохранены', 'success');
@@ -371,6 +373,14 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
                 onToast={showToast}
               />
             ))}
+            <ModelSettingsSection
+              ref={(el) => {
+                sectionRefs.current['model-presets'] = el;
+              }}
+              config={config}
+              onUpdate={onConfigUpdate}
+              onToast={showToast}
+            />
           </>
         )}
 

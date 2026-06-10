@@ -1,4 +1,4 @@
-import openai from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { Reminder, ReminderStatus, rescheduleReminder } from "../reminder";
 import { ReminderRepository } from "../services/ReminderRepository";
 import { ReminderRegistry } from "../stores/ReminderRegistry";
@@ -62,8 +62,7 @@ async function extractReminderEdit(reminder: Reminder, userInput: string): Promi
         weekday: "long",
     });
 
-    const resp = await openai.chat.completions.create({
-        model: "gpt-5.4-nano",
+    const resp = await createChatCompletionForTask('memoryExtraction', {
         messages: [
             {
                 role: "system",

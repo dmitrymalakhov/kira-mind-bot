@@ -18,6 +18,23 @@ import { factAnalysisManager } from "../utils/factAnalysisTimer";
 import { extractAndSaveFactsFromConversation } from "../utils/enhancedFactExtraction";
 import { formatSelfStudyReport, runKiraSelfStudy } from "../services/selfStudyService";
 import { getRecentKiraSelfStudyReports } from "../utils/kiraSelfMemory";
+import {
+    isGroupChatContextEnabled,
+    isGroupReplyToBotEnabled,
+    setGroupChatContextEnabled,
+    setGroupReplyToBotEnabled,
+} from "../services/groupChatFeatureSettings";
+import { isStatusCommandArg, parseBooleanCommandArg } from "../utils/booleanCommandArg";
+
+
+function parseCommandArgument(text: string | undefined, command: string): string {
+    const source = text || `/${command}`;
+    return source.replace(new RegExp(`^/${command}(?:@\\w+)?`, 'i'), '').trim();
+}
+
+function formatToggleState(enabled: boolean): string {
+    return enabled ? 'включено ✅' : 'выключено 🔒';
+}
 
 export function registerCommandHandlers(bot: Bot<BotContext>) {
     registerMemoryCommands(bot);
@@ -86,7 +103,7 @@ bot.command("contacts", async (ctx) => {
         message += `\nВсего контактов: ${contacts.length}`;
 
         // Отправляем сообщение со списком контактов
-        await ctx.reply(message);
+        await sendMessage(ctx, message);
     } catch (error) {
         console.error("Ошибка при получении списка контактов:", error);
         await ctx.reply("Произошла ошибка при получении списка контактов. Пожалуйста, попробуйте позже.");
@@ -318,6 +335,59 @@ bot.command("public_mode", async (ctx) => {
     } catch (error) {
         console.error("Ошибка при переключении публичного режима:", error);
         await ctx.reply("Не удалось изменить режим.");
+    }
+});
+
+
+// Команда /group_context — глобально включить/выключить сбор контекста групповых чатов
+bot.command("group_context", async (ctx) => {
+    try {
+        const arg = parseCommandArgument(ctx.message?.text, 'group_context');
+        const requested = parseBooleanCommandArg(arg);
+        if (requested === undefined && !isStatusCommandArg(arg)) {
+            await ctx.reply('Не понял значение. Используй /group_context on или /group_context off');
+            return;
+        }
+
+        if (requested !== undefined) {
+            await setGroupChatContextEnabled(requested);
+        }
+
+        const enabled = requested ?? await isGroupChatContextEnabled();
+        await ctx.reply(
+            `Контекст групповых чатов: ${formatToggleState(enabled)}\n\n` +
+            `Когда выключено, бот не сохраняет последние сообщения группы и не подставляет их в LLM-промпт.\n` +
+            `Использование: /group_context on или /group_context off`
+        );
+    } catch (error) {
+        console.error("Ошибка при переключении контекста групп:", error);
+        await ctx.reply("Не удалось изменить режим контекста групп.");
+    }
+});
+
+// Команда /group_reply_to_bot — включить/выключить ответы на reply к сообщению бота без @mention
+bot.command("group_reply_to_bot", async (ctx) => {
+    try {
+        const arg = parseCommandArgument(ctx.message?.text, 'group_reply_to_bot');
+        const requested = parseBooleanCommandArg(arg);
+        if (requested === undefined && !isStatusCommandArg(arg)) {
+            await ctx.reply('Не понял значение. Используй /group_reply_to_bot on или /group_reply_to_bot off');
+            return;
+        }
+
+        if (requested !== undefined) {
+            await setGroupReplyToBotEnabled(requested);
+        }
+
+        const enabled = requested ?? await isGroupReplyToBotEnabled();
+        await ctx.reply(
+            `Ответы на reply к боту в группах: ${formatToggleState(enabled)}\n\n` +
+            `Когда выключено, бот реагирует в группе только на явное @упоминание или команды.\n` +
+            `Использование: /group_reply_to_bot on или /group_reply_to_bot off`
+        );
+    } catch (error) {
+        console.error("Ошибка при переключении reply-to-bot режима:", error);
+        await ctx.reply("Не удалось изменить режим ответов на reply.");
     }
 });
 

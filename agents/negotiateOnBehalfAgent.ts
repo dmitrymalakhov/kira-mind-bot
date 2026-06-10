@@ -11,7 +11,7 @@ import {
 import { devLog, notifyUser } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { config } from "../config";
-import openai from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 
 /**
  * Анализирует запрос на переговоры: контакт, задача, первое сообщение.
@@ -47,8 +47,7 @@ async function parseNegotiationRequest(
 `;
 
     try {
-        const response = await openai.chat.completions.create({
-            model: "gpt-5.4",
+        const response = await createChatCompletionForTask('conversation', {
             messages: [
                 {
                     role: "system",

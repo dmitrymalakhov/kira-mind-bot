@@ -1,0 +1,12 @@
+node_modules
+dist
+_deploy
+.git
+.gitignore
+.DS_Store
+*.log
+coverage
+tmp
+tmp/**
+.env
+.env.production

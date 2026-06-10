@@ -2,8 +2,7 @@ import { MessageHistory } from "../types";
 import { ProcessingResult } from "../orchestrator";
 import { devLog, processMarkdownLinks } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
-import { config } from "../config";
-import openai from "../openai";
+import { createResponseForTask } from "../ai/responseCompletion";
 
 interface WebSearchResult {
     success: boolean;
@@ -62,8 +61,7 @@ export async function webSearchAgent(
  */
 async function performWebSearch(query: string): Promise<WebSearchResult> {
     try {
-        const response = await openai.responses.create({
-            model: "gpt-5.4",
+        const response = await createResponseForTask('webSearchReasoning', {
             input: [
                 {
                     role: "system",

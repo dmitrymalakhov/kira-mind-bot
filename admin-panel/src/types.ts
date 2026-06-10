@@ -1,6 +1,11 @@
 export interface ConfigEntry {
   value: string;
   masked: boolean;
+  rawValue?: string | null;
+  rawState?: 'missing' | 'empty' | 'value';
+  source?: 'env_file' | 'inherited_default_text' | 'system_default' | 'bot_settings';
+  configPath?: string;
+  sourceInfo?: ConfigSourceInfo;
 }
 
 export interface ConfigResponse {
@@ -30,7 +35,39 @@ export interface Toast {
   severity: 'success' | 'error' | 'info';
 }
 
+export interface ConfigSourceInfo {
+  kind: 'env_file' | 'database' | 'env_fallback' | 'system_default' | 'runtime_setting';
+  label: string;
+  description?: string;
+  technicalPath?: string;
+  appliesImmediately?: boolean;
+}
+
+export type AiProvider = 'openai' | 'deepseek' | 'gemini';
+export type AiPresetName = 'gpt-max' | 'gpt-balanced' | 'gpt-lean' | 'hybrid-deepseek-gpt' | 'hybrid-gemini-gpt';
+
+export interface AiModelRef {
+  provider: AiProvider;
+  model: string;
+}
+
+export interface AiPresetConfig {
+  name: AiPresetName;
+  title: string;
+  description: string;
+  models: Record<string, AiModelRef>;
+}
+
+export interface AiPresetResponse {
+  activePresetName: AiPresetName;
+  storedPresetName?: AiPresetName | null;
+  envDefaultPreset: AiPresetName;
+  availablePresets: AiPresetConfig[];
+  source: ConfigSourceInfo;
+}
+
 export interface PersonalityProfile {
+  characterName: string;
   persona: string;
   communicationStyle: string;
   biography: string;

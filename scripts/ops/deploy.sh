@@ -29,7 +29,9 @@ if [ "$DEPLOY_KIRA_MIND_BOT" = false ] && [ "$DEPLOY_ADMIN_PANEL" = false ]; the
     show_help
 fi
 
-cd "$(dirname "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$REPO_ROOT"
 DEPLOY_STARTED_AT=$(date '+%Y-%m-%d %H:%M:%S')
 
 echo ""
@@ -126,7 +128,6 @@ ssh root@${SERVER_IP} << EOF
   }
   if [ "$DEPLOY_KIRA_MIND_BOT" = true ];    then stop_and_remove kira-mind-bot; fi
   if [ "$DEPLOY_ADMIN_PANEL" = true ];      then stop_and_remove admin-panel; fi
-  docker rm -f sergey-brain-bot 2>/dev/null && echo "  legacy rm sergey-brain-bot: ok" || true
   echo ""
 
   echo "🗑️  Очистка Docker..."

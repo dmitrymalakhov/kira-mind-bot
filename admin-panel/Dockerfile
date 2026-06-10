@@ -12,5 +12,8 @@ WORKDIR /app
 RUN npm install --no-save express express-session pg
 COPY --from=builder /app/dist ./dist
 COPY server.js ./
+COPY aiPresetRegistry.js ./
+RUN mkdir -p ./src
+COPY src/ai-model-presets.json ./src/ai-model-presets.json
 EXPOSE 3000
 CMD ["node", "server.js"]

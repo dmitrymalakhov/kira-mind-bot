@@ -3,7 +3,7 @@ import { MessageHistory } from '../types';
 import { ExtractedFact } from '../types/FactTypes';
 import { FACT_EXTRACTION_PROMPT } from '../utils/factExtraction';
 import { devLog, parseLLMJson } from '../utils';
-import openai from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { PREDEFINED_DOMAINS } from '../constants/domains';
 
 function normalizeDomain(domain: unknown): string {
@@ -28,8 +28,7 @@ export class FactExtractionService {
 
     try {
       devLog('Fact extraction prompt:', prompt);
-      const resp = await openai.chat.completions.create({
-        model: 'gpt-5.4-nano',
+      const resp = await createChatCompletionForTask('memoryExtraction', {
         messages: [
           { role: 'system', content: 'Ты извлекаешь факты из диалога и возвращаешь JSON.' },
           { role: 'user', content: prompt }
@@ -153,8 +152,7 @@ ${dialogueText}
 
     try {
       devLog('Dialogue fact extraction prompt:', prompt);
-      const resp = await openai.chat.completions.create({
-        model: 'gpt-5.4',
+      const resp = await createChatCompletionForTask('messageAnalysis', {
         messages: [
           {
             role: 'system',

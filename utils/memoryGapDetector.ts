@@ -1,6 +1,6 @@
 import { BotContext } from '../types';
 import { searchAllDomainsMemories } from './enhancedDomainMemory';
-import openai from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { devLog } from '../utils';
 import { addToHistory } from './history';
 
@@ -91,8 +91,7 @@ export async function maybeAskMemoryGap(
  * Намеренно фильтрует знаменитостей, персонажей, исторических лиц.
  */
 async function extractPersonNames(message: string): Promise<string[]> {
-    const resp = await openai.chat.completions.create({
-        model: 'gpt-5.4-nano',
+    const resp = await createChatCompletionForTask('memoryExtraction', {
         messages: [
             {
                 role: 'system',

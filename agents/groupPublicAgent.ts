@@ -16,11 +16,12 @@ import { webSearchAgent } from "./webSearchAgent";
 import { mapsAgent } from "./googleMapsAgent";
 import { imageGenerationAgent } from "./imageGenerationAgent";
 import { answerCapabilitiesQuestion } from "../capabilities";
-import openai from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { devLog, parseLLMJson } from "../utils";
 import { searchMemories } from "../utils/enhancedDomainMemory";
 import { getChatAllowedDomains, getChatForbiddenTopics } from "../services/chatRegistry";
 import { buildGroupChatContext } from "../utils/groupChatContext";
+import { isGroupChatContextEnabled } from "../services/groupChatFeatureSettings";
 
 type PublicIntent = "CONVERSATION" | "WEB_SEARCH" | "MAPS" | "IMAGE_GENERATION" | "CAPABILITIES";
 
@@ -47,8 +48,7 @@ function pushGroupHistory(chatId: number, entry: GroupHistoryEntry): void {
 
 async function classifyPublicMessage(message: string): Promise<PublicIntent> {
     try {
-        const resp = await openai.chat.completions.create({
-            model: "gpt-5.4-nano",
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: "system",
@@ -175,6 +175,7 @@ async function handlePublicConversation(
     const groupContext = await buildGroupChatContext(ctx, message, {
         botUsername: config.botUsername,
         limit: 15,
+        enabled: await isGroupChatContextEnabled(),
     });
     devLog(groupContext.debugSummary);
     const memoryContext = await buildMemoryContext(ctx, message, allowedDomains);
@@ -188,7 +189,7 @@ async function handlePublicConversation(
         : config.ownerName;
 
     const systemContent =
-        // Персонаж без owner-specific части (getBotPersona содержит "Твой пользователь — Дмитрий" и ломает контекст)
+        // Ассистент без owner-specific части, чтобы не тащить персональные установки владельца в публичный контекст
         `Ты — ${config.characterName}. ${getBotBiography()}\nСтиль общения: ${getCommunicationStyle()}\n\n` +
         // Контекст публичного чата
         `Ты отвечаешь в публичном групповом чате.\n` +
@@ -207,8 +208,7 @@ async function handlePublicConversation(
         historyMessages.push({ role: "assistant", content: entry.botResponse });
     }
 
-    const resp = await openai.chat.completions.create({
-        model: "gpt-5.4",
+    const resp = await createChatCompletionForTask('conversation', {
         messages: [
             { role: "system", content: systemContent },
             ...historyMessages,

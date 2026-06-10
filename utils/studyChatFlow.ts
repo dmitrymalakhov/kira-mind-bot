@@ -1,6 +1,6 @@
 import { Api } from 'telegram';
 import { initTelegramClient } from '../services/telegram';
-import openai from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { config } from '../config';
 import { parseLLMJson } from '../utils';
 import type { MemoryStatus } from '../types';
@@ -302,7 +302,7 @@ const DOMAIN_LIST = 'work|health|family|finance|education|hobbies|travel|social|
 
 /** Промпт для извлечения фактов о владельце бота ("Я") */
 function buildUserFactsPrompt(chunk: string, contactName: string, periodLabel: string): string {
-    const ownerName = config.ownerName || 'Дмитрий';
+    const ownerName = config.ownerName || 'пользователь';
     return `Переписка ${ownerName} ("Я") с ${contactName}. Период: ${periodLabel}.
 
 Твоя задача: извлечь факты ТОЛЬКО о ${ownerName}.
@@ -369,7 +369,7 @@ JSON:
 
 /** Промпт для извлечения фактов о собеседнике (контакте) */
 function buildContactFactsPrompt(chunk: string, contactName: string, periodLabel: string): string {
-    const ownerName = config.ownerName || 'Дмитрий';
+    const ownerName = config.ownerName || 'пользователь';
     return `Переписка ${ownerName} ("Я") с ${contactName}. Период: ${periodLabel}.
 
 Твоя задача: извлечь факты ТОЛЬКО о ${contactName}.
@@ -447,16 +447,14 @@ async function extractRawFactsFromChunk(
 ): Promise<ExtractedFactAboutUser[]> {
     // Два параллельных запроса — каждый про одного человека
     const [userResp, contactResp] = await Promise.allSettled([
-        openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
+        createChatCompletionForTask('memoryExtraction', {
             messages: [
                 { role: 'system', content: EXTRACTION_SYSTEM },
                 { role: 'user', content: buildUserFactsPrompt(chunk, contactName, periodLabel) },
             ],
             temperature: 1,
         }),
-        openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
+        createChatCompletionForTask('memoryExtraction', {
             messages: [
                 { role: 'system', content: EXTRACTION_SYSTEM },
                 { role: 'user', content: buildContactFactsPrompt(chunk, contactName, periodLabel) },
@@ -565,8 +563,7 @@ async function synthesizeGroup(
     if (facts.length === 1) return facts;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: 'gpt-5.4',
+        const resp = await createChatCompletionForTask('messageAnalysis', {
             messages: [
                 { role: 'system', content: SYNTHESIS_SYSTEM },
                 { role: 'user', content: buildSynthesisPrompt(facts, personName) },
@@ -594,7 +591,7 @@ async function synthesizeFacts(
 ): Promise<ExtractedFactAboutUser[]> {
     if (rawFacts.length === 0) return [];
 
-    const ownerName = config.ownerName || 'Дмитрий';
+    const ownerName = config.ownerName || 'пользователь';
     const userFacts = rawFacts.filter(f => f.subject === 'user');
     const contactFacts = rawFacts.filter(f => f.subject === 'contact');
 
@@ -684,7 +681,7 @@ function buildCriticPrompt(
     contactName: string,
     periodLabel: string
 ): string {
-    const ownerName = config.ownerName || 'Дмитрий';
+    const ownerName = config.ownerName || 'пользователь';
     const factsText = facts.map((fact, index) => [
         `${index}. subject=${fact.subject}`,
         `domain=${fact.domain}`,
@@ -807,8 +804,7 @@ async function critiqueFactsAgainstConversation(
     for (let i = 0; i < gated.length; i += FACT_CRITIC_BATCH_SIZE) {
         const batch = gated.slice(i, i + FACT_CRITIC_BATCH_SIZE);
         try {
-            const resp = await openai.chat.completions.create({
-                model: 'gpt-5.4-nano',
+            const resp = await createChatCompletionForTask('memoryExtraction', {
                 messages: [
                     {
                         role: 'system',

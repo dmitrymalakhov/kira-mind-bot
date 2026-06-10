@@ -5,9 +5,10 @@ import { detectDomain, getDomainContext } from "../utils/domainMemory";
 import { AgentMemoryContext } from "../utils/agentMemoryContext";
 import { getBotPersona, getCommunicationStyle, getBotBiography } from "../persona";
 import { config } from "../config";
-import openai from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { getKiraSelfMemoryState, getRecentKiraSelfEvents, searchKiraSelfEventsByQuery } from "../utils/kiraSelfMemory";
 import { buildGroupChatContext } from "../utils/groupChatContext";
+import { isGroupChatContextEnabled } from "../services/groupChatFeatureSettings";
 import { devLog } from "../utils";
 
 
@@ -40,6 +41,7 @@ export async function conversationAgent(
         const groupChatContext = await buildGroupChatContext(ctx, message, {
             botUsername: config.botUsername,
             limit: 15,
+            enabled: await isGroupChatContextEnabled(),
         });
         if (groupChatContext.isGroupChat) {
             devLog(groupChatContext.debugSummary);
@@ -201,8 +203,7 @@ ${domainContext ? `Факты из памяти о пользователе:\n${
         `;
 
         // Отправка запроса к API OpenAI
-        const response = await openai.chat.completions.create({
-            model: "gpt-5.4",
+        const response = await createChatCompletionForTask('conversation', {
             messages: [
                 {
                     role: "system",

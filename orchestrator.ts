@@ -6,8 +6,8 @@ import { imageGenerationAgent } from "./agents/imageGenerationAgent";
 import { mapsAgent } from "./agents/googleMapsAgent";
 import { healthAgent } from "./agents/healthAgent";
 import { InlineKeyboard } from "grammy";
-import { devLog, parseLLMJson } from "./utils";
-import openai from "./openai";
+import { devLog } from "./utils";
+import { createJsonChatCompletionForTask } from "./ai/chatCompletion";
 import { llmCache, LLM_CACHE_TTL } from "./utils/llmCache";
 import { fetchAgentMemoryContext, buildMemoryContextBlock } from "./utils/agentMemoryContext";
 import type { RecalledMemoryRef } from "./utils/multiQueryMemory";
@@ -396,8 +396,7 @@ async function isDuplicateIntentByLLM(params: {
 }`;
 
     try {
-        const resp = await openai.chat.completions.create({
-            model: "gpt-5.2",
+        const parsed = await createJsonChatCompletionForTask<IntentDedupCheckResult>('intentDedup', {
             messages: [
                 {
                     role: "system",
@@ -411,8 +410,6 @@ async function isDuplicateIntentByLLM(params: {
             temperature: 1,
         });
 
-        const aiResponse = resp.choices[0]?.message?.content || "";
-        const parsed = parseLLMJson<IntentDedupCheckResult>(aiResponse);
         const result: IntentDedupCheckResult = {
             isDuplicate: Boolean(parsed?.isDuplicate),
             confidence: Number(parsed?.confidence ?? 0),
@@ -471,7 +468,7 @@ function buildProactiveInsightExplanation(ctx: any, message: string): Processing
             `Я написала это из проактивной памяти, а не из текущей переписки.\n\n` +
             `Моя подсказка была: «${insight.message}»\n\n` +
             `Факты, на которые я опиралась:\n${sources}\n\n` +
-            `Если среди этих фактов нет нужного Дмитрия или вывод неверный, значит я неправильно связала имя с контекстом.`,
+            `Если среди этих фактов нет нужного Владельца или вывод неверный, значит я неправильно связала имя с контекстом.`,
     };
 }
 
@@ -741,8 +738,7 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
         }
 
         // Отправка запроса к API OpenAI (gpt-5.2 — для максимально точного определения интента)
-        const response = await openai.chat.completions.create({
-            model: "gpt-5.2",
+        const parsedResponse = await createJsonChatCompletionForTask<MessageClassification>('intentClassification', {
             messages: [
                 {
                     role: "system",
@@ -765,15 +761,12 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
             temperature: 1, // модель поддерживает только default (1)
         });
 
-        // Получаем текст ответа
-        const aiResponse = response.choices[0]?.message?.content || "";
-        devLog("Classification Response:", aiResponse);
+        devLog("Classification Response:", parsedResponse);
 
-        const classification = parseLLMJson<MessageClassification>(aiResponse);
-        if (!classification) {
+        if (!parsedResponse) {
             throw new Error("Could not parse JSON from AI response");
         }
-        const normalizedClassification = normalizeIntentScores(classification);
+        const normalizedClassification = normalizeIntentScores(parsedResponse);
         llmCache.set(cacheKey, normalizedClassification, LLM_CACHE_TTL.CLASSIFY);
         return normalizedClassification;
 

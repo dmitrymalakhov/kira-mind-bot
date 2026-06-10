@@ -5,6 +5,7 @@ import {
     isContextDependentGroupMessage,
     isMessageReplyToBot,
 } from "../utils/groupChatContext";
+import { isStatusCommandArg, parseBooleanCommandArg } from "../utils/booleanCommandArg";
 
 function mentionEntity(text: string, mention: string) {
     return {
@@ -95,6 +96,69 @@ async function main() {
         const snapshot = await buildGroupChatContext(ctx, text);
         assert.equal(snapshot.isContextDependent, true);
         assert(snapshot.systemHint.includes("не выдумывай"));
+    }
+
+    {
+        const chatId = -1001004;
+        const text = "@KiraMindBot что тут было?";
+        const ctx: any = {
+            chat: { id: chatId, type: "supergroup" },
+            from: { id: 42, first_name: "Лена" },
+            message: {
+                message_id: 41,
+                text,
+                entities: [mentionEntity(text, "@KiraMindBot")],
+            },
+            session: {},
+        };
+
+        const snapshot = await buildGroupChatContext(ctx, text, {
+            botUsername: "KiraMindBot",
+            enabled: false,
+        });
+        assert.equal(snapshot.isGroupChat, true);
+        assert.equal(snapshot.promptBlock, "");
+        assert.equal(snapshot.recentMessages.length, 0);
+        assert(snapshot.debugSummary.includes("recent-disabled"));
+    }
+
+    {
+        const chatId = -1001005;
+        const text = "а почему?";
+        const ctx: any = {
+            chat: { id: chatId, type: "supergroup" },
+            from: { id: 42, first_name: "Лена" },
+            message: {
+                message_id: 51,
+                text,
+                reply_to_message: {
+                    message_id: 50,
+                    text: "Потому что до этого бот уже выбрал мягкий вариант.",
+                    from: { id: 777, first_name: "Kira", username: "KiraMindBot", is_bot: true },
+                },
+            },
+            session: {},
+        };
+
+        const snapshot = await buildGroupChatContext(ctx, text, {
+            botUsername: "KiraMindBot",
+            enabled: false,
+        });
+        assert.equal(snapshot.isGroupChat, true);
+        assert.equal(snapshot.recentMessages.length, 0);
+        assert(snapshot.triggerReasons.includes("reply_to_bot"));
+        assert(snapshot.promptBlock.includes("Пользователь отвечает на сообщение"));
+        assert(snapshot.promptBlock.includes("мягкий вариант"));
+        assert(snapshot.debugSummary.includes("recent=disabled"));
+    }
+
+    {
+        assert.equal(parseBooleanCommandArg("on"), true);
+        assert.equal(parseBooleanCommandArg("выкл"), false);
+        assert.equal(parseBooleanCommandArg("offf"), undefined);
+        assert.equal(isStatusCommandArg(""), true);
+        assert.equal(isStatusCommandArg("статус"), true);
+        assert.equal(isStatusCommandArg("offf"), false);
     }
 
     console.log("groupChatContext checks passed");

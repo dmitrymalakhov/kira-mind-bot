@@ -3,6 +3,8 @@ import type {
   HealthExportFormat,
   HealthLogQuery,
   HealthLogsResponse,
+  AiPresetName,
+  AiPresetResponse,
   MemoryFormPayload,
   MemoryQuery,
   MemoryResponse,
@@ -28,13 +30,28 @@ export async function fetchConfig(): Promise<ConfigResponse> {
   return r.json();
 }
 
-export async function saveConfig(data: Record<string, string>) {
+export async function saveConfig(data: Record<string, string | null>) {
   const r = await fetch('/api/config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
   return r.json() as Promise<{ success: boolean; message?: string; error?: string }>;
+}
+
+export async function fetchAiPreset(): Promise<AiPresetResponse> {
+  const r = await fetch('/api/ai-preset');
+  if (!r.ok) throw new Error('Failed to load AI preset');
+  return r.json();
+}
+
+export async function saveAiPreset(preset: AiPresetName) {
+  const r = await fetch('/api/ai-preset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ preset }),
+  });
+  return r.json() as Promise<{ success: boolean; activePresetName?: AiPresetName; message?: string; error?: string }>;
 }
 
 export async function fetchPersonality(): Promise<PersonalityConfig> {
@@ -149,7 +166,7 @@ export async function updateMemory(domain: string, id: string, payload: MemoryFo
   return body as { success: boolean; record?: import('./types').MemoryRecord };
 }
 
-export async function deleteMemory(domain: string, id: string, query: Pick<MemoryQuery, 'profile' | 'userId'> = {}) {
+export async function deleteMemory(domain: string, id: string, query: Partial<Pick<MemoryQuery, 'profile' | 'userId'>> = {}) {
   const params = toSearchParams(query);
   const url = `/api/memory/${encodeURIComponent(domain)}/${encodeURIComponent(id)}${params.toString() ? `?${params}` : ''}`;
   const r = await fetch(url, { method: 'DELETE' });

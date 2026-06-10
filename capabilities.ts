@@ -1,4 +1,4 @@
-import openai from "./openai";
+import { createChatCompletionForTask } from "./ai/chatCompletion";
 import { config } from "./config";
 import { getBotPersona, getCommunicationStyle } from "./persona";
 
@@ -118,6 +118,20 @@ export const BOT_COMMANDS: BotCommandDescription[] = [
         description: "Включить или выключить публичный режим в текущей группе",
         scope: "group",
         usage: "/public_mode",
+    },
+    {
+        command: "group_context",
+        description: "Включить или выключить сбор контекста групповых чатов",
+        scope: "owner",
+        usage: "/group_context [on|off]",
+        examples: ["/group_context", "/group_context off", "/group_context on"],
+    },
+    {
+        command: "group_reply_to_bot",
+        description: "Включить или выключить ответы на reply к боту без @упоминания",
+        scope: "owner",
+        usage: "/group_reply_to_bot [on|off]",
+        examples: ["/group_reply_to_bot", "/group_reply_to_bot off", "/group_reply_to_bot on"],
     },
     {
         command: "telegram_unread",
@@ -400,7 +414,7 @@ export const BOT_CAPABILITIES: BotCapabilityDescription[] = [
             "Включи публичный режим в этой группе",
             "Что ты умеешь в публичном чате?",
         ],
-        commands: ["/public_mode"],
+        commands: ["/public_mode", "/group_context", "/group_reply_to_bot"],
         limitations: ["В публичном режиме недоступны личные напоминания, чтение личных переписок, отправка сообщений и переговоры от имени владельца."],
     },
 ];
@@ -473,8 +487,7 @@ export async function answerCapabilitiesQuestion(
         : "Ты отвечаешь владельцу в личном контексте. Можно говорить о личных функциях, но упоминай настройки, если они нужны.";
 
     try {
-        const response = await openai.chat.completions.create({
-            model: "gpt-5.4-nano",
+        const response = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: "system",

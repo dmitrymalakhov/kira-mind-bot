@@ -4,11 +4,30 @@ import { isUserInContacts } from "../services/telegram";
 import { devLog } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { config } from "../config";
-import openai from "../openai";
-
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 
 // Максимальное количество вопросов от бота
 const MAX_BOT_QUESTIONS = 2;
+
+function ownerPronoun(): "она" | "он" {
+    return config.userGender === "female" ? "она" : "он";
+}
+
+function ownerObjectPronoun(): "ней" | "ним" {
+    return config.userGender === "female" ? "ней" : "ним";
+}
+
+function ownerRoleDative(): "руководительнице" | "руководителю" {
+    return config.userGender === "female" ? "руководительнице" : "руководителю";
+}
+
+function characterPastSuffix(): "а" | "" {
+    return config.eventDescriptionGender === "женский" ? "а" : "";
+}
+
+function characterAbilityForm(): "могла" | "мог" {
+    return config.eventDescriptionGender === "женский" ? "могла" : "мог";
+}
 
 /**
  * Функция для обработки сообщений от неавторизованных пользователей
@@ -110,8 +129,8 @@ export async function handleUnauthorizedUserMessage(ctx: BotContext): Promise<vo
                 devLog("Диалог уже был завершен ранее, но пользователь продолжает писать");
 
                 // Сообщаем пользователю, что обращение уже передано
-                const ownerGender = config.ownerName === "Юлия" ? "она" : "он";
-                await ctx.reply(`Ваше обращение уже передано ${config.ownerName === "Юлия" ? "руководительнице" : "руководителю"}. ${ownerGender === "она" ? "Она" : "Он"} свяжется с вами в ближайшее время.`);
+                const ownerGender = ownerPronoun();
+                await ctx.reply(`Ваше обращение уже передано ${ownerRoleDative()}. ${ownerGender === "она" ? "Она" : "Он"} свяжется с вами в ближайшее время.`);
                 return;
             }
 
@@ -168,7 +187,7 @@ export async function handleUnauthorizedUserMessage(ctx: BotContext): Promise<vo
                 // Если это первое сообщение пользователя
                 if (ctx.session.unauthorizedChat.messages.length === 1) {
                     // Статическое сообщение для пользователей не из контактов
-                    const staticResponse = `Спасибо за ваше обращение. Пожалуйста, укажите ваш вопрос в течение 3 минут. Информация будет передана ${config.ownerName === "Юлия" ? "руководительнице" : "руководителю"}, и ${config.ownerName === "Юлия" ? "она" : "он"} свяжется с вами в ближайшее время.`;
+                    const staticResponse = `Спасибо за ваше обращение. Пожалуйста, укажите ваш вопрос в течение 3 минут. Информация будет передана ${ownerRoleDative()}, и ${ownerPronoun()} свяжется с вами в ближайшее время.`;
 
                     // Сохраняем ответ бота в истории
                     ctx.session.unauthorizedChat.messages.push({
@@ -205,7 +224,7 @@ export async function handleUnauthorizedUserMessage(ctx: BotContext): Promise<vo
         console.error("Ошибка при обработке сообщения от неавторизованного пользователя:", error);
         const characterName = config.characterName || "Ассистент";
         const ownerName = config.ownerName || "руководитель";
-        await ctx.reply(`Прошу прощения за задержку. Я записал${config.characterName === "Кира" ? "а" : ""} ваше обращение и передам его ${ownerName}. Спасибо за понимание!`);
+        await ctx.reply(`Прошу прощения за задержку. Я записал${characterPastSuffix()} ваше обращение и передам его ${ownerName}. Спасибо за понимание!`);
     }
 }
 
@@ -218,11 +237,11 @@ async function finalizeConversation(ctx: BotContext): Promise<void> {
 
     // Выбираем завершающее сообщение в зависимости от того, в контактах ли пользователь
     const ownerName = config.ownerName || "руководитель";
-    const ownerGender = config.ownerName === "Юлия" ? "она" : "он";
+    const ownerGender = ownerPronoun();
 
     const closingResponse = ctx.session.unauthorizedChat.isInContacts
-        ? `Спасибо за информацию! Я передал${config.characterName === "Кира" ? "а" : ""} ваше обращение ${ownerName}, ${ownerGender} свяжется с вами в ближайшее время.`
-        : `Спасибо за обращение. Информация передана ${config.ownerName === "Юлия" ? "руководительнице" : "руководителю"}, ${ownerGender} рассмотрит ваш вопрос в ближайшее время.`;
+        ? `Спасибо за информацию! Я передал${characterPastSuffix()} ваше обращение ${ownerName}, ${ownerGender} свяжется с вами в ближайшее время.`
+        : `Спасибо за обращение. Информация передана ${ownerRoleDative()}, ${ownerGender} рассмотрит ваш вопрос в ближайшее время.`;
 
     // Сохраняем ответ в истории
     ctx.session.unauthorizedChat.messages.push({
@@ -260,17 +279,14 @@ async function finalizeConversation(ctx: BotContext): Promise<void> {
  */
 async function generateFirstQuestion(ctx: BotContext): Promise<string> {
     if (!ctx.session || !ctx.session.unauthorizedChat) {
-        const ownerName = config.ownerName || "руководителем";
-        const ownerGender = config.ownerName === "Юлия" ? "ней" : "ним";
-        return `Здравствуйте! По какому рабочему вопросу вы хотели бы связаться с ${ownerGender}?`;
+        return `Здравствуйте! По какому рабочему вопросу вы хотели бы связаться с ${ownerObjectPronoun()}?`;
     }
 
     const chat = ctx.session.unauthorizedChat;
     const firstName = chat.firstName || "Пользователь";
 
     try {
-        const response = await openai.chat.completions.create({
-            model: "gpt-5.4-nano",
+        const response = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: "system",
@@ -304,7 +320,7 @@ async function generateFirstQuestion(ctx: BotContext): Promise<string> {
     // Запасной вариант
     const ownerName = config.ownerName || "руководителя";
     const characterName = config.characterName || "ассистент";
-    return `Привет${firstName !== "Пользователь" ? `, ${firstName}` : ""}! Я ${characterName}, помощник ${ownerName}. По какому рабочему вопросу ты хотел бы с ${config.ownerName === "Юлия" ? "ней" : "ним"} связаться?`;
+    return `Привет${firstName !== "Пользователь" ? `, ${firstName}` : ""}! Я ${characterName}, помощник ${ownerName}. По какому рабочему вопросу ты хотел бы с ${ownerObjectPronoun()} связаться?`;
 }
 
 /**
@@ -321,11 +337,9 @@ async function generateSecondQuestion(ctx: BotContext): Promise<string> {
     const firstName = chat.firstName || "Пользователь";
     const messages = chat.messages;
     const ownerName = config.ownerName || "руководитель";
-    const ownerGender = config.ownerName === "Юлия" ? "она" : "он";
 
     try {
-        const response = await openai.chat.completions.create({
-            model: "gpt-5.4-nano",
+        const response = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: "system",
@@ -362,7 +376,7 @@ async function generateSecondQuestion(ctx: BotContext): Promise<string> {
     }
 
     // Запасной вариант
-    return `Спасибо за информацию${firstName !== "Пользователь" ? `, ${firstName}` : ""}. Можешь, пожалуйста, уточнить детали этого вопроса, чтобы я ${config.characterName === "Кира" ? "могла" : "мог"} лучше подготовить ${ownerName} к обсуждению?`;
+    return `Спасибо за информацию${firstName !== "Пользователь" ? `, ${firstName}` : ""}. Можешь, пожалуйста, уточнить детали этого вопроса, чтобы я ${characterAbilityForm()} лучше подготовить ${ownerName} к обсуждению?`;
 }
 
 /**

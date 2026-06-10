@@ -3,7 +3,7 @@ import { BotContext, DomainMemory } from "../types";
 import { getDomainContextVector, searchAllDomainsMemories, searchMemories, getAnchorMemories } from './enhancedDomainMemory';
 import { SmartDomainDetector } from './smartDomainDetection';
 import { devLog } from '../utils';
-import openai from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
 
@@ -80,8 +80,7 @@ async function summarizeDomain(ctx: BotContext, domain: string) {
         "\nСделай короткое резюме фактов, сохранив ключевые моменты.";
     try {
         devLog('Domain summarization prompt:', prompt);
-        const resp = await openai.chat.completions.create({
-            model: "gpt-5.4-nano",
+        const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [{ role: "user", content: prompt }],
             temperature: 0.3,
         });

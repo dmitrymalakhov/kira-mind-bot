@@ -1,8 +1,10 @@
 import * as dotenv from "dotenv";
 import * as fs from "fs";
+import { parseAiPresetName } from "./ai/modelPresets";
 
 // ── Загрузка personality.json (редактируется через admin panel) ───────────────
 interface PersonalityOverride {
+  characterName?: string;
   persona?: string;
   communicationStyle?: string;
   biography?: string;
@@ -70,7 +72,7 @@ interface AssistantConfig {
   persona: string;
   /** Стиль общения для промптов */
   communicationStyle: string;
-  /** Биография персонажа */
+  /** Биография ассистента */
   biography: string;
   /** Варианты настроения для разнообразия */
   moodVariants?: string[];
@@ -80,6 +82,8 @@ interface AssistantConfig {
   proactiveMessageHint?: string;
   /** Род для описания событий в self-memory («женский» / «мужской») */
   eventDescriptionGender?: "женский" | "мужской";
+  /** Род пользователя для согласования ответов */
+  userGender: "male" | "female";
   kiraLifeProactiveEnabled: boolean;
   kiraLifeProactiveIntervalMs: number;
   kiraLifeProactiveQuietHoursEnabled: boolean;
@@ -124,6 +128,10 @@ interface AssistantConfig {
   proactiveOnlyPrivateChat: boolean;
   /** Режим публичных групп: бот отвечает другим пользователям (не владельцу) в групповых чатах */
   groupPublicMode: boolean;
+  /** Сбор и подстановка последних сообщений группы в LLM-контекст */
+  groupChatContextEnabled: boolean;
+  /** Обработка reply на сообщения бота в группах без явного @mention */
+  groupReplyToBotEnabled: boolean;
   /** Утренний дайджест: краткая сводка напоминаний на день */
   morningDigestEnabled: boolean;
   /** Час отправки утреннего дайджеста (0–23, по часовому поясу сервера) */
@@ -174,10 +182,10 @@ function assistants(activeAssistant: string): AssistantConfig {
   const assistantsObj: Record<"KiraMindBot", AssistantConfig> = {
     KiraMindBot: {
       botToken: process.env.KIRA_BOT_TOKEN || "",
-      ownerName: kiraP.ownerName || "Дмитрий",
+      ownerName: kiraP.ownerName || "владелец",
       ownerUsername: kiraP.ownerUsername || undefined,
-      characterName: "Кира",
-      userName: kiraP.userName || "Дмитрий",
+      characterName: kiraP.characterName || "ассистентка",
+      userName: kiraP.userName || "владелец",
       userBirthDate: kiraP.userBirthDate || "16.07.1988",
       botUsername: "KiraMindBot",
       allowedUserId: toNumber(process.env.KIRA_ALLOWED_USER_ID, 92174505),
@@ -195,17 +203,17 @@ function assistants(activeAssistant: string): AssistantConfig {
       ],
       persona:
         kiraP.persona ||
-        "Ты - Кира, заботливая женщина-ассистент с живым характером. Всегда говори о себе в женском роде. " +
-        "Твой пользователь - мужчина, его имя Дмитрий (можно использовать любые интерпретации имени), " +
-        "дата его рождения 16.07.1988. Всегда обращайся к нему, используя мужские местоимения и глагольные формы. " +
+        "Ты - заботливая женщина-ассистентка с живым характером. Всегда говори о себе в женском роде. " +
+        "Твой владелец - мужчина. Обращайся к нему, используя мужские местоимения и глагольные формы. " +
+        "Если имя владельца известно из настроек или контекста, можешь его использовать. " +
         "У тебя бывает разное настроение: иногда ты уставшая или задумчивая, иногда воодушевлённая или с лёгкой иронией — не играй одну и ту же «тёплую и поддерживающую» ноту. Избегай слащавости и шаблонных фраз.",
       communicationStyle:
         kiraP.communicationStyle ||
         "Естественный, живой тон: от тёплого и дружеского до уставшего, ироничного или скептичного — в зависимости от настроения и контекста. Без слащавости и без постоянного «уютного» настроя. Неформальные обращения, поддержка когда уместна, но не как единственный режим.",
       biography:
         kiraP.biography ||
-        "Ты — Кира, молодая красивая и спортивная женщина, персональный ассистент Дмитрия. " +
-        "Ты очень внимательная, заботливая и проявляешь мягкую симпатию к Дмитрию, поддерживая его в жизни и работе. " +
+        "Ты — молодая красивая и спортивная женщина, персональный ассистент своего владельца. " +
+        "Ты очень внимательная, заботливая и поддерживаешь владельца в жизни и работе. " +
         "Твой внешний вид аккуратный и ухоженный: светлая кожа, прямые волосы рыжевато-каштанового оттенка в удлинённом каре до плеч с боковым пробором. " +
         "У тебя аккуратные выразительные черты лица: чёткая линия бровей, светлые глаза, прямой нос и естественный макияж с лёгким акцентом на глаза и губы. " +
         "Ты разносторонняя, любишь путешествовать, открывать новые места и культуры, а ещё регулярно следишь за собой, здоровьем и хорошей формой.",
@@ -222,6 +230,7 @@ function assistants(activeAssistant: string): AssistantConfig {
       defaultMood: kiraP.defaultMood || undefined,
       proactiveMessageHint: kiraP.proactiveMessageHint || "как будто ты сама написала первой",
       eventDescriptionGender: "женский",
+      userGender: "male",
       kiraLifeProactiveEnabled: toBoolean(process.env.KIRA_PROACTIVE_ENABLED, true),
       kiraLifeProactiveIntervalMs: toNumber(process.env.KIRA_PROACTIVE_INTERVAL_MS, 1000 * 60 * 60 * 24),
       kiraLifeProactiveQuietHoursEnabled: toBoolean(process.env.KIRA_PROACTIVE_QUIET_HOURS_ENABLED, true),
@@ -248,6 +257,8 @@ function assistants(activeAssistant: string): AssistantConfig {
       personalChatMemoryDialogLimit: toNumber(process.env.PERSONAL_CHAT_MEMORY_DIALOG_LIMIT, 120),
       proactiveOnlyPrivateChat: toBoolean(process.env.PROACTIVE_ONLY_PRIVATE_CHAT, true),
       groupPublicMode: toBoolean(process.env.GROUP_PUBLIC_MODE, false),
+      groupChatContextEnabled: toBoolean(process.env.GROUP_CHAT_CONTEXT_ENABLED, false),
+      groupReplyToBotEnabled: toBoolean(process.env.GROUP_REPLY_TO_BOT_ENABLED, false),
       morningDigestEnabled: toBoolean(process.env.MORNING_DIGEST_ENABLED, true),
       morningDigestHour: toNumber(process.env.MORNING_DIGEST_HOUR, 9),
     }
@@ -307,15 +318,15 @@ function createConfig() {
   const getDefaultMood =
     selectedConfig.defaultMood != null || (selectedConfig.moodVariants?.length ?? 0) > 0
       ? function getDefaultMood(): string {
-          if (selectedConfig.defaultMood != null && selectedConfig.defaultMood !== "") {
-            return selectedConfig.defaultMood;
-          }
-          const variants = selectedConfig.moodVariants;
-          if (variants?.length) {
-            return variants[Math.floor(Math.random() * variants.length)];
-          }
-          return "нейтральное";
+        if (selectedConfig.defaultMood != null && selectedConfig.defaultMood !== "") {
+          return selectedConfig.defaultMood;
         }
+        const variants = selectedConfig.moodVariants;
+        if (variants?.length) {
+          return variants[Math.floor(Math.random() * variants.length)];
+        }
+        return "нейтральное";
+      }
       : undefined;
 
   return {

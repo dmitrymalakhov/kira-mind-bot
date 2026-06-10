@@ -17,6 +17,7 @@ import { fetchPersonality, savePersonality } from '../api';
 import type { PersonalityConfig, PersonalityProfile } from '../types';
 
 const EMPTY_PROFILE: PersonalityProfile = {
+  characterName: '',
   persona: '',
   communicationStyle: '',
   biography: '',
@@ -66,12 +67,23 @@ function ProfileEditor({ icon, title, values, onChange, onSave, saving }: Profil
         <Grid container spacing={2}>
           <Grid item xs={12} sm={3}>
             <TextField
+              label="Имя ассистента"
+              value={values.characterName}
+              onChange={(e) => onChange('characterName', e.target.value)}
+              fullWidth
+              placeholder="например, Эни"
+              helperText="Имя ассистента задаётся вручную. Если оставить пустым, используется «ассистентка»."
+              FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px' } }}
+            />
+          </Grid>
+          <Grid item xs={12} sm={3}>
+            <TextField
               label="Имя владельца"
               value={values.ownerName}
               onChange={(e) => onChange('ownerName', e.target.value)}
               fullWidth
-              placeholder="Дмитрий"
-              helperText="Как бот обращается к пользователю"
+              placeholder="владелец"
+              helperText="Как бот обращается к владельцу"
               FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px' } }}
             />
           </Grid>
@@ -88,16 +100,16 @@ function ProfileEditor({ icon, title, values, onChange, onSave, saving }: Profil
           </Grid>
           <Grid item xs={12} sm={3}>
             <TextField
-              label="Имя пользователя (для обращения)"
+              label="Имя владельца (для обращения)"
               value={values.userName}
               onChange={(e) => onChange('userName', e.target.value)}
               fullWidth
-              placeholder="Дмитрий"
+              placeholder="владелец"
             />
           </Grid>
           <Grid item xs={12} sm={3}>
             <TextField
-              label="Дата рождения пользователя"
+              label="Дата рождения владельца"
               value={values.userBirthDate}
               onChange={(e) => onChange('userBirthDate', e.target.value)}
               fullWidth
@@ -119,7 +131,7 @@ function ProfileEditor({ icon, title, values, onChange, onSave, saving }: Profil
               fullWidth
               multiline
               rows={5}
-              placeholder="Ты — Кира, заботливая женщина-ассистент с живым характером..."
+              placeholder="Ты — ассистент с живым характером..."
               helperText="Основной системный промпт, определяющий характер бота"
               inputProps={{ style: { fontFamily: 'monospace', fontSize: '12px', lineHeight: 1.6 } }}
               FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px' } }}
@@ -147,8 +159,8 @@ function ProfileEditor({ icon, title, values, onChange, onSave, saving }: Profil
               fullWidth
               multiline
               rows={4}
-              placeholder="Ты — Кира, молодая красивая и спортивная женщина..."
-              helperText="Описание персонажа: внешность, характер, история"
+              placeholder="Краткая биография ассистента..."
+              helperText="Описание ассистента: внешность, характер, история"
               inputProps={{ style: { fontFamily: 'monospace', fontSize: '12px', lineHeight: 1.6 } }}
               FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px' } }}
             />

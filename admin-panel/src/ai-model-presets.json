@@ -1,0 +1,106 @@
+{
+  "presetNames": [
+    "gpt-max",
+    "gpt-balanced",
+    "gpt-lean",
+    "hybrid-deepseek-gpt",
+    "hybrid-gemini-gpt"
+  ],
+  "presets": {
+    "gpt-max": {
+      "name": "gpt-max",
+      "title": "GPT Max",
+      "description": "Максимальное качество на OpenAI-моделях с системными дефолтами.",
+      "models": {
+        "defaultText": { "provider": "openai", "model": "gpt-5.4" },
+        "intentClassification": { "provider": "openai", "model": "gpt-5.4" },
+        "intentDedup": { "provider": "openai", "model": "gpt-5.4" },
+        "conversation": { "provider": "openai", "model": "gpt-5.4" },
+        "memoryExtraction": { "provider": "openai", "model": "gpt-5.4" },
+        "memoryConsolidation": { "provider": "openai", "model": "gpt-5.4" },
+        "messageAnalysis": { "provider": "openai", "model": "gpt-5.4" },
+        "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4" },
+        "browserPlanning": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "browserVision": { "provider": "openai", "model": "gpt-4o" },
+        "embedding": { "provider": "openai", "model": "text-embedding-ada-002" },
+        "transcription": { "provider": "openai", "model": "whisper-1" }
+      }
+    },
+    "gpt-balanced": {
+      "name": "gpt-balanced",
+      "title": "GPT Balanced",
+      "description": "Сбалансированный OpenAI-пресет с основными текстовыми задачами на mini.",
+      "models": {
+        "defaultText": { "provider": "openai", "model": "gpt-5.4" },
+        "intentClassification": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "intentDedup": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "conversation": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "memoryExtraction": { "provider": "openai", "model": "gpt-5.4" },
+        "memoryConsolidation": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "messageAnalysis": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "browserPlanning": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "browserVision": { "provider": "openai", "model": "gpt-4o" },
+        "embedding": { "provider": "openai", "model": "text-embedding-3-small" },
+        "transcription": { "provider": "openai", "model": "whisper-1" }
+      }
+    },
+    "gpt-lean": {
+      "name": "gpt-lean",
+      "title": "GPT Lean",
+      "description": "Бюджетный OpenAI-пресет с nano для лёгких intent-задач.",
+      "models": {
+        "defaultText": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "intentClassification": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "intentDedup": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "conversation": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "memoryExtraction": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "memoryConsolidation": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "messageAnalysis": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "browserPlanning": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "browserVision": { "provider": "openai", "model": "gpt-4o" },
+        "embedding": { "provider": "openai", "model": "text-embedding-3-small" },
+        "transcription": { "provider": "openai", "model": "whisper-1" }
+      }
+    },
+    "hybrid-deepseek-gpt": {
+      "name": "hybrid-deepseek-gpt",
+      "title": "Hybrid DeepSeek + GPT",
+      "description": "DeepSeek для основного текста и OpenAI для fallback, web/vision/embedding/transcription.",
+      "models": {
+        "defaultText": { "provider": "deepseek", "model": "deepseek-v4-pro" },
+        "intentClassification": { "provider": "deepseek", "model": "deepseek-v4-flash" },
+        "intentDedup": { "provider": "deepseek", "model": "deepseek-v4-flash" },
+        "conversation": { "provider": "deepseek", "model": "deepseek-v4-pro" },
+        "memoryExtraction": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "memoryConsolidation": { "provider": "deepseek", "model": "deepseek-v4-pro" },
+        "messageAnalysis": { "provider": "deepseek", "model": "deepseek-v4-pro" },
+        "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "browserPlanning": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "browserVision": { "provider": "openai", "model": "gpt-4o" },
+        "embedding": { "provider": "openai", "model": "text-embedding-3-small" },
+        "transcription": { "provider": "openai", "model": "whisper-1" }
+      }
+    },
+    "hybrid-gemini-gpt": {
+      "name": "hybrid-gemini-gpt",
+      "title": "Hybrid Gemini + GPT",
+      "description": "Gemini для conversation/analysis/vision и OpenAI для intent, web, embeddings, whisper и fallback.",
+      "models": {
+        "defaultText": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
+        "intentClassification": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "intentDedup": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "conversation": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
+        "memoryExtraction": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "memoryConsolidation": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
+        "messageAnalysis": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
+        "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "browserPlanning": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "browserVision": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
+        "embedding": { "provider": "openai", "model": "text-embedding-3-small" },
+        "transcription": { "provider": "openai", "model": "whisper-1" }
+      }
+    }
+  }
+}

@@ -3,7 +3,7 @@ import { FactExtractionService } from '../services/FactExtractionService';
 import { saveMemory } from './enhancedDomainMemory';
 import { devLog, parseLLMJson } from '../utils';
 import { rememberFact } from './domainMemory';
-import openai from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { normalizeContactLookupValue, saveContactMemoryFactOrAsk } from './contactMemory';
 import { createMemoryEpisode, updateWorkingMemoryFromMessages } from '../services/MemoryEpisodeService';
 
@@ -360,8 +360,7 @@ export async function quickFactCheck(message: string): Promise<QuickFact[]> {
 Если явных фактов нет, верни {"facts": []}.`;
 
     try {
-        const response = await openai.chat.completions.create({
-            model: 'gpt-5.4-nano',
+        const response = await createChatCompletionForTask('memoryExtraction', {
             messages: [
                 {
                     role: 'system',

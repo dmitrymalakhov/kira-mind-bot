@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   TextField,
   Switch,
@@ -18,14 +18,26 @@ interface Props {
   field: FieldDef;
   value: string;
   onChange: (key: string, value: string) => void;
+  displayValue?: string;
 }
 
-export function FieldInput({ field, value, onChange }: Props) {
+export function FieldInput({ field, value, onChange, displayValue }: Props) {
   const [showPassword, setShowPassword] = useState(false);
+  const [showDerivedValue, setShowDerivedValue] = useState(true);
   // Store original masked value so we can restore it if user focuses then blurs without typing
   const originalMasked = useRef('');
 
   const isMasked = value.includes('••••');
+  const usesDerivedValue = !isMasked && value === '' && !!displayValue && showDerivedValue;
+  const resolvedValue = usesDerivedValue ? displayValue : value;
+
+  useEffect(() => {
+    if (value !== '') {
+      setShowDerivedValue(false);
+      return;
+    }
+    setShowDerivedValue(true);
+  }, [value, displayValue]);
 
   if (field.type === 'toggle') {
     return (
@@ -78,7 +90,7 @@ export function FieldInput({ field, value, onChange }: Props) {
       <Box sx={{ gridColumn: '1 / -1' }}>
         <TextField
           label={field.label}
-          value={value}
+          value={resolvedValue}
           onChange={(e) => onChange(field.key, e.target.value)}
           fullWidth
           multiline
@@ -107,15 +119,20 @@ export function FieldInput({ field, value, onChange }: Props) {
         )
       }
       type={isPassword && !showPassword ? 'password' : 'text'}
-      value={isMasked ? value : value}
+      value={isMasked ? value : resolvedValue}
       onChange={(e) => {
         originalMasked.current = ''; // user started typing, don't restore
+        setShowDerivedValue(false);
         onChange(field.key, e.target.value);
       }}
       onFocus={() => {
         if (isMasked) {
           originalMasked.current = value; // save before clearing
           onChange(field.key, '');
+          return;
+        }
+        if (usesDerivedValue) {
+          setShowDerivedValue(false);
         }
       }}
       onBlur={(e) => {
@@ -123,6 +140,9 @@ export function FieldInput({ field, value, onChange }: Props) {
         if (originalMasked.current && e.target.value === '') {
           onChange(field.key, originalMasked.current);
           originalMasked.current = '';
+        }
+        if (!isMasked && e.target.value === '') {
+          setShowDerivedValue(true);
         }
       }}
       inputMode={field.type === 'number' ? 'numeric' : undefined}

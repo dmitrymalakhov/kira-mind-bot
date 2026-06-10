@@ -2,7 +2,7 @@ import { Bot } from "grammy";
 import { BotContext } from "../types";
 import { config } from "../config";
 import { getBotPersona, getCommunicationStyle, getBotBiography } from "../persona";
-import openai from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 import {
   addKiraSelfEvent,
   getKiraSelfMemoryState,
@@ -17,7 +17,7 @@ import { appendPersistedHistory } from "./SessionStorage";
 const PROACTIVE_MESSAGE_FORMATS = [
   "поделись чем-то что произошло или что сейчас чувствуешь — искренне, без пафоса",
   "брось мысль или наблюдение, как будто само собой вырвалось",
-  "задай Дмитрию вопрос — опираясь на своё событие или просто из любопытства",
+  "задай Владельцу вопрос — опираясь на своё событие или просто из любопытства",
   "напиши как будто только что вспомнила что хотела сказать",
   "коротко, как будто между делом что-то мелькнуло в голове",
   "поделись маленькой деталью дня — что заметила, что удивило, что раздражало",
@@ -108,8 +108,7 @@ async function maybeGenerateLifeEvent(): Promise<KiraSelfEvent> {
     .map((e) => `${new Date(e.date).toLocaleDateString("ru-RU", { weekday: "short", day: "numeric" })}: ${e.description}`)
     .join(" | ");
 
-  const response = await openai.chat.completions.create({
-    model: "gpt-5.4",
+  const response = await createChatCompletionForTask('conversation', {
     messages: [
       {
         role: "system",
@@ -164,8 +163,7 @@ async function buildProactiveMessage(): Promise<string> {
   const state = await getKiraSelfMemoryState();
   const formatHint = PROACTIVE_MESSAGE_FORMATS[Math.floor(Math.random() * PROACTIVE_MESSAGE_FORMATS.length)];
 
-  const response = await openai.chat.completions.create({
-    model: "gpt-5.4",
+  const response = await createChatCompletionForTask('conversation', {
     messages: [
       {
         role: "system",

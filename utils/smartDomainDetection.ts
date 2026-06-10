@@ -1,7 +1,7 @@
 import { MessageHistory } from '../types';
 import { PREDEFINED_DOMAINS, DOMAIN_DESCRIPTIONS } from '../constants/domains';
 import { devLog } from '../utils';
-import openai from '../openai';
+import { createChatCompletionForTask } from '../ai/chatCompletion';
 
 export class SmartDomainDetector {
 
@@ -20,8 +20,7 @@ export class SmartDomainDetector {
 
         try {
             devLog('Domain detection prompt:', prompt);
-            const resp = await openai.chat.completions.create({
-                model: 'gpt-5.4-nano',
+            const resp = await createChatCompletionForTask('memoryExtraction', {
                 messages: [
                     { role: 'system', content: 'Ты определяешь домен для сообщения по ключевым словам' },
                     { role: 'user', content: prompt }

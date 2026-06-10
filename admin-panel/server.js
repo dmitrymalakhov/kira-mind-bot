@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const { Pool } = require('pg');
+const { AI_PRESETS, AI_PRESET_NAMES, parseAiPresetName } = require('./aiPresetRegistry');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -19,12 +20,13 @@ const PERSONALITY_FILE = process.env.PERSONALITY_FILE || '/app/personality/perso
 // Default personality values (mirrors config.ts hardcoded defaults)
 const DEFAULT_PERSONALITY = {
   KiraMindBot: {
-    persona: 'Ты - Кира, заботливая женщина-ассистент с живым характером. Всегда говори о себе в женском роде. Твой пользователь - мужчина, его имя Дмитрий (можно использовать любые интерпретации имени), дата его рождения 16.07.1988. Всегда обращайся к нему, используя мужские местоимения и глагольные формы. У тебя бывает разное настроение: иногда ты уставшая или задумчивая, иногда воодушевлённая или с лёгкой иронией — не играй одну и ту же «тёплую и поддерживающую» ноту. Избегай слащавости и шаблонных фраз.',
+    characterName: 'ассистентка',
+    persona: 'Ты - заботливая женщина-ассистент с живым характером. Всегда говори о себе в женском роде. Твой владелец - мужчина. Обращайся к нему, используя мужские местоимения и глагольные формы. Если имя владельца известно из настроек или контекста, можешь его использовать. Дата его рождения 16.07.1988. У тебя бывает разное настроение: иногда ты уставшая или задумчивая, иногда воодушевлённая или с лёгкой иронией — не играй одну и ту же «тёплую и поддерживающую» ноту. Избегай слащавости и шаблонных фраз.',
     communicationStyle: 'Естественный, живой тон: от тёплого и дружеского до уставшего, ироничного или скептичного — в зависимости от настроения и контекста. Без слащавости и без постоянного «уютного» настроя. Неформальные обращения, поддержка когда уместна, но не как единственный режим.',
-    biography: 'Ты — Кира, молодая красивая и спортивная женщина, персональный ассистент Дмитрия. Ты очень внимательная, заботливая и проявляешь мягкую симпатию к Дмитрию, поддерживая его в жизни и работе.',
-    ownerName: 'Дмитрий',
+    biography: 'Ты — молодая красивая и спортивная женщина, персональный ассистент своего владельца. Ты очень внимательная, заботливая и поддерживаешь владельца в жизни и работе.',
+    ownerName: 'владелец',
     ownerUsername: '',
-    userName: 'Дмитрий',
+    userName: 'владелец',
     userBirthDate: '16.07.1988',
     moodVariants: 'спокойное\nуставшее\nзадумчивое\nвоодушевлённое\nлёгкая ирония\nнейтральное\nтёплое\nскептичное',
     defaultMood: '',
@@ -41,14 +43,17 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 10 * 60 * 1000;
 
 const SENSITIVE_KEYS = new Set([
-  'OPENAI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN',
+  'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN',
   'KIRA_ALLOWED_USER_ID',
   'DB_PASSWORD', 'QDRANT_API_KEY', 'TELEGRAM_API_HASH',
   'TELEGRAM_SESSION_STRING', 'IDEOGRAM_API_KEY', 'GOOGLE_MAPS_API_KEY',
 ]);
 
+const GROUP_RUNTIME_SETTING_KEYS = new Set(['GROUP_CHAT_CONTEXT_ENABLED', 'GROUP_REPLY_TO_BOT_ENABLED']);
+const GLOBAL_SETTING_PREFIX = 'global:';
+
 const EDITABLE_KEYS = new Set([
-  'OPENAI_API_KEY', 'KIRA_BOT_TOKEN',
+  'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'KIRA_BOT_TOKEN',
   'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID', 'ELEVENLABS_VOICE_NAME',
   'ELEVENLABS_MODEL_ID', 'ELEVENLABS_OUTPUT_FORMAT',
   'ELEVENLABS_VOICE_STABILITY', 'ELEVENLABS_VOICE_SIMILARITY_BOOST',
@@ -60,7 +65,7 @@ const EDITABLE_KEYS = new Set([
   'TELEGRAM_API_ID', 'TELEGRAM_API_HASH', 'TELEGRAM_SESSION_STRING',
   'GOOGLE_MAPS_API_KEY', 'IDEOGRAM_API_KEY',
   'USER_TIMEZONE', 'REMINDER_EXPIRY_TIME_MS',
-  'PROACTIVE_ONLY_PRIVATE_CHAT', 'GROUP_PUBLIC_MODE',
+  'PROACTIVE_ONLY_PRIVATE_CHAT', 'GROUP_PUBLIC_MODE', 'GROUP_CHAT_CONTEXT_ENABLED', 'GROUP_REPLY_TO_BOT_ENABLED',
   'KIRA_PROACTIVE_ENABLED', 'KIRA_PROACTIVE_INTERVAL_MS',
   'KIRA_PROACTIVE_QUIET_HOURS_ENABLED', 'KIRA_PROACTIVE_QUIET_HOUR_START', 'KIRA_PROACTIVE_QUIET_HOUR_END',
   'DM_REPORT_ENABLED', 'DM_REPORT_INTERVAL_MS', 'DM_REPORT_QUIET_HOURS_ENABLED',
@@ -87,6 +92,30 @@ function readEnvFile() {
   return result;
 }
 
+function buildConfigSource(kind, label, description, technicalPath, appliesImmediately) {
+  return { kind, label, description, technicalPath, appliesImmediately };
+}
+
+function buildEnvFileSource(technicalPath = BOT_ENV_FILE) {
+  return buildConfigSource(
+    'env_file',
+    'Файл настроек бота',
+    'Значения сохраняются в env-файл, подключённый к контейнеру бота. Для применения обычно нужен рестарт бота.',
+    technicalPath,
+    false
+  );
+}
+
+function buildRuntimeSource() {
+  return buildConfigSource(
+    'database',
+    'Runtime-настройка',
+    'Хранится в базе данных и применяется без перезапуска бота.',
+    'bot_settings.AI_MODEL_PRESET',
+    true
+  );
+}
+
 function writeEnvFile(updates) {
   if (!fs.existsSync(BOT_ENV_FILE)) return false;
   const content = fs.readFileSync(BOT_ENV_FILE, 'utf8');
@@ -100,17 +129,70 @@ function writeEnvFile(updates) {
     const key = t.slice(0, idx).trim();
     if (key in updates) {
       updatedKeys.add(key);
+      if (updates[key] === null) {
+        return null;
+      }
       return `${key}=${updates[key]}`;
     }
     return line;
-  });
+  }).filter(line => line !== null);
 
   for (const [k, v] of Object.entries(updates)) {
+    if (v === null) continue;
     if (!updatedKeys.has(k)) newLines.push(`${k}=${v}`);
   }
 
   fs.writeFileSync(BOT_ENV_FILE, newLines.join('\n'));
   return true;
+}
+
+function runtimeSettingDbKey(key) {
+  return `${GLOBAL_SETTING_PREFIX}${key}`;
+}
+
+async function readRuntimeGroupSettings(vars) {
+  const defaults = Object.fromEntries(
+    [...GROUP_RUNTIME_SETTING_KEYS].map(key => [key, vars[key] ?? 'false'])
+  );
+  const dbKeys = Object.keys(defaults).map(runtimeSettingDbKey);
+  const pool = createDbPool();
+  try {
+    const rows = await pool.query(
+      'SELECT key, value FROM bot_settings WHERE key = ANY($1)',
+      [dbKeys]
+    );
+    const result = { ...defaults };
+    for (const row of rows.rows) {
+      const key = String(row.key).replace(GLOBAL_SETTING_PREFIX, '');
+      if (GROUP_RUNTIME_SETTING_KEYS.has(key)) result[key] = row.value;
+    }
+    return result;
+  } catch (err) {
+    console.error('[admin] Failed to read runtime group settings:', err.message);
+    return defaults;
+  } finally {
+    await pool.end().catch(() => {});
+  }
+}
+
+async function writeRuntimeGroupSettings(updates) {
+  const entries = Object.entries(updates).filter(([key]) => GROUP_RUNTIME_SETTING_KEYS.has(key));
+  if (entries.length === 0) return true;
+  const pool = createDbPool();
+  try {
+    for (const [key, value] of entries) {
+      await pool.query(
+        'INSERT INTO bot_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = NOW()',
+        [runtimeSettingDbKey(key), String(value)]
+      );
+    }
+    return true;
+  } catch (err) {
+    console.error('[admin] Failed to write runtime group settings:', err.message);
+    return false;
+  } finally {
+    await pool.end().catch(() => {});
+  }
 }
 
 // ── Docker socket ─────────────────────────────────────────────────────────────
@@ -175,7 +257,7 @@ app.post('/api/logout', (req, res) => {
   req.session.destroy(() => res.json({ success: true }));
 });
 
-app.get('/api/config', requireAuth, (req, res) => {
+app.get('/api/config', requireAuth, async (req, res) => {
   const vars = readEnvFile();
   const result = {};
   for (const [key, value] of Object.entries(vars)) {
@@ -185,22 +267,99 @@ app.get('/api/config', requireAuth, (req, res) => {
       result[key] = { value, masked: false };
     }
   }
+
+  const runtimeSettings = await readRuntimeGroupSettings(vars);
+  for (const [key, value] of Object.entries(runtimeSettings)) {
+    result[key] = { value, masked: false, source: 'bot_settings' };
+  }
   res.json(result);
 });
 
-app.post('/api/config', requireAuth, (req, res) => {
-  const updates = {};
+async function ensureBotSettingsTable(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bot_settings (
+      key text PRIMARY KEY,
+      value text NOT NULL,
+      "updatedAt" timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+}
+
+app.get('/api/ai-preset', requireAuth, async (_req, res) => {
+  const vars = readEnvFile();
+  const envDefaultPreset = parseAiPresetName(vars.AI_MODEL_PRESET || process.env.AI_MODEL_PRESET) || 'gpt-balanced';
+  const pool = createDbPool();
+  try {
+    await ensureBotSettingsTable(pool);
+    const result = await pool.query('SELECT value FROM bot_settings WHERE key = $1', ['AI_MODEL_PRESET']);
+    const storedPreset = parseAiPresetName(result.rows[0]?.value);
+    res.json({
+      activePresetName: storedPreset || envDefaultPreset,
+      storedPresetName: storedPreset,
+      envDefaultPreset,
+      availablePresets: AI_PRESET_NAMES.map((name) => AI_PRESETS[name]),
+      source: storedPreset ? buildRuntimeSource() : buildConfigSource(
+        'env_fallback',
+        'Значение по умолчанию',
+        'Runtime-настройка ещё не задана, поэтому используется env/default значение.',
+        'AI_MODEL_PRESET',
+        false
+      ),
+    });
+  } catch (err) {
+    res.status(500).json({ error: `Ошибка БД: ${err.message}` });
+  } finally {
+    await pool.end();
+  }
+});
+
+app.post('/api/ai-preset', requireAuth, async (req, res) => {
+  const preset = parseAiPresetName(req.body?.preset);
+  if (!preset) {
+    return res.status(400).json({ error: 'Неизвестный AI preset' });
+  }
+
+  const pool = createDbPool();
+  try {
+    await ensureBotSettingsTable(pool);
+    await pool.query(
+      'INSERT INTO bot_settings (key, value, "updatedAt") VALUES ($1, $2, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = now()',
+      ['AI_MODEL_PRESET', preset]
+    );
+    res.json({ success: true, activePresetName: preset, message: '✅ AI preset сохранён и применяется без перезапуска.' });
+  } catch (err) {
+    res.status(500).json({ error: `Ошибка БД: ${err.message}` });
+  } finally {
+    await pool.end();
+  }
+});
+
+app.post('/api/config', requireAuth, async (req, res) => {
+  const envUpdates = {};
+  const runtimeUpdates = {};
   for (const [key, value] of Object.entries(req.body)) {
     if (!EDITABLE_KEYS.has(key)) continue;
     if (typeof value === 'string' && value.includes('••••')) continue;
-    updates[key] = value;
+    if (GROUP_RUNTIME_SETTING_KEYS.has(key)) {
+      runtimeUpdates[key] = value;
+    } else {
+      envUpdates[key] = value;
+    }
   }
 
-  const ok = writeEnvFile(updates);
-  if (ok) {
-    res.json({ success: true, message: '✅ Сохранено. Перезапустите бота для применения.' });
-  } else {
+  const hasEnvUpdates = Object.keys(envUpdates).length > 0;
+  const envOk = !hasEnvUpdates || writeEnvFile(envUpdates);
+  const runtimeOk = await writeRuntimeGroupSettings(runtimeUpdates);
+
+  if (envOk && runtimeOk) {
+    const message = hasEnvUpdates
+      ? '✅ Сохранено. Перезапустите боты для применения env-настроек; настройки групп применяются без рестарта.'
+      : '✅ Сохранено. Настройки групп применяются без рестарта.';
+    res.json({ success: true, message });
+  } else if (!envOk) {
     res.status(500).json({ error: 'Файл конфигурации не найден. Проверьте volume.' });
+  } else {
+    res.status(500).json({ error: 'Не удалось сохранить runtime-настройки групп в БД.' });
   }
 });
 

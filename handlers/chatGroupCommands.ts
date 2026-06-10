@@ -3,6 +3,7 @@ import { BotContext } from '../types';
 import { ChatGroupRepository } from '../services/ChatGroupRepository';
 import { ChatGroupEntity } from '../entity/ChatGroupEntity';
 import { notifyChatGroupTrackerChange } from '../services/chatGroupTracker';
+import { config } from '../config';
 
 const ITEMS_PER_PAGE = 5;
 
@@ -44,7 +45,7 @@ function buildMainMenu(groups: ChatGroupEntity[], page = 0): { text: string; key
 function buildGroupDetailMenu(group: ChatGroupEntity): { text: string; keyboard: InlineKeyboard } {
     const chats = group.chatNames.map((c, i) => `${i + 1}. ${c}`).join('\n');
     const trackingLabel = group.isTracking ? '🔕 Отслеживание: вкл' : '📡 Отслеживать';
-    const text = `✏️ *${group.name}*\n\nЧаты:\n${chats}${group.isTracking ? '\n\n📡 _Умное отслеживание активно — Кира уведомит о важных сообщениях_' : ''}\n\nЧто сделать?`;
+    const text = `✏️ *${group.name}*\n\nЧаты:\n${chats}${group.isTracking ? `\n\n📡 _Умное отслеживание активно — ${config.characterName} уведомит о важных сообщениях_` : ''}\n\nЧто сделать?`;
 
     const kb = new InlineKeyboard()
         .text('➕ Добавить чат', `cg:addchat:${group.id}`).row()
@@ -203,7 +204,7 @@ export function registerChatGroupCommands(bot: Bot<BotContext>) {
         if (!group) return;
 
         const statusText = isNowTracking
-            ? `✅ Умное отслеживание для группы «${group.name}» *включено*.\n\nКира будет присылать уведомления о важных сообщениях в личный чат.`
+            ? `✅ Умное отслеживание для группы «${group.name}» *включено*.\n\n${config.characterName} будет присылать уведомления о важных сообщениях в личный чат.`
             : `🔕 Отслеживание для группы «${group.name}» *выключено*.`;
 
         await ctx.reply(statusText, { parse_mode: 'Markdown' });

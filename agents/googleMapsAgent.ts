@@ -4,7 +4,7 @@ import { ProcessingResult } from "../orchestrator";
 import { GoogleMapsService, PlaceResult } from "../services/googleMaps";
 import { devLog } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
-import openai from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -95,8 +95,7 @@ async function analyzeMapsQuery(
         `;
 
         // Отправка запроса к API OpenAI
-        const response = await openai.chat.completions.create({
-            model: "gpt-5.4",
+        const response = await createChatCompletionForTask('conversation', {
             messages: [
                 {
                     role: "system",

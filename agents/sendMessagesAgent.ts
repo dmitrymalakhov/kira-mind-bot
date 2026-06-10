@@ -14,7 +14,7 @@ import { Contact, ContactsStore } from "../stores/ContactsStore";
 import { devLog, notifyUser } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { config } from "../config";
-import openai from "../openai";
+import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { getContactPortrait } from "../services/PsychologicalPortraitService";
 import { getTelegramVoiceReadinessIssue, withTelegramVoiceFile } from "../services/elevenLabsTts";
 import { normalizeNumbersForVoiceMessage } from "../utils/russianSpeechNumbers";
@@ -46,7 +46,7 @@ export function wantsOutboundVoiceMessage(message: string): boolean {
 }
 
 export function buildOutboundVoiceSpeechText(messageText: string): string {
-    const botName = config.characterName || "Кира";
+    const botName = config.characterName;
     const ownerName = config.ownerName || config.userName || "пользователя";
     return `Привет, это ${botName}, личный ассистент ${ownerName}. Передаю сообщение: ${messageText.trim()}`;
 }
@@ -209,8 +209,7 @@ async function analyzeAndGenerateMessage(
         }
         `;
 
-        const response = await openai.chat.completions.create({
-            model: "gpt-5.4",
+        const response = await createChatCompletionForTask('conversation', {
             messages: [
                 {
                     role: "system",

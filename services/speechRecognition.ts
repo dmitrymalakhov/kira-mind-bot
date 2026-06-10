@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import fetch from 'node-fetch';
 import openai from "../openai";
+import { resolveOpenAiModelForTaskAsync } from "../ai/modelResolver";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -36,11 +37,12 @@ export async function transcribeAudio(audioFilePath: string): Promise<string> {
         // В Node.js среде OpenAI SDK принимает файловый поток
         // Используем createReadStream для создания потока из файла
         const audioFileStream = fs.createReadStream(audioFilePath);
+        const model = await resolveOpenAiModelForTaskAsync('transcription');
 
         // Отправляем запрос на транскрипцию в OpenAI
         const transcription = await openai.audio.transcriptions.create({
             file: audioFileStream,
-            model: "whisper-1",
+            model,
             language: "ru",
             response_format: "text",
         });
