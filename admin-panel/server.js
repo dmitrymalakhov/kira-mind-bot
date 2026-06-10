@@ -1599,6 +1599,12 @@ app.get('/api/health/export', requireAuth, async (req, res) => {
 function buildContainerStatus(name, status, running, startedAt, details) {
   const statusLabelMap = {
     running: 'online',
+    created: 'создан',
+    restarting: 'перезапускается',
+    removing: 'удаляется',
+    paused: 'на паузе',
+    exited: 'остановлен',
+    dead: 'не отвечает',
     stopped: 'offline',
     container_not_found: 'контейнер не найден',
     docker_unreachable: 'Docker недоступен',
@@ -1646,13 +1652,34 @@ function getContainerStatus(name) {
               resolve(buildContainerStatus(name, 'status_unreadable', false, null, `Docker вернул ответ без поля State${res.statusCode ? ` (HTTP ${res.statusCode})` : ''}.`));
               return;
             }
+            const knownStatuses = new Set(['created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead']);
+            const status = knownStatuses.has(rawStatus)
+              ? rawStatus
+              : running
+                ? 'running'
+                : 'status_unreadable';
+            const details = status === 'running'
+              ? 'Контейнер запущен.'
+              : status === 'paused'
+                ? 'Контейнер поставлен на паузу.'
+                : status === 'restarting'
+                  ? 'Контейнер сейчас перезапускается.'
+                  : status === 'removing'
+                    ? 'Контейнер удаляется.'
+                    : status === 'created'
+                      ? 'Контейнер создан, но ещё не запущен.'
+                      : status === 'exited'
+                        ? 'Контейнер остановлен.'
+                        : status === 'dead'
+                          ? 'Контейнер не отвечает и требует проверки.'
+                          : `Неизвестный статус Docker: ${rawStatus || 'empty'}.`;
             resolve(
               buildContainerStatus(
                 name,
-                running || rawStatus === 'running' ? 'running' : 'stopped',
+                status,
                 running,
-                running ? startedAt : null,
-                running ? 'Контейнер запущен.' : 'Контейнер остановлен.'
+                startedAt,
+                details
               )
             );
           } catch {

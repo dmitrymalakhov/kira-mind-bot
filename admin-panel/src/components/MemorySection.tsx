@@ -615,6 +615,12 @@ function MemoryRow({
               variant="outlined"
               sx={{ fontSize: '10px' }}
             />
+            <Chip
+              size="small"
+              label={formatDateTime(record.timestamp)}
+              variant="outlined"
+              sx={{ fontSize: '10px' }}
+            />
           </Box>
           {!!record.tags.length && (
             <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.75 }}>

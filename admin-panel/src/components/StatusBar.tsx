@@ -40,12 +40,21 @@ function getStatusAppearance(status: string) {
     };
   }
 
-  if (status === 'stopped') {
+  if (status === 'paused' || status === 'exited' || status === 'stopped') {
     return {
       dot: '#fbbf24',
       bg: 'rgba(251, 191, 36, 0.10)',
       border: 'rgba(251, 191, 36, 0.22)',
       text: '#ffe7b0',
+    };
+  }
+
+  if (status === 'restarting' || status === 'created' || status === 'removing') {
+    return {
+      dot: '#93c5fd',
+      bg: 'rgba(96, 165, 250, 0.10)',
+      border: 'rgba(147, 197, 253, 0.22)',
+      text: '#dbeafe',
     };
   }
 

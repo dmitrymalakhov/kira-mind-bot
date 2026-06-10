@@ -119,6 +119,18 @@ function DomainRow({ chat, onUpdate }: { chat: ChatInfo; onUpdate: (updated: Cha
                   variant="outlined"
                   sx={{ fontSize: '10px' }}
                 />
+                <Chip
+                  label={`ID ${chat.chatId}`}
+                  size="small"
+                  variant="outlined"
+                  sx={{ fontSize: '10px', fontFamily: 'monospace' }}
+                />
+                <Chip
+                  label={formatDate(chat.lastSeenAt)}
+                  size="small"
+                  variant="outlined"
+                  sx={{ fontSize: '10px' }}
+                />
               </Box>
             </Box>
           </Box>

@@ -264,16 +264,19 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
     caption,
     selected,
     onClick,
+    clickable = true,
   }: {
     icon: JSX.Element;
     label: string;
     caption: string;
     selected: boolean;
-    onClick: () => void;
+    onClick?: () => void;
+    clickable?: boolean;
   }) => (
     <ListItemButton
       selected={selected}
       onClick={onClick}
+      disabled={!clickable}
       sx={{
         alignItems: 'center',
         gap: 0.875,
@@ -287,13 +290,26 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
         bgcolor: selected ? alpha(theme.palette.primary.main, 0.18) : 'transparent',
         color: selected ? 'text.primary' : 'text.secondary',
         transition: 'background-color 0.18s ease, border-color 0.18s ease',
+        cursor: clickable ? 'pointer' : 'default',
         '&:hover': {
-          bgcolor: selected ? alpha(theme.palette.primary.main, 0.24) : alpha(theme.palette.common.white, 0.04),
-          borderColor: selected ? 'primary.light' : alpha(theme.palette.common.white, 0.08),
+          bgcolor: clickable
+            ? selected
+              ? alpha(theme.palette.primary.main, 0.24)
+              : alpha(theme.palette.common.white, 0.04)
+            : 'transparent',
+          borderColor: clickable
+            ? selected
+              ? 'primary.light'
+              : alpha(theme.palette.common.white, 0.08)
+            : 'transparent',
         },
         '& .MuiListItemIcon-root': {
           minWidth: 0,
           color: selected ? 'primary.light' : 'text.secondary',
+        },
+        '&.Mui-disabled': {
+          opacity: 1,
+          color: 'text.secondary',
         },
       }}
     >
@@ -317,7 +333,9 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
           {caption}
         </Typography>
       </Box>
-      <ChevronRightIcon sx={{ fontSize: 16, color: selected ? 'primary.light' : 'text.disabled' }} />
+      {clickable ? (
+        <ChevronRightIcon sx={{ fontSize: 16, color: selected ? 'primary.light' : 'text.disabled' }} />
+      ) : null}
     </ListItemButton>
   );
 
@@ -527,7 +545,8 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
                 label: item.label,
                 caption: item.caption,
                 selected: false,
-                onClick: () => handleIntroCardClick(item.targetId),
+                onClick: item.targetId ? () => handleIntroCardClick(item.targetId) : undefined,
+                clickable: Boolean(item.targetId),
               }),
             )}
           </Box>
