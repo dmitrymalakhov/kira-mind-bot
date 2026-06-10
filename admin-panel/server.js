@@ -1600,6 +1600,7 @@ function buildContainerStatus(name, status, running, startedAt, details) {
   const statusLabelMap = {
     running: 'online',
     stopped: 'offline',
+    container_not_found: 'контейнер не найден',
     docker_unreachable: 'Docker недоступен',
     status_unreadable: 'статус не прочитан',
   };
@@ -1618,17 +1619,31 @@ function getContainerStatus(name) {
   return new Promise((resolve) => {
     const chunks = [];
     const req = http.request(
-      { socketPath: '/var/run/docker.sock', path: `/v1.41/containers/${name}/json`, method: 'GET' },
+      { socketPath: '/var/run/docker.sock', path: `/containers/${name}/json`, method: 'GET' },
       (res) => {
         res.on('data', (d) => chunks.push(d));
         res.on('end', () => {
+          const rawBody = Buffer.concat(chunks).toString();
+
+          if (res.statusCode === 404) {
+            resolve(buildContainerStatus(name, 'container_not_found', false, null, 'Контейнер с таким именем не найден в Docker.'));
+            return;
+          }
+
           try {
-            const data = JSON.parse(Buffer.concat(chunks).toString());
+            const data = JSON.parse(rawBody);
+            if (res.statusCode && res.statusCode >= 400) {
+              const message = typeof data?.message === 'string' && data.message.trim()
+                ? data.message.trim()
+                : `Docker вернул HTTP ${res.statusCode}.`;
+              resolve(buildContainerStatus(name, 'status_unreadable', false, null, message));
+              return;
+            }
             const rawStatus = String(data.State?.Status || '').toLowerCase();
             const running = Boolean(data.State?.Running);
             const startedAt = data.State?.StartedAt || null;
             if (!data.State || (!running && !rawStatus)) {
-              resolve(buildContainerStatus(name, 'status_unreadable', false, null, 'Не удалось прочитать состояние контейнера.'));
+              resolve(buildContainerStatus(name, 'status_unreadable', false, null, `Docker вернул ответ без поля State${res.statusCode ? ` (HTTP ${res.statusCode})` : ''}.`));
               return;
             }
             resolve(
@@ -1641,7 +1656,7 @@ function getContainerStatus(name) {
               )
             );
           } catch {
-            resolve(buildContainerStatus(name, 'status_unreadable', false, null, 'Docker ответил некорректными данными.'));
+            resolve(buildContainerStatus(name, 'status_unreadable', false, null, `Docker ответил некорректными данными${res.statusCode ? ` (HTTP ${res.statusCode})` : ''}.`));
           }
         });
       }

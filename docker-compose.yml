@@ -46,7 +46,7 @@ services:
     container_name: kira-mind-bot
     <<: *default-restart
     env_file:
-      - ./.env.production
+      - ./kira-mind-bot/.env.production
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - ASSISTANT_PROFILE=KiraMindBot
@@ -68,7 +68,7 @@ services:
     ports:
       - "${ADMIN_PORT:-8080}:3000"
     volumes:
-      - ./.env.production:/app/env/bot.env
+      - ./kira-mind-bot/.env.production:/app/env/bot.env
       - ./personality.json:/app/personality/personality.json
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
