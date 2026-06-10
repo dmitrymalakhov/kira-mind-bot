@@ -28,8 +28,8 @@ function getProviderLabel(provider: string): string {
   switch (provider) {
     case 'openai':
       return 'OpenAI';
-    case 'deepseek':
-      return 'DeepSeek';
+    case 'openrouter':
+      return 'OpenRouter';
     case 'gemini':
       return 'Gemini';
     default:
@@ -146,15 +146,15 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
                     disabled={loading || !aiPresetData}
                   >
                     {(aiPresetData?.availablePresets ?? []).map((preset: AiPresetConfig) => (
-                      <MenuItem key={preset.name} value={preset.name}>
-                        {preset.title}
+                      <MenuItem key={preset.name} value={preset.name} disabled={preset.enabled === false}>
+                        {preset.title}{preset.enabled === false ? ' · недоступен' : ''}
                       </MenuItem>
                     ))}
                   </TextField>
                   <Button
                     variant="contained"
                     onClick={handleAiPresetSave}
-                    disabled={loading || savingAiPreset || !aiPresetData || selectedAiPreset === aiPresetData.activePresetName}
+                    disabled={loading || savingAiPreset || !aiPresetData || selectedAiPreset === aiPresetData.activePresetName || activeAiPreset?.enabled === false}
                     startIcon={savingAiPreset ? <CircularProgress size={14} color="inherit" /> : <SaveIcon fontSize="small" />}
                   >
                     Применить
@@ -166,8 +166,16 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
                     <Typography variant="body2" color="text.secondary">
                       {activeAiPreset.description}
                     </Typography>
+                    {activeAiPreset.enabled === false && activeAiPreset.unavailableReason && (
+                      <Typography variant="body2" color="error.main">
+                        {activeAiPreset.unavailableReason}
+                      </Typography>
+                    )}
                     <Stack direction="row" spacing={1} flexWrap="wrap">
                       <Chip size="small" color={selectedAiPreset === aiPresetData?.activePresetName ? 'success' : 'warning'} label={selectedAiPreset === aiPresetData?.activePresetName ? 'Активен' : 'Есть несохранённое изменение'} />
+                      {activeAiPreset.enabled === false && (
+                        <Chip size="small" color="error" variant="outlined" label="Недоступен без API ключей" />
+                      )}
                       {Object.entries(providerCounts).map(([provider, count]) => (
                         <Chip key={provider} size="small" variant="outlined" label={`${getProviderLabel(provider)}: ${count}`} />
                       ))}

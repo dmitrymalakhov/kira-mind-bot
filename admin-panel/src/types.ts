@@ -43,8 +43,14 @@ export interface ConfigSourceInfo {
   appliesImmediately?: boolean;
 }
 
-export type AiProvider = 'openai' | 'deepseek' | 'gemini';
-export type AiPresetName = 'gpt-max' | 'gpt-balanced' | 'gpt-lean' | 'hybrid-deepseek-gpt' | 'hybrid-gemini-gpt';
+export type AiProvider = 'openai' | 'openrouter' | 'gemini';
+export type AiPresetName =
+  | 'gpt-max'
+  | 'gpt-balanced'
+  | 'gpt-lean'
+  | 'hybrid-openrouter-gpt'
+  | 'hybrid-gemini-gpt'
+  | 'gemini-direct-balanced';
 
 export interface AiModelRef {
   provider: AiProvider;
@@ -56,6 +62,8 @@ export interface AiPresetConfig {
   title: string;
   description: string;
   models: Record<string, AiModelRef>;
+  enabled?: boolean;
+  unavailableReason?: string;
 }
 
 export interface AiPresetResponse {

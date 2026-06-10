@@ -43,7 +43,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 10 * 60 * 1000;
 
 const SENSITIVE_KEYS = new Set([
-  'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN',
+  'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN',
   'KIRA_ALLOWED_USER_ID',
   'DB_PASSWORD', 'QDRANT_API_KEY', 'TELEGRAM_API_HASH',
   'TELEGRAM_SESSION_STRING', 'IDEOGRAM_API_KEY', 'GOOGLE_MAPS_API_KEY',
@@ -53,7 +53,7 @@ const GROUP_RUNTIME_SETTING_KEYS = new Set(['GROUP_CHAT_CONTEXT_ENABLED', 'GROUP
 const GLOBAL_SETTING_PREFIX = 'global:';
 
 const EDITABLE_KEYS = new Set([
-  'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'KIRA_BOT_TOKEN',
+  'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'KIRA_BOT_TOKEN',
   'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID', 'ELEVENLABS_VOICE_NAME',
   'ELEVENLABS_MODEL_ID', 'ELEVENLABS_OUTPUT_FORMAT',
   'ELEVENLABS_VOICE_STABILITY', 'ELEVENLABS_VOICE_SIMILARITY_BOOST',
@@ -114,6 +114,63 @@ function buildRuntimeSource() {
     'bot_settings.AI_MODEL_PRESET',
     true
   );
+}
+
+const PROVIDER_ENV_KEY = {
+  openai: 'OPENAI_API_KEY',
+  openrouter: 'OPENROUTER_API_KEY',
+  gemini: 'GEMINI_API_KEY',
+};
+
+const PROVIDER_LABEL = {
+  openai: 'OpenAI',
+  openrouter: 'OpenRouter',
+  gemini: 'Gemini',
+};
+
+function hasConfiguredValue(vars, key) {
+  const value = vars[key] || process.env[key] || '';
+  return typeof value === 'string' ? value.trim().length > 0 : Boolean(value);
+}
+
+function getPresetAvailability(preset, vars) {
+  const providers = new Set(Object.values(preset.models || {}).map((modelRef) => modelRef.provider));
+
+  // Эти task-ключи пока реализованы только через OpenAI-specific code paths,
+  // даже если в preset указан другой provider.
+  for (const taskKey of ['embedding', 'transcription']) {
+    if (preset.models?.[taskKey]?.provider !== 'openai') {
+      providers.add('openai');
+    }
+  }
+
+  const missingProviders = [...providers].filter((provider) => {
+    const envKey = PROVIDER_ENV_KEY[provider];
+    return envKey ? !hasConfiguredValue(vars, envKey) : false;
+  });
+
+  if (!missingProviders.length) {
+    return { enabled: true, unavailableReason: undefined };
+  }
+
+  const missingKeys = missingProviders.map((provider) => {
+    const envKey = PROVIDER_ENV_KEY[provider];
+    return `${PROVIDER_LABEL[provider] || provider}: ${envKey}`;
+  });
+
+  return {
+    enabled: false,
+    unavailableReason: `Недоступен: не задан ${missingKeys.join(', ')}`,
+  };
+}
+
+function buildAiPresetResponseEntry(name, vars) {
+  const preset = AI_PRESETS[name];
+  const availability = getPresetAvailability(preset, vars);
+  return {
+    ...preset,
+    ...availability,
+  };
 }
 
 function writeEnvFile(updates) {
@@ -297,7 +354,7 @@ app.get('/api/ai-preset', requireAuth, async (_req, res) => {
       activePresetName: storedPreset || envDefaultPreset,
       storedPresetName: storedPreset,
       envDefaultPreset,
-      availablePresets: AI_PRESET_NAMES.map((name) => AI_PRESETS[name]),
+      availablePresets: AI_PRESET_NAMES.map((name) => buildAiPresetResponseEntry(name, vars)),
       source: storedPreset ? buildRuntimeSource() : buildConfigSource(
         'env_fallback',
         'Значение по умолчанию',
@@ -317,6 +374,12 @@ app.post('/api/ai-preset', requireAuth, async (req, res) => {
   const preset = parseAiPresetName(req.body?.preset);
   if (!preset) {
     return res.status(400).json({ error: 'Неизвестный AI preset' });
+  }
+
+  const vars = readEnvFile();
+  const availability = getPresetAvailability(AI_PRESETS[preset], vars);
+  if (!availability.enabled) {
+    return res.status(400).json({ error: availability.unavailableReason || 'AI preset недоступен без обязательных API ключей' });
   }
 
   const pool = createDbPool();

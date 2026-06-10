@@ -6,7 +6,7 @@ import modelPresetRegistry from '../admin-panel/src/ai-model-presets.json';
  * Значение используется в task-aware резолвере, чтобы выбрать нужный клиент
  * и понять, требуется ли OpenAI fallback для API, которые пока не абстрагированы.
  */
-export type AiProvider = 'openai' | 'deepseek' | 'gemini';
+export type AiProvider = 'openai' | 'openrouter' | 'gemini';
 
 /**
  * Ключ задачи, для которой подбирается модель из preset registry.
@@ -52,8 +52,9 @@ export type AiPresetName =
     | 'gpt-max'
     | 'gpt-balanced'
     | 'gpt-lean'
-    | 'hybrid-deepseek-gpt'
-    | 'hybrid-gemini-gpt';
+    | 'hybrid-openrouter-gpt'
+    | 'hybrid-gemini-gpt'
+    | 'gemini-direct-balanced';
 
 /**
  * Полная конфигурация одного AI preset-а.
@@ -96,10 +97,12 @@ export const gptMaxPreset = aiPresets['gpt-max'];
 export const gptBalancedPreset = aiPresets['gpt-balanced'];
 /** Готовый shortcut к preset-у `gpt-lean`. */
 export const gptLeanPreset = aiPresets['gpt-lean'];
-/** Готовый shortcut к hybrid preset-у `deepseek + openai fallback`. */
-export const hybridDeepSeekGptPreset = aiPresets['hybrid-deepseek-gpt'];
+/** Готовый shortcut к hybrid preset-у `openrouter + openai fallback`. */
+export const hybridOpenRouterGptPreset = aiPresets['hybrid-openrouter-gpt'];
 /** Готовый shortcut к hybrid preset-у `gemini + openai fallback`. */
 export const hybridGeminiGptPreset = aiPresets['hybrid-gemini-gpt'];
+/** Готовый shortcut к direct preset-у `gemini only`. */
+export const geminiDirectBalancedPreset = aiPresets['gemini-direct-balanced'];
 
 /**
  * Валидирует произвольную строку как имя известного AI preset-а.

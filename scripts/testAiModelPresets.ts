@@ -17,19 +17,34 @@ function withPreset<T>(preset: string, fn: () => T): T {
     }
 }
 
-withPreset('hybrid-deepseek-gpt', () => {
+withPreset('hybrid-openrouter-gpt', () => {
     assert.deepStrictEqual(resolveModelForTask('intentClassification'), {
-        provider: 'deepseek',
-        model: 'deepseek-v4-flash',
+        provider: 'openai',
+        model: 'gpt-5.4-nano',
     });
     assert.deepStrictEqual(resolveModelForTask('conversation'), {
-        provider: 'deepseek',
-        model: 'deepseek-v4-pro',
+        provider: 'openrouter',
+        model: 'openrouter/auto',
     });
 });
 
 withPreset('hybrid-gemini-gpt', () => {
     assert.deepStrictEqual(resolveModelForTask('browserVision'), {
+        provider: 'gemini',
+        model: 'gemini-3-flash-preview',
+    });
+    assert.deepStrictEqual(resolveModelForTask('conversation'), {
+        provider: 'gemini',
+        model: 'gemini-3-flash-preview',
+    });
+});
+
+withPreset('gemini-direct-balanced', () => {
+    assert.deepStrictEqual(resolveModelForTask('embedding'), {
+        provider: 'gemini',
+        model: 'gemini-embedding-001',
+    });
+    assert.deepStrictEqual(resolveModelForTask('transcription'), {
         provider: 'gemini',
         model: 'gemini-3.1-flash-lite',
     });

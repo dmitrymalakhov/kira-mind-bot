@@ -6,9 +6,9 @@ export const openaiClient = new OpenAI({
     apiKey: config.openAiApiKey || process.env.OPENAI_API_KEY,
 });
 
-export const deepseekClient = new OpenAI({
-    apiKey: process.env.DEEPSEEK_API_KEY || 'missing-deepseek-api-key',
-    baseURL: 'https://api.deepseek.com',
+export const openrouterClient = new OpenAI({
+    apiKey: process.env.OPENROUTER_API_KEY || 'missing-openrouter-api-key',
+    baseURL: 'https://openrouter.ai/api/v1',
 });
 
 export const geminiClient = new OpenAI({
@@ -20,8 +20,8 @@ export function getAiClient(provider: AiProvider): OpenAI {
     switch (provider) {
         case 'openai':
             return openaiClient;
-        case 'deepseek':
-            return deepseekClient;
+        case 'openrouter':
+            return openrouterClient;
         case 'gemini':
             return geminiClient;
     }
