@@ -3,48 +3,76 @@
 .PHONY: \
 	help \
 	install-server remote-install remote-deploy-bot remote-deploy-admin remote-deploy-all \
-	deploy deploy-clean status logs logs-follow logs-bot logs-bot-follow logs-admin logs-admin-follow pause pause-bot pause-admin restart restart-bot restart-admin stop \
+	deploy deploy-clean up down status logs logs-follow logs-bot logs-bot-follow logs-admin logs-admin-follow \
+	pause pause-bot pause-admin restart restart-bot restart-admin stop \
+	admin-up admin-rebuild admin-restart admin-pause admin-stop admin-logs admin-logs-follow \
+	bot-up bot-rebuild bot-restart bot-pause bot-stop bot-logs bot-logs-follow \
 	install install-admin build build-admin build-all test lint dev dev-admin
 
+define SERVER_COMPOSE_PREP
+source ./scripts/ops/server-common.sh && \
+ensure_server_repo_root && \
+resolve_compose_cmd && \
+load_env_if_present && \
+ensure_admin_state && \
+write_compose_env
+endef
+
 help:
-	@printf '%s\n' \
-		'Kira Mind Bot' \
-		'' \
-		'ops:' \
-		'  make install-server  # первый запуск на VPS' \
-		'  make remote-install  # установка на VPS с локальной машины, нужен SERVER_IP=' \
-		'  make remote-deploy-bot    # удалённый деплой только бота, нужен SERVER_IP=' \
-		'  make remote-deploy-admin  # удалённый деплой только админки, нужен SERVER_IP=' \
-		'  make remote-deploy-all    # удалённый деплой бота и админки, нужен SERVER_IP=' \
-		'  make deploy          # обычный redeploy' \
-		'  make deploy-clean    # redeploy с безопасной очисткой Docker cache' \
-		'  make status          # статус сервисов' \
-		'  make logs            # последние логи всего стека' \
-		'  make logs-follow     # live-логи всего стека' \
-		'  make logs-bot        # последние логи kira-mind-bot' \
-		'  make logs-bot-follow # live-логи kira-mind-bot' \
-		'  make logs-admin      # последние логи admin-panel' \
-		'  make logs-admin-follow # live-логи admin-panel' \
-		'  make pause           # пауза app-сервисов' \
-		'  make pause-bot       # пауза kira-mind-bot' \
-		'  make pause-admin     # пауза admin-panel' \
-		'  make restart         # рестарт app-сервисов' \
-		'  make restart-bot     # рестарт kira-mind-bot' \
-		'  make restart-admin   # рестарт admin-panel' \
-		'  make stop            # остановка всего стека' \
-		'' \
-		'local dev:' \
-		'  make install         # npm install для бота' \
-		'  make install-admin   # npm install для admin-panel' \
-		'  make dev             # локальный запуск бота' \
-		'  make dev-admin       # локальный запуск админки' \
-		'' \
-		'build/test:' \
-		'  make build           # сборка server-части' \
-		'  make build-admin     # сборка админки' \
-		'  make build-all       # полная сборка' \
-		'  make test            # тесты' \
-		'  make lint            # typecheck server and admin panel'
+	@printf '\n%s\n\n' 'Kira Mind Bot'
+	@printf '%s\n' '============================================================'
+	@printf '%s\n' '  Сценарий 1: Прямой запуск на VPS'
+	@printf '%s\n' '============================================================'
+	@printf '%s\n' '[Первый запуск]'
+	@printf '  %-28s %s\n' 'make install-server' 'Первый запуск прямо на VPS.'
+	@printf '\n%s\n' '[Общие команды]'
+	@printf '  %-28s %s\n' 'make up' 'Поднять весь стек без пересборки.'
+	@printf '  %-28s %s\n' 'make deploy' 'Обычный redeploy app-сервисов.'
+	@printf '  %-28s %s\n' 'make deploy-clean' 'Redeploy с compose down и очисткой Docker cache.'
+	@printf '  %-28s %s\n' 'make pause' 'Поставить app-сервисы на паузу.'
+	@printf '  %-28s %s\n' 'make stop' 'Остановить весь стек без удаления volumes.'
+	@printf '  %-28s %s\n' 'make down' 'Полностью завершить работу: docker compose down.'
+	@printf '  %-28s %s\n' 'make status' 'Показать статус контейнеров.'
+	@printf '  %-28s %s\n' 'make logs' 'Показать последние логи всего стека.'
+	@printf '  %-28s %s\n' 'make logs-follow' 'Смотреть live-логи всего стека.'
+	@printf '\n%s\n' '[Бот и admin-panel]'
+	@printf '  %-28s %s\n' 'make admin-up' 'Поднять только admin-panel без пересборки.'
+	@printf '  %-28s %s\n' 'make admin-rebuild' 'Пересобрать и заново поднять admin-panel.'
+	@printf '  %-28s %s\n' 'make admin-restart' 'Перезапустить admin-panel без пересборки.'
+	@printf '  %-28s %s\n' 'make admin-pause' 'Поставить admin-panel на паузу.'
+	@printf '  %-28s %s\n' 'make admin-stop' 'Остановить только admin-panel.'
+	@printf '  %-28s %s\n' 'make admin-logs' 'Показать последние логи admin-panel.'
+	@printf '  %-28s %s\n' 'make admin-logs-follow' 'Смотреть live-логи admin-panel.'
+	@printf '  %-28s %s\n' 'make bot-up' 'Поднять только бота без пересборки.'
+	@printf '  %-28s %s\n' 'make bot-rebuild' 'Пересобрать и заново поднять бота.'
+	@printf '  %-28s %s\n' 'make bot-restart' 'Перезапустить бота без пересборки.'
+	@printf '  %-28s %s\n' 'make bot-pause' 'Поставить бота на паузу.'
+	@printf '  %-28s %s\n' 'make bot-stop' 'Остановить только бота.'
+	@printf '  %-28s %s\n' 'make bot-logs' 'Показать последние логи бота.'
+	@printf '  %-28s %s\n' 'make bot-logs-follow' 'Смотреть live-логи бота.'
+	@printf '\n%s\n' '============================================================'
+	@printf '%s\n' '  Сценарий 2: С локальной машины на удалённый VPS'
+	@printf '%s\n' '============================================================'
+	@printf '%s\n' '[Первый запуск]'
+	@printf '  %-28s %s\n' 'make remote-install SERVER_IP=...' 'Первый запуск удалённо на VPS с локальной машины.'
+	@printf '\n%s\n' '[Общие команды]'
+	@printf '  %-28s %s\n' 'make remote-deploy-all SERVER_IP=...' 'Удалённо задеплоить бот и admin-panel.'
+	@printf '\n%s\n' '[Бот и admin-panel]'
+	@printf '  %-28s %s\n' 'make remote-deploy-admin SERVER_IP=...' 'Удалённо задеплоить только admin-panel.'
+	@printf '  %-28s %s\n' 'make remote-deploy-bot SERVER_IP=...' 'Удалённо задеплоить только бота.'
+	@printf '  %-28s %s\n' 'make remote-deploy-all SERVER_IP=...' 'Удалённо задеплоить бот и admin-panel.'
+	@printf '\n%s\n' '============================================================'
+	@printf '%s\n' '  Локальная разработка'
+	@printf '%s\n' '============================================================'
+	@printf '  %-28s %s\n' 'make install' 'npm install для бота.'
+	@printf '  %-28s %s\n' 'make install-admin' 'npm install для admin-panel.'
+	@printf '  %-28s %s\n' 'make dev' 'Локальный запуск бота.'
+	@printf '  %-28s %s\n' 'make dev-admin' 'Локальный запуск админки.'
+	@printf '  %-28s %s\n' 'make build' 'Сборка server-части.'
+	@printf '  %-28s %s\n' 'make build-admin' 'Сборка админки.'
+	@printf '  %-28s %s\n' 'make build-all' 'Полная сборка.'
+	@printf '  %-28s %s\n' 'make test' 'Тесты.'
+	@printf '  %-28s %s\n' 'make lint' 'ESLint.'
 
 install-server:
 	./scripts/ops/server-install.sh
@@ -66,6 +94,12 @@ deploy:
 
 deploy-clean:
 	./scripts/ops/server-deploy.sh deploy --clean
+
+up:
+	@bash -lc '$(SERVER_COMPOSE_PREP) && compose up -d'
+
+down:
+	@bash -lc '$(SERVER_COMPOSE_PREP) && compose down'
 
 status:
 	./scripts/ops/server-deploy.sh status
@@ -108,6 +142,48 @@ restart-admin:
 
 stop:
 	./scripts/ops/server-deploy.sh stop
+
+admin-up:
+	@bash -lc '$(SERVER_COMPOSE_PREP) && compose up -d admin-panel'
+
+admin-rebuild:
+	@bash -lc '$(SERVER_COMPOSE_PREP) && compose build admin-panel && compose up -d admin-panel'
+
+admin-restart:
+	$(MAKE) restart-admin
+
+admin-pause:
+	$(MAKE) pause-admin
+
+admin-stop:
+	@bash -lc '$(SERVER_COMPOSE_PREP) && compose stop admin-panel'
+
+admin-logs:
+	$(MAKE) logs-admin
+
+admin-logs-follow:
+	$(MAKE) logs-admin-follow
+
+bot-up:
+	@bash -lc '$(SERVER_COMPOSE_PREP) && compose up -d postgres qdrant kira-mind-bot'
+
+bot-rebuild:
+	@bash -lc '$(SERVER_COMPOSE_PREP) && compose up -d postgres qdrant && compose build kira-mind-bot && compose up -d kira-mind-bot'
+
+bot-restart:
+	$(MAKE) restart-bot
+
+bot-pause:
+	$(MAKE) pause-bot
+
+bot-stop:
+	@bash -lc '$(SERVER_COMPOSE_PREP) && compose stop kira-mind-bot'
+
+bot-logs:
+	$(MAKE) logs-bot
+
+bot-logs-follow:
+	$(MAKE) logs-bot-follow
 
 install:
 	npm install

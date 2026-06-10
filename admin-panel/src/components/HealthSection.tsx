@@ -20,6 +20,8 @@ import {
   TextField,
   Tooltip,
   Typography,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
@@ -210,7 +212,7 @@ function HealthLogRow({ record }: { record: HealthLogRecord }) {
             sx={{ fontSize: '11px' }}
           />
         </TableCell>
-        <TableCell>
+        <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
           {record.severity == null ? (
             <Typography variant="caption" color="text.disabled">—</Typography>
           ) : (
@@ -227,6 +229,25 @@ function HealthLogRow({ record }: { record: HealthLogRecord }) {
           <Typography variant="body2" sx={{ maxWidth: 360 }}>
             {summary}
           </Typography>
+          <Box sx={{ display: { xs: 'flex', md: 'none' }, gap: 0.5, flexWrap: 'wrap', mt: 0.75 }}>
+            {record.severity != null && (
+              <Chip
+                size="small"
+                color={severityColor(record.severity)}
+                label={`Оценка ${record.severity}/10`}
+                variant="outlined"
+                sx={{ fontSize: '10px' }}
+              />
+            )}
+            {record.userId && (
+              <Chip
+                size="small"
+                label={`User ${record.userId}`}
+                variant="outlined"
+                sx={{ fontSize: '10px', fontFamily: 'monospace' }}
+              />
+            )}
+          </Box>
           {!!record.tags.length && (
             <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.75 }}>
               {record.tags.slice(0, 5).map((tag) => (
@@ -235,7 +256,7 @@ function HealthLogRow({ record }: { record: HealthLogRecord }) {
             </Box>
           )}
         </TableCell>
-        <TableCell>
+        <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
           <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>
             {record.userId || '—'}
           </Typography>
@@ -319,6 +340,8 @@ function HealthLogRow({ record }: { record: HealthLogRecord }) {
 }
 
 export function HealthSection() {
+  const theme = useTheme();
+  const isDesktopTable = useMediaQuery(theme.breakpoints.up('md'));
   const [draft, setDraft] = useState<HealthFilterDraft>(DEFAULT_DRAFT);
   const [query, setQuery] = useState<HealthLogQuery>(() => buildQuery(DEFAULT_DRAFT));
   const [records, setRecords] = useState<HealthLogRecord[]>([]);
@@ -513,16 +536,16 @@ export function HealthSection() {
         </Alert>
       ) : (
         <Paper variant="outlined" sx={{ bgcolor: 'background.paper', overflow: 'hidden', borderRadius: 1 }}>
-          <TableContainer>
-            <Table size="small">
+          <TableContainer sx={{ overflowX: 'auto' }}>
+            <Table size="small" sx={{ minWidth: isDesktopTable ? 760 : 'auto' }}>
               <TableHead>
                 <TableRow>
                   <TableCell />
                   <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px' }}>Время</TableCell>
                   <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px' }}>Тип</TableCell>
-                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px' }}>Оценка</TableCell>
+                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px', display: { xs: 'none', md: 'table-cell' } }}>Оценка</TableCell>
                   <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px' }}>Запись</TableCell>
-                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px' }}>User ID</TableCell>
+                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px', display: { xs: 'none', md: 'table-cell' } }}>User ID</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
