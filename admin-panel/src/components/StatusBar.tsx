@@ -5,6 +5,8 @@ import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 interface ContainerInfo {
   name: string;
   status: string;
+  statusLabel: string;
+  details: string | null;
   running: boolean;
   startedAt: string | null;
 }
@@ -28,6 +30,33 @@ function formatUptime(startedAt: string | null): string {
   return `${m}м`;
 }
 
+function getStatusAppearance(status: string) {
+  if (status === 'running') {
+    return {
+      dot: '#67e8f9',
+      bg: 'rgba(34, 211, 238, 0.10)',
+      border: 'rgba(103, 232, 249, 0.24)',
+      text: '#d9fbff',
+    };
+  }
+
+  if (status === 'stopped') {
+    return {
+      dot: '#fbbf24',
+      bg: 'rgba(251, 191, 36, 0.10)',
+      border: 'rgba(251, 191, 36, 0.22)',
+      text: '#ffe7b0',
+    };
+  }
+
+  return {
+    dot: '#fca5a5',
+    bg: 'rgba(248, 113, 113, 0.10)',
+    border: 'rgba(248, 113, 113, 0.20)',
+    text: '#ffd9d9',
+  };
+}
+
 export function StatusBar() {
   const [data, setData] = useState<StatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -49,37 +78,56 @@ export function StatusBar() {
   if (!data) return null;
 
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
       {data.containers.map((c) => {
         const uptime = formatUptime(c.startedAt);
         const label = LABELS[c.name] ?? c.name;
-        const color = c.running ? '#4ade80' : '#f87171';
-        const tooltipText = c.running
-          ? `${c.status}${uptime ? ` · работает ${uptime}` : ''}`
-          : c.status;
+        const appearance = getStatusAppearance(c.status);
+        const statusText = c.status === 'running'
+          ? `${label} ${c.statusLabel}${uptime ? ` · ${uptime}` : ''}`
+          : `${label}: ${c.statusLabel}`;
+        const tooltipText = c.details || null;
 
-        return (
+        const chip = (
+          <Chip
+            size="small"
+            icon={
+              <FiberManualRecordIcon sx={{ fontSize: '9px !important', color: `${appearance.dot} !important` }} />
+            }
+            label={
+              <Typography variant="caption" sx={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.01em' }}>
+                {statusText}
+              </Typography>
+            }
+            sx={{
+              height: 26,
+              px: 0.25,
+              borderRadius: '13px',
+              bgcolor: appearance.bg,
+              border: '1px solid',
+              borderColor: appearance.border,
+              color: appearance.text,
+              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.04)',
+              cursor: 'default',
+              '& .MuiChip-icon': {
+                ml: 0.75,
+                mr: '-2px',
+              },
+              '& .MuiChip-label': {
+                px: 1,
+              },
+            }}
+          />
+        );
+
+        return tooltipText ? (
           <Tooltip key={c.name} title={tooltipText} arrow>
-            <Chip
-              size="small"
-              icon={
-                <FiberManualRecordIcon sx={{ fontSize: '10px !important', color: `${color} !important` }} />
-              }
-              label={
-                <Typography variant="caption" sx={{ fontSize: '11px' }}>
-                  {label}{uptime ? ` · ${uptime}` : ''}
-                </Typography>
-              }
-              sx={{
-                bgcolor: 'transparent',
-                border: '1px solid',
-                borderColor: c.running ? '#14532d' : '#450a0a',
-                color: c.running ? '#86efac' : '#fca5a5',
-                height: 24,
-                cursor: 'default',
-              }}
-            />
+            <Box component="span">{chip}</Box>
           </Tooltip>
+        ) : (
+          <Box key={c.name}>
+            {chip}
+          </Box>
         );
       })}
     </Box>

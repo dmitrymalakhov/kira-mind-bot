@@ -1596,6 +1596,24 @@ app.get('/api/health/export', requireAuth, async (req, res) => {
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
+function buildContainerStatus(name, status, running, startedAt, details) {
+  const statusLabelMap = {
+    running: 'online',
+    stopped: 'offline',
+    docker_unreachable: 'Docker недоступен',
+    status_unreadable: 'статус не прочитан',
+  };
+
+  return {
+    name,
+    status,
+    statusLabel: statusLabelMap[status] || statusLabelMap.status_unreadable,
+    details: details || null,
+    running: Boolean(running),
+    startedAt: startedAt || null,
+  };
+}
+
 function getContainerStatus(name) {
   return new Promise((resolve) => {
     const chunks = [];
@@ -1606,19 +1624,29 @@ function getContainerStatus(name) {
         res.on('end', () => {
           try {
             const data = JSON.parse(Buffer.concat(chunks).toString());
-            resolve({
-              name,
-              status: data.State?.Status || 'unknown',
-              running: data.State?.Running || false,
-              startedAt: data.State?.StartedAt || null,
-            });
+            const rawStatus = String(data.State?.Status || '').toLowerCase();
+            const running = Boolean(data.State?.Running);
+            const startedAt = data.State?.StartedAt || null;
+            if (!data.State || (!running && !rawStatus)) {
+              resolve(buildContainerStatus(name, 'status_unreadable', false, null, 'Не удалось прочитать состояние контейнера.'));
+              return;
+            }
+            resolve(
+              buildContainerStatus(
+                name,
+                running || rawStatus === 'running' ? 'running' : 'stopped',
+                running,
+                running ? startedAt : null,
+                running ? 'Контейнер запущен.' : 'Контейнер остановлен.'
+              )
+            );
           } catch {
-            resolve({ name, status: 'unknown', running: false, startedAt: null });
+            resolve(buildContainerStatus(name, 'status_unreadable', false, null, 'Docker ответил некорректными данными.'));
           }
         });
       }
     );
-    req.on('error', () => resolve({ name, status: 'unreachable', running: false, startedAt: null }));
+    req.on('error', () => resolve(buildContainerStatus(name, 'docker_unreachable', false, null, 'Нет доступа к Docker socket.')));
     req.end();
   });
 }

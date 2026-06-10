@@ -105,10 +105,25 @@ function DomainRow({ chat, onUpdate }: { chat: ChatInfo; onUpdate: (updated: Cha
               {chat.username && (
                 <Typography variant="caption" color="text.secondary">@{chat.username}</Typography>
               )}
+              <Box sx={{ display: { xs: 'flex', md: 'none' }, gap: 0.5, flexWrap: 'wrap', mt: 0.5 }}>
+                <Chip
+                  label={CHAT_TYPE_LABEL[chat.chatType] ?? chat.chatType}
+                  size="small"
+                  color={CHAT_TYPE_COLOR[chat.chatType] ?? 'default'}
+                  variant="outlined"
+                  sx={{ fontSize: '10px' }}
+                />
+                <Chip
+                  label={chat.profile === 'KiraMindBot' ? '🌸 Kira' : chat.profile}
+                  size="small"
+                  variant="outlined"
+                  sx={{ fontSize: '10px' }}
+                />
+              </Box>
             </Box>
           </Box>
         </TableCell>
-        <TableCell>
+        <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
           <Chip
             label={CHAT_TYPE_LABEL[chat.chatType] ?? chat.chatType}
             size="small"
@@ -117,17 +132,17 @@ function DomainRow({ chat, onUpdate }: { chat: ChatInfo; onUpdate: (updated: Cha
             sx={{ fontSize: '11px' }}
           />
         </TableCell>
-        <TableCell>
+        <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
           <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>
             {chat.chatId}
           </Typography>
         </TableCell>
-        <TableCell>
+        <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
           <Typography variant="caption" color="text.secondary">
             {chat.profile === 'KiraMindBot' ? '🌸 Kira' : chat.profile}
           </Typography>
         </TableCell>
-        <TableCell>
+        <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
           <Typography variant="caption" color="text.secondary">
             {formatDate(chat.lastSeenAt)}
           </Typography>
@@ -168,7 +183,7 @@ function DomainRow({ chat, onUpdate }: { chat: ChatInfo; onUpdate: (updated: Cha
                   {ALL_DOMAINS.map(domain => (
                     <FormControlLabel
                       key={domain.key}
-                      sx={{ width: '50%', m: 0, mb: 0.5 }}
+                      sx={{ width: { xs: '100%', sm: '50%' }, m: 0, mb: 0.5 }}
                       control={
                         <Checkbox
                           size="small"
@@ -298,15 +313,15 @@ export function ChatsSection() {
           Список пуст. Бот появится здесь после первого взаимодействия в любом чате.
         </Alert>
       ) : (
-        <TableContainer component={Paper} variant="outlined" sx={{ bgcolor: 'background.paper' }}>
-          <Table size="small">
+        <TableContainer component={Paper} variant="outlined" sx={{ bgcolor: 'background.paper', overflowX: 'auto' }}>
+          <Table size="small" sx={{ minWidth: { md: 760 } }}>
             <TableHead>
               <TableRow>
                 <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px' }}>Название</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px' }}>Тип</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px' }}>ID</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px' }}>Профиль</TableCell>
-                <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px' }}>Последний раз</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px', display: { xs: 'none', md: 'table-cell' } }}>Тип</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px', display: { xs: 'none', md: 'table-cell' } }}>ID</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px', display: { xs: 'none', md: 'table-cell' } }}>Профиль</TableCell>
+                <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px', display: { xs: 'none', md: 'table-cell' } }}>Последний раз</TableCell>
                 <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px' }} align="center">
                   Публичный режим
                 </TableCell>
