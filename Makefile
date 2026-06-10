@@ -44,7 +44,7 @@ help:
 		'  make build-admin     # сборка админки' \
 		'  make build-all       # полная сборка' \
 		'  make test            # тесты' \
-		'  make lint            # eslint'
+		'  make lint            # typecheck server and admin panel'
 
 install-server:
 	./scripts/ops/server-install.sh
