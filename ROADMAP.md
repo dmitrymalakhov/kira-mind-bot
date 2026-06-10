@@ -2,25 +2,33 @@
 
 ## AI Model Presets
 
-- Добить сценарные проверки для hybrid preset-ов на реальных runtime-путях:
+- Добить сценарные проверки для preset-ов на реальных runtime-путях:
   - `conversation`
   - `messageAnalysis`
   - `browserVision`
   - `browserPlanning`
+- Добавить отдельные сценарные проверки для task key, которые сейчас имеют hidden OpenAI dependency:
+  - `embedding`
+  - `transcription`
 - Зафиксировать smoke/e2e-покрытие для runtime-переключения preset-а без redeploy.
+- Устранить рассинхрон между конфигом preset-ов и фактическим runtime:
+  - `gemini-direct-balanced` не должен позиционироваться как pure Gemini, пока `embedding` и `transcription` идут через OpenAI-specific code paths;
+  - либо перевести `embedding` / `transcription` на полноценные Gemini-адаптеры;
+  - либо пометить preset как hybrid/degraded и явно отражать OpenAI dependency в UI/API;
+  - тесты не должны проверять только `resolveModelForTask(...)`, если реальный execution path использует `resolveOpenAiModelForTaskAsync(...)`.
 
 ## LLM Provider Abstraction
 
 - Ввести абстракцию поверх провайдеров:
   - единый интерфейс text completion / structured output;
   - адаптер OpenAI;
-  - адаптер второго провайдера;
+  - адаптер OpenRouter / Gemini без опоры на OpenAI-compatible случайности там, где это влияет на контракт;
   - единый слой ретраев, таймаутов и логирования ошибок.
-- Для второго провайдера предусмотреть:
+- Для дополнительных провайдеров предусмотреть:
   - отдельный API key;
   - healthcheck/валидатор конфигурации;
   - fallback обратно на OpenAI для критичных сценариев.
-- До включения второго провайдера в проде проверить:
+- До включения OpenRouter / Gemini в проде проверить:
   - совместимость structured output;
   - качество на интентах, анализе переписки и обычных ответах;
   - поведение при rate limits / timeout / provider outage.
@@ -68,7 +76,7 @@
   - `latencyMs`;
   - `fallbackUsed`.
 - Для OpenAI читать `prompt_tokens_details.cached_tokens`.
-- Для DeepSeek и других провайдеров нормализовать собственные cache hit/miss поля в общую usage-модель.
+- Для OpenRouter, Gemini и других провайдеров нормализовать собственные cache hit/miss поля в общую usage-модель.
 - Считать `cacheHitRatio = cachedInputTokens / inputTokens`.
 - Не логировать полный prompt, историю, память пользователя и другие приватные данные.
 
@@ -178,8 +186,8 @@
 
 ### 7. Dialogue summarization
 
-- Перевести `services/dialogueSummarizer.ts` с прямого OpenAI-вызова на task-aware wrapper.
-- Использовать общий preset, fallback, usage logging и completion limits.
+- Проверить, что `services/dialogueSummarizer.ts` и остальные суммаризационные/экстракционные сценарии действительно используют task-aware wrapper end-to-end, а не только task-aware model resolution.
+- Добавить для них явные runtime-тесты на active preset, fallback и usage logging.
 - Удалить persona, биографию и характер из prompt суммаризатора.
 - Сохранять только:
   - устойчивые факты о пользователе;
@@ -230,3 +238,14 @@
 - Публичное поведение Telegram-команд и основные пользовательские сценарии не меняются.
 - Все новые экспорты именованные, в новом коде нет `any`.
 - `npm run build:server` и существующие тесты проходят.
+
+## Уже сделано
+
+- Все прикладные вызовы `openai.chat.completions.create` переведены на task-aware wrapper `createChatCompletionForTask(...)`; legacy-слой `openAiModels` удалён из runtime-конфига.
+- Browser planning и browser vision уже резолвят модель через task-aware preset runtime.
+- Для `embeddings` и `audio.transcriptions` сохранён low-level OpenAI client, но выбор модели теперь берётся из активного preset-а.
+- Добавлен runtime-aware AI preset registry в админке:
+  - доступны `gpt-*`, `hybrid-openrouter-gpt`, `hybrid-gemini-gpt`, `gemini-direct-balanced`;
+  - недоступные preset-ы блокируются в UI и отклоняются API при отсутствии обязательных ключей.
+- Кнопка `Своё время` у напоминаний уже использует общий LLM-разбор даты с сохранением postpone-flow.
+- Серверный VPS-first сценарий, `Dockerfile.server`, `tsconfig.server.json`, `server-install.sh`, `server-deploy.sh` и корневой `Makefile` уже добавлены.
