@@ -5,7 +5,7 @@
 - Все прикладные вызовы `openai.chat.completions.create` переведены на task-aware wrapper `createChatCompletionForTask(...)`; legacy-слой `openAiModels` удалён из runtime-конфига.
 - Browser planning и browser vision теперь тоже резолвят модель через task-aware preset runtime, а не через прямой OpenAI chat completion.
 - Для `embeddings` и `audio.transcriptions` сохранён low-level OpenAI client, но выбор модели теперь берётся из активного preset-а без возврата compat-проекции `openAiModels`.
-- Кнопка `Своё время` у напоминаний унифицирована с общим сценарием редактирования: кастомный перенос теперь использует тот же разбор `applyReminderEditInput(...)`, что и обычное изменение напоминания.
+- Кнопка `Своё время` у напоминаний использует общий LLM-разбор даты, но сохраняет полноценную семантику откладывания: статус `Postponed`, очистку старой клавиатуры и счётчик переносов.
 
 ## 2026-06-09
 

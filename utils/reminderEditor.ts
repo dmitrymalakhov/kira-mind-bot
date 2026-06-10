@@ -41,6 +41,25 @@ function formatDueDate(date: Date): string {
     });
 }
 
+function parseDueDateChange(reminder: Reminder, extracted: ReminderEditExtraction): Date | null {
+    const newDueDateRaw = typeof extracted.newDueDate === "string"
+        ? extracted.newDueDate.trim()
+        : "";
+
+    if (!newDueDateRaw || newDueDateRaw.toLowerCase() === "null") {
+        return null;
+    }
+
+    const parsed = new Date(processReminderTime(newDueDateRaw));
+    const beforeDueDate = new Date(reminder.dueDate);
+
+    if (isNaN(parsed.getTime()) || !isMeaningfulDateChange(beforeDueDate, parsed)) {
+        return null;
+    }
+
+    return parsed;
+}
+
 async function extractReminderEdit(reminder: Reminder, userInput: string): Promise<ReminderEditExtraction | null> {
     const now = new Date();
     const currentDueDate = new Date(reminder.dueDate).toLocaleString("ru-RU", {
@@ -87,6 +106,41 @@ async function extractReminderEdit(reminder: Reminder, userInput: string): Promi
     return parseLLMJson<ReminderEditExtraction>(resp.choices[0]?.message?.content || "");
 }
 
+export async function extractReminderPostponeDate(reminder: Reminder, userInput: string): Promise<{
+    ok: boolean;
+    dueDate?: Date;
+    responseText: string;
+}> {
+    let extracted: ReminderEditExtraction | null = null;
+
+    try {
+        extracted = await extractReminderEdit(reminder, userInput);
+    } catch (error) {
+        console.error("[reminder_postpone] extraction failed:", error);
+    }
+
+    if (!extracted) {
+        return {
+            ok: false,
+            responseText: "Не смогла распознать дату и время. Попробуй ещё раз, например: «завтра в 10» или «в пятницу в 15:30».",
+        };
+    }
+
+    const dueDate = parseDueDateChange(reminder, extracted);
+    if (!dueDate || dueDate.getTime() <= Date.now()) {
+        return {
+            ok: false,
+            responseText: "Не смогла распознать будущую дату и время. Попробуй ещё раз, например: «завтра в 10» или «через 2 часа».",
+        };
+    }
+
+    return {
+        ok: true,
+        dueDate,
+        responseText: `✅ Напоминание перенесено на ${formatDueDate(dueDate)}`,
+    };
+}
+
 export async function applyReminderEditInput(reminder: Reminder, userInput: string): Promise<ReminderEditResult> {
     let extracted: ReminderEditExtraction | null = null;
 
@@ -105,20 +159,14 @@ export async function applyReminderEditInput(reminder: Reminder, userInput: stri
     }
 
     const updated: Reminder = { ...reminder };
-    const beforeDueDate = new Date(reminder.dueDate);
     let changedTime = false;
     let changedText = false;
 
-    const newDueDateRaw = typeof extracted.newDueDate === "string"
-        ? extracted.newDueDate.trim()
-        : "";
-    if (newDueDateRaw && newDueDateRaw.toLowerCase() !== "null") {
-        const parsed = new Date(processReminderTime(newDueDateRaw));
-        if (!isNaN(parsed.getTime()) && isMeaningfulDateChange(beforeDueDate, parsed)) {
-            updated.dueDate = parsed;
-            updated.remindAgainAt = parsed;
-            changedTime = true;
-        }
+    const parsedDueDate = parseDueDateChange(reminder, extracted);
+    if (parsedDueDate) {
+        updated.dueDate = parsedDueDate;
+        updated.remindAgainAt = parsedDueDate;
+        changedTime = true;
     }
 
     const newText = compactText(

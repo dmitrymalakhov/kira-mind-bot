@@ -98,6 +98,8 @@ export interface SessionData {
         reminderId: string;
         messageId: number;
         chatId: number;
+        createdAt?: number;
+        expiresAt?: number;
     };
     /** Ожидание ввода правки для существующего напоминания */
     pendingReminderEdit?: {

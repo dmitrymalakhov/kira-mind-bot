@@ -121,7 +121,7 @@ export function buildReminderCard(
         .text(`${num} из ${total}`, 'reminders_nav_noop')
         .text(nextBtn,       nextCb)
         .row()
-        .text('📄 Список', 'reminders_list');
+        .text('📄 Список', `reminders_list_${index}`);
 
     if (showBackToChats) {
         keyboard.row().text('↩️ К чатам', 'reminder_chat_back');
@@ -154,7 +154,8 @@ export function buildPostponeKeyboard(reminderId: string): InlineKeyboard {
  * Текст и клавиатура для отображения всех напоминаний списком.
  */
 export function buildRemindersList(
-    reminders: Reminder[]
+    reminders: Reminder[],
+    returnIndex = 0
 ): { text: string; keyboard: InlineKeyboard } {
     const lines = reminders.map((r, i) => {
         const dueTime = new Date(r.dueDate).toLocaleString('ru-RU', {
@@ -170,6 +171,7 @@ export function buildRemindersList(
         return `${i + 1}. ${body}\n   🗓 ${dueTime} · 📌 ${statusLabel(r.status)}${recPart}${targetPart}`;
     });
     const text = `📋 Все напоминания (${reminders.length}):\n\n${lines.join('\n\n')}`;
-    const keyboard = new InlineKeyboard().text('◀️ К карточкам', 'reminders_nav_0');
+    const safeReturnIndex = Math.max(0, Math.min(returnIndex, reminders.length - 1));
+    const keyboard = new InlineKeyboard().text('◀️ К карточкам', `reminders_nav_${safeReturnIndex}`);
     return { text, keyboard };
 }

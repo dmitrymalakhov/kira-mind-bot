@@ -28,7 +28,7 @@
 ## Model Presets
 
 - Не добавлять обратно OpenAI-only registry, ручные model overrides и параллельные preset-слои рядом с AI preset registry.
-- Если legacy `pendingPostpone` больше не нужен после унификации с `pendingReminderEdit`, удалить его отдельным cleanup-изменением вместе с типами и fallback-веткой.
+- Не объединять `pendingPostpone` с `pendingReminderEdit`: кастомный перенос должен идти через полноценный postpone-flow со статусом `Postponed`, очисткой старой клавиатуры и счётчиком переносов.
 
 ## GPT-5 Token Params / AI Runtime Debt
 

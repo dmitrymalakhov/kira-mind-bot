@@ -46,7 +46,7 @@ import { ReminderRepository } from "./services/ReminderRepository";
 import { getTelegramMenuCommands } from "./capabilities";
 import { persistSessionNow } from "./services/SessionStorage";
 import { healthPhotoAgent, shouldRouteHealthPhoto } from "./agents/healthAgent";
-import { applyReminderEditInput } from "./utils/reminderEditor";
+import { applyReminderEditInput, extractReminderPostponeDate } from "./utils/reminderEditor";
 import { getTelegramVoiceReadinessIssue, withTelegramVoiceFile } from "./services/elevenLabsTts";
 import { stripVoiceReplyDirective, wantsVoiceReply } from "./utils/voiceReply";
 import { addTargetNotificationButtons, appendTargetNotificationPrompt, buildDefaultTargetReminderMessage } from "./utils/reminderTargetNotification";
@@ -771,22 +771,42 @@ bot.on("message:text", async (ctx, next) => {
 
                 // Кастомное время для переноса напоминания
                 if (ctx.session.pendingPostpone) {
-                    const { reminderId, messageId, chatId } = ctx.session.pendingPostpone;
+                    const pending = ctx.session.pendingPostpone;
+                    const { reminderId } = pending;
+                    const isCancel = /^(отмена|отмени|не надо|стоп|cancel)$/iu.test(message.trim());
+                    if (isCancel) {
+                        ctx.session.pendingPostpone = undefined;
+                        await ctx.reply('Ок, перенос напоминания отменён.');
+                        return;
+                    }
+
+                    if (pending.expiresAt != null && pending.expiresAt <= Date.now()) {
+                        ctx.session.pendingPostpone = undefined;
+                        await ctx.reply('Время переноса вышло. Открой /reminders и нажми «Отложить» ещё раз.');
+                        return;
+                    }
+
                     ctx.session.pendingPostpone = undefined;
                     const reminder = ReminderRegistry.getInstance().get(reminderId);
                     if (reminder) {
-                        const editResult = await applyReminderEditInput(reminder, message);
-                        if (!editResult.ok || !editResult.reminder || !editResult.changedTime) {
-                            await ctx.reply('Не смогла распознать дату и время. Попробуй ещё раз, например: «завтра в 10» или «в пятницу в 15:30».');
-                            ctx.session.pendingPostpone = { reminderId, messageId, chatId };
+                        const parsed = await extractReminderPostponeDate(reminder, message);
+                        if (!parsed.ok || !parsed.dueDate) {
+                            await ctx.reply(parsed.responseText);
+                            ctx.session.pendingPostpone = pending;
                             return;
                         }
 
-                        const updated = editResult.reminder;
+                        const updated = await postponeReminderUntil(bot, reminder, parsed.dueDate);
+                        if (!updated) {
+                            await ctx.reply('Не смогла перенести напоминание. Попробуй ещё раз.');
+                            ctx.session.pendingPostpone = pending;
+                            return;
+                        }
+
                         ReminderRegistry.getInstance().add(updated);
                         const sessIdx = ctx.session.reminders.findIndex(r => r.id === reminderId);
                         if (sessIdx >= 0) ctx.session.reminders[sessIdx] = updated;
-                        await ctx.reply(editResult.responseText);
+                        await ctx.reply(parsed.responseText);
                     }
                     return;
                 }
