@@ -1,6 +1,7 @@
 import {
     extractFactsAboutUserFromConversation,
     ExtractedFactAboutUser,
+    FactExtractionOptions,
     StudyChatAnalysisProgressHandler,
 } from '../utils/studyChatFlow';
 import { devLog } from '../utils';
@@ -14,14 +15,16 @@ export async function runAnalyzeConversationAgent(
     contactName: string,
     startDate?: Date,
     endDate?: Date,
-    onProgress?: StudyChatAnalysisProgressHandler
+    onProgress?: StudyChatAnalysisProgressHandler,
+    options: FactExtractionOptions = {}
 ): Promise<ExtractedFactAboutUser[]> {
     const facts = await extractFactsAboutUserFromConversation(
         formattedConversationText,
         contactName,
         startDate,
         endDate,
-        onProgress
+        onProgress,
+        options
     );
     devLog('AnalyzeConversationAgent: extracted facts', { count: facts.length, contactName });
     return facts;
