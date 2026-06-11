@@ -76,6 +76,7 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme}
       - BOT_ENV_FILE=/app/env/bot.env
       - PERSONALITY_FILE=/app/personality/personality.json
+      - KIRA_RUNTIME_HEALTH_URL=http://kira-mind-bot:3100
     logging: *default-logging
 
 volumes:

@@ -25,6 +25,7 @@ let preloadContactsPromise: Promise<void> | null = null;
 let telegramClientLastError: string | null = null;
 let telegramClientLastErrorAt: string | null = null;
 let telegramClientLastReadyAt: string | null = null;
+let telegramClientInitStartedAt: string | null = null;
 
 interface TelegramUserClientCredentials {
     apiId: number;
@@ -165,12 +166,64 @@ function createTelegramClient(credentials: TelegramUserClientCredentials): Teleg
     );
 }
 
+async function disconnectTelegramClientSafely(client: TelegramClient): Promise<void> {
+    try {
+        await client.disconnect();
+    } catch {
+        // ignore cleanup errors
+    }
+}
+
+async function connectAndAuthorizeTelegramClient(
+    client: TelegramClient,
+    options: { timeoutMs?: number } = {}
+): Promise<boolean> {
+    const initPromise = (async () => {
+        await client.connect();
+        return client.isUserAuthorized();
+    })();
+
+    if (!options.timeoutMs) {
+        return initPromise;
+    }
+
+    return new Promise<boolean>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`TIMEOUT after ${options.timeoutMs}ms`)), options.timeoutMs);
+
+        initPromise.then(
+            (authorized) => {
+                clearTimeout(timer);
+                resolve(authorized);
+            },
+            (error: unknown) => {
+                clearTimeout(timer);
+                reject(error);
+            }
+        );
+    });
+}
+
 /**
  * Инициализирует и устанавливает соединение с клиентом Telegram
  * @returns Подключенный клиент Telegram или undefined при ошибке
  */
 export async function initTelegramClient(options: TelegramClientInitOptions = {}): Promise<TelegramClient | undefined> {
     const { preloadContacts = true, silent = false } = options;
+
+    if (telegramClient) {
+        const diagnostics = buildTelegramClientDiagnostics(telegramClient);
+        if (diagnostics.connected && !diagnostics.reconnecting) {
+            const authorized = await telegramClient.isUserAuthorized().catch(() => false);
+            if (authorized) {
+                if (preloadContacts) {
+                    await preloadContactsList({ client: telegramClient, silent });
+                }
+                return telegramClient;
+            }
+            await disconnectTelegramClientSafely(telegramClient);
+            telegramClient = null;
+        }
+    }
 
     if (telegramClientInitPromise) {
         const client = await telegramClientInitPromise;
@@ -180,6 +233,7 @@ export async function initTelegramClient(options: TelegramClientInitOptions = {}
         return client;
     }
 
+    telegramClientInitStartedAt = new Date().toISOString();
     telegramClientInitPromise = (async () => {
         const credentials = getTelegramUserClientCredentials();
         if (!credentials) {
@@ -192,13 +246,15 @@ export async function initTelegramClient(options: TelegramClientInitOptions = {}
         }
 
         const client = telegramClient ?? createTelegramClient(credentials);
+        const shouldCleanupClient = telegramClient == null;
 
         try {
-            await client.connect();
-
-            if (!await client.isUserAuthorized()) {
+            if (!await connectAndAuthorizeTelegramClient(client)) {
                 rememberTelegramClientError("Пользователь не авторизован в Telegram");
                 logTelegramClientMessage("Пользователь не авторизован в Telegram", undefined, silent);
+                if (shouldCleanupClient) {
+                    await disconnectTelegramClientSafely(client);
+                }
                 telegramClient = null;
                 return undefined;
             }
@@ -209,6 +265,9 @@ export async function initTelegramClient(options: TelegramClientInitOptions = {}
             return telegramClient;
         } catch (error) {
             rememberTelegramClientError(error);
+            if (shouldCleanupClient) {
+                await disconnectTelegramClientSafely(client);
+            }
             telegramClient = null;
             logTelegramClientMessage("Ошибка при подключении к аккаунту Telegram:", error, silent);
             return undefined;
@@ -223,6 +282,7 @@ export async function initTelegramClient(options: TelegramClientInitOptions = {}
         return client;
     } finally {
         telegramClientInitPromise = null;
+        telegramClientInitStartedAt = null;
     }
 }
 
@@ -613,26 +673,10 @@ export async function preloadContactsList(options: PreloadContactsOptions = {}):
     }
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(`TIMEOUT after ${timeoutMs}ms`)), timeoutMs);
-
-        promise.then(
-            (value) => {
-                clearTimeout(timer);
-                resolve(value);
-            },
-            (error: unknown) => {
-                clearTimeout(timer);
-                reject(error);
-            }
-        );
-    });
-}
-
 export async function getTelegramUserClientHealth(): Promise<TelegramUserClientHealth> {
     const checkedAt = new Date().toISOString();
     const credentials = getTelegramUserClientCredentials();
+    let diagnosticClient: TelegramClient | null = null;
 
     if (!credentials) {
         return {
@@ -672,33 +716,65 @@ export async function getTelegramUserClientHealth(): Promise<TelegramUserClientH
         };
     }
 
-    try {
-        const client = await withTimeout(
-            initTelegramClient({ preloadContacts: false, silent: true }),
-            5000
-        );
+    if (telegramClientInitPromise) {
+        return {
+            status: 'warn',
+            summary: 'Telegram user-client ещё инициализируется.',
+            details: telegramClientLastError || 'Общая инициализация клиента уже запущена и ещё не завершилась.',
+            checkedAt,
+            configured: true,
+            connected: currentDiagnostics.connected,
+            authorized: currentDiagnostics.connected,
+            reconnecting: currentDiagnostics.reconnecting,
+            dc: currentDiagnostics.dc,
+            endpoint: currentDiagnostics.endpoint,
+            error: telegramClientLastError,
+            lastReadyAt: telegramClientLastReadyAt,
+            lastErrorAt: telegramClientLastErrorAt ?? telegramClientInitStartedAt,
+        };
+    }
 
-        if (!client) {
+    try {
+        if (telegramClient) {
+            const connected = Boolean(telegramClient.connected) && !telegramClient.disconnected;
+            const authorized = await telegramClient.isUserAuthorized();
+            const diagnostics = buildTelegramClientDiagnostics(telegramClient);
+            const status: TelegramHealthStatus = diagnostics.reconnecting
+                ? 'warn'
+                : connected && authorized
+                    ? 'ok'
+                    : 'down';
+
             return {
-                status: 'down',
-                summary: 'Telegram user-client не инициализировался.',
-                details: telegramClientLastError || 'Клиент не смог подключиться или не авторизован.',
+                status,
+                summary: status === 'ok'
+                    ? 'Telegram user-client подключён и авторизован.'
+                    : status === 'warn'
+                        ? 'Telegram user-client подключён, но находится в reconnect-состоянии.'
+                        : 'Telegram user-client не готов к работе.',
+                details: status === 'ok'
+                    ? 'Клиент прошёл connect() и isUserAuthorized().'
+                    : telegramClientLastError || 'Клиент не подтвердил готовность.',
                 checkedAt,
                 configured: true,
-                connected: false,
-                authorized: false,
-                reconnecting: false,
-                dc: currentDiagnostics.dc,
-                endpoint: currentDiagnostics.endpoint,
+                connected,
+                authorized,
+                reconnecting: diagnostics.reconnecting,
+                dc: diagnostics.dc,
+                endpoint: diagnostics.endpoint,
                 error: telegramClientLastError,
                 lastReadyAt: telegramClientLastReadyAt,
                 lastErrorAt: telegramClientLastErrorAt,
             };
         }
 
-        const connected = Boolean(client.connected) && !client.disconnected;
-        const authorized = await client.isUserAuthorized();
-        const diagnostics = buildTelegramClientDiagnostics(client);
+        diagnosticClient = createTelegramClient(credentials);
+        const authorized = await connectAndAuthorizeTelegramClient(
+            diagnosticClient,
+            { timeoutMs: 5000 }
+        );
+        const connected = Boolean(diagnosticClient.connected) && !diagnosticClient.disconnected;
+        const diagnostics = buildTelegramClientDiagnostics(diagnosticClient);
         const status: TelegramHealthStatus = diagnostics.reconnecting
             ? 'warn'
             : connected && authorized
@@ -745,6 +821,10 @@ export async function getTelegramUserClientHealth(): Promise<TelegramUserClientH
             lastReadyAt: telegramClientLastReadyAt,
             lastErrorAt: telegramClientLastErrorAt,
         };
+    } finally {
+        if (diagnosticClient) {
+            await disconnectTelegramClientSafely(diagnosticClient);
+        }
     }
 }
 

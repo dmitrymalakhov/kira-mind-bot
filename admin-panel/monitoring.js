@@ -5,23 +5,23 @@ const path = require('path');
 
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_RUNTIME_HEALTH_PORT = Number(process.env.KIRA_RUNTIME_HEALTH_PORT || 3100);
-const ROOT_PACKAGE_JSON_PATH = path.join(__dirname, '..', 'package.json');
+const RUNTIME_HEALTH_METADATA_PATH = path.join(__dirname, 'runtime-health-metadata.json');
 
-function readRootPackageJson() {
-  if (!fs.existsSync(ROOT_PACKAGE_JSON_PATH)) {
+function readRuntimeHealthMetadata() {
+  if (!fs.existsSync(RUNTIME_HEALTH_METADATA_PATH)) {
     return null;
   }
 
   try {
-    return JSON.parse(fs.readFileSync(ROOT_PACKAGE_JSON_PATH, 'utf8'));
+    return JSON.parse(fs.readFileSync(RUNTIME_HEALTH_METADATA_PATH, 'utf8'));
   } catch {
     return null;
   }
 }
 
 function getQdrantClientVersion() {
-  const packageJson = readRootPackageJson();
-  const rawVersion = packageJson?.dependencies?.['@qdrant/js-client-rest'];
+  const metadata = readRuntimeHealthMetadata();
+  const rawVersion = metadata?.qdrantClientVersion;
   return typeof rawVersion === 'string' ? rawVersion.replace(/^[^\d]*/, '') : null;
 }
 
@@ -130,9 +130,8 @@ function getRuntimeHealthBaseUrl(env) {
     return String(env.KIRA_RUNTIME_HEALTH_URL).replace(/\/+$/, '');
   }
 
-  const host = env.NODE_ENV === 'production' ? 'kira-mind-bot' : '127.0.0.1';
   const port = Number(env.KIRA_RUNTIME_HEALTH_PORT || DEFAULT_RUNTIME_HEALTH_PORT);
-  return `http://${host}:${port}`;
+  return `http://kira-mind-bot:${port}`;
 }
 
 function buildProviderStatus({ httpStatus, ok, providerLabel }) {
