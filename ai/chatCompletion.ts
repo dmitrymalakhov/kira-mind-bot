@@ -1,20 +1,13 @@
-import type OpenAI from 'openai';
-import { getAiClient } from './aiClients';
 import { resolveModelForTaskAsync } from './modelResolver';
 import type { AiModelRef, AiTaskKey } from './modelPresets';
 import { getFallbackModel } from './fallbackModels';
 import { logAiUsage } from '../services/aiUsageLogService';
+import { getAiProviderAdapter } from './providers/registry';
+import type {
+    ChatCompletion,
+    ChatCompletionParamsWithoutModel,
+} from './providers/types';
 import { parseLLMJson } from '../utils';
-
-type ChatCompletionCreateParams = OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming;
-type ChatCompletion = OpenAI.Chat.Completions.ChatCompletion;
-
-type ParamsWithoutModel = Omit<ChatCompletionCreateParams, 'model'>;
-type ChatCompletionCreateParamsWithLegacyMaxTokens = ChatCompletionCreateParams & {
-    max_tokens?: number;
-    max_completion_tokens?: number;
-};
-
 
 function recordAiUsage(payload: Parameters<typeof logAiUsage>[0]): void {
     void logAiUsage(payload);
@@ -29,39 +22,20 @@ function errorToMessage(error: unknown): string {
     }
 }
 
-function normalizeOpenAiChatParams(
-    provider: AiModelRef['provider'],
-    model: string,
-    params: ParamsWithoutModel,
-): ChatCompletionCreateParamsWithLegacyMaxTokens {
-    const normalized = { ...params } as ChatCompletionCreateParamsWithLegacyMaxTokens;
-
-    if (provider !== 'openai' || !model.startsWith('gpt-5')) {
-        return normalized;
-    }
-
-    if (normalized.max_completion_tokens === undefined && normalized.max_tokens !== undefined) {
-        normalized.max_completion_tokens = normalized.max_tokens;
-    }
-
-    delete normalized.max_tokens;
-    return normalized;
-}
-
 async function createChatCompletionWithModel(
     taskKey: AiTaskKey,
-    params: ParamsWithoutModel,
+    params: ChatCompletionParamsWithoutModel,
     preset: string,
     modelRef: AiModelRef,
     fallbackUsed: boolean,
     originalError?: unknown,
 ): Promise<ChatCompletion> {
     const startedAt = Date.now();
-    const client = getAiClient(modelRef.provider);
-    const normalizedParams = normalizeOpenAiChatParams(modelRef.provider, modelRef.model, params);
+    const providerAdapter = getAiProviderAdapter(modelRef.provider);
+    const normalizedParams = providerAdapter.normalizeChatParams(modelRef.model, params);
 
     try {
-        const result = await client.chat.completions.create({
+        const result = await providerAdapter.client.chat.completions.create({
             ...normalizedParams,
             model: modelRef.model,
         });
@@ -107,7 +81,7 @@ async function createChatCompletionWithModel(
 
 export async function createChatCompletionForTask(
     taskKey: AiTaskKey,
-    params: ParamsWithoutModel,
+    params: ChatCompletionParamsWithoutModel,
 ): Promise<ChatCompletion> {
     const { presetName, modelRef } = await resolveModelForTaskAsync(taskKey);
 
@@ -120,7 +94,7 @@ export async function createChatCompletionForTask(
 
 export async function createFallbackChatCompletion(
     taskKey: AiTaskKey,
-    params: ParamsWithoutModel,
+    params: ChatCompletionParamsWithoutModel,
     originalError: unknown,
     preset = 'fallback',
 ): Promise<ChatCompletion> {
@@ -137,7 +111,7 @@ export async function createFallbackChatCompletion(
 
 export async function createJsonChatCompletionForTask<T>(
     taskKey: AiTaskKey,
-    params: ParamsWithoutModel,
+    params: ChatCompletionParamsWithoutModel,
 ): Promise<T | null> {
     const response = await createChatCompletionForTask(taskKey, params);
     const content = response.choices[0]?.message?.content || '';

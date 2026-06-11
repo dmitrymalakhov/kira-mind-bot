@@ -105,8 +105,8 @@
     },
     "gemini-direct-balanced": {
       "name": "gemini-direct-balanced",
-      "title": "Gemini Direct Balanced",
-      "description": "Чистый Gemini-пресет: Gemini 3 Flash Preview для пользовательских и reasoning-задач, Flash-Lite для лёгких внутренних задач.",
+      "title": "Gemini Balanced",
+      "description": "Gemini для основных текстовых задач; OpenAI для web search, embedding и transcription, где runtime использует OpenAI-специфичные API.",
       "models": {
         "defaultText": { "provider": "gemini", "model": "gemini-3-flash-preview" },
         "intentClassification": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
@@ -115,11 +115,11 @@
         "memoryExtraction": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
         "memoryConsolidation": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
         "messageAnalysis": { "provider": "gemini", "model": "gemini-3-flash-preview" },
-        "webSearchReasoning": { "provider": "gemini", "model": "gemini-3-flash-preview" },
+        "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4-mini" },
         "browserPlanning": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
         "browserVision": { "provider": "gemini", "model": "gemini-3-flash-preview" },
-        "embedding": { "provider": "gemini", "model": "gemini-embedding-001" },
-        "transcription": { "provider": "gemini", "model": "gemini-3.1-flash-lite" }
+        "embedding": { "provider": "openai", "model": "text-embedding-3-small" },
+        "transcription": { "provider": "openai", "model": "whisper-1" }
       }
     }
   }

@@ -40,13 +40,21 @@ withPreset('hybrid-gemini-gpt', () => {
 });
 
 withPreset('gemini-direct-balanced', () => {
-    assert.deepStrictEqual(resolveModelForTask('embedding'), {
-        provider: 'gemini',
-        model: 'gemini-embedding-001',
-    });
-    assert.deepStrictEqual(resolveModelForTask('transcription'), {
+    assert.deepStrictEqual(resolveModelForTask('intentClassification'), {
         provider: 'gemini',
         model: 'gemini-3.1-flash-lite',
+    });
+    assert.deepStrictEqual(resolveModelForTask('webSearchReasoning'), {
+        provider: 'openai',
+        model: 'gpt-5.4-mini',
+    });
+    assert.deepStrictEqual(resolveModelForTask('embedding'), {
+        provider: 'openai',
+        model: 'text-embedding-3-small',
+    });
+    assert.deepStrictEqual(resolveModelForTask('transcription'), {
+        provider: 'openai',
+        model: 'whisper-1',
     });
 });
 

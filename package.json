@@ -8,7 +8,7 @@
     "start:dev": "NODE_ENV=development ts-node index.ts",
     "start:prod": "NODE_ENV=production node ./index.js",
     "build": "npm run build:server",
-    "test": "npm run build:server && npm run test:voice-reply && npm run test:voice-number-normalization && npm run test:speech-text-preparation && npm run test:group-chat-context",
+    "test": "npm run build:server && npm run test:ai-presets && npm run test:ai-runtime-routing && npm run test:voice-reply && npm run test:voice-number-normalization && npm run test:speech-text-preparation && npm run test:group-chat-context",
     "test:voice-reply": "ts-node scripts/testVoiceReply.ts",
     "test:voice-number-normalization": "ts-node scripts/testRussianSpeechNumbers.ts",
     "test:speech-text-preparation": "ts-node scripts/testSpeechTextPreparation.ts",
@@ -18,7 +18,8 @@
     "test:ai-presets": "ts-node scripts/testAiModelPresets.ts",
     "build:server": "tsc --project tsconfig.server.json",
     "build:admin": "npm --prefix admin-panel run build",
-    "build:all": "npm run build:server && npm run build:admin"
+    "build:all": "npm run build:server && npm run build:admin",
+    "test:ai-runtime-routing": "ts-node scripts/testAiRuntimeRouting.ts"
   },
   "author": "",
   "license": "ISC",
