@@ -2,6 +2,7 @@
 
 ## 2026-06-11
 
+- Исправлена потеря контекста при переносе напоминания на произвольное время и при редактировании существующего напоминания: pending-состояния этих сценариев теперь переживают отдельные Telegram updates через session storage.
 - В админке добавлен раздел `Мониторинг` с live health checks для контейнера бота, PostgreSQL, Qdrant, Telegram Bot API, Telegram User Client, OpenAI, Gemini и OpenRouter.
 - Admin backend получил единый endpoint `GET /api/monitoring/health`, который агрегирует статусы зависимостей и возвращает короткие технические детали по каждой проверке.
 - Бот теперь поднимает внутренний runtime health endpoint для безопасной диагностики Telegram User Client без чтения Docker-логов из админки.
