@@ -58,6 +58,14 @@ withPreset('gemini-direct-balanced', () => {
     });
 });
 
+withPreset('hybrid-deepseek-gpt', () => {
+    assert.strictEqual(parseAiPresetName(process.env.AI_MODEL_PRESET), 'hybrid-openrouter-gpt');
+    assert.deepStrictEqual(resolveModelForTask('conversation'), {
+        provider: 'openrouter',
+        model: 'openrouter/auto',
+    });
+});
+
 assert.deepStrictEqual(getFallbackModel('conversation'), {
     provider: 'openai',
     model: 'gpt-5.4-mini',

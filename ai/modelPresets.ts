@@ -78,6 +78,9 @@ interface AiPresetRegistry {
 }
 
 const registry = modelPresetRegistry as AiPresetRegistry;
+const LEGACY_AI_PRESET_ALIASES: Readonly<Record<string, AiPresetName>> = {
+    'hybrid-deepseek-gpt': 'hybrid-openrouter-gpt',
+};
 
 /**
  * Упорядоченный список допустимых имён preset-ов.
@@ -112,5 +115,6 @@ export const geminiDirectBalancedPreset = aiPresets['gemini-direct-balanced'];
  */
 export function parseAiPresetName(raw: string | undefined | null): AiPresetName | null {
     if (!raw) return null;
-    return AI_PRESET_NAMES.includes(raw as AiPresetName) ? raw as AiPresetName : null;
+    const normalized = LEGACY_AI_PRESET_ALIASES[raw] ?? raw;
+    return AI_PRESET_NAMES.includes(normalized as AiPresetName) ? normalized as AiPresetName : null;
 }

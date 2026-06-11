@@ -131,6 +131,10 @@ prompt_default() {
 echo -e "\n${BOLD}OpenAI${NC}"
 prompt_required OPENAI_API_KEY "OpenAI API Key" "https://platform.openai.com/api-keys"
 
+echo -e "\n${BOLD}Дополнительные AI-провайдеры${NC}"
+prompt_optional OPENROUTER_API_KEY "OpenRouter API Key" "https://openrouter.ai/keys"
+prompt_optional GEMINI_API_KEY "Gemini API Key" "https://aistudio.google.com/app/apikey"
+
 # Telegram Bot
 echo -e "\n${BOLD}Telegram Bot${NC}"
 prompt_required KIRA_BOT_TOKEN "Токен бота" "Создать: напиши @BotFather → /newbot"
@@ -184,6 +188,9 @@ cat > "$ENV_FILE" << EOF
 # Сгенерировано install.sh $(date '+%Y-%m-%d %H:%M:%S')
 
 OPENAI_API_KEY=${OPENAI_API_KEY}
+
+OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+GEMINI_API_KEY=${GEMINI_API_KEY}
 
 KIRA_BOT_TOKEN=${KIRA_BOT_TOKEN}
 KIRA_ALLOWED_USER_ID=${KIRA_ALLOWED_USER_ID}
