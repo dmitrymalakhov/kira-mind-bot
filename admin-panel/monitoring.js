@@ -86,7 +86,7 @@ function hasQdrantVersionMismatch(clientVersion, serverVersion) {
     return false;
   }
 
-  return client.major !== server.major || client.minor !== server.minor;
+  return client.major !== server.major;
 }
 
 function aggregateOverallStatus(checks) {

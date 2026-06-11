@@ -130,7 +130,7 @@ async function testSnapshotStatuses() {
 
   assert.strictEqual(snapshot.overallStatus, 'down');
   assert.strictEqual(byKey['postgres'].status, 'ok');
-  assert.strictEqual(byKey['qdrant'].status, 'warn');
+  assert.strictEqual(byKey['qdrant'].status, 'ok');
   assert.strictEqual(byKey['telegram-bot-api'].status, 'ok');
   assert.strictEqual(byKey['telegram-user-client'].status, 'warn');
   assert.strictEqual(byKey['openai'].status, 'down');
