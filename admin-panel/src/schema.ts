@@ -14,16 +14,16 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         hint: 'Используется для GPT fallback, web reasoning, embeddings, vision и whisper.',
       },
       {
-        key: 'DEEPSEEK_API_KEY',
-        label: 'DeepSeek API Key',
+        key: 'OPENROUTER_API_KEY',
+        label: 'OpenRouter API Key',
         type: 'password',
-        hint: 'Нужен для пресета Hybrid DeepSeek + GPT. Применяется после рестарта процесса.',
+        hint: 'Нужен для пресета Hybrid OpenRouter + GPT. Применяется после рестарта процесса.',
       },
       {
         key: 'GEMINI_API_KEY',
         label: 'Gemini API Key',
         type: 'password',
-        hint: 'Нужен для пресета Hybrid Gemini + GPT. Применяется после рестарта процесса.',
+        hint: 'Нужен для пресетов Hybrid Gemini + GPT и Gemini Direct Balanced. Применяется после рестарта процесса.',
       },
       {
         key: 'IDEOGRAM_API_KEY',

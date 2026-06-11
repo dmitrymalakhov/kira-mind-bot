@@ -1,7 +1,15 @@
 # Changelog
 
+## 2026-06-11
+
+- В админке добавлен раздел `Мониторинг` с live health checks для контейнера бота, PostgreSQL, Qdrant, Telegram Bot API, Telegram User Client, OpenAI, Gemini и OpenRouter.
+- Admin backend получил единый endpoint `GET /api/monitoring/health`, который агрегирует статусы зависимостей и возвращает короткие технические детали по каждой проверке.
+- Бот теперь поднимает внутренний runtime health endpoint для безопасной диагностики Telegram User Client без чтения Docker-логов из админки.
+- Инициализация Telegram User Client переведена на guarded path: параллельные вызовы больше не должны возвращать сырой клиент до завершения `connect()` и `isUserAuthorized()`.
+
 ## 2026-06-10
 
+- Provider-specific AI contract logic вынесена из общих runtime wrapper-ов в отдельный слой provider adapters; preset registry сохранён как единственный источник маршрутизации `task -> provider + model`.
 - Все прикладные вызовы `openai.chat.completions.create` переведены на task-aware wrapper `createChatCompletionForTask(...)`; legacy-слой `openAiModels` удалён из runtime-конфига.
 - Browser planning и browser vision теперь тоже резолвят модель через task-aware preset runtime, а не через прямой OpenAI chat completion.
 - Для `embeddings` и `audio.transcriptions` сохранён low-level OpenAI client, но выбор модели теперь берётся из активного preset-а без возврата compat-проекции `openAiModels`.

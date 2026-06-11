@@ -1,11 +1,12 @@
-import { getAiClient } from './aiClients';
 import { getFallbackModel } from './fallbackModels';
 import { resolveModelForTaskAsync } from './modelResolver';
 import type { AiModelRef, AiTaskKey } from './modelPresets';
+import { getAiProviderAdapter } from './providers/registry';
+import type {
+    ResponseCreateParams,
+    ResponseResult,
+} from './providers/types';
 import { logAiUsage } from '../services/aiUsageLogService';
-
-type ResponseCreateParams = Record<string, unknown>;
-type ResponseResult = any;
 
 function recordAiUsage(payload: Parameters<typeof logAiUsage>[0]): void {
     void logAiUsage(payload);
@@ -20,10 +21,14 @@ function errorToMessage(error: unknown): string {
     }
 }
 
-function getUsageTokens(result: ResponseResult) {
+function getUsageTokens(result: ResponseResult): {
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+} {
     return {
-        inputTokens: result?.usage?.input_tokens ?? result?.usage?.prompt_tokens,
-        outputTokens: result?.usage?.output_tokens ?? result?.usage?.completion_tokens,
+        inputTokens: result.usage?.input_tokens,
+        outputTokens: result.usage?.output_tokens,
         totalTokens: result?.usage?.total_tokens,
     };
 }
@@ -36,17 +41,10 @@ async function createResponseWithModel(
     fallbackUsed: boolean,
 ): Promise<ResponseResult> {
     const startedAt = Date.now();
-    const client = getAiClient(modelRef.provider) as any;
+    const providerAdapter = getAiProviderAdapter(modelRef.provider);
 
     try {
-        if (!client.responses?.create) {
-            throw new Error(`Provider ${modelRef.provider} does not support Responses API`);
-        }
-
-        const result = await client.responses.create({
-            ...params,
-            model: modelRef.model,
-        });
+        const result = await providerAdapter.createResponse(modelRef.model, params);
         const usage = getUsageTokens(result);
 
         recordAiUsage({

@@ -2,25 +2,26 @@
 
 ## AI Model Presets
 
-- Добить сценарные проверки для hybrid preset-ов на реальных runtime-путях:
+- Добить сценарные проверки для preset-ов на реальных runtime-путях:
   - `conversation`
   - `messageAnalysis`
   - `browserVision`
   - `browserPlanning`
+- Добавить отдельные сценарные проверки для task key, которые сейчас имеют hidden OpenAI dependency:
+  - `embedding`
+  - `transcription`
 - Зафиксировать smoke/e2e-покрытие для runtime-переключения preset-а без redeploy.
+- Устранить рассинхрон между конфигом preset-ов и фактическим runtime:
+  - либо перевести `embedding` / `transcription` на полноценные Gemini-адаптеры;
+  - тесты не должны проверять только `resolveModelForTask(...)`, если реальный execution path использует `resolveOpenAiModelForTaskAsync(...)`.
 
 ## LLM Provider Abstraction
 
-- Ввести абстракцию поверх провайдеров:
-  - единый интерфейс text completion / structured output;
-  - адаптер OpenAI;
-  - адаптер второго провайдера;
-  - единый слой ретраев, таймаутов и логирования ошибок.
-- Для второго провайдера предусмотреть:
+- Для дополнительных провайдеров предусмотреть:
   - отдельный API key;
   - healthcheck/валидатор конфигурации;
   - fallback обратно на OpenAI для критичных сценариев.
-- До включения второго провайдера в проде проверить:
+- До включения OpenRouter / Gemini в проде проверить:
   - совместимость structured output;
   - качество на интентах, анализе переписки и обычных ответах;
   - поведение при rate limits / timeout / provider outage.
@@ -32,10 +33,6 @@
 
 ## GPT-5 Token Params / AI Runtime Debt
 
-- Убрать хардкод `model.startsWith('gpt-5')` из `ai/chatCompletion.ts` и заменить его на capability metadata модели:
-  - какой лимитный параметр поддерживается (`max_tokens` или `max_completion_tokens`);
-  - какие API-режимы допустимы для модели;
-  - можно ли безопасно использовать модель в fallback без локальных специальных правил.
 - Привести оставшиеся `browserVision`-вызовы к каноническому контракту токен-лимитов, чтобы код не зависел от implicit-нормализации wrapper-а при будущей смене preset-а на GPT-5.x.
 - Добавить регрессионный runtime-тест на сценарий:
   - `createChatCompletionForTask(...)` получает legacy `max_tokens`;
@@ -68,7 +65,7 @@
   - `latencyMs`;
   - `fallbackUsed`.
 - Для OpenAI читать `prompt_tokens_details.cached_tokens`.
-- Для DeepSeek и других провайдеров нормализовать собственные cache hit/miss поля в общую usage-модель.
+- Для OpenRouter, Gemini и других провайдеров нормализовать собственные cache hit/miss поля в общую usage-модель.
 - Считать `cacheHitRatio = cachedInputTokens / inputTokens`.
 - Не логировать полный prompt, историю, память пользователя и другие приватные данные.
 
@@ -178,8 +175,8 @@
 
 ### 7. Dialogue summarization
 
-- Перевести `services/dialogueSummarizer.ts` с прямого OpenAI-вызова на task-aware wrapper.
-- Использовать общий preset, fallback, usage logging и completion limits.
+- Проверить, что `services/dialogueSummarizer.ts` и остальные суммаризационные/экстракционные сценарии действительно используют task-aware wrapper end-to-end, а не только task-aware model resolution.
+- Добавить для них явные runtime-тесты на active preset, fallback и usage logging.
 - Удалить persona, биографию и характер из prompt суммаризатора.
 - Сохранять только:
   - устойчивые факты о пользователе;
@@ -230,3 +227,19 @@
 - Публичное поведение Telegram-команд и основные пользовательские сценарии не меняются.
 - Все новые экспорты именованные, в новом коде нет `any`.
 - `npm run build:server` и существующие тесты проходят.
+
+## Уже сделано
+
+- В админке появился отдельный live-раздел `Мониторинг` с агрегированными health checks для контейнера бота, PostgreSQL, Qdrant, Telegram Bot API, Telegram User Client и AI-провайдеров.
+- Все прикладные вызовы `openai.chat.completions.create` переведены на task-aware wrapper `createChatCompletionForTask(...)`; legacy-слой `openAiModels` удалён из runtime-конфига.
+- Browser planning и browser vision уже резолвят модель через task-aware preset runtime.
+- Для `embeddings` и `audio.transcriptions` сохранён low-level OpenAI client, но выбор модели теперь берётся из активного preset-а.
+- Вынесен отдельный слой provider adapters для OpenAI / Gemini / OpenRouter:
+  - preset registry по-прежнему отвечает только за `task -> provider + model`;
+  - provider-specific capabilities, поддержка `responses.create` и нормализация chat params вынесены из orchestration wrapper-ов;
+  - `model.startsWith('gpt-5')` заменён на capability metadata модели.
+- Добавлен runtime-aware AI preset registry в админке:
+  - доступны `gpt-*`, `hybrid-openrouter-gpt`, `hybrid-gemini-gpt`, `gemini-direct-balanced`;
+  - недоступные preset-ы блокируются в UI и отклоняются API при отсутствии обязательных ключей.
+- Кнопка `Своё время` у напоминаний уже использует общий LLM-разбор даты с сохранением postpone-flow.
+- Серверный VPS-first сценарий, `Dockerfile.server`, `tsconfig.server.json`, `server-install.sh`, `server-deploy.sh` и корневой `Makefile` уже добавлены.
