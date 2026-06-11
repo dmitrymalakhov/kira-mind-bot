@@ -142,6 +142,10 @@ export type InferenceLevel =
     | 'inferred'
     | 'ambiguous';
 
+export interface FactExtractionOptions {
+    mode?: 'default' | 'reflection';
+}
+
 // ─── Константы ────────────────────────────────────────────────────────────────
 
 const CHUNK_MAX_CHARS = 12000;  // ~150–200 сообщений на чанк, чтобы не превышать контекст gpt-5.4-nano
@@ -300,9 +304,36 @@ const EXTRACTION_SYSTEM = `Ты анализируешь переписку и �
 
 const DOMAIN_LIST = 'work|health|family|finance|education|hobbies|travel|social|home|personal|entertainment|general';
 
+function buildReflectionExtractionRules(ownerName: string, contactName: string): string {
+    return `
+РЕЖИМ ФОНОВОЙ РЕФЛЕКСИИ: будь заметно строже обычного анализа.
+Сохраняй только то, что с высокой вероятностью пригодится через недели или месяцы:
+- устойчивые предпочтения, привычки, роли, отношения, место работы/жизни;
+- важные решения, долгосрочные планы, обязательства, дедлайны;
+- значимые события про здоровье, семью, финансы, переезд, работу;
+- повторяющийся паттерн поведения, если он явно виден из нескольких реплик.
+
+НЕ извлекай в фоновой рефлексии:
+- одноразовые рабочие статусы: "${ownerName} занимается задачей", "портирует", "перегоняет файл", "распознаёт фото/слайды";
+- детали инструментов, моделей, ChatGPT, файлов, ошибок обработки, времени распознавания, если это не устойчивое правило о том, как помогать ${ownerName};
+- пересказ просьб обработать/распознать/объединить/отправить материалы без результата или долгосрочного решения;
+- временное местонахождение вида "пока в городе", если это не переезд, поездка с явными датами или важное событие;
+- одноразовое настроение/стресс из-за текущей задачи, если нет устойчивого паттерна или риска.
+
+Если сомневаешься, не извлекай факт. Для слабых одноразовых наблюдений ставь importance ниже 0.45, чтобы они не попали в память.`;
+}
+
 /** Промпт для извлечения фактов о владельце бота ("Я") */
-function buildUserFactsPrompt(chunk: string, contactName: string, periodLabel: string): string {
+function buildUserFactsPrompt(
+    chunk: string,
+    contactName: string,
+    periodLabel: string,
+    options: FactExtractionOptions = {}
+): string {
     const ownerName = config.ownerName || 'пользователь';
+    const reflectionRules = options.mode === 'reflection'
+        ? buildReflectionExtractionRules(ownerName, contactName)
+        : '';
     return `Переписка ${ownerName} ("Я") с ${contactName}. Период: ${periodLabel}.
 
 Твоя задача: извлечь факты ТОЛЬКО о ${ownerName}.
@@ -340,6 +371,7 @@ inferenceLevel:
 - reported — факт о ${ownerName} сообщает собеседник, но ${ownerName} сам это не подтверждает в фрагменте
 - inferred — аккуратный вывод из нескольких реплик, не дословный факт
 - ambiguous — атрибуция/смысл неясны; confidence должен быть низким
+${reflectionRules}
 
 Переписка:
 ${chunk}
@@ -368,8 +400,16 @@ JSON:
 }
 
 /** Промпт для извлечения фактов о собеседнике (контакте) */
-function buildContactFactsPrompt(chunk: string, contactName: string, periodLabel: string): string {
+function buildContactFactsPrompt(
+    chunk: string,
+    contactName: string,
+    periodLabel: string,
+    options: FactExtractionOptions = {}
+): string {
     const ownerName = config.ownerName || 'пользователь';
+    const reflectionRules = options.mode === 'reflection'
+        ? buildReflectionExtractionRules(ownerName, contactName)
+        : '';
     return `Переписка ${ownerName} ("Я") с ${contactName}. Период: ${periodLabel}.
 
 Твоя задача: извлечь факты ТОЛЬКО о ${contactName}.
@@ -404,6 +444,7 @@ inferenceLevel:
 - reported — факт о ${contactName} сообщает ${ownerName} или третья сторона, но контакт сам не подтверждает в фрагменте
 - inferred — аккуратный вывод из нескольких реплик, не дословный факт
 - ambiguous — атрибуция/смысл неясны; confidence должен быть низким
+${reflectionRules}
 
 Переписка:
 ${chunk}
@@ -443,21 +484,22 @@ function parseFacts(text: string, subject: 'user' | 'contact'): ExtractedFactAbo
 async function extractRawFactsFromChunk(
     chunk: string,
     contactName: string,
-    periodLabel: string
+    periodLabel: string,
+    options: FactExtractionOptions = {}
 ): Promise<ExtractedFactAboutUser[]> {
     // Два параллельных запроса — каждый про одного человека
     const [userResp, contactResp] = await Promise.allSettled([
         createChatCompletionForTask('memoryExtraction', {
             messages: [
                 { role: 'system', content: EXTRACTION_SYSTEM },
-                { role: 'user', content: buildUserFactsPrompt(chunk, contactName, periodLabel) },
+                { role: 'user', content: buildUserFactsPrompt(chunk, contactName, periodLabel, options) },
             ],
             temperature: 1,
         }),
         createChatCompletionForTask('memoryExtraction', {
             messages: [
                 { role: 'system', content: EXTRACTION_SYSTEM },
-                { role: 'user', content: buildContactFactsPrompt(chunk, contactName, periodLabel) },
+                { role: 'user', content: buildContactFactsPrompt(chunk, contactName, periodLabel, options) },
             ],
             temperature: 1,
         }),
@@ -679,9 +721,18 @@ function buildCriticPrompt(
     conversationText: string,
     facts: ExtractedFactAboutUser[],
     contactName: string,
-    periodLabel: string
+    periodLabel: string,
+    options: FactExtractionOptions = {}
 ): string {
     const ownerName = config.ownerName || 'пользователь';
+    const reflectionRules = options.mode === 'reflection'
+        ? `
+Дополнительные правила для фоновой рефлексии:
+- drop для одноразовых технических/рабочих деталей про инструменты, ChatGPT, файлы, распознавание, портирование, обработку материалов.
+- drop для "сейчас занимается задачей", "пока находится в городе", "долго обрабатывает", если нет долгосрочного значения.
+- keep только если факт помогает будущему поведению ассистента, отражает устойчивое знание или важное событие.
+- rewrite допустим, если из технической детали можно аккуратно получить устойчивое правило помощи, явно поддержанное перепиской.`
+        : '';
     const factsText = facts.map((fact, index) => [
         `${index}. subject=${fact.subject}`,
         `domain=${fact.domain}`,
@@ -715,6 +766,7 @@ ${factsText}
 - Если факт был правдой только во время переписки, не превращай его в stable.
 - Проверяй inferenceLevel: direct сильнее, reported требует осторожности, inferred/ambiguous нельзя усиливать до высокой уверенности.
 - Верни решение для каждого index.
+${reflectionRules}
 
 JSON:
 {
@@ -791,7 +843,8 @@ async function critiqueFactsAgainstConversation(
     conversationText: string,
     facts: ExtractedFactAboutUser[],
     contactName: string,
-    periodLabel: string
+    periodLabel: string,
+    options: FactExtractionOptions = {}
 ): Promise<ExtractedFactAboutUser[]> {
     const gated = deterministicQualityGate(facts);
     if (gated.length === 0) return [];
@@ -810,7 +863,7 @@ async function critiqueFactsAgainstConversation(
                         role: 'system',
                         content: 'Ты строгий критик долговременной памяти. Отвечай только валидным JSON.',
                     },
-                    { role: 'user', content: buildCriticPrompt(conversationText, batch, contactName, periodLabel) },
+                    { role: 'user', content: buildCriticPrompt(conversationText, batch, contactName, periodLabel, options) },
                 ],
                 temperature: 0,
                 response_format: { type: 'json_object' },
@@ -900,7 +953,8 @@ export async function extractFactsAboutUserFromConversation(
     contactName: string,
     startDate?: Date,
     endDate?: Date,
-    onProgress?: StudyChatAnalysisProgressHandler
+    onProgress?: StudyChatAnalysisProgressHandler,
+    options: FactExtractionOptions = {}
 ): Promise<ExtractedFactAboutUser[]> {
     if (!conversationText.trim()) return [];
 
@@ -932,7 +986,7 @@ export async function extractFactsAboutUserFromConversation(
     for (let i = 0; i < chunks.length; i += CHUNK_CONCURRENCY) {
         const batch = chunks.slice(i, i + CHUNK_CONCURRENCY);
         const batchResults = await Promise.allSettled(
-            batch.map(chunk => extractRawFactsFromChunk(chunk, contactName, periodLabel))
+            batch.map(chunk => extractRawFactsFromChunk(chunk, contactName, periodLabel, options))
         );
         chunkResults.push(...batchResults);
         for (const result of batchResults) {
@@ -976,7 +1030,8 @@ export async function extractFactsAboutUserFromConversation(
         conversationText,
         finalFacts,
         contactName,
-        periodLabel
+        periodLabel,
+        options
     );
     const temporallyGroundedFacts = withTemporalDefaults(qualityCheckedFacts, startDate, endDate);
     console.log(`[studyChatFlow] Фактов после quality-gate: ${temporallyGroundedFacts.length}`);

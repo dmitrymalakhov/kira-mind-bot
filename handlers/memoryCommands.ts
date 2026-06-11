@@ -10,6 +10,7 @@ import { runMemoryConsolidationForContext } from '../services/MemoryConsolidatio
 import { runMemorySchemaConsolidationForContext } from '../services/MemorySchemaConsolidationService';
 import { runMemorySleepCycleForUser } from '../services/MemorySleepCycleService';
 import { getPersonalChatMemoryIndexStatus, runPersonalChatMemoryIndexingCycle } from '../services/personalChatMemoryIndexer';
+import { isReflectionMemoryNoiseCandidate } from '../services/reflectionModeService';
 
 function isAdmin(ctx: BotContext): boolean {
     return ctx.from?.id === config.adminUserId;
@@ -26,7 +27,41 @@ function getMemoryAdminKeyboard() {
         .row()
         .text('/memory_consolidate')
         .text('/personal_chat_memory_status')
+        .row()
+        .text('/memory_reflection_cleanup')
         .resized();
+}
+
+interface PendingReflectionCleanup {
+    userId: number;
+    createdAt: number;
+    items: Array<{
+        id: string;
+        domain: string;
+        content: string;
+    }>;
+}
+
+const pendingReflectionCleanups = new Map<string, PendingReflectionCleanup>();
+const REFLECTION_CLEANUP_LIMIT = 20;
+const REFLECTION_CLEANUP_TTL_MS = 10 * 60 * 1000;
+
+function cleanupExpiredReflectionCleanups(): void {
+    const now = Date.now();
+    for (const [token, pending] of pendingReflectionCleanups.entries()) {
+        if (now - pending.createdAt > REFLECTION_CLEANUP_TTL_MS) {
+            pendingReflectionCleanups.delete(token);
+        }
+    }
+}
+
+function newReflectionCleanupToken(): string {
+    return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function compactMemoryLine(content: string): string {
+    const clean = content.replace(/\s+/g, ' ').trim();
+    return clean.length <= 220 ? clean : `${clean.slice(0, 217)}...`;
 }
 
 function isBareContactQuery(query: string): boolean {
@@ -67,6 +102,7 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
                 '/memory_search <запрос> — ручная проверка поиска памяти (векторный + текстовый fallback)',
                 '/memory_last_insight — последнее проактивное сообщение и его источники',
                 '/memory_cleanup — очистка старых фактов',
+                '/memory_reflection_cleanup — показать и удалить явный мусор из фоновой рефлексии',
                 '/memory_consolidate [домен] — собрать сводные главы, модели и индексы памяти',
                 '/personal_chat_memory_status — статус фонового изучения личных переписок',
                 '/personal_chat_memory_run — запустить один цикл изучения личных переписок',
@@ -190,6 +226,61 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
     bot.command('memory_cleanup', async (ctx) => {
         const removed = await cleanupOldMemories(ctx, 30);
         await ctx.reply(`Удалено старых воспоминаний: ${removed}`);
+    });
+
+    bot.command('memory_reflection_cleanup', async (ctx) => {
+        if (!isAdmin(ctx)) {
+            await ctx.reply('⛔️ Доступ только для администратора.');
+            return;
+        }
+
+        const svc = getVectorService();
+        const userId = ctx.from?.id;
+        if (!svc || !userId) {
+            await ctx.reply('Векторная память недоступна.');
+            return;
+        }
+
+        cleanupExpiredReflectionCleanups();
+        const reflectionMemories = await svc.getMemoriesByTag(String(userId), 'source:reflection');
+        const candidates = reflectionMemories
+            .filter(isReflectionMemoryNoiseCandidate)
+            .slice(0, REFLECTION_CLEANUP_LIMIT)
+            .map(memory => ({
+                id: memory.id,
+                domain: memory.domain,
+                content: memory.content,
+            }));
+
+        if (candidates.length === 0) {
+            await ctx.reply('Явного мусора из фоновой рефлексии не нашла.');
+            return;
+        }
+
+        const token = newReflectionCleanupToken();
+        pendingReflectionCleanups.set(token, {
+            userId,
+            createdAt: Date.now(),
+            items: candidates,
+        });
+
+        const lines = candidates
+            .map((memory, index) => `${index + 1}. [${memory.domain}] ${compactMemoryLine(memory.content)}`)
+            .join('\n');
+        const keyboard = new InlineKeyboard()
+            .text(`✅ Удалить ${candidates.length}`, `mem_refclean:${token}`)
+            .text('❌ Отмена', `mem_refclean_cancel:${token}`);
+
+        await ctx.reply(
+            [
+                `Нашла ${candidates.length} кандидат(ов) на удаление из reflection-памяти:`,
+                '',
+                lines,
+                '',
+                'Удалять только если список выглядит как технический шум.',
+            ].join('\n'),
+            { reply_markup: keyboard }
+        );
     });
 
     bot.command('memory_consolidate', async (ctx) => {
@@ -349,6 +440,46 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
     bot.callbackQuery('mem_del_cancel', async (ctx) => {
         await ctx.answerCallbackQuery();
         await ctx.editMessageText('Удаление отменено.');
+    });
+
+    bot.callbackQuery(/^mem_refclean:([a-z0-9]+)$/i, async (ctx) => {
+        await ctx.answerCallbackQuery();
+        if (!isAdmin(ctx)) {
+            await ctx.editMessageText('⛔️ Доступ только для администратора.');
+            return;
+        }
+
+        cleanupExpiredReflectionCleanups();
+        const token = ctx.callbackQuery.data.match(/^mem_refclean:([a-z0-9]+)$/i)?.[1];
+        const pending = token ? pendingReflectionCleanups.get(token) : undefined;
+        if (!token || !pending || pending.userId !== ctx.from?.id) {
+            await ctx.editMessageText('Список кандидатов устарел. Запусти /memory_reflection_cleanup заново.');
+            return;
+        }
+
+        let removed = 0;
+        const errors: string[] = [];
+        for (const item of pending.items) {
+            try {
+                await deleteMemoryById(ctx, item.id, item.domain);
+                removed++;
+            } catch (e) {
+                errors.push(e instanceof Error ? e.message : String(e));
+            }
+        }
+        pendingReflectionCleanups.delete(token);
+
+        await ctx.editMessageText([
+            `Удалено reflection-воспоминаний: ${removed}/${pending.items.length}.`,
+            errors.length ? `Ошибки: ${errors.slice(0, 3).join('; ')}` : undefined,
+        ].filter(Boolean).join('\n'));
+    });
+
+    bot.callbackQuery(/^mem_refclean_cancel:([a-z0-9]+)$/i, async (ctx) => {
+        await ctx.answerCallbackQuery();
+        const token = ctx.callbackQuery.data.match(/^mem_refclean_cancel:([a-z0-9]+)$/i)?.[1];
+        if (token) pendingReflectionCleanups.delete(token);
+        await ctx.editMessageText('Очистка reflection-памяти отменена.');
     });
 
     // /insights — анализ паттернов в долговременной памяти
