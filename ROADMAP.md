@@ -230,6 +230,7 @@
 
 ## Уже сделано
 
+- В админке появился отдельный live-раздел `Мониторинг` с агрегированными health checks для контейнера бота, PostgreSQL, Qdrant, Telegram Bot API, Telegram User Client и AI-провайдеров.
 - Все прикладные вызовы `openai.chat.completions.create` переведены на task-aware wrapper `createChatCompletionForTask(...)`; legacy-слой `openAiModels` удалён из runtime-конфига.
 - Browser planning и browser vision уже резолвят модель через task-aware preset runtime.
 - Для `embeddings` и `audio.transcriptions` сохранён low-level OpenAI client, но выбор модели теперь берётся из активного preset-а.

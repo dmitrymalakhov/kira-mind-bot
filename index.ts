@@ -52,6 +52,7 @@ import { stripVoiceReplyDirective, wantsVoiceReply } from "./utils/voiceReply";
 import { addTargetNotificationButtons, appendTargetNotificationPrompt, buildDefaultTargetReminderMessage } from "./utils/reminderTargetNotification";
 import { normalizeNumbersForVoiceMessage } from "./utils/russianSpeechNumbers";
 import { warmAiPresetCache } from "./services/aiRuntimeConfigService";
+import { startRuntimeHealthServer } from "./services/runtimeHealthServer";
 
 
 // Загрузка переменных окружения
@@ -75,6 +76,7 @@ const bot = createBot();
 setBotRef(bot);
 setBotApi(bot.api);
 console.log('🤖 Бот создан успешно');
+startRuntimeHealthServer();
 
 const MAX_STORED_SENT_MESSAGES = 50;
 

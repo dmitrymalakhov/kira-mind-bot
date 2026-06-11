@@ -25,6 +25,7 @@ import TuneIcon from '@mui/icons-material/Tune';
 import ForumIcon from '@mui/icons-material/Forum';
 import LocalHospitalIcon from '@mui/icons-material/LocalHospital';
 import MemoryIcon from '@mui/icons-material/Memory';
+import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
 import MenuIcon from '@mui/icons-material/Menu';
 import KeyIcon from '@mui/icons-material/Key';
 import GraphicEqIcon from '@mui/icons-material/GraphicEq';
@@ -46,6 +47,7 @@ import { PersonalitySection } from './PersonalitySection';
 import { ChatsSection } from './ChatsSection';
 import { HealthSection } from './HealthSection';
 import { MemorySection } from './MemorySection';
+import { MonitoringSection } from './MonitoringSection';
 import { saveConfig, fetchConfig, logout, restartService } from '../api';
 import type { ConfigResponse, Toast } from '../types';
 
@@ -89,7 +91,35 @@ const SIDEBAR_TABS: SidebarTabItem[] = [
   { id: 2, label: 'Чаты', caption: 'Группы и доступ', icon: <ForumIcon fontSize="small" /> },
   { id: 3, label: 'Здоровье', caption: 'Дневник и выгрузки', icon: <LocalHospitalIcon fontSize="small" /> },
   { id: 4, label: 'Память', caption: 'Факты и индексы', icon: <MemoryIcon fontSize="small" /> },
+  { id: 5, label: 'Мониторинг', caption: 'Зависимости и API', icon: <MonitorHeartIcon fontSize="small" /> },
 ];
+
+const TAB_META: Record<number, { title: string; caption: string }> = {
+  0: {
+    title: 'Настройки бота',
+    caption: 'Изменения применяются после перезапуска контейнера',
+  },
+  1: {
+    title: 'Управление личностью',
+    caption: 'Изменения применяются после перезапуска контейнера',
+  },
+  2: {
+    title: 'Чаты бота',
+    caption: 'Группы, публичный режим и доступ к памяти',
+  },
+  3: {
+    title: 'Дневник здоровья',
+    caption: 'Сохранённые наблюдения и выгрузки',
+  },
+  4: {
+    title: 'Управление памятью',
+    caption: 'Сводка, факты, индексы и ручная правка',
+  },
+  5: {
+    title: 'Мониторинг зависимостей',
+    caption: 'Live health checks для контейнера, хранилищ, Telegram и AI-провайдеров',
+  },
+};
 
 const SETTINGS_GROUPS: SidebarSectionGroup[] = [
   {
@@ -149,6 +179,13 @@ const SIDEBAR_INTRO_CARDS: Record<number, SidebarIntroCard[]> = {
       caption: 'Факты, синтетика и ревизия индексов',
     },
   ],
+  5: [
+    {
+      icon: <MonitorHeartIcon fontSize="small" />,
+      label: 'Мониторинг',
+      caption: 'Состояние внешних API и runtime-зависимостей',
+    },
+  ],
 };
 
 export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
@@ -162,22 +199,8 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const activeTabMeta = {
-    title: activeTab === 0
-      ? 'Настройки бота'
-      : activeTab === 1
-        ? 'Управление личностью'
-        : activeTab === 2
-          ? 'Чаты бота'
-          : activeTab === 3
-            ? 'Дневник здоровья'
-            : 'Управление памятью',
-    caption: activeTab === 0 || activeTab === 1
-      ? 'Изменения применяются после перезапуска контейнера'
-      : activeTab === 2
-        ? 'Группы, публичный режим и доступ к памяти'
-        : activeTab === 3
-          ? 'Сохранённые наблюдения и выгрузки'
-          : 'Сводка, факты, индексы и ручная правка',
+    title: TAB_META[activeTab]?.title ?? 'Раздел',
+    caption: TAB_META[activeTab]?.caption ?? '',
     badge: SIDEBAR_TABS.find((item) => item.id === activeTab)?.label ?? 'Раздел',
   };
 
@@ -731,7 +754,7 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
           flexGrow: 1,
           minWidth: 0,
           p: { xs: 1.5, sm: 2, md: 2.5 },
-          maxWidth: activeTab === 3 || activeTab === 4 ? 1240 : 980,
+          maxWidth: activeTab === 3 || activeTab === 4 || activeTab === 5 ? 1240 : 980,
           width: '100%',
           mx: isMobile ? 'auto' : 0,
         }}
@@ -867,6 +890,9 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
 
         {/* Memory tab */}
         {activeTab === 4 && <MemorySection onToast={showToast} />}
+
+        {/* Monitoring tab */}
+        {activeTab === 5 && <MonitoringSection />}
       </Box>
       </Box>
 

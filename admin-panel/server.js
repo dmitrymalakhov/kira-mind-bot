@@ -8,6 +8,7 @@ const path = require('path');
 const http = require('http');
 const { Pool } = require('pg');
 const { AI_PRESETS, AI_PRESET_NAMES, parseAiPresetName } = require('./aiPresetRegistry');
+const { createMonitoringService } = require('./monitoring');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -1756,9 +1757,24 @@ function getContainerStatus(name) {
   });
 }
 
+const monitoringService = createMonitoringService({
+  readEnvFile,
+  createDbPool,
+  getContainerStatus,
+});
+
 app.get('/api/status', requireAuth, async (_, res) => {
   const kira = await getContainerStatus('kira-mind-bot');
   res.json({ containers: [kira], serverTime: new Date().toISOString() });
+});
+
+app.get('/api/monitoring/health', requireAuth, async (_, res) => {
+  try {
+    const snapshot = await monitoringService.getMonitoringSnapshot();
+    res.json(snapshot);
+  } catch (err) {
+    res.status(500).json({ error: `Не удалось собрать monitoring health: ${err.message}` });
+  }
 });
 
 // ── Personality helpers ───────────────────────────────────────────────────────

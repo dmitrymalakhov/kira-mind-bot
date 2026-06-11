@@ -74,6 +74,27 @@ export interface AiPresetResponse {
   source: ConfigSourceInfo;
 }
 
+export type MonitoringCheckStatus = 'ok' | 'warn' | 'down' | 'disabled';
+export type MonitoringCheckCategory = 'runtime' | 'storage' | 'telegram' | 'ai';
+
+export interface MonitoringCheck {
+  key: string;
+  label: string;
+  category: MonitoringCheckCategory;
+  status: MonitoringCheckStatus;
+  summary: string;
+  details: string;
+  latencyMs?: number;
+  checkedAt: string;
+  meta?: Record<string, string | number | boolean | null | undefined>;
+}
+
+export interface MonitoringHealthResponse {
+  generatedAt: string;
+  overallStatus: 'ok' | 'degraded' | 'down';
+  checks: MonitoringCheck[];
+}
+
 export interface PersonalityProfile {
   characterName: string;
   persona: string;
