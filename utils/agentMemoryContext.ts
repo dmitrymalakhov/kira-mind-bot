@@ -1,6 +1,7 @@
 import { BotContext } from '../types';
 import { classifyMemoryNeed, getMultiQueryMemoryContextDetailed, RecalledMemoryRef } from './multiQueryMemory';
 import { devLog } from '../utils';
+import { buildTodayImportanceContext } from './todayImportance';
 
 export interface AgentMemoryContext {
     domain: string;
@@ -32,12 +33,16 @@ export async function fetchAgentMemoryContext(ctx: BotContext, message: string):
         return { domain: 'personal', context: '' };
     }
 
-    const memory = await getMultiQueryMemoryContextDetailed(ctx, trimmed, memoryNeed);
+    const [memory, todayImportanceContext] = await Promise.all([
+        getMultiQueryMemoryContextDetailed(ctx, trimmed, memoryNeed),
+        buildTodayImportanceContext(ctx, trimmed),
+    ]);
     const context = memory.context;
     const working = formatWorkingMemory(ctx);
-    const enrichedContext = [working, context].filter(Boolean).join('\n\n');
+    const enrichedContext = [working, todayImportanceContext, context].filter(Boolean).join('\n\n');
     devLog('Fetched memory context (enrichment)', {
         memoryNeed,
+        hasTodayImportanceContext: Boolean(todayImportanceContext),
         hasContext: Boolean(enrichedContext),
         contextLength: enrichedContext.length,
         recalledMemories: memory.recalledMemories.length,
