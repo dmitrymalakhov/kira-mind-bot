@@ -10,7 +10,7 @@ import { runMemoryConsolidationForContext } from '../services/MemoryConsolidatio
 import { runMemorySchemaConsolidationForContext } from '../services/MemorySchemaConsolidationService';
 import { runMemorySleepCycleForUser } from '../services/MemorySleepCycleService';
 import { getPersonalChatMemoryIndexStatus, runPersonalChatMemoryIndexingCycle } from '../services/personalChatMemoryIndexer';
-import { isReflectionMemoryNoiseCandidate } from '../services/reflectionModeService';
+import { isReflectionMemoryNoiseCandidate } from '../utils/reflectionMemoryFilter';
 
 function isAdmin(ctx: BotContext): boolean {
     return ctx.from?.id === config.adminUserId;

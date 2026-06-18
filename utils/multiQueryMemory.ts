@@ -6,6 +6,7 @@ import { getVectorService } from '../services/VectorServiceFactory';
 import { llmCache, LLM_CACHE_TTL } from './llmCache';
 import { Contact } from '../stores/ContactsStore';
 import { contactDisplayName, contactIdentityTags, normalizeContactLookupValue, resolveContactIdentity } from './contactMemory';
+import { isTodayImportanceRequest } from './todayImportance';
 
 const ANSWER_RESULTS_PER_QUERY = 5;
 const CONTEXT_RESULTS_PER_QUERY = 2;
@@ -81,6 +82,7 @@ export async function classifyMemoryNeed(message: string): Promise<MemoryNeed> {
     // Быстрая эвристика для очевидных случаев
     if (/^(привет|здравствуй|хай|хей|добр(ое|ый|ая)|hi|hello|hey|yo)\b/i.test(lc)) return 'none';
     if (/^(спасибо|благодарю|ок|ok|ладно|понял|хорошо|ясно|круто|класс|👍|👌|🙏|да|нет|ага|угу)$/i.test(lc)) return 'none';
+    if (isTodayImportanceRequest(lc)) return 'full';
     if (hasContextDependentReference(lc)) return 'light';
     if (lc.length < 4) return 'none';
 

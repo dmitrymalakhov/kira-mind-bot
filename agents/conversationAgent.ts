@@ -10,6 +10,7 @@ import { getKiraSelfMemoryState, getRecentKiraSelfEvents, searchKiraSelfEventsBy
 import { buildGroupChatContext } from "../utils/groupChatContext";
 import { isGroupChatContextEnabled } from "../services/groupChatFeatureSettings";
 import { devLog } from "../utils";
+import { isTodayImportanceRequest } from "../utils/todayImportance";
 
 
 /**
@@ -146,10 +147,12 @@ export async function conversationAgent(
         // Detect "what do you know about me" queries — answer directly from memory, no self-narrative
         const MEMORY_INTROSPECTION_RE = /^(?:что\s+(?:ты\s+)?(?:знаешь|помнишь|помнила)\s+обо?\s+мне|расскажи\s+(?:что\s+(?:ты\s+)?(?:знаешь|помнишь)(?:\s+обо?\s+мне)?|о\s+себе\s+помнишь)|покажи\s+(?:мою\s+)?память|что\s+ты\s+обо\s+мне(?:\s+знаешь)?|что\s+помнишь\s+обо?\s+мне)\??$/i;
         const isMemoryIntrospection = MEMORY_INTROSPECTION_RE.test(message);
+        const isTodayImportance = isTodayImportanceRequest(message);
 
         // Подготовка промпта для генерации ответа
-        const prompt = isMemoryIntrospection
-            ? `Текущая дата и время: ${formattedDateTime}
+        let prompt: string;
+        if (isMemoryIntrospection) {
+            prompt = `Текущая дата и время: ${formattedDateTime}
 
 Пользователь спросил, что ты о нём знаешь/помнишь.
 
@@ -160,8 +163,28 @@ export async function conversationAgent(
 ${domainContext ? `Факты из памяти о пользователе:\n${domainContext}` : 'Фактов о пользователе пока нет.'}
 
 Формат ответа: живой, но по делу. Перечисли что помнишь. Если фактов мало — честно скажи.
-Предоставь только сам текст ответа.`
-            : `
+Предоставь только сам текст ответа.`;
+        } else if (isTodayImportance) {
+            prompt = `Текущая дата и время: ${formattedDateTime}
+
+Пользователь спросил, что важного у него сегодня:
+"${message}"
+
+ЗАДАЧА: Ответь как личный ассистент по доступному контексту ниже.
+${domainContext ? `\nКонтекст памяти и сводка на сегодня:\n${domainContext}` : '\nКонтекста памяти на сегодня нет.'}
+${historyContext}
+
+Правила:
+- Сначала перечисли точные активные напоминания на сегодня, если они есть.
+- Затем перечисли планы, события, дедлайны или открытые линии из памяти, если они есть.
+- Если точных пунктов нет, скажи прямо: "В доступной памяти на сегодня не вижу ничего конкретного".
+- Не придумывай календарь, встречи, сообщения или дела.
+- Не говори, что проверила текущие Telegram-чаты, если в контексте нет результата анализа переписки.
+- Если пункт идёт только из памяти, а не из активного напоминания, мягко обозначь это: "в памяти есть..." или "похоже...".
+
+Формат: коротко, по делу, максимум 6 пунктов. Предоставь только сам текст ответа.`;
+        } else {
+            prompt = `
         Текущая дата и время: ${formattedDateTime}
 
         Сгенерируй очень естественный, человечный ответ на следующее сообщение${isForwarded ? `, пересланное от ${forwardFrom}` : ""}:
@@ -201,6 +224,7 @@ ${domainContext ? `Факты из памяти о пользователе:\n${
 
         Предоставь только сам текст ответа, без дополнительных пояснений.
         `;
+        }
 
         // Отправка запроса к API OpenAI
         const response = await createChatCompletionForTask('conversation', {

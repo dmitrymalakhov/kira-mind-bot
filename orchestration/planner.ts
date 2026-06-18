@@ -2,6 +2,7 @@ import type { Plan, PlanStep, PlanningInput } from './types';
 import { devLog, parseLLMJson } from '../utils';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { llmCache, LLM_CACHE_TTL } from '../utils/llmCache';
+import { isTodayImportanceRequest } from '../utils/todayImportance';
 
 const AVAILABLE_STEPS = `
 ВАЖНО: контекст из долговременной памяти (факты о пользователе) подтягивается АВТОМАТИЧЕСКИ ко всем шагам. НЕ нужно добавлять отдельный шаг memory — все агенты уже получают память.
@@ -84,6 +85,10 @@ export async function createPlan(input: PlanningInput): Promise<Plan> {
 
     if (intent === 'САМОИЗУЧЕНИЕ') {
         return { steps: [{ agentId: 'selfStudy' }] };
+    }
+
+    if (isTodayImportanceRequest(message)) {
+        return { steps: [{ agentId: 'conversation' }] };
     }
 
     if (intent === 'НАПОМИНАНИЕ' && !classification.subIntents?.length) {
