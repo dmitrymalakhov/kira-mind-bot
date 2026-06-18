@@ -21,6 +21,7 @@ import { handlePendingContactMemoryText } from "./utils/contactMemory";
 import { handlePendingContactLookupText, maybeStartContactMemoryLookup } from "./utils/contactMemoryLookup";
 import { hasActiveBrowserRunForContext } from "./agents/browserAgent";
 import { looksLikeBrowserTaskCancellation, looksLikeNegatedBookingRequest } from "./utils/browserTaskCancellation";
+import { isTodayImportanceRequest } from "./utils/todayImportance";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -993,6 +994,22 @@ export async function processMessage(
                 },
             };
             deterministicOverrideApplied = true;
+        }
+
+        if (
+            !deterministicOverrideApplied &&
+            isTodayImportanceRequest(message) &&
+            !explicitRemember
+        ) {
+            classification = {
+                ...classification,
+                intent: "РАЗГОВОР",
+                confidenceLevel: "ВЫСОКИЙ",
+                ambiguityReason: undefined,
+                clarificationQuestion: undefined,
+            };
+            deterministicOverrideApplied = true;
+            devLog("Today importance request detected, routing to conversation");
         }
 
         if (
