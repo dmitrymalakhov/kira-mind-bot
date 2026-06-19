@@ -3,7 +3,7 @@
 .PHONY: \
 	help \
 	install-server remote-install remote-deploy-bot remote-deploy-admin remote-deploy-all \
-	deploy deploy-clean up down status logs logs-follow logs-bot logs-bot-follow logs-admin logs-admin-follow \
+	deploy deploy-clean up down status logs logs-follow logs-no-db logs-no-db-follow logs-bot logs-bot-follow logs-admin logs-admin-follow \
 	pause pause-bot pause-admin restart restart-bot restart-admin stop \
 	admin-up admin-rebuild admin-restart admin-pause admin-stop admin-logs admin-logs-follow \
 	bot-up bot-rebuild bot-restart bot-pause bot-stop bot-logs bot-logs-follow \
@@ -35,6 +35,8 @@ help:
 	@printf '  %-28s %s\n' 'make status' 'Показать статус контейнеров.'
 	@printf '  %-28s %s\n' 'make logs' 'Показать последние логи всего стека.'
 	@printf '  %-28s %s\n' 'make logs-follow' 'Смотреть live-логи всего стека.'
+	@printf '  %-28s %s\n' 'make logs-no-db' 'Показать логи стека без postgres и qdrant.'
+	@printf '  %-28s %s\n' 'make logs-no-db-follow' 'Смотреть live-логи стека без postgres и qdrant.'
 	@printf '\n%s\n' '[Бот и admin-panel]'
 	@printf '  %-28s %s\n' 'make admin-up' 'Поднять только admin-panel без пересборки.'
 	@printf '  %-28s %s\n' 'make admin-rebuild' 'Пересобрать и заново поднять admin-panel.'
@@ -109,6 +111,12 @@ logs:
 
 logs-follow:
 	./scripts/ops/server-deploy.sh logs -f
+
+logs-no-db:
+	./scripts/ops/server-deploy.sh logs --no-postgres --no-qdrant
+
+logs-no-db-follow:
+	./scripts/ops/server-deploy.sh logs -f --no-postgres --no-qdrant
 
 logs-bot:
 	./scripts/ops/server-deploy.sh logs kira-mind-bot
