@@ -45,14 +45,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
+COMMAND="${1:-help}"
+shift || true
+
+if [ "$COMMAND" = "help" ]; then
+    show_help
+    exit 0
+fi
+
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/server-common.sh"
 
 ensure_server_repo_root || error "Не найден серверный compose-сценарий в корне репозитория"
 resolve_compose_cmd || error "Docker Compose недоступен для текущего пользователя"
-
-COMMAND="${1:-help}"
-shift || true
 
 DEPLOY_CLEAN=false
 TARGET_SERVICE=""
@@ -117,11 +122,6 @@ case "$COMMAND" in
         error "Неизвестная команда: $COMMAND"
         ;;
 esac
-
-if [ "$COMMAND" = "help" ]; then
-    show_help
-    exit 0
-fi
 
 load_env_if_present
 ensure_admin_state
