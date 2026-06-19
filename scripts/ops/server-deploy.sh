@@ -18,7 +18,7 @@ show_help() {
 Usage:
   ./scripts/ops/server-deploy.sh deploy [--clean]
   ./scripts/ops/server-deploy.sh status
-  ./scripts/ops/server-deploy.sh logs [-f|--follow] [service]
+  ./scripts/ops/server-deploy.sh logs [-f|--follow] [--no-postgres] [service]
   ./scripts/ops/server-deploy.sh pause [service]
   ./scripts/ops/server-deploy.sh restart [service]
   ./scripts/ops/server-deploy.sh stop [service]
@@ -36,6 +36,7 @@ Commands:
 Options:
   --clean       Для deploy: выполнить down и безопасную Docker-очистку перед rebuild.
   -f, --follow  Для logs: следить за логами в реальном времени.
+  --no-postgres Для logs: исключить postgres из общего вывода логов.
 EOF
 }
 
@@ -55,6 +56,7 @@ shift || true
 DEPLOY_CLEAN=false
 TARGET_SERVICE=""
 FOLLOW_LOGS=false
+EXCLUDE_POSTGRES_LOGS=false
 
 validate_service_name() {
     local service="$1"
@@ -78,6 +80,10 @@ case "$COMMAND" in
             case "$1" in
                 -f|--follow)
                     FOLLOW_LOGS=true
+                    shift
+                    ;;
+                --no-postgres)
+                    EXCLUDE_POSTGRES_LOGS=true
                     shift
                     ;;
                 *)
@@ -105,6 +111,11 @@ case "$COMMAND" in
         error "Неизвестная команда: $COMMAND"
         ;;
 esac
+
+if [ "$COMMAND" = "help" ]; then
+    show_help
+    exit 0
+fi
 
 load_env_if_present
 ensure_admin_state
@@ -139,6 +150,7 @@ deploy_stack() {
 
 show_logs() {
     local args=(logs --tail 100)
+    local services=()
 
     if [ "$FOLLOW_LOGS" = true ]; then
         args+=(--follow)
@@ -149,6 +161,14 @@ show_logs() {
         args+=("$TARGET_SERVICE")
         compose "${args[@]}"
         return
+    fi
+
+    if [ "$EXCLUDE_POSTGRES_LOGS" = true ]; then
+        mapfile -t services < <(compose config --services | grep -vx 'postgres' || true)
+        if [ "${#services[@]}" -eq 0 ]; then
+            error "Не удалось сформировать список сервисов без postgres"
+        fi
+        args+=("${services[@]}")
     fi
 
     compose "${args[@]}"
@@ -209,5 +229,4 @@ case "$COMMAND" in
     pause) pause_services ;;
     restart) restart_services ;;
     stop) stop_services ;;
-    help) show_help ;;
 esac
