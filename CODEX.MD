@@ -12,7 +12,6 @@
 - Reminder-flows, которые продолжаются следующим сообщением пользователя после callback-кнопки, считаются context-critical и должны переживать отдельные Telegram updates через session storage.
 
 ## Локальные соглашения
-- Для Pull Request используется `.github/PULL_REQUEST_TEMPLATE.md`.
 - Commit message пишутся в формате Conventional Commits: `<type>(optional-scope): <summary>`.
 - Рекомендуемые типы: `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `build`, `ci`, `chore`, `revert`.
 - `summary` и тело коммита пишутся по-русски.
