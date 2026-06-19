@@ -170,7 +170,7 @@ export async function studyChatAndSaveFacts(
     let portraitUpdated = false;
     await notifyUser(ctx, `🧠 Этап 5/5: обновляю психологический портрет ${displayName} и собираю итог…`);
     try {
-        portraitUpdated = await saveOrUpdatePortrait(ctx, displayName, fetchResult.formattedText);
+        portraitUpdated = await saveOrUpdatePortrait(ctx, displayName, fetchResult.formattedText, contact);
     } catch (e) {
         console.error('[studyChatPipeline] portrait build error:', e);
     }

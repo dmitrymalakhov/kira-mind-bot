@@ -5,31 +5,41 @@ import { ReminderStatus } from '../types/reminderTypes';
 import type { Reminder } from '../reminder';
 import { getRecentMemories, searchAllDomainsMemories } from './enhancedDomainMemory';
 import { devLog } from '../utils';
+import { isTodayImportanceRequest, TODAY_IMPORTANCE_WORD_BOUNDARY } from './todayImportanceIntent';
 
-const WORD_START = String.raw`(?:^|[^\p{L}\p{N}_])`;
-const WORD_END = String.raw`(?=$|[^\p{L}\p{N}_])`;
-const TODAY_RE = new RegExp(`${WORD_START}(?:сегодня|сегодняшн\\p{L}*|на\\s+сегодня|today)${WORD_END}`, 'iu');
-const IMPORTANT_RE = /(?:важн|план|дел[ао]?|задач|событ|встреч|созвон|звон|дедлайн|срок|напомин|расписан|календар|предстоит|надо|нужно|обязател|есть\s+ли\s+(?:что|что-то|что-нибудь)|что\s+у\s+меня|что\s+.*на\s+сегодня|anything\s+important|agenda|schedule|plans?)/iu;
-const LIVE_CHAT_CHECK_RE = /(?:проверь|прочитай|изучи|проанализируй|посмотри)(?:\s+\S+){0,5}\s+(?:переписк|сообщен|чат|чаты|групп)/iu;
+export { isTodayImportanceRequest } from './todayImportanceIntent';
+
+const WORD_START = TODAY_IMPORTANCE_WORD_BOUNDARY.start;
+const WORD_END = TODAY_IMPORTANCE_WORD_BOUNDARY.end;
 const PROSPECTIVE_TEXT_RE = /(?:дедлайн|срок|надо|нужно|предстоит|встреч|созвон|звонок|запланирован|планир|собира|обещал|договорил|ожида|не\s+забыть|важно|событи)/iu;
 const SYNTHETIC_TAGS = new Set(['memory-episode', 'memory-chapter', 'memory-schema', 'sleep_open_loop_index', 'sleep_uncertainty_index']);
 
-type TodayMemory = Pick<SearchResult, 'id' | 'content' | 'domain' | 'timestamp' | 'importance' | 'tags'> &
+export type TodayMemory = Pick<SearchResult, 'id' | 'content' | 'domain' | 'timestamp' | 'importance' | 'tags'> &
     Partial<Pick<SearchResult, 'confidence' | 'expiresAt' | 'memoryKind' | 'validFrom' | 'validTo' | 'status' | 'sourceContext'>>;
 
-interface TodayMemoryItem {
+export interface TodayMemoryItem {
     memory: TodayMemory;
     score: number;
     reason: string;
 }
 
-interface ZonedDay {
+export interface TodayImportanceDay {
     key: string;
     label: string;
     shortDate: string;
     day: number;
     month: number;
     year: number;
+}
+
+export interface TodayImportanceSnapshot {
+    day: TodayImportanceDay;
+    timeZone: string;
+    now: Date;
+    todayReminders: Reminder[];
+    earlierUnresolvedReminders: Reminder[];
+    memoryItems: TodayMemoryItem[];
+    memoryLookupFailed: boolean;
 }
 
 const RU_MONTHS_GENITIVE = [
@@ -46,14 +56,6 @@ const RU_MONTHS_GENITIVE = [
     'ноября',
     'декабря',
 ];
-
-export function isTodayImportanceRequest(message: string): boolean {
-    const normalized = message.toLowerCase().replace(/\s+/g, ' ').trim();
-    if (!normalized) return false;
-    if (!TODAY_RE.test(normalized)) return false;
-    if (LIVE_CHAT_CHECK_RE.test(normalized)) return false;
-    return IMPORTANT_RE.test(normalized);
-}
 
 function getZonedParts(date: Date, timeZone: string): { day: number; month: number; year: number } {
     const parts = new Intl.DateTimeFormat('en-GB', {
@@ -74,7 +76,7 @@ function dateKeyFromParts(parts: { day: number; month: number; year: number }): 
     return `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
 }
 
-function getZonedDay(date: Date, timeZone: string): ZonedDay {
+function getZonedDay(date: Date, timeZone: string): TodayImportanceDay {
     const parts = getZonedParts(date, timeZone);
     const key = dateKeyFromParts(parts);
     return {
@@ -98,8 +100,13 @@ function zonedDateKey(date: Date | undefined, timeZone: string): string | undefi
     return dateKeyFromParts(getZonedParts(parsed, timeZone));
 }
 
-function isSameZonedDay(date: Date | undefined, day: ZonedDay, timeZone: string): boolean {
+function isSameZonedDay(date: Date | undefined, day: TodayImportanceDay, timeZone: string): boolean {
     return zonedDateKey(date, timeZone) === day.key;
+}
+
+function isBeforeZonedDay(date: Date | undefined, day: TodayImportanceDay, timeZone: string): boolean {
+    const key = zonedDateKey(date, timeZone);
+    return Boolean(key && key < day.key);
 }
 
 function addDays(date: Date, days: number): Date {
@@ -126,10 +133,17 @@ function getReminderScope(ctx: BotContext): Reminder[] {
     return [...byId.values()];
 }
 
-function getTodayReminders(ctx: BotContext, day: ZonedDay, timeZone: string): Reminder[] {
+function getTodayReminders(ctx: BotContext, day: TodayImportanceDay, timeZone: string): Reminder[] {
     return getReminderScope(ctx)
         .filter((reminder) => isSameZonedDay(new Date(reminder.dueDate), day, timeZone))
         .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+}
+
+function getEarlierUnresolvedReminders(ctx: BotContext, day: TodayImportanceDay, timeZone: string): Reminder[] {
+    return getReminderScope(ctx)
+        .filter((reminder) => isBeforeZonedDay(new Date(reminder.dueDate), day, timeZone))
+        .sort((a, b) => new Date(b.dueDate).getTime() - new Date(a.dueDate).getTime())
+        .slice(0, 8);
 }
 
 function reminderStatusLabel(reminder: Reminder, now: Date): string {
@@ -139,8 +153,15 @@ function reminderStatusLabel(reminder: Reminder, now: Date): string {
     return '';
 }
 
-function formatReminderLine(reminder: Reminder, now: Date, timeZone: string): string {
+function formatReminderLine(reminder: Reminder, now: Date, timeZone: string, includeDate = false): string {
     const due = new Date(reminder.dueDate);
+    const date = includeDate
+        ? `${due.toLocaleDateString('ru-RU', {
+            timeZone,
+            day: '2-digit',
+            month: '2-digit',
+        })} `
+        : '';
     const time = due.toLocaleTimeString('ru-RU', {
         timeZone,
         hour: '2-digit',
@@ -154,7 +175,7 @@ function formatReminderLine(reminder: Reminder, now: Date, timeZone: string): st
             ? ` [адресат: группа ${reminder.targetChat.groupName}]`
             : ` [адресат: ${reminder.targetChat.contactQuery}]`
         : '';
-    return `- ${time}${status ? ` (${status})` : ''}${chat}: ${reminder.displayText || reminder.text}${recurrence}${target}`;
+    return `- ${date}${time}${status ? ` (${status})` : ''}${chat}: ${reminder.displayText || reminder.text}${recurrence}${target}`;
 }
 
 function statusFromTags(tags: string[] | undefined): string | undefined {
@@ -173,7 +194,7 @@ function isSyntheticMemory(memory: TodayMemory): boolean {
     return (memory.tags ?? []).some((tag) => SYNTHETIC_TAGS.has(String(tag)));
 }
 
-function rangeRelation(memory: TodayMemory, day: ZonedDay, timeZone: string): string | null {
+function rangeRelation(memory: TodayMemory, day: TodayImportanceDay, timeZone: string): string | null {
     const fromKey = zonedDateKey(memory.validFrom, timeZone);
     const toKey = zonedDateKey(memory.validTo, timeZone);
 
@@ -183,7 +204,7 @@ function rangeRelation(memory: TodayMemory, day: ZonedDay, timeZone: string): st
     return null;
 }
 
-function contentMentionsTodayDate(content: string, day: ZonedDay): boolean {
+function contentMentionsTodayDate(content: string, day: TodayImportanceDay): boolean {
     const escapedMonth = RU_MONTHS_GENITIVE[day.month - 1]?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') ?? '';
     const dd = String(day.day).padStart(2, '0');
     const mm = String(day.month).padStart(2, '0');
@@ -196,7 +217,7 @@ function contentMentionsTodayDate(content: string, day: ZonedDay): boolean {
     return patterns.some((pattern) => pattern.test(content));
 }
 
-function relativeTemporalMatch(memory: TodayMemory, now: Date, day: ZonedDay, timeZone: string): string | null {
+function relativeTemporalMatch(memory: TodayMemory, now: Date, day: TodayImportanceDay, timeZone: string): string | null {
     const content = memory.content.toLowerCase();
     const savedToday = isSameZonedDay(memory.timestamp, day, timeZone);
     const savedYesterday = zonedDateKey(memory.timestamp, timeZone) === zonedDateKey(addDays(now, -1), timeZone);
@@ -218,7 +239,7 @@ function hasProspectiveSignal(memory: TodayMemory): boolean {
     return PROSPECTIVE_TEXT_RE.test(memory.content);
 }
 
-function scoreTodayMemory(memory: TodayMemory, now: Date, day: ZonedDay, timeZone: string): TodayMemoryItem | null {
+function scoreTodayMemory(memory: TodayMemory, now: Date, day: TodayImportanceDay, timeZone: string): TodayMemoryItem | null {
     const status = memoryStatus(memory);
     if (status === 'expired' || status === 'superseded' || status === 'done') return null;
 
@@ -268,7 +289,7 @@ function normalizeMemory(memory: MemoryEntry | SearchResult): TodayMemory {
     };
 }
 
-async function loadMemoryCandidates(ctx: BotContext, day: ZonedDay): Promise<TodayMemory[]> {
+async function loadMemoryCandidates(ctx: BotContext, day: TodayImportanceDay): Promise<TodayMemory[]> {
     const queries = [
         `что важного сегодня ${day.shortDate}`,
         `планы на сегодня дедлайн встреча событие ${day.shortDate}`,
@@ -311,7 +332,7 @@ function formatMemoryLine(item: TodayMemoryItem): string {
     return `- ${compactContent(memory.content)} [${memory.domain}; ${item.reason}; importance ${(memory.importance ?? 0.5).toFixed(2)}${confidence}${kind}${status}]`;
 }
 
-async function getTodayMemoryItems(ctx: BotContext, now: Date, day: ZonedDay, timeZone: string): Promise<TodayMemoryItem[]> {
+async function getTodayMemoryItems(ctx: BotContext, now: Date, day: TodayImportanceDay, timeZone: string): Promise<TodayMemoryItem[]> {
     if (!ctx.from?.id) return [];
     const candidates = await loadMemoryCandidates(ctx, day);
     const byId = new Map<string, TodayMemoryItem>();
@@ -328,37 +349,65 @@ async function getTodayMemoryItems(ctx: BotContext, now: Date, day: ZonedDay, ti
         .slice(0, 10);
 }
 
-export async function buildTodayImportanceContext(ctx: BotContext, message: string, timeZone = USER_TIMEZONE): Promise<string> {
-    if (!isTodayImportanceRequest(message)) return '';
-    if (ctx.chat?.type !== 'private') return '';
+export async function buildTodayImportanceSnapshot(ctx: BotContext, message: string, timeZone = USER_TIMEZONE): Promise<TodayImportanceSnapshot | null> {
+    if (!isTodayImportanceRequest(message)) return null;
+    if (ctx.chat?.type !== 'private') return null;
 
     const now = new Date();
     const day = getZonedDay(now, timeZone);
-    const reminders = getTodayReminders(ctx, day, timeZone);
+    const todayReminders = getTodayReminders(ctx, day, timeZone);
+    const earlierUnresolvedReminders = getEarlierUnresolvedReminders(ctx, day, timeZone);
     let memoryItems: TodayMemoryItem[] = [];
+    let memoryLookupFailed = false;
     try {
         memoryItems = await getTodayMemoryItems(ctx, now, day, timeZone);
     } catch (error) {
+        memoryLookupFailed = true;
         devLog('Today importance memory lookup failed:', error);
     }
 
-    const reminderLines = reminders.length
-        ? reminders.map((reminder) => formatReminderLine(reminder, now, timeZone)).join('\n')
+    return {
+        day,
+        timeZone,
+        now,
+        todayReminders,
+        earlierUnresolvedReminders,
+        memoryItems,
+        memoryLookupFailed,
+    };
+}
+
+export function formatTodayImportanceContext(snapshot: TodayImportanceSnapshot): string {
+    const reminderLines = snapshot.todayReminders.length
+        ? snapshot.todayReminders.map((reminder) => formatReminderLine(reminder, snapshot.now, snapshot.timeZone)).join('\n')
         : '- Активных напоминаний на сегодня нет.';
-    const memoryLines = memoryItems.length
-        ? memoryItems.map(formatMemoryLine).join('\n')
-        : '- В долговременной памяти нет конкретных планов, дедлайнов или событий с привязкой к сегодняшней дате.';
+    const earlierReminderLines = snapshot.earlierUnresolvedReminders.length
+        ? snapshot.earlierUnresolvedReminders.map((reminder) => formatReminderLine(reminder, snapshot.now, snapshot.timeZone, true)).join('\n')
+        : '- Незавершённых более ранних напоминаний нет.';
+    const memoryLines = snapshot.memoryLookupFailed
+        ? '- Не удалось надёжно прочитать долговременную память для сегодняшней сводки.'
+        : snapshot.memoryItems.length
+            ? snapshot.memoryItems.map(formatMemoryLine).join('\n')
+            : '- В долговременной памяти нет конкретных планов, дедлайнов или событий с привязкой к сегодняшней дате.';
 
     return [
-        `Сводка важного на сегодня (${day.label}, часовой пояс ${timeZone}).`,
+        `Сводка важного на сегодня (${snapshot.day.label}, часовой пояс ${snapshot.timeZone}).`,
         'Источники: активные напоминания и долговременная память, включая сохранённые факты из изученных переписок.',
         '',
         'Активные напоминания на сегодня:',
         reminderLines,
+        '',
+        'Незавершённые более ранние напоминания:',
+        earlierReminderLines,
         '',
         'Планы, события и открытые линии из памяти на сегодня:',
         memoryLines,
         '',
         'Правила ответа: сначала назови точные напоминания, затем пункты из памяти. Не придумывай календарь, встречи или сообщения. Не утверждай, что текущие Telegram-чаты проверены, если в контексте нет результата readMessages.',
     ].join('\n');
+}
+
+export async function buildTodayImportanceContext(ctx: BotContext, message: string, timeZone = USER_TIMEZONE): Promise<string> {
+    const snapshot = await buildTodayImportanceSnapshot(ctx, message, timeZone);
+    return snapshot ? formatTodayImportanceContext(snapshot) : '';
 }

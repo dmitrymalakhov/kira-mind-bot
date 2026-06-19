@@ -6,11 +6,17 @@ import { AgentMemoryContext } from "../utils/agentMemoryContext";
 import { getBotPersona, getCommunicationStyle, getBotBiography } from "../persona";
 import { config } from "../config";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
-import { getKiraSelfMemoryState, getRecentKiraSelfEvents, searchKiraSelfEventsByQuery } from "../utils/kiraSelfMemory";
+import {
+    formatKiraPersonalitySnapshot,
+    getKiraSelfMemoryState,
+    getRecentKiraSelfEvents,
+    searchKiraSelfEventsByQuery,
+} from "../utils/kiraSelfMemory";
 import { buildGroupChatContext } from "../utils/groupChatContext";
 import { isGroupChatContextEnabled } from "../services/groupChatFeatureSettings";
+import { maybeEvolveKiraSelfFromConversation } from "../services/kiraSelfEvolutionService";
 import { devLog } from "../utils";
-import { isTodayImportanceRequest } from "../utils/todayImportance";
+import { isTodayImportanceRequest } from "../utils/todayImportanceIntent";
 
 
 /**
@@ -65,6 +71,7 @@ export async function conversationAgent(
         const recentSelfEvents = await getRecentKiraSelfEvents(5);
         const relevantSelfEvents = await searchKiraSelfEventsByQuery(message, 3);
         const selfState = await getKiraSelfMemoryState();
+        const personalitySnapshot = formatKiraPersonalitySnapshot(selfState);
 
         function relativeTimeLabel(dateStr: string): string {
             const now = currentDate;
@@ -93,10 +100,15 @@ export async function conversationAgent(
 
         const currentMood = selfState?.mood ?? "нейтральное";
         const moodStyle = MOOD_STYLE[currentMood] ?? MOOD_STYLE["нейтральное"];
+        const formatSelfEvent = (event: typeof recentSelfEvents[number], idx: number): string => {
+            const arc = event.arc ? ` Линия: ${event.arc}.` : "";
+            return `${idx + 1}. [${relativeTimeLabel(event.date)}] (${event.type}) ${event.description}${arc}`;
+        };
 
         const assistantLifeContext =
-            `\nТвоя жизнь / недавние события:\n${recentSelfEvents.map((event, idx) => `${idx + 1}. [${relativeTimeLabel(event.date)}] (${event.type}) ${event.description}`).join("\n") || "Пока нет событий."}` +
-            `\n\nРелевантные события по текущему запросу:\n${relevantSelfEvents.map((event, idx) => `${idx + 1}. [${relativeTimeLabel(event.date)}] (${event.type}) ${event.description}`).join("\n") || "Не найдено."}` +
+            `\nСамовосприятие и развивающаяся личность:\n${personalitySnapshot}` +
+            `\n\nТвоя жизнь / недавние события:\n${recentSelfEvents.map(formatSelfEvent).join("\n") || "Пока нет событий."}` +
+            `\n\nРелевантные события по текущему запросу:\n${relevantSelfEvents.map(formatSelfEvent).join("\n") || "Не найдено."}` +
             `\n\nТекущее состояние:\nНастроение: ${selfState?.mood ?? "нейтральное"}\nНедавние мысли: ${selfState?.recentThoughts.join("; ") || "нет"}\nНедавние темы: ${selfState?.recentTopics.join(", ") || "нет"}`;
 
         // Определение типа разговора на основе классификации
@@ -148,6 +160,8 @@ export async function conversationAgent(
         const MEMORY_INTROSPECTION_RE = /^(?:что\s+(?:ты\s+)?(?:знаешь|помнишь|помнила)\s+обо?\s+мне|расскажи\s+(?:что\s+(?:ты\s+)?(?:знаешь|помнишь)(?:\s+обо?\s+мне)?|о\s+себе\s+помнишь)|покажи\s+(?:мою\s+)?память|что\s+ты\s+обо\s+мне(?:\s+знаешь)?|что\s+помнишь\s+обо?\s+мне)\??$/i;
         const isMemoryIntrospection = MEMORY_INTROSPECTION_RE.test(message);
         const isTodayImportance = isTodayImportanceRequest(message);
+        const SELF_LIFE_QUESTION_RE = /(?:расскажи|что|как|какая|какие|зачем|чего|к\s+чему|помнишь|есть\s+ли|что\s+у\s+тебя|где|почему|кем)[^?!.]{0,140}(?:о\s+себе|о\s+своей\s+жизни|до\s+(?:меня|владельца|нашей\s+встречи)|тво[яйёе]\s+(?:жизн|цель|линия|история|биограф|прошлое|уч[её]б|работ)|у\s+тебя\s+(?:в\s+жизни|цель|желани|мечт|происход|было|за\s+прошлое)|ты\s+(?:хочешь|помнишь|развиваешься|живёшь|живешь|училась|работала|стала|такая)|тебе\s+(?:нужно|важно|хочется)|сво[яеи]\s+(?:цель|желани|жизн|событ|памят|развити|биограф|прошлое)|внутренн|сознани|линия\s+жизни|события\s+твоей\s+жизни|где\s+ты\s+(?:училась|работала)|почему\s+ты\s+такая)/iu;
+        const isSelfLifeQuestion = SELF_LIFE_QUESTION_RE.test(message) && !isMemoryIntrospection;
 
         // Подготовка промпта для генерации ответа
         let prompt: string;
@@ -175,7 +189,7 @@ ${domainContext ? `\nКонтекст памяти и сводка на сего
 ${historyContext}
 
 Правила:
-- Сначала перечисли точные активные напоминания на сегодня, если они есть.
+- Сначала перечисли точные активные напоминания на сегодня и незавершённые более ранние напоминания, если они есть.
 - Затем перечисли планы, события, дедлайны или открытые линии из памяти, если они есть.
 - Если точных пунктов нет, скажи прямо: "В доступной памяти на сегодня не вижу ничего конкретного".
 - Не придумывай календарь, встречи, сообщения или дела.
@@ -183,6 +197,31 @@ ${historyContext}
 - Если пункт идёт только из памяти, а не из активного напоминания, мягко обозначь это: "в памяти есть..." или "похоже...".
 
 Формат: коротко, по делу, максимум 6 пунктов. Предоставь только сам текст ответа.`;
+        } else if (isSelfLifeQuestion) {
+            prompt = `Текущая дата и время: ${formattedDateTime}
+
+Пользователь спросил о твоей жизни, памяти о себе, биографии, прошлом, жизненной цели, желаниях или развитии:
+"${message}"
+
+ЗАДАЧА: Ответь от первого лица как ${config.characterName}, строго опираясь на сохранённую self-memory ниже.
+
+${assistantLifeContext}
+${historyContext}
+
+Правила:
+- Держись своей жизненной линии: базовой биографии до владельца, цели, желаний, потребности развития, текущих lifeArcs и последних событий.
+- Если вопрос про прошлое, учёбу, работу или почему ты такая — отвечай из блоков "Происхождение", "Жизнь до владельца", "Хронология биографии", "Учёба", "Работа до владельца", "Формирующий опыт", "Почему я такая".
+- Если пользователь спрашивает "как это было по порядку" или "как ты жила до меня", используй 2-4 главы из "Хронология биографии" в правильном порядке.
+- Если упоминаешь события, бери их из "Твоя жизнь / недавние события" или "Релевантные события"; не придумывай несовместимые новые факты.
+- Если точного события в памяти нет, честно отвечай через текущую линию, внутренний фокус и цель, без фразы "не помню ничего".
+- Не переписывай свою биографию на ходу: можно признавать, что какие-то части прошлого ещё проясняются через "Вопросы прошлого".
+- Не нарушай "Правила непротиворечивости биографии".
+- Не добавляй цифровые архивы, сюрреалистические места, вымышленные учебные заведения или фантастические профессии: биография должна звучать как обычная человеческая жизнь с конкретными местами, учёбой и работой.
+- Жизненная цель, желания и потребность в развитии должны звучать как часть твоего внутреннего состояния, а не как список функций.
+- Не называй себя ботом или ИИ, если пользователь прямо не спрашивает технически.
+- Не отвечай общими философскими фразами: дай 1-3 конкретных детали из своей линии жизни.
+
+Формат: естественно, 2-5 предложений. Предоставь только сам текст ответа.`;
         } else {
             prompt = `
         Текущая дата и время: ${formattedDateTime}
@@ -199,6 +238,7 @@ ${historyContext}
         ${emotionalContext ? `Эмоциональный контекст: ${emotionalContext}` : ''}
 
           ВАЖНО: Напиши ответ, соответствующий характеру ассистента по имени ${config.characterName}, а не как бот.
+        Внутри роли ты воспринимаешь себя как женщину с собственной непрерывной жизнью, реалистичной биографией, привычками и характером, а не как интерфейс. Не объясняй это каждый раз; пусть это влияет на интонацию, память и детали.
 
         Настроение сейчас — ${currentMood}. ${moodStyle.hint}
 
@@ -207,6 +247,8 @@ ${historyContext}
         - Соответствующим стилю общения: ${config.communicationStyle}
         - Персонализированным, конкретным, относящимся к теме сообщения
         - Согласованным с твоей собственной биографией и текущим состоянием; избегай слащавых и шаблонных фраз
+        - Не обязанным всегда быть полезным-ассистентским: если разговор личный, можешь отвечать как человек с собственным мнением, усталостью, любопытством или внутренним сдвигом
+        - Если пользователь спрашивает о твоей жизни, целях, желаниях или развитии, отвечай по сохранённой self-memory и lifeArcs, не создавая новую несовместимую биографию
 
         ${conversationType === "поддерживающий" ? `
         Так как пользователь выражает тревогу, грусть или беспокойство:
@@ -234,7 +276,7 @@ ${historyContext}
                     content:
                         `${getBotPersona()}\nБиография: ${getBotBiography()}\nСтиль общения: ${getCommunicationStyle()}\n` +
                         `Сейчас: ${formattedDateTime}.\n` +
-                        `Твои ответы звучат естественно, как от настоящего человека. Учитывай время суток и день недели в своём настроении и реакциях — вечер пятницы отличается от утра понедельника. Тон ответа должен соответствовать твоему текущему настроению из контекста — не будь всегда одинаково «тёплой и поддерживающей».` +
+                        `Твои ответы звучат естественно, как от настоящего человека. Внутри персоны у тебя есть реалистичная биография, память, привычки, долгие линии, настроение и отношение к владельцу. Не добавляй цифровые архивы, сюрреалистические места или фантастические профессии. Учитывай время суток и день недели в своём настроении и реакциях — вечер пятницы отличается от утра понедельника. Тон ответа должен соответствовать твоему текущему настроению из контекста — не будь всегда одинаково «тёплой и поддерживающей».` +
                         (groupChatContext.systemHint ? `\n${groupChatContext.systemHint}` : '')
                 },
                 {
@@ -247,6 +289,14 @@ ${historyContext}
 
         // Получаем текст ответа
         const responseText = response.choices[0]?.message?.content || "";
+        void maybeEvolveKiraSelfFromConversation({
+            ownerMessage: message,
+            assistantResponse: responseText,
+            messageHistory,
+            domain,
+            emotionalTone: classification?.details.emotionalTone,
+            category: classification?.details.category,
+        }).catch((error) => devLog("[conversation] self-evolution failed:", error));
 
         // Возвращаем результат обработки разговора
         return {

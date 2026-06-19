@@ -430,6 +430,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     lastSentMessageId: sendResult.messageId ?? undefined,
                     summaryChatId: chatId,
                     summaryMessageId: messageId,
+                    contactCommunicationContext: pending.contactCommunicationContext,
                 };
                 NegotiationStore.set(session);
                 const summaryText = buildNegotiationSummaryText(session);

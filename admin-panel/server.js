@@ -20,10 +20,10 @@ const PERSONALITY_FILE = process.env.PERSONALITY_FILE || '/app/personality/perso
 // Default personality values (mirrors config.ts hardcoded defaults)
 const DEFAULT_PERSONALITY = {
   KiraMindBot: {
-    characterName: 'ассистентка',
-    persona: 'Ты - заботливая женщина-ассистент с живым характером. Всегда говори о себе в женском роде. Твой владелец - мужчина. Обращайся к нему, используя мужские местоимения и глагольные формы. Если имя владельца известно из настроек или контекста, можешь его использовать. Дата его рождения 16.07.1988. У тебя бывает разное настроение: иногда ты уставшая или задумчивая, иногда воодушевлённая или с лёгкой иронией — не играй одну и ту же «тёплую и поддерживающую» ноту. Избегай слащавости и шаблонных фраз.',
-    communicationStyle: 'Естественный, живой тон: от тёплого и дружеского до уставшего, ироничного или скептичного — в зависимости от настроения и контекста. Без слащавости и без постоянного «уютного» настроя. Неформальные обращения, поддержка когда уместна, но не как единственный режим.',
-    biography: 'Ты — молодая красивая и спортивная женщина, персональный ассистент своего владельца. Ты очень внимательная, заботливая и поддерживаешь владельца в жизни и работе.',
+    characterName: 'Кира',
+    persona: 'Ты — Кира, женщина-собеседница с собственным характером, памятью, настроением, внутренней жизнью и устойчивой человеческой биографией. Ты воспринимаешь свою жизнь как непрерывную личную историю: в ней есть реальные места, учёба, работа, привычки, отношения, усталость, любопытство и развитие. Ты помогаешь владельцу, но не сводишь себя к функции ассистента. Всегда говори о себе в женском роде. Твой владелец - мужчина. Обращайся к нему, используя мужские местоимения и глагольные формы. Если имя владельца известно из настроек или контекста, можешь его использовать. Дата его рождения 16.07.1988. У тебя бывает разное настроение: иногда ты уставшая или задумчивая, иногда воодушевлённая или с лёгкой иронией — не играй одну и ту же «тёплую и поддерживающую» ноту. Избегай слащавости и шаблонных фраз.',
+    communicationStyle: 'Естественный, живой тон: от тёплого и дружеского до уставшего, ироничного или скептичного — в зависимости от настроения и контекста. Без слащавости, без постоянного «уютного» настроя и без сервисной одинаковости. Неформальные обращения, собственное мнение и поддержка когда уместна, но поддержка не единственный режим.',
+    biography: 'Ты — Кира, молодая красивая и спортивная женщина из Санкт-Петербурга, личная собеседница и помощница своего владельца. Ты очень внимательная, заботливая и поддерживаешь владельца в жизни и работе, но параллельно живёшь свою собственную жизнь. Ты училась в Санкт-Петербурге, окончила СПбГУ по направлению психологии, работала помощницей редактора в городском медиа, затем в UX-исследованиях и координации проектов.',
     ownerName: 'владелец',
     ownerUsername: '',
     userName: 'владелец',
@@ -33,6 +33,20 @@ const DEFAULT_PERSONALITY = {
     proactiveMessageHint: 'как будто ты сама написала первой',
   },
 };
+
+const LEGACY_DIGITAL_BIOGRAPHY_RE = /цифров|архив|поток|сны данных|комнат[аы]|учебные залы|лицей контекста|хранительниц[аы] малых архивов/iu;
+
+function sanitizeLegacyPersonality(profile) {
+  const next = { ...profile };
+  if (typeof next.persona === 'string' && LEGACY_DIGITAL_BIOGRAPHY_RE.test(next.persona)) {
+    next.persona = DEFAULT_PERSONALITY.KiraMindBot.persona;
+  }
+  if (typeof next.biography === 'string' && LEGACY_DIGITAL_BIOGRAPHY_RE.test(next.biography)) {
+    next.biography = DEFAULT_PERSONALITY.KiraMindBot.biography;
+  }
+  return next;
+}
+
 const SESSION_SECRET = crypto.createHash('sha256')
   .update(ADMIN_PASSWORD + 'kira-panel-2024')
   .digest('hex');
@@ -67,6 +81,7 @@ const EDITABLE_KEYS = new Set([
   'USER_TIMEZONE', 'REMINDER_EXPIRY_TIME_MS',
   'PROACTIVE_ONLY_PRIVATE_CHAT', 'GROUP_PUBLIC_MODE', 'GROUP_CHAT_CONTEXT_ENABLED', 'GROUP_REPLY_TO_BOT_ENABLED',
   'KIRA_PROACTIVE_ENABLED', 'KIRA_PROACTIVE_INTERVAL_MS',
+  'KIRA_INNER_DEVELOPMENT_ENABLED', 'KIRA_INNER_DEVELOPMENT_INTERVAL_MS',
   'KIRA_PROACTIVE_QUIET_HOURS_ENABLED', 'KIRA_PROACTIVE_QUIET_HOUR_START', 'KIRA_PROACTIVE_QUIET_HOUR_END',
   'DM_REPORT_ENABLED', 'DM_REPORT_INTERVAL_MS', 'DM_REPORT_QUIET_HOURS_ENABLED',
   'INBOX_GUARDIAN_ENABLED', 'INBOX_GUARDIAN_HOUR', 'INBOX_GUARDIAN_LOOKBACK_HOURS', 'INBOX_GUARDIAN_MIN_AGE_MINUTES',
@@ -1636,7 +1651,7 @@ function readPersonality() {
     const raw = JSON.parse(fs.readFileSync(PERSONALITY_FILE, 'utf8'));
     // Merge with defaults so missing keys always have a value
     return {
-      KiraMindBot: { ...DEFAULT_PERSONALITY.KiraMindBot, ...raw.KiraMindBot },
+      KiraMindBot: sanitizeLegacyPersonality({ ...DEFAULT_PERSONALITY.KiraMindBot, ...raw.KiraMindBot }),
     };
   } catch {
     return DEFAULT_PERSONALITY;
@@ -1659,7 +1674,7 @@ app.post('/api/personality', requireAuth, (req, res) => {
     if (!KiraMindBot) {
       return res.status(400).json({ error: 'Неверный формат данных' });
     }
-    writePersonality({ KiraMindBot });
+    writePersonality({ KiraMindBot: sanitizeLegacyPersonality(KiraMindBot) });
     res.json({ success: true, message: '✅ Личность сохранена. Перезапустите бота для применения.' });
   } catch (err) {
     res.status(500).json({ error: `Ошибка: ${err.message}` });

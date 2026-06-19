@@ -21,7 +21,7 @@ import { handlePendingContactMemoryText } from "./utils/contactMemory";
 import { handlePendingContactLookupText, maybeStartContactMemoryLookup } from "./utils/contactMemoryLookup";
 import { hasActiveBrowserRunForContext } from "./agents/browserAgent";
 import { looksLikeBrowserTaskCancellation, looksLikeNegatedBookingRequest } from "./utils/browserTaskCancellation";
-import { isTodayImportanceRequest } from "./utils/todayImportance";
+import { isTodayImportanceRequest } from "./utils/todayImportanceIntent";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });

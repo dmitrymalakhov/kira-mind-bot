@@ -6,7 +6,7 @@ import { getVectorService } from '../services/VectorServiceFactory';
 import { llmCache, LLM_CACHE_TTL } from './llmCache';
 import { Contact } from '../stores/ContactsStore';
 import { contactDisplayName, contactIdentityTags, normalizeContactLookupValue, resolveContactIdentity } from './contactMemory';
-import { isTodayImportanceRequest } from './todayImportance';
+import { isTodayImportanceRequest } from './todayImportanceIntent';
 
 const ANSWER_RESULTS_PER_QUERY = 5;
 const CONTEXT_RESULTS_PER_QUERY = 2;

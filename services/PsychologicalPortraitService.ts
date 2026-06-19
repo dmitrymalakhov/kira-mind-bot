@@ -1,9 +1,11 @@
-import { v4 as uuidv4 } from 'uuid';
 import { BotContext } from '../types';
+import { Contact } from '../stores/ContactsStore';
 import { getVectorService } from './VectorServiceFactory';
 import { devLog } from '../utils';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { getActiveMemoryBotId } from '../utils/botIdentity';
+import { contactDisplayName, contactIdentityTags } from '../utils/contactMemory';
+import type { SearchResult } from './interfaces/IVectorService';
 
 const PORTRAIT_DOMAIN = 'contacts';
 const PORTRAIT_IMPORTANCE = 0.92;
@@ -12,6 +14,61 @@ const PORTRAIT_CONFIDENCE = 0.85;
 /** Тег для идентификации записи как психологического портрета конкретного контакта */
 export function portraitTag(contactName: string): string {
     return `portrait:${contactName}`;
+}
+
+function portraitLookupTags(contactName: string, contact?: Contact): string[] {
+    const names = [
+        contactName.trim(),
+        contact ? contactDisplayName(contact) : '',
+        contact?.firstName,
+        [contact?.firstName, contact?.lastName].filter(Boolean).join(' '),
+        contact?.username ? `@${contact.username}` : '',
+    ].filter(Boolean) as string[];
+
+    return [...new Set(names.map(name => portraitTag(name.trim())).filter(Boolean))];
+}
+
+function portraitStorageTags(contactName: string, contact?: Contact): string[] {
+    return [
+        ...portraitLookupTags(contactName, contact),
+        ...contactIdentityTags(contactName, contact),
+    ];
+}
+
+function isPortraitResult(result: SearchResult): boolean {
+    return result.content.startsWith('[ПСИХОЛОГИЧЕСКИЙ ПОРТРЕТ:') ||
+        result.memoryKind === 'portrait' ||
+        (result.tags ?? []).some(tag => String(tag).startsWith('portrait:'));
+}
+
+async function findStoredPortraits(
+    userId: string,
+    contactName: string,
+    contact?: Contact
+): Promise<SearchResult[]> {
+    const svc = getVectorService();
+    if (!svc) return [];
+
+    const tags = [
+        ...portraitLookupTags(contactName, contact),
+        ...contactIdentityTags(contactName, contact),
+    ];
+    const seen = new Map<string, SearchResult>();
+
+    for (const tag of [...new Set(tags)]) {
+        const results = await svc.getMemoriesByTag(userId, tag).catch(() => []);
+        for (const result of results) {
+            if (!isPortraitResult(result)) continue;
+            seen.set(result.id, result);
+        }
+    }
+
+    return Array.from(seen.values()).sort((a, b) => {
+        const ai = (a.importance ?? 0.5) + (a.isAnchor ? 0.2 : 0);
+        const bi = (b.importance ?? 0.5) + (b.isAnchor ? 0.2 : 0);
+        if (bi !== ai) return bi - ai;
+        return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+    });
 }
 
 export interface ContactPortrait {
@@ -163,6 +220,7 @@ export async function saveOrUpdatePortrait(
     ctx: BotContext,
     contactName: string,
     conversationText: string,
+    contact?: Contact,
 ): Promise<boolean> {
     const svc = getVectorService();
     if (!svc) return false;
@@ -170,15 +228,13 @@ export async function saveOrUpdatePortrait(
     const userId = String(ctx.from?.id);
     if (!userId) return false;
 
-    const tag = portraitTag(contactName);
-
     // Ищем существующий портрет
     let oldPortraitText: string | undefined;
     let oldId: string | undefined;
     let oldConversationsCount = 0;
 
     try {
-        const existing = await svc.getMemoriesByTag(userId, tag);
+        const existing = await findStoredPortraits(userId, contactName, contact);
         if (existing.length > 0) {
             const best = existing[0];
             oldPortraitText = best.content;
@@ -220,7 +276,7 @@ export async function saveOrUpdatePortrait(
             botId,
             timestamp: new Date(),
             importance: PORTRAIT_IMPORTANCE,
-            tags: [tag, `contact:${contactName}`],
+            tags: portraitStorageTags(contactName, contact),
             userId,
             isAnchor: true,
             confidence: PORTRAIT_CONFIDENCE,
@@ -243,15 +299,13 @@ export async function saveOrUpdatePortrait(
 export async function getContactPortrait(
     ctx: BotContext,
     contactName: string,
+    contact?: Contact,
 ): Promise<string | null> {
-    const svc = getVectorService();
-    if (!svc) return null;
-
     const userId = String(ctx.from?.id);
     if (!userId) return null;
 
     try {
-        const results = await svc.getMemoriesByTag(userId, portraitTag(contactName));
+        const results = await findStoredPortraits(userId, contactName, contact);
         return results.length > 0 ? results[0].content : null;
     } catch (e) {
         devLog('PsychologicalPortraitService: getPortrait error', e);

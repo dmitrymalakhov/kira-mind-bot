@@ -2,7 +2,7 @@ import type { Plan, PlanStep, PlanningInput } from './types';
 import { devLog, parseLLMJson } from '../utils';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { llmCache, LLM_CACHE_TTL } from '../utils/llmCache';
-import { isTodayImportanceRequest } from '../utils/todayImportance';
+import { isTodayImportanceRequest } from '../utils/todayImportanceIntent';
 
 const AVAILABLE_STEPS = `
 ВАЖНО: контекст из долговременной памяти (факты о пользователе) подтягивается АВТОМАТИЧЕСКИ ко всем шагам. НЕ нужно добавлять отдельный шаг memory — все агенты уже получают память.
