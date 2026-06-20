@@ -67,6 +67,28 @@ export class MessageStore {
         return this.messages.get(chatId) || [];
     }
 
+    // Удаление одного сообщения по идентификатору
+    removeMessage(chatId: string, messageId: number): boolean {
+        const messages = this.messages.get(chatId);
+        if (!messages) {
+            return false;
+        }
+
+        const nextMessages = messages.filter((message) => message.id !== messageId);
+        if (nextMessages.length === messages.length) {
+            return false;
+        }
+
+        if (nextMessages.length === 0) {
+            this.messages.delete(chatId);
+        } else {
+            this.messages.set(chatId, nextMessages);
+        }
+
+        this.updateUnreadMessagesFlag();
+        return true;
+    }
+
     // Проверка наличия новых непрочитанных сообщений
     hasUnreadMessages(): boolean {
         return this.hasNewUnreadMessages;

@@ -162,6 +162,16 @@ function buildIncomingStoredMessage(
     };
 }
 
+function buildIncomingPlaceholderMessage(message: TelegramMessageLike, senderId: number): StoredMessage {
+    return buildIncomingStoredMessage(
+        message,
+        senderId,
+        "Неизвестный пользователь",
+        undefined,
+        false
+    );
+}
+
 function describeTelegramSender(sender: unknown): {
     senderName: string;
     senderUsername?: string;
@@ -328,6 +338,8 @@ function handleIncomingMessageEvent(event: { message?: TelegramMessageLike; isPr
             return;
         }
 
+        messageStore.addMessage(String(chatId), buildIncomingPlaceholderMessage(message, senderId));
+
         incomingTelegramQueue.enqueue({
             chatId,
             enqueuedAt: Date.now(),
@@ -362,6 +374,7 @@ async function processIncomingTelegramMessage(job: IncomingTelegramQueueJob<Tele
     }
 
     if (isBot) {
+        messageStore.removeMessage(String(chatId), message.id);
         devLog(`Пропускаем сообщение от бота: ${senderName}`);
         markChatAsBot(String(chatId));
         return;
@@ -427,6 +440,8 @@ async function processIncomingTelegramMessage(job: IncomingTelegramQueueJob<Tele
                 );
                 messageTracker.stopTracking(replyToMessageId);
             }
+
+            return;
         }
     }
 
