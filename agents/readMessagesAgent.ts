@@ -344,6 +344,9 @@ function handleIncomingMessageEvent(event: { message?: TelegramMessageLike; isPr
             chatId,
             enqueuedAt: Date.now(),
             message,
+            onDiscard: () => {
+                messageStore.removeMessage(String(chatId), message.id);
+            },
         });
     } catch (error) {
         console.error("Ошибка при быстром приёме нового сообщения:", error);

@@ -4,6 +4,7 @@ export interface IncomingTelegramQueueJob<TMessage> {
     chatId: number;
     enqueuedAt: number;
     message: TMessage;
+    onDiscard?: (reason: "dropped" | "expired") => void;
 }
 
 interface IncomingTelegramQueueOptions<TMessage> {
@@ -51,6 +52,17 @@ export function createIncomingTelegramQueue<TMessage>(
         devLog(`[${logLabel}] ${event}`, payload);
     }
 
+    function notifyDiscard(
+        job: IncomingTelegramQueueJob<TMessage>,
+        reason: "dropped" | "expired"
+    ): void {
+        try {
+            job.onDiscard?.(reason);
+        } catch (error) {
+            console.error("Ошибка в cleanup discarded job:", error);
+        }
+    }
+
     function dropOldestJob(): IncomingTelegramQueueJob<TMessage> | undefined {
         let oldestChatId: number | undefined;
         let oldestJob: IncomingTelegramQueueJob<TMessage> | undefined;
@@ -80,6 +92,7 @@ export function createIncomingTelegramQueue<TMessage>(
 
         pendingJobs = Math.max(0, pendingJobs - 1);
         droppedJobs++;
+        notifyDiscard(oldestJob, "dropped");
         log("dropped oldest job", {
             chatId: oldestChatId,
             dropped: droppedJobs,
@@ -106,6 +119,7 @@ export function createIncomingTelegramQueue<TMessage>(
 
         pendingJobs = Math.max(0, pendingJobs - 1);
         droppedJobs++;
+        notifyDiscard(dropped, "dropped");
         log("dropped oldest job from chat", {
             chatId,
             dropped: droppedJobs,
@@ -164,6 +178,7 @@ export function createIncomingTelegramQueue<TMessage>(
         const waitedMs = Date.now() - job.enqueuedAt;
         if (waitedMs > maxAgeMs) {
             expiredJobs++;
+            notifyDiscard(job, "expired");
             log("skipped expired job", {
                 activeWorkers,
                 chatId,

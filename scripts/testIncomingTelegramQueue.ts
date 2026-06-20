@@ -154,10 +154,83 @@ async function testDropsOldestPendingJobGlobally(): Promise<void> {
     assert.deepEqual(finished, [1, 3, 4]);
 }
 
+async function testCallsDiscardCallbackForDroppedJobs(): Promise<void> {
+    const blocker = deferred();
+    let firstStarted = false;
+    const discarded: Array<{ id: number; reason: "dropped" | "expired" }> = [];
+
+    const queue = createIncomingTelegramQueue<TestMessage>({
+        concurrency: 1,
+        maxAgeMs: 1_000,
+        maxPendingPerChat: 2,
+        maxPendingTotal: 10,
+        warnProcessMs: 1,
+        warnWaitMs: 1,
+        logLabel: "test-queue",
+        getMessageId: (message) => message.id,
+        processJob: async (job) => {
+            if (job.message.id === 1) {
+                firstStarted = true;
+                await blocker.promise;
+            }
+        },
+    });
+
+    queue.enqueue({ chatId: 1, enqueuedAt: Date.now(), message: { id: 1, delayMs: 0 } });
+    await waitFor(() => firstStarted);
+    queue.enqueue({
+        chatId: 1,
+        enqueuedAt: Date.now(),
+        message: { id: 2, delayMs: 0 },
+        onDiscard: (reason) => {
+            discarded.push({ id: 2, reason });
+        },
+    });
+    queue.enqueue({ chatId: 1, enqueuedAt: Date.now(), message: { id: 3, delayMs: 0 } });
+    queue.enqueue({ chatId: 1, enqueuedAt: Date.now(), message: { id: 4, delayMs: 0 } });
+
+    await waitFor(() => discarded.length === 1);
+    blocker.resolve();
+
+    assert.deepEqual(discarded, [{ id: 2, reason: "dropped" }]);
+}
+
+async function testCallsDiscardCallbackForExpiredJobs(): Promise<void> {
+    const discarded: Array<{ id: number; reason: "dropped" | "expired" }> = [];
+
+    const queue = createIncomingTelegramQueue<TestMessage>({
+        concurrency: 1,
+        maxAgeMs: 10,
+        maxPendingPerChat: 10,
+        maxPendingTotal: 10,
+        warnProcessMs: 1,
+        warnWaitMs: 1,
+        logLabel: "test-queue",
+        getMessageId: (message) => message.id,
+        processJob: async () => {
+            throw new Error("expired job must not reach processJob");
+        },
+    });
+
+    queue.enqueue({
+        chatId: 1,
+        enqueuedAt: Date.now() - 100,
+        message: { id: 99, delayMs: 0 },
+        onDiscard: (reason) => {
+            discarded.push({ id: 99, reason });
+        },
+    });
+
+    await waitFor(() => discarded.length === 1);
+    assert.deepEqual(discarded, [{ id: 99, reason: "expired" }]);
+}
+
 async function main(): Promise<void> {
     await testSerializesPerChatAndLimitsConcurrency();
     await testDropsOldestPendingJobPerChat();
     await testDropsOldestPendingJobGlobally();
+    await testCallsDiscardCallbackForDroppedJobs();
+    await testCallsDiscardCallbackForExpiredJobs();
     console.log("incomingTelegramQueue checks passed");
 }
 
