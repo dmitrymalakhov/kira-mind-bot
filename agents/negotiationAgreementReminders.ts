@@ -9,6 +9,7 @@ import { Reminder, ReminderStatus, scheduleReminder } from "../reminder";
 import { ReminderRegistry } from "../stores/ReminderRegistry";
 import { ReminderRepository } from "../services/ReminderRepository";
 import type { BotContext } from "../types";
+import { createOrRefreshReminderMemory } from "../services/ReminderMemorySync";
 
 const MAX_REMINDERS = 5;
 
@@ -139,6 +140,9 @@ ${historyText}
                 console.error("[negotiation reminders] DB save failed:", e)
             );
             scheduleReminder(bot, reminder);
+            await createOrRefreshReminderMemory(ctx, reminder).catch((e) =>
+                console.error("[negotiation reminders] memory sync failed:", e)
+            );
 
             const displayTime = due.toLocaleString("ru-RU", {
                 timeZone: USER_TIMEZONE,
