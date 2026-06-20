@@ -24,9 +24,11 @@ async function createTranscriptionWithModel(
         throw new Error(`Provider ${modelRef.provider} does not support transcription for model ${modelRef.model}`);
     }
 
+    const fileStream = fs.createReadStream(audioFilePath);
+
     try {
         const result = await providerAdapter.createTranscription(modelRef.model, {
-            file: fs.createReadStream(audioFilePath),
+            file: fileStream,
             language: 'ru',
             response_format: 'text',
         });
@@ -61,6 +63,8 @@ async function createTranscriptionWithModel(
         }
 
         throw error;
+    } finally {
+        fileStream.destroy();
     }
 }
 

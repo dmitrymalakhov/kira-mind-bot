@@ -59,6 +59,14 @@ withPreset('gemini-direct-balanced', () => {
 });
 
 withPreset('glm-balanced', () => {
+    assert.deepStrictEqual(resolveModelForTask('intentClassification'), {
+        provider: 'openai',
+        model: 'gpt-5.4-nano',
+    });
+    assert.deepStrictEqual(resolveModelForTask('intentDedup'), {
+        provider: 'openai',
+        model: 'gpt-5.4-nano',
+    });
     assert.deepStrictEqual(resolveModelForTask('conversation'), {
         provider: 'zai',
         model: 'glm-5.2',

@@ -117,6 +117,7 @@ async function main() {
     const originalOpenAiAudio = openaiMutableClient.audio;
     const originalConsoleInfo = console.info;
     const originalConsoleWarn = console.warn;
+    let lastTranscriptionStream: { destroyed?: boolean } | null = null;
 
     try {
         console.info = () => undefined;
@@ -158,6 +159,7 @@ async function main() {
         openaiMutableClient.audio = {
             transcriptions: {
                 create: async (body: Record<string, unknown>) => {
+                    lastTranscriptionStream = body.file as { destroyed?: boolean };
                     calls.push({ provider: 'openai', method: 'audio.transcriptions.create', body: { ...body, file: '[stream]' } });
                     return 'decoded text';
                 },
@@ -343,6 +345,12 @@ async function main() {
                 response_format: 'text',
             },
         });
+        assert.ok(lastTranscriptionStream, 'Expected transcription request to pass a file stream');
+        assert.strictEqual(
+            (lastTranscriptionStream as { destroyed?: boolean }).destroyed,
+            true,
+            'Transcription stream must be closed after request completion',
+        );
         await new Promise((resolve) => setTimeout(resolve, 25));
         fs.unlinkSync(tempAudioPath);
     } finally {

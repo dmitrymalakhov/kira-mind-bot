@@ -129,8 +129,8 @@
       "description": "Z.ai GLM-5.2 для основных текстовых задач и планирования; OpenAI для web search, vision, embedding и transcription.",
       "models": {
         "defaultText": { "provider": "zai", "model": "glm-5.2" },
-        "intentClassification": { "provider": "zai", "model": "glm-5.2" },
-        "intentDedup": { "provider": "zai", "model": "glm-5.2" },
+        "intentClassification": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "intentDedup": { "provider": "openai", "model": "gpt-5.4-nano" },
         "conversation": { "provider": "zai", "model": "glm-5.2" },
         "memoryExtraction": { "provider": "zai", "model": "glm-5.2" },
         "memoryConsolidation": { "provider": "zai", "model": "glm-5.2" },
