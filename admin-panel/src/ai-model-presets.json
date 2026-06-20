@@ -5,7 +5,8 @@
     "gpt-lean",
     "hybrid-openrouter-gpt",
     "hybrid-gemini-gpt",
-    "gemini-direct-balanced"
+    "gemini-direct-balanced",
+    "glm-balanced"
   ],
   "presets": {
     "gpt-max": {
@@ -118,6 +119,25 @@
         "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4-mini" },
         "browserPlanning": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
         "browserVision": { "provider": "gemini", "model": "gemini-3-flash-preview" },
+        "embedding": { "provider": "openai", "model": "text-embedding-3-small" },
+        "transcription": { "provider": "openai", "model": "whisper-1" }
+      }
+    },
+    "glm-balanced": {
+      "name": "glm-balanced",
+      "title": "GLM Balanced",
+      "description": "Z.ai GLM-5.2 для основных текстовых задач и планирования; OpenAI для web search, vision, embedding и transcription.",
+      "models": {
+        "defaultText": { "provider": "zai", "model": "glm-5.2" },
+        "intentClassification": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "intentDedup": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "conversation": { "provider": "zai", "model": "glm-5.2" },
+        "memoryExtraction": { "provider": "zai", "model": "glm-5.2" },
+        "memoryConsolidation": { "provider": "zai", "model": "glm-5.2" },
+        "messageAnalysis": { "provider": "zai", "model": "glm-5.2" },
+        "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "browserPlanning": { "provider": "zai", "model": "glm-5.2" },
+        "browserVision": { "provider": "openai", "model": "gpt-4o" },
         "embedding": { "provider": "openai", "model": "text-embedding-3-small" },
         "transcription": { "provider": "openai", "model": "whisper-1" }
       }

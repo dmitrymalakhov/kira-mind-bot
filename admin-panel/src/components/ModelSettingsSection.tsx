@@ -32,6 +32,8 @@ function getProviderLabel(provider: string): string {
       return 'OpenRouter';
     case 'gemini':
       return 'Gemini';
+    case 'zai':
+      return 'Z.ai';
     default:
       return provider;
   }

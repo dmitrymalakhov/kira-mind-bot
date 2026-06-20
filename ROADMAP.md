@@ -2,29 +2,31 @@
 
 ## AI Model Presets
 
-- Добить сценарные проверки для preset-ов на реальных runtime-путях:
+- Зафиксировать e2e-покрытие для runtime-переключения preset-а через реальную runtime-настройку без redeploy, а не только через тестовую подмену окружения.
+- Добавить отдельные quality-check сценарии для пресета `glm-balanced` на реальных задачах:
   - `conversation`
   - `messageAnalysis`
-  - `browserVision`
   - `browserPlanning`
-- Добавить отдельные сценарные проверки для task key, которые сейчас имеют hidden OpenAI dependency:
-  - `embedding`
-  - `transcription`
-- Зафиксировать smoke/e2e-покрытие для runtime-переключения preset-а без redeploy.
-- Устранить рассинхрон между конфигом preset-ов и фактическим runtime:
-  - либо перевести `embedding` / `transcription` на полноценные Gemini-адаптеры;
-  - тесты не должны проверять только `resolveModelForTask(...)`, если реальный execution path использует `resolveOpenAiModelForTaskAsync(...)`.
+  - `memoryExtraction`
 
 ## LLM Provider Abstraction
 
-- Для дополнительных провайдеров предусмотреть:
-  - отдельный API key;
-  - healthcheck/валидатор конфигурации;
-  - fallback обратно на OpenAI для критичных сценариев.
-- До включения OpenRouter / Gemini в проде проверить:
+- До включения OpenRouter / Gemini / Z.ai в проде проверить:
   - совместимость structured output;
   - качество на интентах, анализе переписки и обычных ответах;
   - поведение при rate limits / timeout / provider outage.
+
+## Admin Panel Layout
+
+- Не держать layout `AI Presets` и других custom-секций отдельными JSX special-case блоками вне общего registry.
+- Ввести единый registry секций настроек для вкладки `Настройки`, где каждая секция описывает:
+  - `id`;
+  - `tab`;
+  - `order`;
+  - `navLabel` / `caption`;
+  - `renderKind`: schema-based или custom component.
+- `CONFIG_SCHEMA` оставить только как описание полей для простых form-секций, а не как единственный источник layout-порядка.
+- Sidebar и main content собирать из одного и того же registry, чтобы порядок нельзя было разъехать отдельным ручным рендером.
 
 ## Model Presets
 
@@ -233,13 +235,17 @@
 - В админке появился отдельный live-раздел `Мониторинг` с агрегированными health checks для контейнера бота, PostgreSQL, Qdrant, Telegram Bot API, Telegram User Client и AI-провайдеров.
 - Все прикладные вызовы `openai.chat.completions.create` переведены на task-aware wrapper `createChatCompletionForTask(...)`; legacy-слой `openAiModels` удалён из runtime-конфига.
 - Browser planning и browser vision уже резолвят модель через task-aware preset runtime.
-- Для `embeddings` и `audio.transcriptions` сохранён low-level OpenAI client, но выбор модели теперь берётся из активного preset-а.
-- Вынесен отдельный слой provider adapters для OpenAI / Gemini / OpenRouter:
+- `embeddings` и `audio.transcriptions` переведены на отдельные runtime-операции `createEmbeddingForTask(...)` и `createTranscriptionForTask(...)`; прямые вызовы OpenAI из прикладных сервисов убраны.
+- Вынесен capability-first слой provider adapters и descriptor-ов для OpenAI / Gemini / OpenRouter / Z.ai:
   - preset registry по-прежнему отвечает только за `task -> provider + model`;
-  - provider-specific capabilities, поддержка `responses.create` и нормализация chat params вынесены из orchestration wrapper-ов;
+  - provider-specific capabilities, monitoring metadata, поддержка `responses.create` и нормализация chat params вынесены из runtime-слоя;
   - `model.startsWith('gpt-5')` заменён на capability metadata модели.
+- Добавлены единый provider registry (`envKey`, `label`, `baseURL`, monitoring, capability map) и отдельный model catalog.
+- Fallback policy для runtime и admin availability централизована в общей матрице `ai/fallback-models.json`; локальные копии fallback-правил убраны.
 - Добавлен runtime-aware AI preset registry в админке:
-  - доступны `gpt-*`, `hybrid-openrouter-gpt`, `hybrid-gemini-gpt`, `gemini-direct-balanced`;
+  - доступны `gpt-*`, `hybrid-openrouter-gpt`, `hybrid-gemini-gpt`, `gemini-direct-balanced`, `glm-balanced`;
   - недоступные preset-ы блокируются в UI и отклоняются API при отсутствии обязательных ключей.
+- В админке исправлен фактический порядок секции `AI Presets`: она теперь отображается сразу после `API Ключи`, а не отдельным блоком внизу списка настроек.
+- Сборка `admin-panel` переведена на root Docker build context, чтобы server-side часть панели использовала общие runtime JSON-реестры без дублирования metadata.
 - Кнопка `Своё время` у напоминаний уже использует общий LLM-разбор даты с сохранением postpone-flow.
 - Серверный VPS-first сценарий, `Dockerfile.server`, `tsconfig.server.json`, `server-install.sh`, `server-deploy.sh` и корневой `Makefile` уже добавлены.

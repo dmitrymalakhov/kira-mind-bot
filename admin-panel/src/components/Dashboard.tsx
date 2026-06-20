@@ -857,25 +857,28 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
         {activeTab === 0 && (
           <>
             {CONFIG_SCHEMA.map((section) => (
-              <ConfigSection
-                key={section.id}
-                ref={(el) => {
-                  sectionRefs.current[section.id] = el;
-                }}
-                section={section}
-                config={config}
-                onUpdate={onConfigUpdate}
-                onToast={showToast}
-              />
+              <Box key={section.id}>
+                <ConfigSection
+                  ref={(el) => {
+                    sectionRefs.current[section.id] = el;
+                  }}
+                  section={section}
+                  config={config}
+                  onUpdate={onConfigUpdate}
+                  onToast={showToast}
+                />
+                {section.id === 'api' && (
+                  <ModelSettingsSection
+                    ref={(el) => {
+                      sectionRefs.current['model-presets'] = el;
+                    }}
+                    config={config}
+                    onUpdate={onConfigUpdate}
+                    onToast={showToast}
+                  />
+                )}
+              </Box>
             ))}
-            <ModelSettingsSection
-              ref={(el) => {
-                sectionRefs.current['model-presets'] = el;
-              }}
-              config={config}
-              onUpdate={onConfigUpdate}
-              onToast={showToast}
-            />
           </>
         )}
 

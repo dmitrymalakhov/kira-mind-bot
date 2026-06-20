@@ -6,7 +6,7 @@ import modelPresetRegistry from '../admin-panel/src/ai-model-presets.json';
  * Значение используется в task-aware резолвере, чтобы выбрать нужный клиент
  * и понять, требуется ли OpenAI fallback для API, которые пока не абстрагированы.
  */
-export type AiProvider = 'openai' | 'openrouter' | 'gemini';
+export type AiProvider = 'openai' | 'openrouter' | 'gemini' | 'zai';
 
 /**
  * Ключ задачи, для которой подбирается модель из preset registry.
@@ -54,7 +54,8 @@ export type AiPresetName =
     | 'gpt-lean'
     | 'hybrid-openrouter-gpt'
     | 'hybrid-gemini-gpt'
-    | 'gemini-direct-balanced';
+    | 'gemini-direct-balanced'
+    | 'glm-balanced';
 
 /**
  * Полная конфигурация одного AI preset-а.
@@ -106,6 +107,8 @@ export const hybridOpenRouterGptPreset = aiPresets['hybrid-openrouter-gpt'];
 export const hybridGeminiGptPreset = aiPresets['hybrid-gemini-gpt'];
 /** Готовый shortcut к direct preset-у `gemini only`. */
 export const geminiDirectBalancedPreset = aiPresets['gemini-direct-balanced'];
+/** Готовый shortcut к direct preset-у `zai + openai fallback for missing capabilities`. */
+export const glmBalancedPreset = aiPresets['glm-balanced'];
 
 /**
  * Валидирует произвольную строку как имя известного AI preset-а.

@@ -26,6 +26,12 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         hint: 'Нужен для пресетов Hybrid Gemini + GPT и Gemini Direct Balanced. Применяется после рестарта процесса.',
       },
       {
+        key: 'ZAI_API_KEY',
+        label: 'Z.ai API Key',
+        type: 'password',
+        hint: 'Нужен для пресета GLM Balanced и обычного Z.ai API endpoint. Применяется после рестарта процесса.',
+      },
+      {
         key: 'IDEOGRAM_API_KEY',
         label: 'Ideogram API Key',
         type: 'password',

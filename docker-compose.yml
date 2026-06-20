@@ -62,7 +62,8 @@ services:
 
   admin-panel:
     build:
-      context: ./admin-panel
+      context: .
+      dockerfile: admin-panel/Dockerfile
     container_name: admin-panel
     <<: *default-restart
     ports:

@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { providers: AI_PROVIDER_REGISTRY } = require('../ai/provider-registry.json');
 
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_RUNTIME_HEALTH_PORT = Number(process.env.KIRA_RUNTIME_HEALTH_PORT || 3100);
@@ -174,6 +175,31 @@ function trimDetails(text, limit = 280) {
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
 }
 
+function buildProviderRequestOptions(providerId, apiKey) {
+  const descriptor = AI_PROVIDER_REGISTRY[providerId];
+  if (!descriptor) {
+    throw new Error(`Unknown AI provider: ${providerId}`);
+  }
+
+  const monitoring = descriptor.monitoring || {};
+  if (monitoring.auth === 'query_key') {
+    return {
+      url: `${monitoring.url}?key=${encodeURIComponent(apiKey)}`,
+      options: {},
+    };
+  }
+
+  return {
+    url: monitoring.url,
+    options: {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: 'application/json',
+      },
+    },
+  };
+}
+
 function createMonitoringService({
   readEnvFile,
   createDbPool,
@@ -181,6 +207,72 @@ function createMonitoringService({
   fetchImpl = fetch,
   env = process.env,
 }) {
+  async function checkAiProviderHealth(providerId) {
+    const vars = readEnvFile();
+    const descriptor = AI_PROVIDER_REGISTRY[providerId];
+    const checkedAt = nowIso();
+
+    if (!descriptor) {
+      return buildCheck({
+        key: providerId,
+        label: providerId,
+        category: 'ai',
+        status: 'disabled',
+        summary: `Проверка отключена: неизвестный AI provider ${providerId}.`,
+        details: 'Provider отсутствует в общем registry.',
+        checkedAt,
+      });
+    }
+
+    const apiKey = String(vars[descriptor.envKey] || env[descriptor.envKey] || '').trim();
+    if (!apiKey) {
+      return buildCheck({
+        key: providerId,
+        label: descriptor.label,
+        category: 'ai',
+        status: 'disabled',
+        summary: `Проверка отключена: ${descriptor.envKey} не задан.`,
+        details: `Без ключа нельзя проверить доступность ${descriptor.label} API.`,
+        checkedAt,
+      });
+    }
+
+    try {
+      const request = buildProviderRequestOptions(providerId, apiKey);
+      const result = await fetchWithMeta(fetchImpl, request.url, request.options);
+      const providerStatus = buildProviderStatus({
+        httpStatus: result.response.status,
+        ok: result.response.ok,
+        providerLabel: descriptor.label,
+      });
+
+      return buildCheck({
+        key: providerId,
+        label: descriptor.label,
+        category: 'ai',
+        status: providerStatus.status,
+        summary: providerStatus.summary,
+        details: trimDetails(result.data?.error?.message || result.text || `HTTP ${result.response.status}`),
+        latencyMs: result.latencyMs,
+        checkedAt,
+        meta: {
+          httpStatus: result.response.status,
+          monitoringKind: descriptor.monitoring?.kind || null,
+        },
+      });
+    } catch (error) {
+      return buildCheck({
+        key: providerId,
+        label: descriptor.label,
+        category: 'ai',
+        status: 'down',
+        summary: `${descriptor.label} API недоступен.`,
+        details: trimDetails(toErrorMessage(error)),
+        checkedAt,
+      });
+    }
+  }
+
   async function checkKiraContainerHealth() {
     const checkedAt = nowIso();
     const container = await getContainerStatus('kira-mind-bot');
@@ -455,166 +547,19 @@ function createMonitoringService({
   }
 
   async function checkOpenAiHealth() {
-    const vars = readEnvFile();
-    const apiKey = String(vars.OPENAI_API_KEY || env.OPENAI_API_KEY || '').trim();
-    const checkedAt = nowIso();
-
-    if (!apiKey) {
-      return buildCheck({
-        key: 'openai',
-        label: 'OpenAI',
-        category: 'ai',
-        status: 'disabled',
-        summary: 'Проверка отключена: OPENAI_API_KEY не задан.',
-        details: 'Без ключа нельзя проверить доступность OpenAI API.',
-        checkedAt,
-      });
-    }
-
-    try {
-      const result = await fetchWithMeta(fetchImpl, 'https://api.openai.com/v1/models', {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
-      });
-
-      const providerStatus = buildProviderStatus({
-        httpStatus: result.response.status,
-        ok: result.response.ok,
-        providerLabel: 'OpenAI',
-      });
-
-      return buildCheck({
-        key: 'openai',
-        label: 'OpenAI',
-        category: 'ai',
-        status: providerStatus.status,
-        summary: providerStatus.summary,
-        details: trimDetails(result.data?.error?.message || result.text || `HTTP ${result.response.status}`),
-        latencyMs: result.latencyMs,
-        checkedAt,
-        meta: {
-          httpStatus: result.response.status,
-        },
-      });
-    } catch (error) {
-      return buildCheck({
-        key: 'openai',
-        label: 'OpenAI',
-        category: 'ai',
-        status: 'down',
-        summary: 'OpenAI API недоступен.',
-        details: trimDetails(toErrorMessage(error)),
-        checkedAt,
-      });
-    }
+    return checkAiProviderHealth('openai');
   }
 
   async function checkGeminiHealth() {
-    const vars = readEnvFile();
-    const apiKey = String(vars.GEMINI_API_KEY || env.GEMINI_API_KEY || '').trim();
-    const checkedAt = nowIso();
-
-    if (!apiKey) {
-      return buildCheck({
-        key: 'gemini',
-        label: 'Gemini',
-        category: 'ai',
-        status: 'disabled',
-        summary: 'Проверка отключена: GEMINI_API_KEY не задан.',
-        details: 'Без ключа нельзя проверить доступность Gemini API.',
-        checkedAt,
-      });
-    }
-
-    try {
-      const result = await fetchWithMeta(fetchImpl, `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`);
-      const providerStatus = buildProviderStatus({
-        httpStatus: result.response.status,
-        ok: result.response.ok,
-        providerLabel: 'Gemini',
-      });
-
-      return buildCheck({
-        key: 'gemini',
-        label: 'Gemini',
-        category: 'ai',
-        status: providerStatus.status,
-        summary: providerStatus.summary,
-        details: trimDetails(result.data?.error?.message || result.text || `HTTP ${result.response.status}`),
-        latencyMs: result.latencyMs,
-        checkedAt,
-        meta: {
-          httpStatus: result.response.status,
-        },
-      });
-    } catch (error) {
-      return buildCheck({
-        key: 'gemini',
-        label: 'Gemini',
-        category: 'ai',
-        status: 'down',
-        summary: 'Gemini API недоступен.',
-        details: trimDetails(toErrorMessage(error)),
-        checkedAt,
-      });
-    }
+    return checkAiProviderHealth('gemini');
   }
 
   async function checkOpenRouterHealth() {
-    const vars = readEnvFile();
-    const apiKey = String(vars.OPENROUTER_API_KEY || env.OPENROUTER_API_KEY || '').trim();
-    const checkedAt = nowIso();
+    return checkAiProviderHealth('openrouter');
+  }
 
-    if (!apiKey) {
-      return buildCheck({
-        key: 'openrouter',
-        label: 'OpenRouter',
-        category: 'ai',
-        status: 'disabled',
-        summary: 'Проверка отключена: OPENROUTER_API_KEY не задан.',
-        details: 'Без ключа нельзя проверить доступность OpenRouter API.',
-        checkedAt,
-      });
-    }
-
-    try {
-      const result = await fetchWithMeta(fetchImpl, 'https://openrouter.ai/api/v1/auth/key', {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          Accept: 'application/json',
-        },
-      });
-      const providerStatus = buildProviderStatus({
-        httpStatus: result.response.status,
-        ok: result.response.ok,
-        providerLabel: 'OpenRouter',
-      });
-
-      return buildCheck({
-        key: 'openrouter',
-        label: 'OpenRouter',
-        category: 'ai',
-        status: providerStatus.status,
-        summary: providerStatus.summary,
-        details: trimDetails(result.data?.error?.message || result.text || `HTTP ${result.response.status}`),
-        latencyMs: result.latencyMs,
-        checkedAt,
-        meta: {
-          httpStatus: result.response.status,
-        },
-      });
-    } catch (error) {
-      return buildCheck({
-        key: 'openrouter',
-        label: 'OpenRouter',
-        category: 'ai',
-        status: 'down',
-        summary: 'OpenRouter API недоступен.',
-        details: trimDetails(toErrorMessage(error)),
-        checkedAt,
-      });
-    }
+  async function checkZaiHealth() {
+    return checkAiProviderHealth('zai');
   }
 
   async function getMonitoringSnapshot() {
@@ -627,6 +572,7 @@ function createMonitoringService({
       checkOpenAiHealth(),
       checkGeminiHealth(),
       checkOpenRouterHealth(),
+      checkZaiHealth(),
     ]);
 
     return {
@@ -646,6 +592,7 @@ function createMonitoringService({
     checkOpenAiHealth,
     checkGeminiHealth,
     checkOpenRouterHealth,
+    checkZaiHealth,
   };
 }
 
