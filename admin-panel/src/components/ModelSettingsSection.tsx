@@ -48,7 +48,7 @@ function getPresetTitle(data: AiPresetResponse | null, presetName: AiPresetName 
 function ActivePresetStatus({ data }: { data: AiPresetResponse | null }) {
   if (!data) return null;
 
-  const activePresetTitle = getPresetTitle(data, data.activePresetName);
+  const configuredPresetTitle = getPresetTitle(data, data.configuredPresetName);
   const basePresetTitle = getPresetTitle(data, data.envDefaultPreset);
 
   return (
@@ -62,7 +62,7 @@ function ActivePresetStatus({ data }: { data: AiPresetResponse | null }) {
     >
       <Stack spacing={0.75}>
         <Typography variant="body2">
-          Сейчас активно: <b>{activePresetTitle}</b>
+          Сохранённый preset: <b>{configuredPresetTitle}</b>
         </Typography>
         <Typography variant="body2" color="text.secondary">
           Базовое значение: <b>{basePresetTitle}</b>
@@ -96,7 +96,7 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
       try {
         const response = await fetchAiPreset();
         setAiPresetData(response);
-        setSelectedAiPreset(response.activePresetName);
+        setSelectedAiPreset(response.configuredPresetName);
       } catch {
         setAiPresetData(null);
         onToast('Не удалось загрузить AI preset', 'error');
@@ -171,7 +171,7 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
                   <Button
                     variant="contained"
                     onClick={handleAiPresetSave}
-                    disabled={loading || savingAiPreset || !aiPresetData || selectedAiPreset === aiPresetData.activePresetName || activeAiPreset?.enabled === false}
+                    disabled={loading || savingAiPreset || !aiPresetData || selectedAiPreset === aiPresetData.configuredPresetName || activeAiPreset?.enabled === false}
                     startIcon={savingAiPreset ? <CircularProgress size={14} color="inherit" /> : <SaveIcon fontSize="small" />}
                   >
                     Применить
@@ -191,8 +191,8 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
                     <Stack direction="row" spacing={1} flexWrap="wrap">
                       <Chip
                         size="small"
-                        color={selectedAiPreset === aiPresetData?.activePresetName ? 'success' : 'warning'}
-                        label={selectedAiPreset === aiPresetData?.activePresetName ? 'Совпадает с активным значением' : 'Есть несохранённое изменение'}
+                        color={selectedAiPreset === aiPresetData?.configuredPresetName ? 'success' : 'warning'}
+                        label={selectedAiPreset === aiPresetData?.configuredPresetName ? 'Совпадает с сохранённым значением' : 'Есть несохранённое изменение'}
                       />
                       <Chip
                         size="small"

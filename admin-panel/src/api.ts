@@ -61,7 +61,7 @@ export async function saveAiPreset(preset: AiPresetName) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ preset }),
   });
-  return r.json() as Promise<{ success: boolean; activePresetName?: AiPresetName; message?: string; error?: string }>;
+  return r.json() as Promise<{ success: boolean; configuredPresetName?: AiPresetName; message?: string; error?: string }>;
 }
 
 export async function fetchPersonality(): Promise<PersonalityConfig> {

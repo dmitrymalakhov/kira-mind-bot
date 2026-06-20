@@ -305,12 +305,12 @@ app.get('/api/ai-preset', requireAuth, async (_req, res) => {
     const result = await pool.query('SELECT value FROM bot_settings WHERE key = $1', ['AI_MODEL_PRESET']);
     const storedPreset = parseAiPresetName(result.rows[0]?.value);
     const hasRuntimeOverride = Boolean(storedPreset);
-    const activePresetName = storedPreset || envDefaultPreset;
+    const configuredPresetName = storedPreset || envDefaultPreset;
     const activeSourceSummary = hasRuntimeOverride
       ? 'Значение переопределено в админке, хранится в базе данных и подхватывается ботом без перезапуска.'
       : 'Сейчас используется базовое значение из env/default, отдельного runtime-переопределения нет.';
     res.json({
-      activePresetName,
+      configuredPresetName,
       storedPresetName: storedPreset,
       envDefaultPreset,
       hasRuntimeOverride,
@@ -351,7 +351,7 @@ app.post('/api/ai-preset', requireAuth, async (req, res) => {
       'INSERT INTO bot_settings (key, value, "updatedAt") VALUES ($1, $2, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = now()',
       ['AI_MODEL_PRESET', preset]
     );
-    res.json({ success: true, activePresetName: preset, message: 'Активный AI preset сохранён. Бот подхватит его без перезапуска.' });
+    res.json({ success: true, configuredPresetName: preset, message: 'AI preset сохранён. Бот подхватит его без перезапуска.' });
   } catch (err) {
     res.status(500).json({ error: `Ошибка БД: ${err.message}` });
   } finally {
