@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-21
+
+- AI runtime переведён на capability-first схему для `chat`, `responses`, `embedding` и `transcription`; прямые OpenAI-вызовы из прикладных сервисов убраны.
+- Добавлены общий provider registry и model catalog для OpenAI, OpenRouter, Gemini и Z.ai, а также новый preset `glm-balanced`.
+- Transitional fallback policy централизована в общей матрице `ai/fallback-models.json`, которую используют и runtime, и admin-panel availability.
+- В админке `AI Presets` и monitoring теперь читают общий provider metadata source; локальное дублирование registry убрано.
+- Сборка `admin-panel` переведена на root Docker build context, чтобы server-side часть панели могла безопасно использовать общие runtime JSON-реестры.
+- README и ROADMAP актуализированы под новые AI provider-ы, capability-first runtime и текущую сборочную схему админки.
+
 ## 2026-06-20
 
 - В `server-deploy.sh` для команды `logs` добавлены флаги `--no-postgres` и `--no-qdrant`, чтобы исключать инфраструктурные сервисы из общего потока логов.

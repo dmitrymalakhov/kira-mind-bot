@@ -241,9 +241,11 @@
   - provider-specific capabilities, monitoring metadata, поддержка `responses.create` и нормализация chat params вынесены из runtime-слоя;
   - `model.startsWith('gpt-5')` заменён на capability metadata модели.
 - Добавлены единый provider registry (`envKey`, `label`, `baseURL`, monitoring, capability map) и отдельный model catalog.
+- Fallback policy для runtime и admin availability централизована в общей матрице `ai/fallback-models.json`; локальные копии fallback-правил убраны.
 - Добавлен runtime-aware AI preset registry в админке:
   - доступны `gpt-*`, `hybrid-openrouter-gpt`, `hybrid-gemini-gpt`, `gemini-direct-balanced`, `glm-balanced`;
   - недоступные preset-ы блокируются в UI и отклоняются API при отсутствии обязательных ключей.
 - В админке исправлен фактический порядок секции `AI Presets`: она теперь отображается сразу после `API Ключи`, а не отдельным блоком внизу списка настроек.
+- Сборка `admin-panel` переведена на root Docker build context, чтобы server-side часть панели использовала общие runtime JSON-реестры без дублирования metadata.
 - Кнопка `Своё время` у напоминаний уже использует общий LLM-разбор даты с сохранением postpone-flow.
 - Серверный VPS-first сценарий, `Dockerfile.server`, `tsconfig.server.json`, `server-install.sh`, `server-deploy.sh` и корневой `Makefile` уже добавлены.

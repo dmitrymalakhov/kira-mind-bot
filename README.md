@@ -390,6 +390,7 @@ make remote-deploy-admin SERVER_IP=<ip>
 Что можно делать в панели:
 
 - менять API-ключи и токены;
+- переключать AI preset для runtime-маршрутизации задач между OpenAI, OpenRouter, Gemini и Z.ai;
 - редактировать параметры PostgreSQL и Qdrant;
 - задавать Telegram User Client session string;
 - менять часовой пояс и срок хранения выполненных напоминаний;
@@ -477,6 +478,9 @@ make remote-deploy-admin SERVER_IP=<ip>
 
 | Переменная | Что включает |
 |------------|--------------|
+| `OPENROUTER_API_KEY` | OpenRouter как дополнительный AI provider для preset-ов |
+| `GEMINI_API_KEY` | Gemini как дополнительный AI provider для preset-ов |
+| `ZAI_API_KEY` | Z.ai / GLM как дополнительный AI provider для preset-ов |
 | `GOOGLE_MAPS_API_KEY` | Карты, адреса, маршруты, места рядом |
 | `IDEOGRAM_API_KEY` | Генерацию изображений |
 | `TELEGRAM_API_ID` | Telegram User Client |
@@ -598,8 +602,9 @@ Telegram Bot API / Telegram User Client
   webSearch / maps / imageAgent / imageGeneration
               |
               v
-  Services: PostgreSQL, Qdrant, OpenAI, Google Maps,
-            Ideogram, Playwright, Telegram MTProto
+  Services: PostgreSQL, Qdrant, OpenAI / OpenRouter /
+            Gemini / Z.ai, Google Maps, Ideogram,
+            Playwright, Telegram MTProto
               |
               v
   Schedulers: proactive, dmReport, memoryInsight,
