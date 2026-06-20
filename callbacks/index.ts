@@ -28,6 +28,7 @@ import { processMessage, type ProcessingResult } from "../orchestrator";
 import { addToHistory } from "../utils/history";
 import { consumeQuickChoice, isQuickChoiceCallback } from "../utils/quickChoice";
 import { MAX_MESSAGE_LENGTH, USER_TIMEZONE } from "../constants";
+import { createOrRefreshReminderMemory, syncReminderMemoryMutation } from "../services/ReminderMemorySync";
 import { getTelegramVoiceReadinessIssue, withTelegramVoiceFile } from "../services/elevenLabsTts";
 import {
     addTargetNotificationButtons,
@@ -161,6 +162,7 @@ async function saveRemindersFromResult(ctx: BotContext, bot: Bot<BotContext>, re
         ReminderRegistry.getInstance().add(reminder);
         await ReminderRepository.save(reminder).catch(e => console.error("[reminder] DB save failed on quick choice:", e));
         scheduleReminder(bot, reminder);
+        await createOrRefreshReminderMemory(ctx, reminder).catch((e) => console.error("[reminder] memory sync failed on quick create:", e));
 
         if (details.targetChat) {
             resolveTargetChat(details.targetChat).then((resolved) => {
@@ -714,6 +716,9 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 await cancelReminder(reminderId);
                 ReminderRegistry.getInstance().remove(reminderId);
                 ctx.session.reminders = ctx.session.reminders.filter(r => r.id !== reminderId);
+                await syncReminderMemoryMutation(ctx, reminder, reminder, 'cancel').catch((e) =>
+                    console.error('[reminder] memory sync failed on cancel:', e)
+                );
                 await ctx.answerCallbackQuery({ text: "Напоминание отменено" });
 
                 const showBack = !!ctx.session.viewingRemindersInChat;
@@ -888,6 +893,9 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     await markReminderAsCompleted(bot, reminder);
                     ReminderRegistry.getInstance().remove(reminderId);
                     ctx.session.reminders = ctx.session.reminders.filter(r => r.id !== reminderId);
+                    await syncReminderMemoryMutation(ctx, reminder, reminder, 'complete').catch((e) =>
+                        console.error('[reminder] memory sync failed on complete:', e)
+                    );
                     await ctx.answerCallbackQuery({ text: "Выполнено! ✅" });
 
                     // Если кнопка нажата на самом уведомлении — markReminderAsCompleted уже обновил его,
@@ -1027,12 +1035,16 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     }
                 }
 
+                const previousReminder: Reminder = { ...reminder, dueDate: new Date(reminder.dueDate) };
                 const updatedReminder = await postponeReminderUntil(bot, reminder, newDueDate);
 
                 if (updatedReminder) {
                     ReminderRegistry.getInstance().add(updatedReminder);
                     const sessIdx = ctx.session.reminders.findIndex(r => r.id === reminderId);
                     if (sessIdx !== -1) ctx.session.reminders[sessIdx] = updatedReminder;
+                    await syncReminderMemoryMutation(ctx, previousReminder, updatedReminder, 'postpone').catch((e) =>
+                        console.error('[reminder] memory sync failed on quick postpone:', e)
+                    );
 
                     await ctx.answerCallbackQuery({ text: notificationText });
 

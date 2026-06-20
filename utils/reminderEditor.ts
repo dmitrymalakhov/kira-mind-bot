@@ -1,9 +1,11 @@
 import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { Reminder, ReminderStatus, rescheduleReminder } from "../reminder";
 import { ReminderRepository } from "../services/ReminderRepository";
+import { syncReminderMemoryMutation } from "../services/ReminderMemorySync";
 import { ReminderRegistry } from "../stores/ReminderRegistry";
 import { USER_TIMEZONE } from "../constants";
 import { parseLLMJson, processReminderTime } from "../utils";
+import type { BotContext } from "../types";
 
 interface ReminderEditExtraction {
     newDueDate?: string | null;
@@ -141,7 +143,7 @@ export async function extractReminderPostponeDate(reminder: Reminder, userInput:
     };
 }
 
-export async function applyReminderEditInput(reminder: Reminder, userInput: string): Promise<ReminderEditResult> {
+export async function applyReminderEditInput(ctx: BotContext, reminder: Reminder, userInput: string): Promise<ReminderEditResult> {
     let extracted: ReminderEditExtraction | null = null;
 
     try {
@@ -158,6 +160,7 @@ export async function applyReminderEditInput(reminder: Reminder, userInput: stri
         };
     }
 
+    const previousReminder: Reminder = { ...reminder, dueDate: new Date(reminder.dueDate) };
     const updated: Reminder = { ...reminder };
     let changedTime = false;
     let changedText = false;
@@ -199,6 +202,9 @@ export async function applyReminderEditInput(reminder: Reminder, userInput: stri
     ReminderRegistry.getInstance().add(updated);
     await ReminderRepository.update(updated).catch((error) =>
         console.error("[reminder_edit] DB update failed:", error)
+    );
+    await syncReminderMemoryMutation(ctx, previousReminder, updated, changedTime ? 'postpone' : 'update').catch((error) =>
+        console.error("[reminder_edit] memory sync failed:", error)
     );
 
     const changedParts = [

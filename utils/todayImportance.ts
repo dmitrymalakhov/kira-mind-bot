@@ -5,6 +5,8 @@ import { ReminderStatus } from '../types/reminderTypes';
 import type { Reminder } from '../reminder';
 import { getRecentMemories, searchAllDomainsMemories } from './enhancedDomainMemory';
 import { devLog } from '../utils';
+import { buildReminderSourceTag } from './enhancedDomainMemory';
+import { reminderMemoryMatchesReminderText } from '../services/ReminderMemorySync';
 
 const WORD_START = String.raw`(?:^|[^\p{L}\p{N}_])`;
 const WORD_END = String.raw`(?=$|[^\p{L}\p{N}_])`;
@@ -218,7 +220,77 @@ function hasProspectiveSignal(memory: TodayMemory): boolean {
     return PROSPECTIVE_TEXT_RE.test(memory.content);
 }
 
-function scoreTodayMemory(memory: TodayMemory, now: Date, day: ZonedDay, timeZone: string): TodayMemoryItem | null {
+function extractReminderId(tags: string[] | undefined): string | undefined {
+    const tag = (tags ?? []).find((value) => String(value).startsWith(buildReminderSourceTag('')));
+    return tag ? String(tag).slice(buildReminderSourceTag('').length) : undefined;
+}
+
+function normalizeReminderText(value: string): string {
+    return value
+        .toLowerCase()
+        .replace(/["«»“”'.,:;!?()[\]{}]/g, ' ')
+        .replace(/\b(?:напоминание|встреча|созвон|сегодня|завтра|через|нужно|надо|дедлайн)\b/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function contentTimeLabel(content: string): string | null {
+    const match = content.match(/\b(\d{1,2}[:.]\d{2})\b/u);
+    return match?.[1]?.replace('.', ':') ?? null;
+}
+
+function reminderTimeLabel(reminder: Reminder, timeZone: string): string {
+    return new Date(reminder.dueDate).toLocaleTimeString('ru-RU', {
+        timeZone,
+        hour: '2-digit',
+        minute: '2-digit',
+    });
+}
+
+function findReminderConflict(memory: TodayMemory, reminders: Reminder[], day: ZonedDay, timeZone: string): string | null {
+    const reminderId = extractReminderId(memory.tags);
+    if (reminderId) {
+        const linkedReminder = reminders.find((reminder) => reminder.id === reminderId);
+        if (!linkedReminder) {
+            return 'связанное напоминание больше не активно';
+        }
+        if (!isSameZonedDay(new Date(linkedReminder.dueDate), day, timeZone)) {
+            return 'связанное напоминание перенесено на другую дату';
+        }
+        const memoryTime = contentTimeLabel(memory.content);
+        if (memoryTime && memoryTime !== reminderTimeLabel(linkedReminder, timeZone)) {
+            return 'связанное напоминание перенесено на другое время';
+        }
+        return null;
+    }
+
+    if (memoryStatus(memory) !== 'planned' && !(memory.tags ?? []).includes('temporal_scope:future_plan')) {
+        return null;
+    }
+
+    if (!normalizeReminderText(memory.content)) return null;
+
+    for (const reminder of reminders) {
+        const reminderText = normalizeReminderText(reminder.displayText || reminder.text);
+        if (!reminderText) continue;
+        if (!reminderMemoryMatchesReminderText(memory, reminderText)) continue;
+        if (!isSameZonedDay(new Date(reminder.dueDate), day, timeZone)) {
+            return 'похожее напоминание перенесено на другую дату';
+        }
+        const memoryTime = contentTimeLabel(memory.content);
+        if (memoryTime && memoryTime !== reminderTimeLabel(reminder, timeZone)) {
+            return 'похожее напоминание перенесено на другое время';
+        }
+    }
+
+    return null;
+}
+
+export const todayImportanceTestUtils = {
+    findReminderConflict,
+};
+
+function scoreTodayMemory(memory: TodayMemory, now: Date, day: ZonedDay, timeZone: string, reminders: Reminder[]): TodayMemoryItem | null {
     const status = memoryStatus(memory);
     if (status === 'expired' || status === 'superseded' || status === 'done') return null;
 
@@ -233,6 +305,8 @@ function scoreTodayMemory(memory: TodayMemory, now: Date, day: ZonedDay, timeZon
     const prospective = hasProspectiveSignal(memory);
     if (synthetic && !/Открытые линии:|дедлайн|срок|предстоит|нужно|надо|важн/iu.test(memory.content)) return null;
     if (!prospective && !exactContentDate && !relativeMatch && relation === 'актуально сегодня') return null;
+    const reminderConflict = findReminderConflict(memory, reminders, day, timeZone);
+    if (reminderConflict) return null;
 
     let score = memory.importance ?? 0.5;
     if (relation === 'срок/окончание сегодня') score += 0.55;
@@ -311,12 +385,12 @@ function formatMemoryLine(item: TodayMemoryItem): string {
     return `- ${compactContent(memory.content)} [${memory.domain}; ${item.reason}; importance ${(memory.importance ?? 0.5).toFixed(2)}${confidence}${kind}${status}]`;
 }
 
-async function getTodayMemoryItems(ctx: BotContext, now: Date, day: ZonedDay, timeZone: string): Promise<TodayMemoryItem[]> {
+async function getTodayMemoryItems(ctx: BotContext, now: Date, day: ZonedDay, timeZone: string, reminders: Reminder[]): Promise<TodayMemoryItem[]> {
     if (!ctx.from?.id) return [];
     const candidates = await loadMemoryCandidates(ctx, day);
     const byId = new Map<string, TodayMemoryItem>();
     for (const memory of candidates) {
-        const item = scoreTodayMemory(memory, now, day, timeZone);
+        const item = scoreTodayMemory(memory, now, day, timeZone, reminders);
         if (!item) continue;
         const existing = byId.get(memory.id);
         if (!existing || item.score > existing.score) {
@@ -335,9 +409,10 @@ export async function buildTodayImportanceContext(ctx: BotContext, message: stri
     const now = new Date();
     const day = getZonedDay(now, timeZone);
     const reminders = getTodayReminders(ctx, day, timeZone);
+    const reminderScope = getReminderScope(ctx);
     let memoryItems: TodayMemoryItem[] = [];
     try {
-        memoryItems = await getTodayMemoryItems(ctx, now, day, timeZone);
+        memoryItems = await getTodayMemoryItems(ctx, now, day, timeZone, reminderScope);
     } catch (error) {
         devLog('Today importance memory lookup failed:', error);
     }
