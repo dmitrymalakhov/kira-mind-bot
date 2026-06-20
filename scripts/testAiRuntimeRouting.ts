@@ -1,10 +1,13 @@
 import assert from 'assert';
+import fs from 'fs';
+import path from 'path';
 import type OpenAI from 'openai';
 import type { AiModelRef } from '../ai/modelPresets';
 
 process.env.KIRA_BOT_TOKEN = process.env.KIRA_BOT_TOKEN || 'test-token';
 process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'test-openai-key';
 process.env.GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'test-gemini-key';
+process.env.ZAI_API_KEY = process.env.ZAI_API_KEY || 'test-zai-key';
 
 interface RecordedCall {
     provider: string;
@@ -25,6 +28,14 @@ interface MutableAiClient {
     };
     responses?: {
         create: (body: Record<string, unknown>) => Promise<unknown>;
+    };
+    embeddings?: {
+        create: (body: Record<string, unknown>) => Promise<unknown>;
+    };
+    audio?: {
+        transcriptions: {
+            create: (body: Record<string, unknown>) => Promise<unknown>;
+        };
     };
 }
 
@@ -84,18 +95,26 @@ function lastCall(): RecordedCall {
 async function main() {
     const { createChatCompletionForTask } = await import('../ai/chatCompletion');
     const { createResponseForTask } = await import('../ai/responseCompletion');
-    const { openaiClient, geminiClient } = await import('../ai/aiClients');
+    const { createEmbeddingForTask } = await import('../ai/embedding');
+    const { createTranscriptionForTask } = await import('../ai/transcription');
+    const { openaiClient, geminiClient, zaiClient } = await import('../ai/aiClients');
     const { aiPresets } = await import('../ai/modelPresets');
 
     const openaiMutableClient = openaiClient as unknown as MutableAiClient;
     const geminiMutableClient = geminiClient as unknown as MutableAiClient;
+    const zaiMutableClient = zaiClient as unknown as MutableAiClient;
 
     const originalOpenAiChatCreate = openaiMutableClient.chat.completions.create;
     const originalGeminiChatCreate = geminiMutableClient.chat.completions.create;
+    const originalZaiChatCreate = zaiMutableClient.chat.completions.create;
     const hadOpenAiResponses = Object.prototype.hasOwnProperty.call(openaiMutableClient, 'responses');
     const originalOpenAiResponses = openaiMutableClient.responses;
     const hadGeminiResponses = Object.prototype.hasOwnProperty.call(geminiMutableClient, 'responses');
     const originalGeminiResponses = geminiMutableClient.responses;
+    const hadOpenAiEmbeddings = Object.prototype.hasOwnProperty.call(openaiMutableClient, 'embeddings');
+    const originalOpenAiEmbeddings = openaiMutableClient.embeddings;
+    const hadOpenAiAudio = Object.prototype.hasOwnProperty.call(openaiMutableClient, 'audio');
+    const originalOpenAiAudio = openaiMutableClient.audio;
     const originalConsoleInfo = console.info;
     const originalConsoleWarn = console.warn;
 
@@ -111,6 +130,10 @@ async function main() {
             calls.push({ provider: 'gemini', method: 'chat.completions.create', body });
             return chatResult(String(body.model));
         };
+        zaiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => {
+            calls.push({ provider: 'zai', method: 'chat.completions.create', body });
+            return chatResult(String(body.model));
+        };
         openaiMutableClient.responses = {
             create: async (body: Record<string, unknown>) => {
                 calls.push({ provider: 'openai', method: 'responses.create', body });
@@ -121,6 +144,23 @@ async function main() {
             create: async (body: Record<string, unknown>) => {
                 calls.push({ provider: 'gemini', method: 'responses.create', body });
                 throw new Error('Gemini Responses API must not be called');
+            },
+        };
+        openaiMutableClient.embeddings = {
+            create: async (body: Record<string, unknown>) => {
+                calls.push({ provider: 'openai', method: 'embeddings.create', body });
+                return {
+                    data: [{ embedding: [0.1, 0.2, 0.3] }],
+                    usage: { prompt_tokens: 3, total_tokens: 3 },
+                };
+            },
+        };
+        openaiMutableClient.audio = {
+            transcriptions: {
+                create: async (body: Record<string, unknown>) => {
+                    calls.push({ provider: 'openai', method: 'audio.transcriptions.create', body: { ...body, file: '[stream]' } });
+                    return 'decoded text';
+                },
             },
         };
 
@@ -246,9 +286,69 @@ async function main() {
                 },
             },
         ]);
+
+        calls.length = 0;
+        await withPreset('glm-balanced', async () => {
+            await createChatCompletionForTask('conversation', {
+                messages: [{ role: 'user', content: 'plan this task' }],
+                max_tokens: 512,
+                temperature: 0.2,
+                extra_body: {
+                    thinking: { type: 'enabled' },
+                    reasoning_effort: 'max',
+                },
+            } as ChatParamsWithoutModel);
+        });
+        assert.deepStrictEqual(lastCall(), {
+            provider: 'zai',
+            method: 'chat.completions.create',
+            body: {
+                messages: [{ role: 'user', content: 'plan this task' }],
+                max_tokens: 512,
+                temperature: 0.2,
+                extra_body: {
+                    thinking: { type: 'enabled' },
+                    reasoning_effort: 'max',
+                },
+                model: 'glm-5.2',
+            },
+        });
+
+        calls.length = 0;
+        await withPreset('glm-balanced', async () => {
+            await createEmbeddingForTask('vectorize me');
+        });
+        assert.deepStrictEqual(lastCall(), {
+            provider: 'openai',
+            method: 'embeddings.create',
+            body: {
+                model: 'text-embedding-3-small',
+                input: 'vectorize me',
+            },
+        });
+
+        const tempAudioPath = path.join(process.cwd(), '.tmp-test-zai-transcription.ogg');
+        fs.writeFileSync(tempAudioPath, 'test');
+        calls.length = 0;
+        await withPreset('glm-balanced', async () => {
+            await createTranscriptionForTask(tempAudioPath);
+        });
+        assert.deepStrictEqual(lastCall(), {
+            provider: 'openai',
+            method: 'audio.transcriptions.create',
+            body: {
+                file: '[stream]',
+                model: 'whisper-1',
+                language: 'ru',
+                response_format: 'text',
+            },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        fs.unlinkSync(tempAudioPath);
     } finally {
         openaiMutableClient.chat.completions.create = originalOpenAiChatCreate;
         geminiMutableClient.chat.completions.create = originalGeminiChatCreate;
+        zaiMutableClient.chat.completions.create = originalZaiChatCreate;
         if (hadOpenAiResponses) {
             openaiMutableClient.responses = originalOpenAiResponses;
         } else {
@@ -258,6 +358,16 @@ async function main() {
             geminiMutableClient.responses = originalGeminiResponses;
         } else {
             delete geminiMutableClient.responses;
+        }
+        if (hadOpenAiEmbeddings) {
+            openaiMutableClient.embeddings = originalOpenAiEmbeddings;
+        } else {
+            delete openaiMutableClient.embeddings;
+        }
+        if (hadOpenAiAudio) {
+            openaiMutableClient.audio = originalOpenAiAudio;
+        } else {
+            delete openaiMutableClient.audio;
         }
         console.info = originalConsoleInfo;
         console.warn = originalConsoleWarn;

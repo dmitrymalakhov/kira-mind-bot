@@ -43,14 +43,15 @@ export interface ConfigSourceInfo {
   appliesImmediately?: boolean;
 }
 
-export type AiProvider = 'openai' | 'openrouter' | 'gemini';
+export type AiProvider = 'openai' | 'openrouter' | 'gemini' | 'zai';
 export type AiPresetName =
   | 'gpt-max'
   | 'gpt-balanced'
   | 'gpt-lean'
   | 'hybrid-openrouter-gpt'
   | 'hybrid-gemini-gpt'
-  | 'gemini-direct-balanced';
+  | 'gemini-direct-balanced'
+  | 'glm-balanced';
 
 export interface AiModelRef {
   provider: AiProvider;

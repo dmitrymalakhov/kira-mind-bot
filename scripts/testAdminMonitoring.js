@@ -67,12 +67,13 @@ async function testDisabledChecks() {
     },
   });
 
-  const [botApi, userClient, openai, gemini, openrouter] = await Promise.all([
+  const [botApi, userClient, openai, gemini, openrouter, zai] = await Promise.all([
     service.checkTelegramBotApiHealth(),
     service.checkTelegramUserClientHealth(),
     service.checkOpenAiHealth(),
     service.checkGeminiHealth(),
     service.checkOpenRouterHealth(),
+    service.checkZaiHealth(),
   ]);
 
   assert.strictEqual(botApi.status, 'disabled');
@@ -80,6 +81,7 @@ async function testDisabledChecks() {
   assert.strictEqual(openai.status, 'disabled');
   assert.strictEqual(gemini.status, 'disabled');
   assert.strictEqual(openrouter.status, 'disabled');
+  assert.strictEqual(zai.status, 'disabled');
 }
 
 async function testSnapshotStatuses() {
@@ -89,6 +91,7 @@ async function testSnapshotStatuses() {
       OPENAI_API_KEY: 'openai-key',
       GEMINI_API_KEY: 'gemini-key',
       OPENROUTER_API_KEY: 'openrouter-key',
+      ZAI_API_KEY: 'zai-key',
       KIRA_BOT_TOKEN: 'bot-token',
       TELEGRAM_API_ID: '12345',
       TELEGRAM_API_HASH: 'hash',
@@ -122,6 +125,9 @@ async function testSnapshotStatuses() {
       'https://openrouter.ai/api/v1/auth/key': createJsonResponse(503, {
         error: { message: 'Upstream unavailable' },
       }),
+      'https://api.z.ai/api/paas/v4/models': createJsonResponse(200, {
+        data: [{ id: 'glm-5.2' }],
+      }),
     },
   });
 
@@ -136,6 +142,7 @@ async function testSnapshotStatuses() {
   assert.strictEqual(byKey['openai'].status, 'down');
   assert.strictEqual(byKey['gemini'].status, 'warn');
   assert.strictEqual(byKey['openrouter'].status, 'down');
+  assert.strictEqual(byKey['zai'].status, 'ok');
 }
 
 async function main() {

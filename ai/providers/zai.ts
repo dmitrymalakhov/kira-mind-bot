@@ -6,7 +6,7 @@ import {
     resolveModelCapabilities,
 } from './types';
 
-const OPENROUTER_CAPABILITIES: AiProviderCapabilities = {
+const ZAI_CAPABILITIES: AiProviderCapabilities = {
     supportsOpenAiCompatibleTransport: true,
     defaultModelCapabilities: {
         chatTokenParam: 'max_tokens',
@@ -16,25 +16,25 @@ const OPENROUTER_CAPABILITIES: AiProviderCapabilities = {
         supportsTranscription: false,
         supportsVision: false,
         supportsFunctionCalling: true,
-        supportsThinkingMode: false,
-        supportsReasoningEffort: false,
-        supportsPromptCaching: false,
+        supportsThinkingMode: true,
+        supportsReasoningEffort: true,
+        supportsPromptCaching: true,
         supportsOpenAiCompatibleTransport: true,
     },
 };
 
-const openrouterClient = new OpenAI({
-    apiKey: process.env.OPENROUTER_API_KEY || 'missing-openrouter-api-key',
-    baseURL: 'https://openrouter.ai/api/v1',
+const zaiClient = new OpenAI({
+    apiKey: process.env.ZAI_API_KEY || 'missing-zai-api-key',
+    baseURL: 'https://api.z.ai/api/paas/v4/',
 });
 
-export const openrouterProviderAdapter: AiProviderAdapter = {
-    provider: 'openrouter',
-    client: openrouterClient,
-    capabilities: OPENROUTER_CAPABILITIES,
-    descriptor: getAiProviderDescriptor('openrouter'),
+export const zaiProviderAdapter: AiProviderAdapter = {
+    provider: 'zai',
+    descriptor: getAiProviderDescriptor('zai'),
+    client: zaiClient,
+    capabilities: ZAI_CAPABILITIES,
     getModelCapabilities(model) {
-        return resolveModelCapabilities(OPENROUTER_CAPABILITIES, model);
+        return resolveModelCapabilities(ZAI_CAPABILITIES, model);
     },
     normalizeChatParams(model, params) {
         const capabilities = this.getModelCapabilities(model);

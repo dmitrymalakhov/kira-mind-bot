@@ -1,4 +1,5 @@
 import { OpenAI } from 'openai';
+import { getAiProviderDescriptor } from '../providerMetadata';
 import type { AiProviderAdapter, AiProviderCapabilities } from './types';
 import {
     applyChatTokenParamMode,
@@ -26,9 +27,16 @@ const GEMINI_CAPABILITIES: AiProviderCapabilities = {
     supportsOpenAiCompatibleTransport: false,
     defaultModelCapabilities: {
         chatTokenParam: 'max_tokens',
+        supportsChatCompletions: true,
         supportsResponsesApi: false,
         supportsEmbedding: false,
         supportsTranscription: false,
+        supportsVision: true,
+        supportsFunctionCalling: true,
+        supportsThinkingMode: false,
+        supportsReasoningEffort: false,
+        supportsPromptCaching: false,
+        supportsOpenAiCompatibleTransport: false,
     },
     allowedChatParams: GEMINI_CHAT_COMPLETION_ALLOWED_PARAMS,
 };
@@ -42,6 +50,7 @@ export const geminiProviderAdapter: AiProviderAdapter = {
     provider: 'gemini',
     client: geminiClient,
     capabilities: GEMINI_CAPABILITIES,
+    descriptor: getAiProviderDescriptor('gemini'),
     getModelCapabilities(model) {
         return resolveModelCapabilities(GEMINI_CAPABILITIES, model);
     },
@@ -54,6 +63,12 @@ export const geminiProviderAdapter: AiProviderAdapter = {
         }
 
         return filterAllowedChatParams(normalized, this.capabilities.allowedChatParams);
+    },
+    async createChatCompletion(model, params) {
+        return this.client.chat.completions.create({
+            ...this.normalizeChatParams(model, params),
+            model,
+        });
     },
     async createResponse() {
         throw new Error(`Provider ${this.provider} does not support OpenAI Responses API`);

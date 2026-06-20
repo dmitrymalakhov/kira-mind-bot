@@ -9,6 +9,7 @@ const http = require('http');
 const { Pool } = require('pg');
 const { AI_PRESETS, AI_PRESET_NAMES, parseAiPresetName } = require('./aiPresetRegistry');
 const { createMonitoringService } = require('./monitoring');
+const { providers: AI_PROVIDER_REGISTRY } = require('../ai/provider-registry.json');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -44,7 +45,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 10 * 60 * 1000;
 
 const SENSITIVE_KEYS = new Set([
-  'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN',
+  'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN',
   'KIRA_ALLOWED_USER_ID',
   'DB_PASSWORD', 'QDRANT_API_KEY', 'TELEGRAM_API_HASH',
   'TELEGRAM_SESSION_STRING', 'IDEOGRAM_API_KEY', 'GOOGLE_MAPS_API_KEY',
@@ -54,7 +55,7 @@ const GROUP_RUNTIME_SETTING_KEYS = new Set(['GROUP_CHAT_CONTEXT_ENABLED', 'GROUP
 const GLOBAL_SETTING_PREFIX = 'global:';
 
 const EDITABLE_KEYS = new Set([
-  'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'KIRA_BOT_TOKEN',
+  'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'KIRA_BOT_TOKEN',
   'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID', 'ELEVENLABS_VOICE_NAME',
   'ELEVENLABS_MODEL_ID', 'ELEVENLABS_OUTPUT_FORMAT',
   'ELEVENLABS_VOICE_STABILITY', 'ELEVENLABS_VOICE_SIMILARITY_BOOST',
@@ -117,17 +118,17 @@ function buildRuntimeSource() {
   );
 }
 
-const PROVIDER_ENV_KEY = {
-  openai: 'OPENAI_API_KEY',
-  openrouter: 'OPENROUTER_API_KEY',
-  gemini: 'GEMINI_API_KEY',
-};
+function getProviderDescriptor(provider) {
+  return AI_PROVIDER_REGISTRY[provider] || null;
+}
 
-const PROVIDER_LABEL = {
-  openai: 'OpenAI',
-  openrouter: 'OpenRouter',
-  gemini: 'Gemini',
-};
+function getTaskCapabilityKey(taskKey) {
+  if (taskKey === 'embedding') return 'supportsEmbedding';
+  if (taskKey === 'transcription') return 'supportsTranscription';
+  if (taskKey === 'browserVision') return 'supportsVision';
+  if (taskKey === 'webSearchReasoning') return 'supportsResponsesApi';
+  return 'supportsChatCompletions';
+}
 
 function hasConfiguredValue(vars, key) {
   const value = vars[key] || process.env[key] || '';
@@ -135,28 +136,40 @@ function hasConfiguredValue(vars, key) {
 }
 
 function getPresetAvailability(preset, vars) {
-  const providers = new Set(Object.values(preset.models || {}).map((modelRef) => modelRef.provider));
+  const missingProviders = new Set();
+  const invalidTasks = [];
 
-  // Эти task-ключи пока реализованы только через OpenAI-specific code paths,
-  // даже если в preset указан другой provider.
-  for (const taskKey of ['embedding', 'transcription']) {
-    if (preset.models?.[taskKey]?.provider !== 'openai') {
-      providers.add('openai');
+  for (const [taskKey, modelRef] of Object.entries(preset.models || {})) {
+    const descriptor = getProviderDescriptor(modelRef.provider);
+    if (!descriptor) {
+      invalidTasks.push(`${taskKey}: неизвестный provider ${modelRef.provider}`);
+      continue;
+    }
+
+    if (!hasConfiguredValue(vars, descriptor.envKey)) {
+      missingProviders.add(modelRef.provider);
+    }
+
+    const capabilityKey = getTaskCapabilityKey(taskKey);
+    if (!descriptor.capabilities?.[capabilityKey]) {
+      invalidTasks.push(`${taskKey}: ${descriptor.label} не поддерживает ${capabilityKey}`);
     }
   }
 
-  const missingProviders = [...providers].filter((provider) => {
-    const envKey = PROVIDER_ENV_KEY[provider];
-    return envKey ? !hasConfiguredValue(vars, envKey) : false;
-  });
+  if (invalidTasks.length > 0) {
+    return {
+      enabled: false,
+      unavailableReason: `Недоступен: ${invalidTasks.join(', ')}`,
+    };
+  }
 
-  if (!missingProviders.length) {
+  if (missingProviders.size === 0) {
     return { enabled: true, unavailableReason: undefined };
   }
 
-  const missingKeys = missingProviders.map((provider) => {
-    const envKey = PROVIDER_ENV_KEY[provider];
-    return `${PROVIDER_LABEL[provider] || provider}: ${envKey}`;
+  const missingKeys = [...missingProviders].map((provider) => {
+    const descriptor = getProviderDescriptor(provider);
+    return `${descriptor?.label || provider}: ${descriptor?.envKey || provider}`;
   });
 
   return {

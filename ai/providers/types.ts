@@ -1,25 +1,43 @@
 import type OpenAI from 'openai';
+import type { ReadStream } from 'fs';
 import type { AiProvider } from '../modelPresets';
+import type { AiCapabilityMap, AiProviderDescriptor } from '../providerMetadata';
 
 export type ChatCompletionCreateParams = OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming;
 export type ChatCompletion = OpenAI.Chat.Completions.ChatCompletion;
-export type ChatCompletionParamsWithoutModel = Omit<ChatCompletionCreateParams, 'model'>;
+export type ChatCompletionParamsWithoutModel = Omit<ChatCompletionCreateParams, 'model'> & Record<string, unknown>;
 export type ChatCompletionCreateParamsWithLegacyMaxTokens = ChatCompletionCreateParams & {
     max_tokens?: number;
     max_completion_tokens?: number;
 };
 export type ProviderNormalizedChatParams = ChatCompletionCreateParamsWithLegacyMaxTokens & Record<string, unknown>;
 
-export type ResponseCreateParams = Omit<OpenAI.Responses.ResponseCreateParamsNonStreaming, 'model'>;
+export type ResponseCreateParams = Omit<OpenAI.Responses.ResponseCreateParamsNonStreaming, 'model'> & Record<string, unknown>;
 export type ResponseResult = OpenAI.Responses.Response;
+export type EmbeddingCreateParams = {
+    input: string | string[];
+};
+export type EmbeddingResult = {
+    embedding: number[];
+    rawUsage?: {
+        inputTokens?: number;
+        outputTokens?: number;
+        totalTokens?: number;
+    };
+};
+export type TranscriptionCreateParams = {
+    file: ReadStream;
+    language?: string;
+    response_format?: 'text';
+};
+export type TranscriptionResult = {
+    text: string;
+};
 
 export type AiTokenParamMode = 'max_tokens' | 'max_completion_tokens';
 
-export interface AiModelCapabilities {
+export interface AiModelCapabilities extends AiCapabilityMap {
     chatTokenParam: AiTokenParamMode;
-    supportsResponsesApi: boolean;
-    supportsEmbedding: boolean;
-    supportsTranscription: boolean;
 }
 
 export interface AiProviderCapabilities {
@@ -31,6 +49,7 @@ export interface AiProviderCapabilities {
 
 export interface AiProviderAdapter {
     provider: AiProvider;
+    descriptor: AiProviderDescriptor;
     client: OpenAI;
     capabilities: AiProviderCapabilities;
     getModelCapabilities(model: string): AiModelCapabilities;
@@ -38,10 +57,22 @@ export interface AiProviderAdapter {
         model: string,
         params: ChatCompletionParamsWithoutModel,
     ): ProviderNormalizedChatParams;
+    createChatCompletion(
+        model: string,
+        params: ChatCompletionParamsWithoutModel,
+    ): Promise<ChatCompletion>;
     createResponse(
         model: string,
         params: ResponseCreateParams,
     ): Promise<ResponseResult>;
+    createEmbedding?(
+        model: string,
+        params: EmbeddingCreateParams,
+    ): Promise<EmbeddingResult>;
+    createTranscription?(
+        model: string,
+        params: TranscriptionCreateParams,
+    ): Promise<TranscriptionResult>;
 }
 
 export function resolveModelCapabilities(

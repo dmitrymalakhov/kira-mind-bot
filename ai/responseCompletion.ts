@@ -1,4 +1,3 @@
-import { getFallbackModel } from './fallbackModels';
 import { resolveModelForTaskAsync } from './modelResolver';
 import type { AiModelRef, AiTaskKey } from './modelPresets';
 import { getAiProviderAdapter } from './providers/registry';
@@ -7,18 +6,10 @@ import type {
     ResponseResult,
 } from './providers/types';
 import { logAiUsage } from '../services/aiUsageLogService';
+import { errorToMessage, getTaskFallbackModel } from './runtimeSupport';
 
 function recordAiUsage(payload: Parameters<typeof logAiUsage>[0]): void {
     void logAiUsage(payload);
-}
-
-function errorToMessage(error: unknown): string {
-    if (error instanceof Error) return error.message;
-    try {
-        return JSON.stringify(error);
-    } catch {
-        return String(error);
-    }
 }
 
 function getUsageTokens(result: ResponseResult): {
@@ -83,7 +74,7 @@ export async function createResponseForTask(
     try {
         return await createResponseWithModel(taskKey, params, presetName, modelRef, false);
     } catch (error) {
-        const fallbackModel = getFallbackModel(taskKey);
+        const fallbackModel = getTaskFallbackModel(taskKey);
         console.warn('[AI responses fallback]', { taskKey, fallbackModel, originalError: error });
         return createResponseWithModel(taskKey, params, presetName, fallbackModel, true);
     }

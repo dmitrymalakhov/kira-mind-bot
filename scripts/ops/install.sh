@@ -134,6 +134,7 @@ prompt_required OPENAI_API_KEY "OpenAI API Key" "https://platform.openai.com/api
 echo -e "\n${BOLD}Дополнительные AI-провайдеры${NC}"
 prompt_optional OPENROUTER_API_KEY "OpenRouter API Key" "https://openrouter.ai/keys"
 prompt_optional GEMINI_API_KEY "Gemini API Key" "https://aistudio.google.com/app/apikey"
+prompt_optional ZAI_API_KEY "Z.ai API Key" "https://z.ai/manage-apikey/apikey-list"
 
 # Telegram Bot
 echo -e "\n${BOLD}Telegram Bot${NC}"
@@ -191,6 +192,7 @@ OPENAI_API_KEY=${OPENAI_API_KEY}
 
 OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
 GEMINI_API_KEY=${GEMINI_API_KEY}
+ZAI_API_KEY=${ZAI_API_KEY}
 
 KIRA_BOT_TOKEN=${KIRA_BOT_TOKEN}
 KIRA_ALLOWED_USER_ID=${KIRA_ALLOWED_USER_ID}

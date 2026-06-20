@@ -1,0 +1,96 @@
+{
+  "providers": {
+    "openai": {
+      "id": "openai",
+      "label": "OpenAI",
+      "envKey": "OPENAI_API_KEY",
+      "baseURL": null,
+      "monitoring": {
+        "kind": "openai-models",
+        "url": "https://api.openai.com/v1/models",
+        "auth": "bearer"
+      },
+      "capabilities": {
+        "supportsChatCompletions": true,
+        "supportsResponsesApi": true,
+        "supportsEmbedding": true,
+        "supportsTranscription": true,
+        "supportsVision": true,
+        "supportsFunctionCalling": true,
+        "supportsThinkingMode": false,
+        "supportsReasoningEffort": false,
+        "supportsPromptCaching": true,
+        "supportsOpenAiCompatibleTransport": true
+      }
+    },
+    "openrouter": {
+      "id": "openrouter",
+      "label": "OpenRouter",
+      "envKey": "OPENROUTER_API_KEY",
+      "baseURL": "https://openrouter.ai/api/v1",
+      "monitoring": {
+        "kind": "openrouter-auth-key",
+        "url": "https://openrouter.ai/api/v1/auth/key",
+        "auth": "bearer"
+      },
+      "capabilities": {
+        "supportsChatCompletions": true,
+        "supportsResponsesApi": false,
+        "supportsEmbedding": false,
+        "supportsTranscription": false,
+        "supportsVision": false,
+        "supportsFunctionCalling": true,
+        "supportsThinkingMode": false,
+        "supportsReasoningEffort": false,
+        "supportsPromptCaching": false,
+        "supportsOpenAiCompatibleTransport": true
+      }
+    },
+    "gemini": {
+      "id": "gemini",
+      "label": "Gemini",
+      "envKey": "GEMINI_API_KEY",
+      "baseURL": "https://generativelanguage.googleapis.com/v1beta/openai/",
+      "monitoring": {
+        "kind": "gemini-models",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models",
+        "auth": "query_key"
+      },
+      "capabilities": {
+        "supportsChatCompletions": true,
+        "supportsResponsesApi": false,
+        "supportsEmbedding": false,
+        "supportsTranscription": false,
+        "supportsVision": true,
+        "supportsFunctionCalling": true,
+        "supportsThinkingMode": false,
+        "supportsReasoningEffort": false,
+        "supportsPromptCaching": false,
+        "supportsOpenAiCompatibleTransport": false
+      }
+    },
+    "zai": {
+      "id": "zai",
+      "label": "Z.ai",
+      "envKey": "ZAI_API_KEY",
+      "baseURL": "https://api.z.ai/api/paas/v4/",
+      "monitoring": {
+        "kind": "openai-models",
+        "url": "https://api.z.ai/api/paas/v4/models",
+        "auth": "bearer"
+      },
+      "capabilities": {
+        "supportsChatCompletions": true,
+        "supportsResponsesApi": false,
+        "supportsEmbedding": false,
+        "supportsTranscription": false,
+        "supportsVision": false,
+        "supportsFunctionCalling": true,
+        "supportsThinkingMode": true,
+        "supportsReasoningEffort": true,
+        "supportsPromptCaching": true,
+        "supportsOpenAiCompatibleTransport": true
+      }
+    }
+  }
+}

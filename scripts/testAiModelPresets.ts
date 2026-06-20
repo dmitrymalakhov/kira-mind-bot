@@ -58,6 +58,25 @@ withPreset('gemini-direct-balanced', () => {
     });
 });
 
+withPreset('glm-balanced', () => {
+    assert.deepStrictEqual(resolveModelForTask('conversation'), {
+        provider: 'zai',
+        model: 'glm-5.2',
+    });
+    assert.deepStrictEqual(resolveModelForTask('browserPlanning'), {
+        provider: 'zai',
+        model: 'glm-5.2',
+    });
+    assert.deepStrictEqual(resolveModelForTask('browserVision'), {
+        provider: 'openai',
+        model: 'gpt-4o',
+    });
+    assert.deepStrictEqual(resolveModelForTask('embedding'), {
+        provider: 'openai',
+        model: 'text-embedding-3-small',
+    });
+});
+
 withPreset('hybrid-deepseek-gpt', () => {
     assert.strictEqual(parseAiPresetName(process.env.AI_MODEL_PRESET), 'hybrid-openrouter-gpt');
     assert.deepStrictEqual(resolveModelForTask('conversation'), {
