@@ -13,6 +13,8 @@ RUN npm install --no-save express express-session pg
 COPY --from=builder /app/dist ./dist
 COPY server.js ./
 COPY monitoring.js ./
+COPY presetAvailability.js ./
+COPY provider-registry.json ./
 COPY runtime-health-metadata.json ./
 COPY aiPresetRegistry.js ./
 RUN mkdir -p ./src

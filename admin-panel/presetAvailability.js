@@ -1,6 +1,6 @@
 'use strict';
 
-const { providers: AI_PROVIDER_REGISTRY } = require('../ai/provider-registry.json');
+const { providers: AI_PROVIDER_REGISTRY } = require('./provider-registry.json');
 
 function getProviderDescriptor(provider) {
   return AI_PROVIDER_REGISTRY[provider] || null;
