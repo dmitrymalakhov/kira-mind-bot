@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import {
+  Alert,
   Box,
   Button,
   Card,
@@ -15,7 +16,7 @@ import {
 } from '@mui/material';
 import SaveIcon from '@mui/icons-material/Save';
 import { fetchAiPreset, saveAiPreset } from '../api';
-import type { AiModelRef, AiPresetConfig, AiPresetName, AiPresetResponse, ConfigResponse, ConfigSourceInfo } from '../types';
+import type { AiModelRef, AiPresetConfig, AiPresetName, AiPresetResponse, ConfigResponse } from '../types';
 import type { ConfigSectionHandle } from './ConfigSection';
 
 interface Props {
@@ -39,27 +40,41 @@ function getProviderLabel(provider: string): string {
   }
 }
 
-function SourceInfo({ source }: { source?: ConfigSourceInfo }) {
-  if (!source) return null;
+function getPresetTitle(data: AiPresetResponse | null, presetName: AiPresetName | null | undefined): string {
+  if (!data || !presetName) return 'Не определён';
+  return data.availablePresets.find((preset) => preset.name === presetName)?.title ?? presetName;
+}
+
+function ActivePresetStatus({ data }: { data: AiPresetResponse | null }) {
+  if (!data) return null;
+
+  const activePresetTitle = getPresetTitle(data, data.activePresetName);
+  const basePresetTitle = getPresetTitle(data, data.envDefaultPreset);
 
   return (
-    <Box sx={{ p: 1.25, border: '1px solid', borderColor: 'divider', borderRadius: 1, bgcolor: 'rgba(15, 23, 42, 0.35)' }}>
-      <Typography variant="caption" color="text.secondary" component="div">
-        Источник: <b>{source.label}</b>
-        {source.appliesImmediately != null ? ` · ${source.appliesImmediately ? 'применяется сразу' : 'может потребоваться рестарт'}` : ''}
-      </Typography>
-      {source.description && (
-        <Typography variant="caption" color="text.secondary" component="div">
-          {source.description}
+    <Alert
+      severity={data.hasRuntimeOverride ? 'info' : 'success'}
+      variant="outlined"
+      sx={{
+        alignItems: 'flex-start',
+        '& .MuiAlert-message': { width: '100%' },
+      }}
+    >
+      <Stack spacing={0.75}>
+        <Typography variant="body2">
+          Сейчас активно: <b>{activePresetTitle}</b>
         </Typography>
-      )}
-      {source.technicalPath && (
-        <Typography variant="caption" color="text.disabled" component="details" sx={{ mt: 0.5 }}>
-          <summary>Технические детали</summary>
-          {source.technicalPath}
+        <Typography variant="body2" color="text.secondary">
+          Базовое значение: <b>{basePresetTitle}</b>
         </Typography>
-      )}
-    </Box>
+        <Typography variant="body2" color="text.secondary">
+          {data.activeSourceSummary}
+        </Typography>
+        <Typography variant="caption" color="text.disabled">
+          Технический источник: {data.activeSourceTechnicalPath}
+        </Typography>
+      </Stack>
+    </Alert>
   );
 }
 
@@ -143,7 +158,7 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
                     label="Активный AI preset"
                     value={selectedAiPreset}
                     onChange={(event) => setSelectedAiPreset(event.target.value as AiPresetName)}
-                    helperText="Единая runtime-настройка всех AI-моделей. Хранится в БД и применяется без перезапуска."
+                    helperText="Базовое значение берётся из env/default. Сохранение здесь сразу переключает бота на выбранный preset."
                     sx={{ flex: 1 }}
                     disabled={loading || !aiPresetData}
                   >
@@ -174,7 +189,16 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
                       </Typography>
                     )}
                     <Stack direction="row" spacing={1} flexWrap="wrap">
-                      <Chip size="small" color={selectedAiPreset === aiPresetData?.activePresetName ? 'success' : 'warning'} label={selectedAiPreset === aiPresetData?.activePresetName ? 'Активен' : 'Есть несохранённое изменение'} />
+                      <Chip
+                        size="small"
+                        color={selectedAiPreset === aiPresetData?.activePresetName ? 'success' : 'warning'}
+                        label={selectedAiPreset === aiPresetData?.activePresetName ? 'Совпадает с активным значением' : 'Есть несохранённое изменение'}
+                      />
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        label={aiPresetData?.hasRuntimeOverride ? 'Переопределено в админке' : 'Используется базовое значение'}
+                      />
                       {activeAiPreset.enabled === false && (
                         <Chip size="small" color="error" variant="outlined" label="Недоступен без API ключей" />
                       )}
@@ -193,7 +217,7 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
                     </Grid>
                   </>
                 )}
-                <SourceInfo source={aiPresetData?.source} />
+                <ActivePresetStatus data={aiPresetData} />
               </Stack>
             </Box>
           </Stack>

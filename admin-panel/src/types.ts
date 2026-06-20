@@ -71,6 +71,9 @@ export interface AiPresetResponse {
   activePresetName: AiPresetName;
   storedPresetName?: AiPresetName | null;
   envDefaultPreset: AiPresetName;
+  hasRuntimeOverride: boolean;
+  activeSourceSummary: string;
+  activeSourceTechnicalPath: string;
   availablePresets: AiPresetConfig[];
   source: ConfigSourceInfo;
 }

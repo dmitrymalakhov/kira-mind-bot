@@ -2,6 +2,7 @@
 
 ## 2026-06-21
 
+- В админке блок `AI Presets` теперь явно показывает активный preset, базовое значение из `env/default` и факт runtime-переопределения без технически перегруженного текста про источник.
 - AI runtime переведён на capability-first схему для `chat`, `responses`, `embedding` и `transcription`; прямые OpenAI-вызовы из прикладных сервисов убраны.
 - Добавлены общий provider registry и model catalog для OpenAI, OpenRouter, Gemini и Z.ai, а также новый preset `glm-balanced`.
 - Transitional fallback policy централизована в общей матрице `ai/fallback-models.json`, которую используют и runtime, и admin-panel availability.

@@ -111,7 +111,7 @@ function buildEnvFileSource(technicalPath = BOT_ENV_FILE) {
 function buildRuntimeSource() {
   return buildConfigSource(
     'database',
-    'Runtime-настройка',
+    'Переопределение из админки',
     'Хранится в базе данных и применяется без перезапуска бота.',
     'bot_settings.AI_MODEL_PRESET',
     true
@@ -304,15 +304,23 @@ app.get('/api/ai-preset', requireAuth, async (_req, res) => {
     await ensureBotSettingsTable(pool);
     const result = await pool.query('SELECT value FROM bot_settings WHERE key = $1', ['AI_MODEL_PRESET']);
     const storedPreset = parseAiPresetName(result.rows[0]?.value);
+    const hasRuntimeOverride = Boolean(storedPreset);
+    const activePresetName = storedPreset || envDefaultPreset;
+    const activeSourceSummary = hasRuntimeOverride
+      ? 'Значение переопределено в админке, хранится в базе данных и уже применяется ботом.'
+      : 'Сейчас используется базовое значение из env/default, отдельного runtime-переопределения нет.';
     res.json({
-      activePresetName: storedPreset || envDefaultPreset,
+      activePresetName,
       storedPresetName: storedPreset,
       envDefaultPreset,
+      hasRuntimeOverride,
+      activeSourceSummary,
+      activeSourceTechnicalPath: hasRuntimeOverride ? 'bot_settings.AI_MODEL_PRESET' : 'AI_MODEL_PRESET',
       availablePresets: AI_PRESET_NAMES.map((name) => buildAiPresetResponseEntry(name, vars)),
       source: storedPreset ? buildRuntimeSource() : buildConfigSource(
         'env_fallback',
-        'Значение по умолчанию',
-        'Runtime-настройка ещё не задана, поэтому используется env/default значение.',
+        'Базовое значение',
+        'Runtime-переопределение ещё не задано, поэтому используется env/default значение.',
         'AI_MODEL_PRESET',
         false
       ),
@@ -343,7 +351,7 @@ app.post('/api/ai-preset', requireAuth, async (req, res) => {
       'INSERT INTO bot_settings (key, value, "updatedAt") VALUES ($1, $2, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = now()',
       ['AI_MODEL_PRESET', preset]
     );
-    res.json({ success: true, activePresetName: preset, message: '✅ AI preset сохранён и применяется без перезапуска.' });
+    res.json({ success: true, activePresetName: preset, message: 'Активный AI preset обновлён и уже используется ботом.' });
   } catch (err) {
     res.status(500).json({ error: `Ошибка БД: ${err.message}` });
   } finally {
