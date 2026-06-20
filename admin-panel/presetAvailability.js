@@ -1,6 +1,7 @@
 'use strict';
 
-const { providers: AI_PROVIDER_REGISTRY } = require('./provider-registry.json');
+const { providers: AI_PROVIDER_REGISTRY } = require('../ai/provider-registry.json');
+const FALLBACK_MODELS = require('../ai/fallback-models.json');
 
 function getProviderDescriptor(provider) {
   return AI_PROVIDER_REGISTRY[provider] || null;
@@ -15,43 +16,7 @@ function getTaskCapabilityKey(taskKey) {
 }
 
 function getDeclaredFallbackModel(taskKey) {
-  if (
-    taskKey === 'intentClassification' ||
-    taskKey === 'intentDedup' ||
-    taskKey === 'memoryExtraction' ||
-    taskKey === 'browserPlanning'
-  ) {
-    return {
-      provider: 'openai',
-      model: 'gpt-5.4-nano',
-    };
-  }
-
-  if (taskKey === 'browserVision') {
-    return {
-      provider: 'openai',
-      model: 'gpt-4o',
-    };
-  }
-
-  if (taskKey === 'embedding') {
-    return {
-      provider: 'openai',
-      model: 'text-embedding-3-small',
-    };
-  }
-
-  if (taskKey === 'transcription') {
-    return {
-      provider: 'openai',
-      model: 'whisper-1',
-    };
-  }
-
-  return {
-    provider: 'openai',
-    model: 'gpt-5.4-mini',
-  };
+  return FALLBACK_MODELS[taskKey] || null;
 }
 
 function hasConfiguredValue(vars, key) {
@@ -75,6 +40,12 @@ function resolveTaskExecutionProvider(taskKey, modelRef) {
   }
 
   const fallbackModelRef = getDeclaredFallbackModel(taskKey);
+  if (!fallbackModelRef) {
+    return {
+      error: `${taskKey}: не найден fallback provider для capability ${capabilityKey}`,
+    };
+  }
+
   const fallbackDescriptor = getProviderDescriptor(fallbackModelRef.provider);
   if (fallbackDescriptor?.capabilities?.[capabilityKey]) {
     return {

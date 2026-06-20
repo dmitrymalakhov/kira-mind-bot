@@ -101,6 +101,14 @@ assert.deepStrictEqual(getFallbackModel('browserVision'), {
     provider: 'openai',
     model: 'gpt-4o',
 });
+assert.deepStrictEqual(getFallbackModel('embedding'), {
+    provider: 'openai',
+    model: 'text-embedding-3-small',
+});
+assert.deepStrictEqual(getFallbackModel('transcription'), {
+    provider: 'openai',
+    model: 'whisper-1',
+});
 
 withPreset('invalid-preset', () => {
     assert.strictEqual(parseAiPresetName(process.env.AI_MODEL_PRESET), null);

@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { providers: AI_PROVIDER_REGISTRY } = require('./provider-registry.json');
+const { providers: AI_PROVIDER_REGISTRY } = require('../ai/provider-registry.json');
 
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_RUNTIME_HEALTH_PORT = Number(process.env.KIRA_RUNTIME_HEALTH_PORT || 3100);

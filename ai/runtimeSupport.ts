@@ -8,20 +8,6 @@ export function getTaskFallbackModel(taskKey: AiTaskKey): AiModelRef {
 }
 
 export function getTransitionalTaskFallbackModel(taskKey: AiTaskKey): AiModelRef {
-    if (taskKey === 'embedding') {
-        return {
-            provider: 'openai',
-            model: 'text-embedding-3-small',
-        };
-    }
-
-    if (taskKey === 'transcription') {
-        return {
-            provider: 'openai',
-            model: 'whisper-1',
-        };
-    }
-
     return getTaskFallbackModel(taskKey);
 }
 
