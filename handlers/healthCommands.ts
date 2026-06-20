@@ -14,6 +14,7 @@ import {
 } from '../agents/healthAgent';
 import { addToHistory } from '../utils/history';
 import { addTargetNotificationButtons, appendTargetNotificationPrompt, buildDefaultTargetReminderMessage } from '../utils/reminderTargetNotification';
+import { createOrRefreshReminderMemory } from '../services/ReminderMemorySync';
 
 export function registerHealthCommands(bot: Bot<BotContext>): void {
     bot.command('health', async (ctx) => {
@@ -98,6 +99,7 @@ async function saveHealthRemindersFromResult(
         ReminderRegistry.getInstance().add(reminder);
         await ReminderRepository.save(reminder).catch((error) => console.error('[health] reminder DB save failed:', error));
         scheduleReminder(bot, reminder);
+        await createOrRefreshReminderMemory(ctx, reminder).catch((error) => console.error('[health] reminder memory sync failed:', error));
     }
 
     if (targetNotificationCandidates.length > 0) {

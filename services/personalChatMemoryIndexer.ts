@@ -542,7 +542,7 @@ export async function runPersonalChatMemoryIndexingCycle(options: { force?: bool
     };
 
     try {
-        const client = await initTelegramClient();
+        const client = await initTelegramClient({ preloadContacts: false });
         if (!client) {
             result.errors.push('telegram-client-unavailable');
             return result;

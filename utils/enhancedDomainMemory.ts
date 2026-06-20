@@ -25,6 +25,7 @@ export interface MemorySaveMetadata {
     sourceContext?: string;
     sourceMessageIds?: string[];
     sourceMemoryIds?: string[];
+    reminderId?: string;
     extractionMethod?: MemoryExtractionMethod;
     confidence?: number;
     subject?: MemorySubject;
@@ -37,6 +38,12 @@ export interface MemorySaveMetadata {
     strength?: number;
     vividness?: number;
     specificity?: number;
+}
+
+export const REMINDER_SOURCE_TAG_PREFIX = 'source_reminder:';
+
+export function buildReminderSourceTag(reminderId: string): string {
+    return `${REMINDER_SOURCE_TAG_PREFIX}${reminderId}`;
 }
 
 // Нижний порог для поиска устаревших планировочных фактов при смене состояния
@@ -801,6 +808,9 @@ export async function saveMemory(
         domain = normalizedDomain;
         content = normalizedContent;
         tags = normalizeMemoryTags(tags);
+        if (metadata.reminderId?.trim()) {
+            tags = normalizeMemoryTags([...tags, buildReminderSourceTag(metadata.reminderId.trim())]);
+        }
 
         const incomingConfidence = clamp01(
             typeof metadata.confidence === 'number' && Number.isFinite(metadata.confidence)
