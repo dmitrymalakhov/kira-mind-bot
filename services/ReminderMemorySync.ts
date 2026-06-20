@@ -2,7 +2,7 @@ import { PREDEFINED_DOMAINS } from '../constants/domains';
 import { getVectorService } from './VectorServiceFactory';
 import type { BotContext, MemoryEntry, SearchResult, MemoryStatus } from '../types';
 import type { Reminder } from '../reminder';
-import { buildReminderSourceTag, saveMemory } from '../utils/enhancedDomainMemory';
+import { buildReminderSourceTag } from '../utils/enhancedDomainMemory';
 import { getActiveMemoryBotId } from '../utils/botIdentity';
 
 const REMINDER_MEMORY_TAG = 'reminder-memory';
@@ -27,6 +27,28 @@ function reminderDateLabel(date: Date): string {
 
 function reminderMemoryContent(reminder: Reminder): string {
     return `Напоминание: ${reminderBody(reminder)} — ${reminderDateLabel(new Date(reminder.dueDate))}.`;
+}
+
+function buildReminderMemoryEntry(userId: string, reminder: Reminder, status: MemoryStatus): Omit<MemoryEntry, 'id'> {
+    const now = new Date();
+    return {
+        content: reminderMemoryContent(reminder),
+        domain: PREDEFINED_DOMAINS.GENERAL,
+        botId: getActiveMemoryBotId(),
+        timestamp: now,
+        importance: 0.82,
+        tags: reminderMemoryTags(reminder, status),
+        userId,
+        confidence: 0.9,
+        memoryKind: 'open_loop',
+        subject: 'user',
+        predicate: 'reminder',
+        object: reminderBody(reminder),
+        validFrom: now,
+        validTo: new Date(reminder.dueDate),
+        status,
+        extractionMethod: 'manual',
+    };
 }
 
 function reminderMemoryTags(reminder: Reminder, status: MemoryStatus): string[] {
@@ -247,8 +269,10 @@ async function findLegacyReminderMemories(userId: string, previous: Reminder, ne
 
 export async function createOrRefreshReminderMemory(ctx: BotContext, reminder: Reminder): Promise<void> {
     if (!ctx.from?.id) return;
-    const userId = String(ctx.from.id);
+    await createOrRefreshReminderMemoryForUserId(String(ctx.from.id), reminder);
+}
 
+export async function createOrRefreshReminderMemoryForUserId(userId: string, reminder: Reminder): Promise<void> {
     const existing = await findReminderMemoriesByTag(userId, reminder.id);
     if (existing.length > 0) {
         const svc = getVectorService();
@@ -261,25 +285,9 @@ export async function createOrRefreshReminderMemory(ctx: BotContext, reminder: R
         return;
     }
 
-    await saveMemory(
-        ctx,
-        PREDEFINED_DOMAINS.GENERAL,
-        reminderMemoryContent(reminder),
-        0.82,
-        reminderMemoryTags(reminder, 'planned'),
-        false,
-        {
-            reminderId: reminder.id,
-            confidence: 0.9,
-            extractionMethod: 'manual',
-            subject: 'user',
-            predicate: 'reminder',
-            object: reminderBody(reminder),
-            validFrom: new Date(),
-            validTo: new Date(reminder.dueDate),
-            status: 'planned',
-        }
-    ).catch(() => {});
+    const svc = getVectorService();
+    if (!svc) return;
+    await svc.saveMemory(buildReminderMemoryEntry(userId, reminder, 'planned')).catch(() => {});
 }
 
 export async function syncReminderMemoryMutation(

@@ -8,6 +8,8 @@ import { ReminderRepository } from "./services/ReminderRepository";
 import { ReminderStatus, ReminderTargetChat, ReminderTargetNotificationStatus, RecurrenceRule } from "./types/reminderTypes";
 import { ReminderRegistry } from "./stores/ReminderRegistry";
 import { buildDefaultTargetReminderMessage } from "./utils/reminderTargetNotification";
+import { createOrRefreshReminderMemoryForUserId } from "./services/ReminderMemorySync";
+import { config } from "./config";
 export { ReminderStatus, ReminderTargetChat, ReminderTargetNotificationStatus, RecurrenceRule };
 
 // Расширенный интерфейс для напоминания с поддержкой статусов
@@ -326,6 +328,8 @@ async function sendReminder(bot: Bot<BotContext>, reminder: Reminder): Promise<v
             ReminderRegistry.getInstance().add(nextReminder);
             ReminderRepository.save(nextReminder).catch(e => console.error('[reminder] DB save failed on recurrence:', e));
             scheduleReminder(bot, nextReminder);
+            createOrRefreshReminderMemoryForUserId(String(config.allowedUserId), nextReminder)
+                .catch((e) => console.error('[reminder] memory sync failed on recurrence:', e));
             logReminderEvent("scheduled_next_recurrence", nextReminder);
         }
 
