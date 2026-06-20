@@ -27,7 +27,7 @@ async function pollOnce(): Promise<void> {
     const groups = await ChatGroupRepository.findAllTracking();
     if (!groups.length) return;
 
-    const client = await initTelegramClient();
+    const client = await initTelegramClient({ preloadContacts: false });
     if (!client) return;
 
     const ownerChatId = await getProactiveChatId();

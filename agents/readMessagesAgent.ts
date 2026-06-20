@@ -30,6 +30,7 @@ import { runUpdateLongTermMemoryAgent } from "./updateLongTermMemoryAgent";
 import { queueMessage as queueForReflection, markChatAsBot } from "../services/reflectionModeService";
 import { ChatGroupRepository } from "../services/ChatGroupRepository";
 import { persistSessionNow } from "../services/SessionStorage";
+import { createIncomingTelegramQueue, type IncomingTelegramQueueJob } from "../services/IncomingTelegramQueue";
 
 
 // Глобальное хранилище сообщений
@@ -71,6 +72,126 @@ function getVoiceChatAnalysisInstruction(): string {
 }
 
 let isListening: boolean = false;
+
+interface TelegramSenderLike {
+    firstName?: string;
+    lastName?: string;
+    username?: string;
+    bot?: boolean;
+}
+
+interface TelegramMessageLike {
+    id: number;
+    chatId?: unknown;
+    message?: string;
+    date: number;
+    media?: {
+        className?: string;
+    };
+    fromId?: unknown;
+    peerId?: unknown;
+    replyTo?: {
+        replyToMsgId?: number;
+    };
+    getSender?: () => Promise<unknown>;
+}
+
+const MAX_PENDING_INCOMING_TELEGRAM_JOBS_PER_CHAT = 20;
+const MAX_PENDING_INCOMING_TELEGRAM_JOBS_TOTAL = 120;
+const MAX_CONCURRENT_INCOMING_TELEGRAM_WORKERS = 2;
+const MAX_INCOMING_TELEGRAM_JOB_AGE_MS = 15 * 60 * 1000;
+const INCOMING_QUEUE_WARN_WAIT_MS = 2_000;
+const INCOMING_QUEUE_WARN_PROCESS_MS = 5_000;
+
+function toNumberId(value: unknown): number | undefined {
+    const id = Number(value);
+    return Number.isFinite(id) ? id : undefined;
+}
+
+function getTelegramPeerUserId(peer: unknown): unknown {
+    if (!peer || typeof peer !== "object") {
+        return undefined;
+    }
+
+    if (!("userId" in peer)) {
+        return undefined;
+    }
+
+    return (peer as { userId?: unknown }).userId;
+}
+
+function getTelegramMessageChatId(message: TelegramMessageLike): number | undefined {
+    return toNumberId(message.chatId ?? getTelegramPeerUserId(message.peerId));
+}
+
+function getTelegramMessageSenderId(message: TelegramMessageLike): number | undefined {
+    return toNumberId(getTelegramPeerUserId(message.fromId) ?? getTelegramPeerUserId(message.peerId));
+}
+
+function getTelegramMessageText(message: TelegramMessageLike): string {
+    const text = message.message?.trim() || "";
+    const mediaLabel = message.media?.className?.replace("MessageMedia", "").trim();
+
+    if (!mediaLabel) {
+        return text;
+    }
+
+    if (!text) {
+        return `[${mediaLabel}]`;
+    }
+
+    return `${text} [${mediaLabel}]`;
+}
+
+function buildIncomingStoredMessage(
+    message: TelegramMessageLike,
+    senderId: number,
+    senderName: string,
+    senderUsername?: string,
+    isBot: boolean = false
+): StoredMessage {
+    return {
+        id: message.id,
+        senderId,
+        senderName,
+        senderUsername,
+        text: getTelegramMessageText(message),
+        date: new Date(message.date * 1000),
+        isRead: false,
+        isBot,
+    };
+}
+
+function describeTelegramSender(sender: unknown): {
+    senderName: string;
+    senderUsername?: string;
+    isBot: boolean;
+} {
+    const typedSender = sender as TelegramSenderLike | undefined;
+    const senderUsername = typedSender?.username?.trim();
+    const senderName = [typedSender?.firstName?.trim(), typedSender?.lastName?.trim()]
+        .filter((part): part is string => Boolean(part))
+        .join(" ")
+        .trim() || senderUsername || "Неизвестный пользователь";
+
+    return {
+        senderName,
+        senderUsername: senderUsername || undefined,
+        isBot: Boolean(typedSender?.bot || (senderUsername && isLikelyBot(senderUsername))),
+    };
+}
+
+const incomingTelegramQueue = createIncomingTelegramQueue<TelegramMessageLike>({
+    concurrency: MAX_CONCURRENT_INCOMING_TELEGRAM_WORKERS,
+    getMessageId: (message) => message.id,
+    logLabel: "telegram-incoming-queue",
+    maxAgeMs: MAX_INCOMING_TELEGRAM_JOB_AGE_MS,
+    maxPendingPerChat: MAX_PENDING_INCOMING_TELEGRAM_JOBS_PER_CHAT,
+    maxPendingTotal: MAX_PENDING_INCOMING_TELEGRAM_JOBS_TOTAL,
+    processJob: processIncomingTelegramMessage,
+    warnProcessMs: INCOMING_QUEUE_WARN_PROCESS_MS,
+    warnWaitMs: INCOMING_QUEUE_WARN_WAIT_MS,
+});
 
 function createStudyChatRequestId(): string {
     return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
@@ -189,163 +310,148 @@ ${historyLines}
     return false;
 }
 
-/**
- * Обработчик новых сообщений
- * @param event Событие нового сообщения
- */
-async function handleNewMessage(event: any): Promise<void> {
+function handleIncomingMessageEvent(event: { message?: TelegramMessageLike; isPrivate?: boolean }): void {
     try {
         const message = event.message;
+        if (!message) {
+            return;
+        }
 
-        // Проверяем, что это личное сообщение (не группа, не канал)
-        if (message.isPrivate) {
-            // Получаем информацию об отправителе
-            const senderId = message.fromId ? message.fromId.userId : message.peerId.userId;
-            const chatId = message.chatId;
+        const chatId = getTelegramMessageChatId(message);
+        const senderId = getTelegramMessageSenderId(message);
+        if (chatId === undefined || senderId === undefined) {
+            return;
+        }
 
-            // Проверяем, является ли сообщение отправленным самому себе в "Избранное"
-            // В Telegram, когда пользователь отправляет сообщение себе, 
-            // ID отправителя совпадает с ID получателя (ID чата)
-            if (senderId.toString() === String(config.allowedUserId)) {
-                devLog(`Пропускаем сообщение из "Избранного" (self-chat): ${message.message || "[Медиа]"}`);
-                return; // Пропускаем обработку сообщений из "Избранного"
-            }
+        if (senderId.toString() === String(config.allowedUserId)) {
+            devLog(`Пропускаем сообщение из "Избранного" (self-chat): ${getTelegramMessageText(message) || "[Медиа]"}`);
+            return;
+        }
 
-            let senderName = "Неизвестный пользователь";
-            let senderUsername = undefined;
-            let isBot = false;
+        incomingTelegramQueue.enqueue({
+            chatId,
+            enqueuedAt: Date.now(),
+            message,
+        });
+    } catch (error) {
+        console.error("Ошибка при быстром приёме нового сообщения:", error);
+    }
+}
 
-            try {
-                const sender = await message.getSender();
-                senderName = sender.firstName || "Неизвестный пользователь";
-                if (sender.lastName) {
-                    senderName += " " + sender.lastName;
-                }
+async function processIncomingTelegramMessage(job: IncomingTelegramQueueJob<TelegramMessageLike>): Promise<void> {
+    const message = job.message;
+    const chatId = job.chatId;
+    const senderId = getTelegramMessageSenderId(message);
 
-                if (sender.username) {
-                    senderUsername = sender.username;
-                    isBot = isLikelyBot(sender.username) || !!sender.bot;
+    if (senderId === undefined) {
+        return;
+    }
 
-                    if (isBot) {
-                        devLog(`Обнаружен бот: ${senderName} (@${senderUsername})`);
-                    }
-                }
-            } catch (error) {
-                console.error("Не удалось получить информацию об отправителе:", error);
-            }
+    let senderName = "Неизвестный пользователь";
+    let senderUsername: string | undefined;
+    let isBot = false;
 
-            // Пропускаем сообщения от ботов
-            if (isBot) {
-                devLog(`Пропускаем сообщение от бота: ${senderName}`);
-                markChatAsBot(String(chatId));
-                return;
-            }
+    try {
+        const sender = await message.getSender?.();
+        const described = describeTelegramSender(sender);
+        senderName = described.senderName;
+        senderUsername = described.senderUsername;
+        isBot = described.isBot;
+    } catch (error) {
+        console.error("Не удалось получить информацию об отправителе:", error);
+    }
 
-            // Сохраняем сообщение
-            const storedMessage: StoredMessage = {
-                id: message.id,
-                senderId,
-                senderName,
-                senderUsername,
-                text: message.message || "",
-                date: new Date(message.date * 1000), // Конвертируем Unix timestamp в Date
-                isRead: false,
-                isBot
-            };
+    if (isBot) {
+        devLog(`Пропускаем сообщение от бота: ${senderName}`);
+        markChatAsBot(String(chatId));
+        return;
+    }
 
-            // Если есть медиа-контент, добавляем информацию о нем
-            if (message.media) {
-                storedMessage.text += ` [${message.media.className.replace('MessageMedia', '')}]`;
-            }
+    const storedMessage = buildIncomingStoredMessage(
+        message,
+        senderId,
+        senderName,
+        senderUsername,
+        false
+    );
 
-            messageStore.addMessage(chatId, storedMessage);
+    messageStore.addMessage(String(chatId), storedMessage);
 
-            // Добавляем в буфер режима рефлексии (синхронно, не блокирует обработку)
-            if (storedMessage.text) {
-                queueForReflection(String(chatId), senderName, storedMessage.text, storedMessage.date);
-            }
+    if (storedMessage.text) {
+        queueForReflection(String(chatId), senderName, storedMessage.text, storedMessage.date);
+    }
 
-            devLog(`Новое сообщение от ${senderName}: ${storedMessage.text}`);
+    devLog(`Новое сообщение от ${senderName}: ${storedMessage.text}`);
 
-            // Получаем экземпляр трекера сообщений
-            const messageTracker = MessageTracker.getInstance();
-            const contactIdNum = typeof senderId === "number" ? senderId : Number(senderId);
+    const messageTracker = MessageTracker.getInstance();
+    const contactIdNum = senderId;
 
-            // Обработка ответа в рамках активной сессии переговоров (бот ведёт переписку от имени пользователя)
-            const tryNegotiation = async (
-                originalChatId: number,
-                contactId: number,
-                trackedMessageId: number
-            ): Promise<boolean> => {
-                const session = NegotiationStore.get(originalChatId, contactId);
-                if (!session) return false;
-                session.history.push({ role: "contact", text: storedMessage.text, at: new Date() });
-                const handled = await tryGenerateReplyOrAskUser(
-                    originalChatId,
-                    contactId,
-                    session,
+    const tryNegotiation = async (
+        originalChatId: number,
+        contactId: number,
+        trackedMessageId: number
+    ): Promise<boolean> => {
+        const session = NegotiationStore.get(originalChatId, contactId);
+        if (!session) return false;
+        session.history.push({ role: "contact", text: storedMessage.text, at: new Date() });
+        const handled = await tryGenerateReplyOrAskUser(
+            originalChatId,
+            contactId,
+            session,
+            storedMessage.text,
+            senderName
+        );
+        if (handled && !session.waitingForUserReply) {
+            messageTracker.stopTracking(trackedMessageId);
+        }
+        return handled;
+    };
+
+    if (message.replyTo && message.replyTo.replyToMsgId) {
+        const replyToMessageId = message.replyTo.replyToMsgId;
+        const trackedInfo = messageTracker.getTrackedMessageInfo(replyToMessageId);
+        if (trackedInfo) {
+            devLog(`Получен ответ на отслеживаемое сообщение ${replyToMessageId}`);
+            const handled = await tryNegotiation(
+                trackedInfo.originalChatId,
+                trackedInfo.contactId,
+                replyToMessageId
+            );
+            if (!handled) {
+                await forwardReplyToOwner(
+                    trackedInfo.originalChatId,
+                    senderName,
+                    senderUsername,
                     storedMessage.text,
-                    senderName
+                    message
                 );
-                if (handled && !session.waitingForUserReply) {
-                    messageTracker.stopTracking(trackedMessageId);
-                }
-                return handled;
-            };
-
-            // Проверяем, является ли сообщение ответом на отслеживаемое сообщение
-            if (message.replyTo && message.replyTo.replyToMsgId) {
-                const replyToMessageId = message.replyTo.replyToMsgId;
-                const trackedInfo = messageTracker.getTrackedMessageInfo(replyToMessageId);
-                if (trackedInfo) {
-                    devLog(`Получен ответ на отслеживаемое сообщение ${replyToMessageId}`);
-                    const handled = await tryNegotiation(
-                        trackedInfo.originalChatId,
-                        trackedInfo.contactId,
-                        replyToMessageId
-                    );
-                    if (!handled) {
-                        await forwardReplyToOwner(
-                            trackedInfo.originalChatId,
-                            senderName,
-                            senderUsername,
-                            storedMessage.text,
-                            message
-                        );
-                        messageTracker.stopTracking(replyToMessageId);
-                    }
-                }
-            }
-
-            // Также проверяем случай, когда сообщение отправлено после нашего, но без явного ответа
-            if (senderId) {
-                const latestTrackedInfo = messageTracker.getLatestTrackedMessageForContact(contactIdNum);
-                if (latestTrackedInfo) {
-                    const messageAge = Date.now() - latestTrackedInfo.timestamp.getTime();
-                    const isRecentEnough = messageAge < 24 * 60 * 60 * 1000; // 24 часа
-                    if (isRecentEnough) {
-                        devLog(`Получено сообщение от контакта ${senderId}, которому было отправлено отслеживаемое сообщение`);
-                        const handled = await tryNegotiation(
-                            latestTrackedInfo.originalChatId,
-                            contactIdNum,
-                            latestTrackedInfo.messageId
-                        );
-                        if (!handled) {
-                            await forwardReplyToOwner(
-                                latestTrackedInfo.originalChatId,
-                                senderName,
-                                senderUsername,
-                                storedMessage.text,
-                                message
-                            );
-                            messageTracker.stopTracking(latestTrackedInfo.messageId);
-                        }
-                    }
-                }
+                messageTracker.stopTracking(replyToMessageId);
             }
         }
-    } catch (error) {
-        console.error("Ошибка при обработке нового сообщения:", error);
+    }
+
+    const latestTrackedInfo = messageTracker.getLatestTrackedMessageForContact(contactIdNum);
+    if (latestTrackedInfo) {
+        const messageAge = Date.now() - latestTrackedInfo.timestamp.getTime();
+        const isRecentEnough = messageAge < 24 * 60 * 60 * 1000;
+        if (isRecentEnough) {
+            devLog(`Получено сообщение от контакта ${senderId}, которому было отправлено отслеживаемое сообщение`);
+            const handled = await tryNegotiation(
+                latestTrackedInfo.originalChatId,
+                contactIdNum,
+                latestTrackedInfo.messageId
+            );
+            if (!handled) {
+                await forwardReplyToOwner(
+                    latestTrackedInfo.originalChatId,
+                    senderName,
+                    senderUsername,
+                    storedMessage.text,
+                    message
+                );
+                messageTracker.stopTracking(latestTrackedInfo.messageId);
+            }
+        }
     }
 }
 
@@ -408,12 +514,12 @@ async function forwardReplyToOwner(
  * Сохраняет их в MessageStore (isOwn=true) и добавляет в очередь рефлексии
  * как "Я: text" — чтобы LLM видел обе стороны диалога.
  */
-async function handleOutgoingMessage(event: any): Promise<void> {
+function handleOutgoingMessage(event: { message?: TelegramMessageLike; isPrivate?: boolean }): void {
     try {
         const message = event.message;
-        if (!message.isPrivate) return;
+        if (!event.isPrivate || !message || !message.chatId) return;
 
-        const text: string = message.message?.trim();
+        const text: string = message.message?.trim() || "";
         if (!text) return;
 
         const chatId = message.chatId;
@@ -443,7 +549,7 @@ async function handleOutgoingMessage(event: any): Promise<void> {
 }
 
 async function subscribeToNewMessages(): Promise<void> {
-    const telegramClient = await initTelegramClient();
+    const telegramClient = await initTelegramClient({ preloadContacts: false });
 
     if (!telegramClient) {
         console.error("Не удалось инициализировать клиент Telegram");
@@ -451,12 +557,12 @@ async function subscribeToNewMessages(): Promise<void> {
     }
 
     // Предзагружаем контакты
-    await preloadContactsList();
+    await preloadContactsList({ client: telegramClient });
 
     telegramClient.addEventHandler(
-        async (event) => {
+        (event) => {
             if (event.isPrivate) {
-                await handleNewMessage(event);
+                handleIncomingMessageEvent(event);
             }
         },
         new NewMessage({ incoming: true })
@@ -465,9 +571,9 @@ async function subscribeToNewMessages(): Promise<void> {
     // Исходящие сообщения — нужны для полного контекста в режиме рефлексии.
     // Сохраняем в MessageStore (isOwn=true) и очередь рефлексии как "Я: text".
     telegramClient.addEventHandler(
-        async (event) => {
+        (event) => {
             if (event.isPrivate) {
-                await handleOutgoingMessage(event);
+                handleOutgoingMessage(event);
             }
         },
         new NewMessage({ outgoing: true })
