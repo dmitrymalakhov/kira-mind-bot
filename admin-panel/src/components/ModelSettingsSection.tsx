@@ -158,7 +158,7 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
                     label="Активный AI preset"
                     value={selectedAiPreset}
                     onChange={(event) => setSelectedAiPreset(event.target.value as AiPresetName)}
-                    helperText="Базовое значение берётся из env/default. Сохранение здесь сразу переключает бота на выбранный preset."
+                    helperText="Базовое значение берётся из env/default. Сохранение обновляет runtime-настройку, которую бот подхватывает без перезапуска."
                     sx={{ flex: 1 }}
                     disabled={loading || !aiPresetData}
                   >
