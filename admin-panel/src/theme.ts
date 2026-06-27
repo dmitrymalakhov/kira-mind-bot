@@ -1,55 +1,80 @@
 import { createTheme } from '@mui/material/styles';
 
+interface SidebarPalette {
+  surface: string;
+  card: string;
+  hover: string;
+  border: string;
+  label: string;
+}
+
+declare module '@mui/material/styles' {
+  interface Palette {
+    sidebar: SidebarPalette;
+  }
+
+  interface PaletteOptions {
+    sidebar?: SidebarPalette;
+  }
+}
+
 export const theme = createTheme({
   palette: {
     mode: 'dark',
     primary: {
-      main: '#7c3aed',
-      light: '#a78bfa',
-      dark: '#5b21b6',
+      main: '#2563eb',
+      light: '#7dd3fc',
+      dark: '#1d4ed8',
       contrastText: '#fff',
     },
     secondary: {
-      main: '#c4b5fd',
+      main: '#8b5cf6',
     },
     background: {
-      default: '#0f0f1a',
-      paper: '#1a1a2e',
+      default: '#0b1120',
+      paper: '#111827',
     },
-    divider: '#2d2d50',
+    divider: '#243047',
     text: {
-      primary: '#e2e8f0',
-      secondary: '#94a3b8',
+      primary: '#e5eefb',
+      secondary: '#93a4bd',
+    },
+    sidebar: {
+      surface: '#0f172a',
+      card: '#111c34',
+      hover: '#16223e',
+      border: '#263552',
+      label: '#8395b5',
     },
   },
   shape: {
-    borderRadius: 10,
+    borderRadius: 14,
   },
   typography: {
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    fontFamily: '"Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif',
     h6: { fontWeight: 700 },
-    subtitle2: { color: '#94a3b8' },
+    subtitle2: { color: '#93a4bd' },
   },
   components: {
     MuiCard: {
       styleOverrides: {
         root: {
           backgroundImage: 'none',
-          border: '1px solid #2d2d50',
+          border: '1px solid #243047',
         },
       },
     },
     MuiOutlinedInput: {
       styleOverrides: {
         root: {
-          backgroundColor: '#0d0d1a',
-          '& fieldset': { borderColor: '#2d2d50' },
-          '&:hover fieldset': { borderColor: '#4c4c7a' },
+          backgroundColor: '#0a1222',
+          '& fieldset': { borderColor: '#243047' },
+          '&:hover fieldset': { borderColor: '#31507d' },
         },
         input: {
           '&:-webkit-autofill': {
-            WebkitBoxShadow: '0 0 0 100px #0d0d1a inset',
-            WebkitTextFillColor: '#e2e8f0',
+            WebkitBoxShadow: '0 0 0 100px #0a1222 inset',
+            WebkitTextFillColor: '#e5eefb',
           },
         },
       },
@@ -57,8 +82,8 @@ export const theme = createTheme({
     MuiDrawer: {
       styleOverrides: {
         paper: {
-          backgroundColor: '#1a1a2e',
-          borderRight: '1px solid #2d2d50',
+          backgroundColor: '#0f172a',
+          borderRight: '1px solid #263552',
         },
       },
     },
@@ -66,11 +91,10 @@ export const theme = createTheme({
       styleOverrides: {
         root: {
           borderRadius: 8,
-          margin: '1px 8px',
           '&.Mui-selected': {
-            backgroundColor: '#2d1f5e',
-            borderLeft: '2px solid #7c3aed',
-            '&:hover': { backgroundColor: '#3b2970' },
+            backgroundColor: 'rgba(37, 99, 235, 0.14)',
+            borderLeft: '2px solid #2563eb',
+            '&:hover': { backgroundColor: 'rgba(37, 99, 235, 0.2)' },
           },
         },
       },
@@ -78,8 +102,8 @@ export const theme = createTheme({
     MuiSwitch: {
       styleOverrides: {
         switchBase: {
-          '&.Mui-checked': { color: '#a78bfa' },
-          '&.Mui-checked + .MuiSwitch-track': { backgroundColor: '#5b21b6' },
+          '&.Mui-checked': { color: '#7dd3fc' },
+          '&.Mui-checked + .MuiSwitch-track': { backgroundColor: '#2563eb' },
         },
       },
     },

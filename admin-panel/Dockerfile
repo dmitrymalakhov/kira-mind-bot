@@ -1,19 +1,25 @@
 # Stage 1: Build React app
 FROM node:23-alpine AS builder
-WORKDIR /app
-COPY package.json package-lock.json* ./
+WORKDIR /workspace/admin-panel
+COPY admin-panel/package.json admin-panel/package-lock.json* ./
 RUN npm install
-COPY . .
+COPY admin-panel ./
 RUN npm run build
 
 # Stage 2: Production server
 FROM node:23-alpine
-WORKDIR /app
-RUN npm install --no-save express express-session pg
-COPY --from=builder /app/dist ./dist
-COPY server.js ./
-COPY aiPresetRegistry.js ./
-RUN mkdir -p ./src
-COPY src/ai-model-presets.json ./src/ai-model-presets.json
+WORKDIR /app/admin-panel
+COPY admin-panel/package.json admin-panel/package-lock.json* ./
+RUN npm install --omit=dev
+COPY --from=builder /workspace/admin-panel/dist ./dist
+COPY admin-panel/server.js ./server.js
+COPY admin-panel/monitoring.js ./monitoring.js
+COPY admin-panel/presetAvailability.js ./presetAvailability.js
+COPY admin-panel/runtime-health-metadata.json ./runtime-health-metadata.json
+COPY admin-panel/aiPresetRegistry.js ./aiPresetRegistry.js
+RUN mkdir -p ./src /app/ai
+COPY admin-panel/src/ai-model-presets.json ./src/ai-model-presets.json
+COPY ai/provider-registry.json /app/ai/provider-registry.json
+COPY ai/fallback-models.json /app/ai/fallback-models.json
 EXPOSE 3000
 CMD ["node", "server.js"]

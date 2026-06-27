@@ -1,7 +1,41 @@
 # Changelog
 
+## 2026-06-21
+
+- В админке блок `AI Presets` теперь явно показывает активный preset, базовое значение из `env/default` и факт runtime-переопределения без технически перегруженного текста про источник.
+- Исправлены фантомные факты в ответах “что важного сегодня”: reminder-memory теперь привязывается к напоминанию через `source_reminder:<id>`, синхронно обновляется при переносе/редактировании/отмене/выполнении, а `todayImportance` отфильтровывает устаревшие `planned/future_plan` факты, если активное напоминание по тому же событию уже перенесено.
+- AI runtime переведён на capability-first схему для `chat`, `responses`, `embedding` и `transcription`; прямые OpenAI-вызовы из прикладных сервисов убраны.
+- Добавлены общий provider registry и model catalog для OpenAI, OpenRouter, Gemini и Z.ai, а также новый preset `glm-balanced`.
+- Transitional fallback policy централизована в общей матрице `ai/fallback-models.json`, которую используют и runtime, и admin-panel availability.
+- В админке `AI Presets` и monitoring теперь читают общий provider metadata source; локальное дублирование registry убрано.
+- Сборка `admin-panel` переведена на root Docker build context, чтобы server-side часть панели могла безопасно использовать общие runtime JSON-реестры.
+- README и ROADMAP актуализированы под новые AI provider-ы, capability-first runtime и текущую сборочную схему админки.
+
+## 2026-06-20
+
+- В `server-deploy.sh` для команды `logs` добавлены флаги `--no-postgres` и `--no-qdrant`, чтобы исключать инфраструктурные сервисы из общего потока логов.
+- В `Makefile` добавлены цели `make logs-no-db` и `make logs-no-db-follow` как короткие сценарии просмотра логов приложения без `postgres` и `qdrant`.
+- `server-deploy.sh help` теперь показывает справку без чтения server-state и не падает вне целевого окружения.
+- README обновлён: новые сценарии просмотра логов добавлены в быстрый старт и список частых команд.
+
+## 2026-06-19
+
+- В `server-deploy.sh` для команды `logs` добавлен флаг `--no-postgres`, чтобы смотреть общий поток логов без периодических checkpoint-сообщений PostgreSQL.
+- В `Makefile` добавлены цели `make logs-no-postgres` и `make logs-no-postgres-follow`.
+- README обновлён: новые команды логов добавлены в быстрый старт и список частых команд.
+- Для commit message принято соглашение Conventional Commits с русским `summary`; подробные проверки и развёрнутые списки изменений оставлены для PR, а не для каждого коммита.
+
+## 2026-06-11
+
+- Исправлена потеря контекста при переносе напоминания на произвольное время и при редактировании существующего напоминания: pending-состояния этих сценариев теперь переживают отдельные Telegram updates через session storage.
+- В админке добавлен раздел `Мониторинг` с live health checks для контейнера бота, PostgreSQL, Qdrant, Telegram Bot API, Telegram User Client, OpenAI, Gemini и OpenRouter.
+- Admin backend получил единый endpoint `GET /api/monitoring/health`, который агрегирует статусы зависимостей и возвращает короткие технические детали по каждой проверке.
+- Бот теперь поднимает внутренний runtime health endpoint для безопасной диагностики Telegram User Client без чтения Docker-логов из админки.
+- Инициализация Telegram User Client переведена на guarded path: параллельные вызовы больше не должны возвращать сырой клиент до завершения `connect()` и `isUserAuthorized()`.
+
 ## 2026-06-10
 
+- Provider-specific AI contract logic вынесена из общих runtime wrapper-ов в отдельный слой provider adapters; preset registry сохранён как единственный источник маршрутизации `task -> provider + model`.
 - Все прикладные вызовы `openai.chat.completions.create` переведены на task-aware wrapper `createChatCompletionForTask(...)`; legacy-слой `openAiModels` удалён из runtime-конфига.
 - Browser planning и browser vision теперь тоже резолвят модель через task-aware preset runtime, а не через прямой OpenAI chat completion.
 - Для `embeddings` и `audio.transcriptions` сохранён low-level OpenAI client, но выбор модели теперь берётся из активного preset-а без возврата compat-проекции `openAiModels`.

@@ -24,6 +24,7 @@ import { devLog, parseLLMJson } from '../utils';
 import { buildQuickChoiceKeyboard } from '../utils/quickChoice';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { applyReminderEditInput } from '../utils/reminderEditor';
+import { syncReminderMemoryMutation } from '../services/ReminderMemorySync';
 
 /**
  * Ищет напоминание по текстовому запросу и отменяет его.
@@ -72,6 +73,9 @@ async function cancelReminderByQuery(
     if (ctx.session?.reminders) {
         ctx.session.reminders = ctx.session.reminders.filter((r) => r.id !== reminder.id);
     }
+    await syncReminderMemoryMutation(ctx, reminder, reminder, 'cancel').catch((e) =>
+        console.error('[ORCH] cancelReminderByQuery memory sync failed:', e)
+    );
 
     devLog('Executor: cancelled reminder by query', query, '->', reminder.id);
     console.log('[ORCH] cancelReminderByQuery: cancelled', reminder.id, '| text:', (reminder.displayText || reminder.text).slice(0, 60));
@@ -121,7 +125,7 @@ async function updateReminderByQuery(
         };
     }
 
-    const editResult = await applyReminderEditInput(best.reminder, message);
+    const editResult = await applyReminderEditInput(ctx, best.reminder, message);
     if (!editResult.ok || !editResult.reminder) {
         return { responseText: editResult.responseText };
     }
@@ -188,6 +192,9 @@ async function cancelAllReminders(
         if (ctx.session?.reminders) {
             ctx.session.reminders = ctx.session.reminders.filter((s) => s.id !== r.id);
         }
+        await syncReminderMemoryMutation(ctx, r, r, 'cancel').catch((e) =>
+            console.error('[ORCH] cancelAllReminders memory sync failed:', e)
+        );
     }
 
     const label = period === 'today' ? ' на сегодня' : period === 'tomorrow' ? ' на завтра' : period === 'week' ? ' за неделю' : '';
@@ -247,6 +254,7 @@ async function updateAllReminders(
     }
 
     for (const r of targets) {
+        const previousReminder = { ...r, dueDate: new Date(r.dueDate) };
         const updated = { ...r };
         if (shiftMinutes) {
             updated.dueDate = new Date(new Date(r.dueDate).getTime() + shiftMinutes * 60 * 1000);
@@ -260,6 +268,9 @@ async function updateAllReminders(
             if (idx >= 0) ctx.session.reminders[idx] = updated;
         }
         await ReminderRepository.update(updated).catch(() => {});
+        await syncReminderMemoryMutation(ctx, previousReminder, updated, 'postpone').catch((e) =>
+            console.error('[ORCH] updateAllReminders memory sync failed:', e)
+        );
     }
 
     const label = period === 'today' ? ' на сегодня' : period === 'tomorrow' ? ' на завтра' : period === 'week' ? ' за неделю' : '';

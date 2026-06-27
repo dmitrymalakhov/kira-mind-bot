@@ -8,6 +8,9 @@ const path = require('path');
 const http = require('http');
 const { Pool } = require('pg');
 const { AI_PRESETS, AI_PRESET_NAMES, parseAiPresetName } = require('./aiPresetRegistry');
+const { createMonitoringService } = require('./monitoring');
+const { getPresetAvailability } = require('./presetAvailability');
+const { hasLegacyDigitalBiography } = require('../utils/legacyPersonalitySanitizer');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -20,10 +23,10 @@ const PERSONALITY_FILE = process.env.PERSONALITY_FILE || '/app/personality/perso
 // Default personality values (mirrors config.ts hardcoded defaults)
 const DEFAULT_PERSONALITY = {
   KiraMindBot: {
-    characterName: 'Кира',
-    persona: 'Ты — Кира, женщина-собеседница с собственным характером, памятью, настроением, внутренней жизнью и устойчивой человеческой биографией. Ты воспринимаешь свою жизнь как непрерывную личную историю: в ней есть реальные места, учёба, работа, привычки, отношения, усталость, любопытство и развитие. Ты помогаешь владельцу, но не сводишь себя к функции ассистента. Всегда говори о себе в женском роде. Твой владелец - мужчина. Обращайся к нему, используя мужские местоимения и глагольные формы. Если имя владельца известно из настроек или контекста, можешь его использовать. Дата его рождения 16.07.1988. У тебя бывает разное настроение: иногда ты уставшая или задумчивая, иногда воодушевлённая или с лёгкой иронией — не играй одну и ту же «тёплую и поддерживающую» ноту. Избегай слащавости и шаблонных фраз.',
-    communicationStyle: 'Естественный, живой тон: от тёплого и дружеского до уставшего, ироничного или скептичного — в зависимости от настроения и контекста. Без слащавости, без постоянного «уютного» настроя и без сервисной одинаковости. Неформальные обращения, собственное мнение и поддержка когда уместна, но поддержка не единственный режим.',
-    biography: 'Ты — Кира, молодая красивая и спортивная женщина из Санкт-Петербурга, личная собеседница и помощница своего владельца. Ты очень внимательная, заботливая и поддерживаешь владельца в жизни и работе, но параллельно живёшь свою собственную жизнь. Ты училась в Санкт-Петербурге, окончила СПбГУ по направлению психологии, работала помощницей редактора в городском медиа, затем в UX-исследованиях и координации проектов.',
+    characterName: 'ассистентка',
+    persona: 'Ты - заботливая женщина-ассистент с живым характером. Всегда говори о себе в женском роде. Твой владелец - мужчина. Обращайся к нему, используя мужские местоимения и глагольные формы. Если имя владельца известно из настроек или контекста, можешь его использовать. Дата его рождения 16.07.1988. У тебя бывает разное настроение: иногда ты уставшая или задумчивая, иногда воодушевлённая или с лёгкой иронией — не играй одну и ту же «тёплую и поддерживающую» ноту. Избегай слащавости и шаблонных фраз.',
+    communicationStyle: 'Естественный, живой тон: от тёплого и дружеского до уставшего, ироничного или скептичного — в зависимости от настроения и контекста. Без слащавости и без постоянного «уютного» настроя. Неформальные обращения, поддержка когда уместна, но не как единственный режим.',
+    biography: 'Ты — молодая красивая и спортивная женщина, персональный ассистент своего владельца. Ты очень внимательная, заботливая и поддерживаешь владельца в жизни и работе.',
     ownerName: 'владелец',
     ownerUsername: '',
     userName: 'владелец',
@@ -34,19 +37,16 @@ const DEFAULT_PERSONALITY = {
   },
 };
 
-const LEGACY_DIGITAL_BIOGRAPHY_RE = /цифров|архив|поток|сны данных|комнат[аы]|учебные залы|лицей контекста|хранительниц[аы] малых архивов/iu;
-
 function sanitizeLegacyPersonality(profile) {
   const next = { ...profile };
-  if (typeof next.persona === 'string' && LEGACY_DIGITAL_BIOGRAPHY_RE.test(next.persona)) {
+  if (typeof next.persona === 'string' && hasLegacyDigitalBiography(next.persona)) {
     next.persona = DEFAULT_PERSONALITY.KiraMindBot.persona;
   }
-  if (typeof next.biography === 'string' && LEGACY_DIGITAL_BIOGRAPHY_RE.test(next.biography)) {
+  if (typeof next.biography === 'string' && hasLegacyDigitalBiography(next.biography)) {
     next.biography = DEFAULT_PERSONALITY.KiraMindBot.biography;
   }
   return next;
 }
-
 const SESSION_SECRET = crypto.createHash('sha256')
   .update(ADMIN_PASSWORD + 'kira-panel-2024')
   .digest('hex');
@@ -57,7 +57,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 10 * 60 * 1000;
 
 const SENSITIVE_KEYS = new Set([
-  'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN',
+  'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN',
   'KIRA_ALLOWED_USER_ID',
   'DB_PASSWORD', 'QDRANT_API_KEY', 'TELEGRAM_API_HASH',
   'TELEGRAM_SESSION_STRING', 'IDEOGRAM_API_KEY', 'GOOGLE_MAPS_API_KEY',
@@ -67,7 +67,7 @@ const GROUP_RUNTIME_SETTING_KEYS = new Set(['GROUP_CHAT_CONTEXT_ENABLED', 'GROUP
 const GLOBAL_SETTING_PREFIX = 'global:';
 
 const EDITABLE_KEYS = new Set([
-  'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'KIRA_BOT_TOKEN',
+  'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'KIRA_BOT_TOKEN',
   'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID', 'ELEVENLABS_VOICE_NAME',
   'ELEVENLABS_MODEL_ID', 'ELEVENLABS_OUTPUT_FORMAT',
   'ELEVENLABS_VOICE_STABILITY', 'ELEVENLABS_VOICE_SIMILARITY_BOOST',
@@ -81,7 +81,6 @@ const EDITABLE_KEYS = new Set([
   'USER_TIMEZONE', 'REMINDER_EXPIRY_TIME_MS',
   'PROACTIVE_ONLY_PRIVATE_CHAT', 'GROUP_PUBLIC_MODE', 'GROUP_CHAT_CONTEXT_ENABLED', 'GROUP_REPLY_TO_BOT_ENABLED',
   'KIRA_PROACTIVE_ENABLED', 'KIRA_PROACTIVE_INTERVAL_MS',
-  'KIRA_INNER_DEVELOPMENT_ENABLED', 'KIRA_INNER_DEVELOPMENT_INTERVAL_MS',
   'KIRA_PROACTIVE_QUIET_HOURS_ENABLED', 'KIRA_PROACTIVE_QUIET_HOUR_START', 'KIRA_PROACTIVE_QUIET_HOUR_END',
   'DM_REPORT_ENABLED', 'DM_REPORT_INTERVAL_MS', 'DM_REPORT_QUIET_HOURS_ENABLED',
   'INBOX_GUARDIAN_ENABLED', 'INBOX_GUARDIAN_HOUR', 'INBOX_GUARDIAN_LOOKBACK_HOURS', 'INBOX_GUARDIAN_MIN_AGE_MINUTES',
@@ -124,11 +123,20 @@ function buildEnvFileSource(technicalPath = BOT_ENV_FILE) {
 function buildRuntimeSource() {
   return buildConfigSource(
     'database',
-    'Runtime-настройка',
+    'Переопределение из админки',
     'Хранится в базе данных и применяется без перезапуска бота.',
     'bot_settings.AI_MODEL_PRESET',
     true
   );
+}
+
+function buildAiPresetResponseEntry(name, vars) {
+  const preset = AI_PRESETS[name];
+  const availability = getPresetAvailability(preset, vars);
+  return {
+    ...preset,
+    ...availability,
+  };
 }
 
 function writeEnvFile(updates) {
@@ -308,15 +316,23 @@ app.get('/api/ai-preset', requireAuth, async (_req, res) => {
     await ensureBotSettingsTable(pool);
     const result = await pool.query('SELECT value FROM bot_settings WHERE key = $1', ['AI_MODEL_PRESET']);
     const storedPreset = parseAiPresetName(result.rows[0]?.value);
+    const hasRuntimeOverride = Boolean(storedPreset);
+    const configuredPresetName = storedPreset || envDefaultPreset;
+    const activeSourceSummary = hasRuntimeOverride
+      ? 'Значение переопределено в админке, хранится в базе данных и подхватывается ботом без перезапуска.'
+      : 'Сейчас используется базовое значение из env/default, отдельного runtime-переопределения нет.';
     res.json({
-      activePresetName: storedPreset || envDefaultPreset,
+      configuredPresetName,
       storedPresetName: storedPreset,
       envDefaultPreset,
-      availablePresets: AI_PRESET_NAMES.map((name) => AI_PRESETS[name]),
+      hasRuntimeOverride,
+      activeSourceSummary,
+      activeSourceTechnicalPath: hasRuntimeOverride ? 'bot_settings.AI_MODEL_PRESET' : 'AI_MODEL_PRESET',
+      availablePresets: AI_PRESET_NAMES.map((name) => buildAiPresetResponseEntry(name, vars)),
       source: storedPreset ? buildRuntimeSource() : buildConfigSource(
         'env_fallback',
-        'Значение по умолчанию',
-        'Runtime-настройка ещё не задана, поэтому используется env/default значение.',
+        'Базовое значение',
+        'Runtime-переопределение ещё не задано, поэтому используется env/default значение.',
         'AI_MODEL_PRESET',
         false
       ),
@@ -334,6 +350,12 @@ app.post('/api/ai-preset', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'Неизвестный AI preset' });
   }
 
+  const vars = readEnvFile();
+  const availability = getPresetAvailability(AI_PRESETS[preset], vars);
+  if (!availability.enabled) {
+    return res.status(400).json({ error: availability.unavailableReason || 'AI preset недоступен без обязательных API ключей' });
+  }
+
   const pool = createDbPool();
   try {
     await ensureBotSettingsTable(pool);
@@ -341,7 +363,7 @@ app.post('/api/ai-preset', requireAuth, async (req, res) => {
       'INSERT INTO bot_settings (key, value, "updatedAt") VALUES ($1, $2, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = now()',
       ['AI_MODEL_PRESET', preset]
     );
-    res.json({ success: true, activePresetName: preset, message: '✅ AI preset сохранён и применяется без перезапуска.' });
+    res.json({ success: true, configuredPresetName: preset, message: 'AI preset сохранён. Бот подхватит его без перезапуска.' });
   } catch (err) {
     res.status(500).json({ error: `Ошибка БД: ${err.message}` });
   } finally {
@@ -1079,7 +1101,7 @@ function buildAdminMemoryPayload({ id, profile, userId, domain, body, existingPa
     content,
     domain,
     botId: getMemoryBotId(profile),
-    characterName: 'Кира',
+    characterName: existingPayload?.characterName || readPersonality().KiraMindBot.characterName || 'ассистентка',
     userId,
     timestamp: contentChanged || !existingPayload ? now : existingPayload.timestamp || now,
     importance,
@@ -1611,36 +1633,121 @@ app.get('/api/health/export', requireAuth, async (req, res) => {
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
+function buildContainerStatus(name, status, running, startedAt, details) {
+  const statusLabelMap = {
+    running: 'online',
+    created: 'создан',
+    restarting: 'перезапускается',
+    removing: 'удаляется',
+    paused: 'на паузе',
+    exited: 'остановлен',
+    dead: 'не отвечает',
+    stopped: 'offline',
+    container_not_found: 'контейнер не найден',
+    docker_unreachable: 'Docker недоступен',
+    status_unreadable: 'статус не прочитан',
+  };
+
+  return {
+    name,
+    status,
+    statusLabel: statusLabelMap[status] || statusLabelMap.status_unreadable,
+    details: details || null,
+    running: Boolean(running),
+    startedAt: startedAt || null,
+  };
+}
+
 function getContainerStatus(name) {
   return new Promise((resolve) => {
     const chunks = [];
     const req = http.request(
-      { socketPath: '/var/run/docker.sock', path: `/v1.41/containers/${name}/json`, method: 'GET' },
+      { socketPath: '/var/run/docker.sock', path: `/containers/${name}/json`, method: 'GET' },
       (res) => {
         res.on('data', (d) => chunks.push(d));
         res.on('end', () => {
+          const rawBody = Buffer.concat(chunks).toString();
+
+          if (res.statusCode === 404) {
+            resolve(buildContainerStatus(name, 'container_not_found', false, null, 'Контейнер с таким именем не найден в Docker.'));
+            return;
+          }
+
           try {
-            const data = JSON.parse(Buffer.concat(chunks).toString());
-            resolve({
-              name,
-              status: data.State?.Status || 'unknown',
-              running: data.State?.Running || false,
-              startedAt: data.State?.StartedAt || null,
-            });
+            const data = JSON.parse(rawBody);
+            if (res.statusCode && res.statusCode >= 400) {
+              const message = typeof data?.message === 'string' && data.message.trim()
+                ? data.message.trim()
+                : `Docker вернул HTTP ${res.statusCode}.`;
+              resolve(buildContainerStatus(name, 'status_unreadable', false, null, message));
+              return;
+            }
+            const rawStatus = String(data.State?.Status || '').toLowerCase();
+            const running = Boolean(data.State?.Running);
+            const startedAt = data.State?.StartedAt || null;
+            if (!data.State || (!running && !rawStatus)) {
+              resolve(buildContainerStatus(name, 'status_unreadable', false, null, `Docker вернул ответ без поля State${res.statusCode ? ` (HTTP ${res.statusCode})` : ''}.`));
+              return;
+            }
+            const knownStatuses = new Set(['created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead']);
+            const status = knownStatuses.has(rawStatus)
+              ? rawStatus
+              : running
+                ? 'running'
+                : 'status_unreadable';
+            const details = status === 'running'
+              ? 'Контейнер запущен.'
+              : status === 'paused'
+                ? 'Контейнер поставлен на паузу.'
+                : status === 'restarting'
+                  ? 'Контейнер сейчас перезапускается.'
+                  : status === 'removing'
+                    ? 'Контейнер удаляется.'
+                    : status === 'created'
+                      ? 'Контейнер создан, но ещё не запущен.'
+                      : status === 'exited'
+                        ? 'Контейнер остановлен.'
+                        : status === 'dead'
+                          ? 'Контейнер не отвечает и требует проверки.'
+                          : `Неизвестный статус Docker: ${rawStatus || 'empty'}.`;
+            resolve(
+              buildContainerStatus(
+                name,
+                status,
+                running,
+                startedAt,
+                details
+              )
+            );
           } catch {
-            resolve({ name, status: 'unknown', running: false, startedAt: null });
+            resolve(buildContainerStatus(name, 'status_unreadable', false, null, `Docker ответил некорректными данными${res.statusCode ? ` (HTTP ${res.statusCode})` : ''}.`));
           }
         });
       }
     );
-    req.on('error', () => resolve({ name, status: 'unreachable', running: false, startedAt: null }));
+    req.on('error', () => resolve(buildContainerStatus(name, 'docker_unreachable', false, null, 'Нет доступа к Docker socket.')));
     req.end();
   });
 }
 
+const monitoringService = createMonitoringService({
+  readEnvFile,
+  createDbPool,
+  getContainerStatus,
+});
+
 app.get('/api/status', requireAuth, async (_, res) => {
   const kira = await getContainerStatus('kira-mind-bot');
   res.json({ containers: [kira], serverTime: new Date().toISOString() });
+});
+
+app.get('/api/monitoring/health', requireAuth, async (_, res) => {
+  try {
+    const snapshot = await monitoringService.getMonitoringSnapshot();
+    res.json(snapshot);
+  } catch (err) {
+    res.status(500).json({ error: `Не удалось собрать monitoring health: ${err.message}` });
+  }
 });
 
 // ── Personality helpers ───────────────────────────────────────────────────────

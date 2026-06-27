@@ -3,8 +3,10 @@
     "gpt-max",
     "gpt-balanced",
     "gpt-lean",
-    "hybrid-deepseek-gpt",
-    "hybrid-gemini-gpt"
+    "hybrid-openrouter-gpt",
+    "hybrid-gemini-gpt",
+    "gemini-direct-balanced",
+    "glm-balanced"
   ],
   "presets": {
     "gpt-max": {
@@ -64,18 +66,18 @@
         "transcription": { "provider": "openai", "model": "whisper-1" }
       }
     },
-    "hybrid-deepseek-gpt": {
-      "name": "hybrid-deepseek-gpt",
-      "title": "Hybrid DeepSeek + GPT",
-      "description": "DeepSeek для основного текста и OpenAI для fallback, web/vision/embedding/transcription.",
+    "hybrid-openrouter-gpt": {
+      "name": "hybrid-openrouter-gpt",
+      "title": "Hybrid OpenRouter + GPT",
+      "description": "OpenRouter для основного текста и анализа сообщений, OpenAI для intent, web, vision, embedding и transcription.",
       "models": {
-        "defaultText": { "provider": "deepseek", "model": "deepseek-v4-pro" },
-        "intentClassification": { "provider": "deepseek", "model": "deepseek-v4-flash" },
-        "intentDedup": { "provider": "deepseek", "model": "deepseek-v4-flash" },
-        "conversation": { "provider": "deepseek", "model": "deepseek-v4-pro" },
+        "defaultText": { "provider": "openrouter", "model": "openrouter/auto" },
+        "intentClassification": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "intentDedup": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "conversation": { "provider": "openrouter", "model": "openrouter/auto" },
         "memoryExtraction": { "provider": "openai", "model": "gpt-5.4-nano" },
-        "memoryConsolidation": { "provider": "deepseek", "model": "deepseek-v4-pro" },
-        "messageAnalysis": { "provider": "deepseek", "model": "deepseek-v4-pro" },
+        "memoryConsolidation": { "provider": "openrouter", "model": "openrouter/auto" },
+        "messageAnalysis": { "provider": "openrouter", "model": "openrouter/auto" },
         "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4-mini" },
         "browserPlanning": { "provider": "openai", "model": "gpt-5.4-nano" },
         "browserVision": { "provider": "openai", "model": "gpt-4o" },
@@ -86,18 +88,56 @@
     "hybrid-gemini-gpt": {
       "name": "hybrid-gemini-gpt",
       "title": "Hybrid Gemini + GPT",
-      "description": "Gemini для conversation/analysis/vision и OpenAI для intent, web, embeddings, whisper и fallback.",
+      "description": "Gemini 3 Flash Preview для conversation/messageAnalysis/vision, Gemini Flash-Lite для memory consolidation, OpenAI nano для intent/extraction/planning, OpenAI для web/embedding/transcription.",
       "models": {
-        "defaultText": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
+        "defaultText": { "provider": "gemini", "model": "gemini-3-flash-preview" },
         "intentClassification": { "provider": "openai", "model": "gpt-5.4-nano" },
         "intentDedup": { "provider": "openai", "model": "gpt-5.4-nano" },
-        "conversation": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
+        "conversation": { "provider": "gemini", "model": "gemini-3-flash-preview" },
         "memoryExtraction": { "provider": "openai", "model": "gpt-5.4-nano" },
         "memoryConsolidation": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
-        "messageAnalysis": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
+        "messageAnalysis": { "provider": "gemini", "model": "gemini-3-flash-preview" },
         "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4-mini" },
         "browserPlanning": { "provider": "openai", "model": "gpt-5.4-nano" },
-        "browserVision": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
+        "browserVision": { "provider": "gemini", "model": "gemini-3-flash-preview" },
+        "embedding": { "provider": "openai", "model": "text-embedding-3-small" },
+        "transcription": { "provider": "openai", "model": "whisper-1" }
+      }
+    },
+    "gemini-direct-balanced": {
+      "name": "gemini-direct-balanced",
+      "title": "Gemini Balanced",
+      "description": "Gemini для основных текстовых задач; OpenAI для web search, embedding и transcription, где runtime использует OpenAI-специфичные API.",
+      "models": {
+        "defaultText": { "provider": "gemini", "model": "gemini-3-flash-preview" },
+        "intentClassification": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
+        "intentDedup": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
+        "conversation": { "provider": "gemini", "model": "gemini-3-flash-preview" },
+        "memoryExtraction": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
+        "memoryConsolidation": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
+        "messageAnalysis": { "provider": "gemini", "model": "gemini-3-flash-preview" },
+        "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "browserPlanning": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
+        "browserVision": { "provider": "gemini", "model": "gemini-3-flash-preview" },
+        "embedding": { "provider": "openai", "model": "text-embedding-3-small" },
+        "transcription": { "provider": "openai", "model": "whisper-1" }
+      }
+    },
+    "glm-balanced": {
+      "name": "glm-balanced",
+      "title": "GLM Balanced",
+      "description": "Z.ai GLM-5.2 для основных текстовых задач и планирования; OpenAI для web search, vision, embedding и transcription.",
+      "models": {
+        "defaultText": { "provider": "zai", "model": "glm-5.2" },
+        "intentClassification": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "intentDedup": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "conversation": { "provider": "zai", "model": "glm-5.2" },
+        "memoryExtraction": { "provider": "zai", "model": "glm-5.2" },
+        "memoryConsolidation": { "provider": "zai", "model": "glm-5.2" },
+        "messageAnalysis": { "provider": "zai", "model": "glm-5.2" },
+        "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "browserPlanning": { "provider": "zai", "model": "glm-5.2" },
+        "browserVision": { "provider": "openai", "model": "gpt-4o" },
         "embedding": { "provider": "openai", "model": "text-embedding-3-small" },
         "transcription": { "provider": "openai", "model": "whisper-1" }
       }

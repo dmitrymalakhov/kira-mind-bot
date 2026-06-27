@@ -17,7 +17,7 @@ import { isReflectionModeEnabled, setReflectionModeEnabled, getReflectionStats }
 import { factAnalysisManager } from "../utils/factAnalysisTimer";
 import { extractAndSaveFactsFromConversation } from "../utils/enhancedFactExtraction";
 import { formatSelfStudyReport, runKiraSelfStudy } from "../services/selfStudyService";
-import { getRecentKiraSelfStudyReports } from "../utils/kiraSelfMemory";
+import { getRecentKiraSelfStudyReports, isKiraSelfMemoryCorruptedError } from "../utils/kiraSelfMemory";
 import {
     isGroupChatContextEnabled,
     isGroupReplyToBotEnabled,
@@ -417,17 +417,33 @@ bot.command("self_study", async (ctx) => {
     const arg = rawText.replace(/^\/self_study(?:@\w+)?/i, "").trim().toLowerCase();
 
     if (/^(last|latest|последн|прошл)/i.test(arg)) {
-        const [latest] = await getRecentKiraSelfStudyReports(1);
-        await ctx.reply(latest ? formatSelfStudyReport(latest) : "Пока нет сохранённых отчётов самоизучения.");
+        try {
+            const [latest] = await getRecentKiraSelfStudyReports(1);
+            await ctx.reply(latest ? formatSelfStudyReport(latest) : "Пока нет сохранённых отчётов самоизучения.");
+        } catch (error) {
+            if (isKiraSelfMemoryCorruptedError(error)) {
+                await ctx.reply("Self-memory сейчас повреждена и не читается. Сначала восстанови файл памяти, потом я смогу показать последний отчёт.");
+                return;
+            }
+            throw error;
+        }
         return;
     }
 
     await ctx.api.sendChatAction(ctx.chat.id, "typing").catch(() => {});
-    const report = await runKiraSelfStudy({
-        triggerMessage: rawText,
-        messageHistory: ctx.session.messageHistory.slice().reverse(),
-    });
-    await ctx.reply(formatSelfStudyReport(report));
+    try {
+        const report = await runKiraSelfStudy({
+            triggerMessage: rawText,
+            messageHistory: ctx.session.messageHistory.slice().reverse(),
+        });
+        await ctx.reply(formatSelfStudyReport(report));
+    } catch (error) {
+        if (isKiraSelfMemoryCorruptedError(error)) {
+            await ctx.reply("Self-memory сейчас повреждена и не читается. Я не буду делать самоизучение по пустому состоянию: сначала нужно восстановить файл памяти.");
+            return;
+        }
+        throw error;
+    }
 });
 
 // ── Команда /reflection — режим рефлексии и накопления знаний ────────────────

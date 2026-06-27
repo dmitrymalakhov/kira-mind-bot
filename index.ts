@@ -52,6 +52,8 @@ import { stripVoiceReplyDirective, wantsVoiceReply } from "./utils/voiceReply";
 import { addTargetNotificationButtons, appendTargetNotificationPrompt, buildDefaultTargetReminderMessage } from "./utils/reminderTargetNotification";
 import { normalizeNumbersForVoiceMessage } from "./utils/russianSpeechNumbers";
 import { warmAiPresetCache } from "./services/aiRuntimeConfigService";
+import { startRuntimeHealthServer } from "./services/runtimeHealthServer";
+import { createOrRefreshReminderMemory, syncReminderMemoryMutation } from "./services/ReminderMemorySync";
 
 
 // Загрузка переменных окружения
@@ -75,6 +77,7 @@ const bot = createBot();
 setBotRef(bot);
 setBotApi(bot.api);
 console.log('🤖 Бот создан успешно');
+startRuntimeHealthServer();
 
 const MAX_STORED_SENT_MESSAGES = 50;
 
@@ -241,6 +244,7 @@ async function saveRemindersFromResult(ctx: BotContext, result: ProcessingResult
         console.info(`[reminder] event=created id=${reminder.id} chatId=${reminder.chatId} due=${new Date(reminder.dueDate).toISOString()}` + (chatTitle ? ` chat="${chatTitle}"` : '') + (details.targetChat ? ` target=${details.targetChat.type}` : ""));
         await ReminderRepository.save(reminder).catch(e => console.error('[reminder] DB save failed on create:', e));
         scheduleReminder(bot, reminder);
+        await createOrRefreshReminderMemory(ctx, reminder).catch((e) => console.error('[reminder] memory sync failed on create:', e));
 
         // Валидация targetChat — предупреждаем сразу если группа/контакт не найдены
         if (details.targetChat) {
@@ -756,7 +760,7 @@ bot.on("message:text", async (ctx, next) => {
                         return;
                     }
 
-                    const editResult = await applyReminderEditInput(reminder, message);
+                    const editResult = await applyReminderEditInput(ctx, reminder, message);
                     if (!editResult.ok || !editResult.reminder) {
                         await ctx.reply(editResult.responseText);
                         return;
@@ -796,6 +800,7 @@ bot.on("message:text", async (ctx, next) => {
                             return;
                         }
 
+                        const previousReminder: Reminder = { ...reminder, dueDate: new Date(reminder.dueDate) };
                         const updated = await postponeReminderUntil(bot, reminder, parsed.dueDate);
                         if (!updated) {
                             await ctx.reply('Не смогла перенести напоминание. Попробуй ещё раз.');
@@ -806,6 +811,9 @@ bot.on("message:text", async (ctx, next) => {
                         ReminderRegistry.getInstance().add(updated);
                         const sessIdx = ctx.session.reminders.findIndex(r => r.id === reminderId);
                         if (sessIdx >= 0) ctx.session.reminders[sessIdx] = updated;
+                        await syncReminderMemoryMutation(ctx, previousReminder, updated, 'postpone').catch((e) =>
+                            console.error('[reminder] memory sync failed on custom postpone:', e)
+                        );
                         await ctx.reply(parsed.responseText);
                     }
                     return;

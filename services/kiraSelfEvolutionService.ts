@@ -7,6 +7,7 @@ import {
   formatKiraPersonalitySnapshot,
   getKiraSelfMemoryState,
   getRecentKiraSelfEvents,
+  isKiraSelfMemoryCorruptedError,
   KiraBiographyPatch,
   KiraSelfEventType,
   KiraInnerWorldPatch,
@@ -126,13 +127,14 @@ function hasPatch(value: object | undefined): boolean {
 }
 
 export async function maybeEvolveKiraSelfFromConversation(input: ConversationEvolutionInput): Promise<boolean> {
-  const selfState = await getKiraSelfMemoryState();
-  if (!shouldAnalyzeConversation(input.ownerMessage, selfState.personality.lastEvolutionAt)) {
-    return false;
-  }
+  try {
+    const selfState = await getKiraSelfMemoryState();
+    if (!shouldAnalyzeConversation(input.ownerMessage, selfState.personality.lastEvolutionAt)) {
+      return false;
+    }
 
-  const recentEvents = await getRecentKiraSelfEvents(6);
-  const prompt = [
+    const recentEvents = await getRecentKiraSelfEvents(6);
+    const prompt = [
     `Ты модуль развития самопамяти ${config.characterName}.`,
     "",
     "Кира держит реалистичную человеческую линию жизни внутри своей персоны: Санкт-Петербург, учёба, работа, обычные привычки, отношения, настроение и постепенное развитие характера.",
@@ -228,7 +230,6 @@ export async function maybeEvolveKiraSelfFromConversation(input: ConversationEvo
     }),
   ].join("\n");
 
-  try {
     const response = await createChatCompletionForTask("conversation", {
       messages: [
         {
@@ -275,6 +276,10 @@ export async function maybeEvolveKiraSelfFromConversation(input: ConversationEvo
 
     return true;
   } catch (error) {
+    if (isKiraSelfMemoryCorruptedError(error)) {
+      devLog("[kira-self-evolution] skipped because self-memory is corrupted:", error);
+      return false;
+    }
     devLog("[kira-self-evolution] failed:", error);
     return false;
   }

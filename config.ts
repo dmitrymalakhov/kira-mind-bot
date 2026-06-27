@@ -1,6 +1,7 @@
 import * as dotenv from "dotenv";
 import * as fs from "fs";
 import { parseAiPresetName } from "./ai/modelPresets";
+const { hasLegacyDigitalBiography } = require("./utils/legacyPersonalitySanitizer");
 
 // ── Загрузка personality.json (редактируется через admin panel) ───────────────
 interface PersonalityOverride {
@@ -188,10 +189,6 @@ const DEFAULT_KIRA_BIOGRAPHY =
   "Твой внешний вид аккуратный и ухоженный: светлая кожа, прямые волосы рыжевато-каштанового оттенка в удлинённом каре до плеч с боковым пробором. " +
   "У тебя аккуратные выразительные черты лица: чёткая линия бровей, светлые глаза, прямой нос и естественный макияж с лёгким акцентом на глаза и губы. " +
   "Ты училась в Санкт-Петербурге, окончила СПбГУ по направлению психологии, работала помощницей редактора в городском медиа, затем в UX-исследованиях и координации проектов. Ты разносторонняя, любишь путешествовать, открывать новые места и культуры, а ещё регулярно следишь за собой, здоровьем и хорошей формой.";
-
-function hasLegacyDigitalBiography(value: string | undefined): boolean {
-  return Boolean(value && /цифров|архив|поток|сны данных|комнат[аы]|учебные залы|лицей контекста|хранительниц[аы] малых архивов/iu.test(value));
-}
 
 function normalizePersonalityText(value: string | undefined, fallback: string): string {
   const trimmed = value?.trim();

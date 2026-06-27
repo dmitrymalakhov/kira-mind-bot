@@ -1,70 +1,31 @@
-import type OpenAI from 'openai';
-import { getAiClient } from './aiClients';
 import { resolveModelForTaskAsync } from './modelResolver';
 import type { AiModelRef, AiTaskKey } from './modelPresets';
-import { getFallbackModel } from './fallbackModels';
 import { logAiUsage } from '../services/aiUsageLogService';
+import { getAiProviderAdapter } from './providers/registry';
+import type {
+    ChatCompletion,
+    ChatCompletionParamsWithoutModel,
+} from './providers/types';
 import { parseLLMJson } from '../utils';
-
-type ChatCompletionCreateParams = OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming;
-type ChatCompletion = OpenAI.Chat.Completions.ChatCompletion;
-
-type ParamsWithoutModel = Omit<ChatCompletionCreateParams, 'model'>;
-type ChatCompletionCreateParamsWithLegacyMaxTokens = ChatCompletionCreateParams & {
-    max_tokens?: number;
-    max_completion_tokens?: number;
-};
-
+import { errorToMessage, getTaskFallbackModel } from './runtimeSupport';
 
 function recordAiUsage(payload: Parameters<typeof logAiUsage>[0]): void {
     void logAiUsage(payload);
 }
 
-function errorToMessage(error: unknown): string {
-    if (error instanceof Error) return error.message;
-    try {
-        return JSON.stringify(error);
-    } catch {
-        return String(error);
-    }
-}
-
-function normalizeOpenAiChatParams(
-    provider: AiModelRef['provider'],
-    model: string,
-    params: ParamsWithoutModel,
-): ChatCompletionCreateParamsWithLegacyMaxTokens {
-    const normalized = { ...params } as ChatCompletionCreateParamsWithLegacyMaxTokens;
-
-    if (provider !== 'openai' || !model.startsWith('gpt-5')) {
-        return normalized;
-    }
-
-    if (normalized.max_completion_tokens === undefined && normalized.max_tokens !== undefined) {
-        normalized.max_completion_tokens = normalized.max_tokens;
-    }
-
-    delete normalized.max_tokens;
-    return normalized;
-}
-
 async function createChatCompletionWithModel(
     taskKey: AiTaskKey,
-    params: ParamsWithoutModel,
+    params: ChatCompletionParamsWithoutModel,
     preset: string,
     modelRef: AiModelRef,
     fallbackUsed: boolean,
     originalError?: unknown,
 ): Promise<ChatCompletion> {
     const startedAt = Date.now();
-    const client = getAiClient(modelRef.provider);
-    const normalizedParams = normalizeOpenAiChatParams(modelRef.provider, modelRef.model, params);
+    const providerAdapter = getAiProviderAdapter(modelRef.provider);
 
     try {
-        const result = await client.chat.completions.create({
-            ...normalizedParams,
-            model: modelRef.model,
-        });
+        const result = await providerAdapter.createChatCompletion(modelRef.model, params);
 
         recordAiUsage({
             taskKey,
@@ -107,7 +68,7 @@ async function createChatCompletionWithModel(
 
 export async function createChatCompletionForTask(
     taskKey: AiTaskKey,
-    params: ParamsWithoutModel,
+    params: ChatCompletionParamsWithoutModel,
 ): Promise<ChatCompletion> {
     const { presetName, modelRef } = await resolveModelForTaskAsync(taskKey);
 
@@ -120,11 +81,11 @@ export async function createChatCompletionForTask(
 
 export async function createFallbackChatCompletion(
     taskKey: AiTaskKey,
-    params: ParamsWithoutModel,
+    params: ChatCompletionParamsWithoutModel,
     originalError: unknown,
     preset = 'fallback',
 ): Promise<ChatCompletion> {
-    const fallbackModel = getFallbackModel(taskKey);
+    const fallbackModel = getTaskFallbackModel(taskKey);
 
     console.warn('[AI fallback]', {
         taskKey,
@@ -137,7 +98,7 @@ export async function createFallbackChatCompletion(
 
 export async function createJsonChatCompletionForTask<T>(
     taskKey: AiTaskKey,
-    params: ParamsWithoutModel,
+    params: ChatCompletionParamsWithoutModel,
 ): Promise<T | null> {
     const response = await createChatCompletionForTask(taskKey, params);
     const content = response.choices[0]?.message?.content || '';
@@ -157,5 +118,4 @@ export async function createJsonChatCompletionForTask<T>(
         return null;
     }
 }
-
-export { getFallbackModel } from './fallbackModels';
+export { getTaskFallbackModel as getFallbackModel } from './runtimeSupport';

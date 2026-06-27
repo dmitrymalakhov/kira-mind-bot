@@ -9,6 +9,7 @@ import {
   getKiraSelfMemoryState,
   getRecentKiraSelfEvents,
   getRecentKiraSelfStudyReports,
+  isKiraSelfMemoryCorruptedError,
   KiraBiographyPatch,
   KiraInnerWorldPatch,
   KiraLifeArcPatch,
@@ -227,11 +228,22 @@ function fallbackPayload(): NormalizedSelfStudyPayload {
 }
 
 export async function runKiraSelfStudy(options: RunSelfStudyOptions): Promise<KiraSelfStudyReport> {
-  const [selfState, recentEvents, recentReports] = await Promise.all([
-    getKiraSelfMemoryState(),
-    getRecentKiraSelfEvents(8),
-    getRecentKiraSelfStudyReports(3),
-  ]);
+  let selfState: Awaited<ReturnType<typeof getKiraSelfMemoryState>>;
+  let recentEvents: Awaited<ReturnType<typeof getRecentKiraSelfEvents>>;
+  let recentReports: Awaited<ReturnType<typeof getRecentKiraSelfStudyReports>>;
+
+  try {
+    [selfState, recentEvents, recentReports] = await Promise.all([
+      getKiraSelfMemoryState(),
+      getRecentKiraSelfEvents(8),
+      getRecentKiraSelfStudyReports(3),
+    ]);
+  } catch (error) {
+    if (isKiraSelfMemoryCorruptedError(error)) {
+      throw error;
+    }
+    throw error;
+  }
 
   const prompt = [
     `Ассистент: ${config.characterName}. Владелец: ${config.ownerName}.`,

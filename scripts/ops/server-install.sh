@@ -94,6 +94,10 @@ write_env_production() {
 
 OPENAI_API_KEY=${OPENAI_API_KEY}
 
+OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+GEMINI_API_KEY=${GEMINI_API_KEY}
+ZAI_API_KEY=${ZAI_API_KEY}
+
 KIRA_BOT_TOKEN=${KIRA_BOT_TOKEN}
 KIRA_ALLOWED_USER_ID=${KIRA_ALLOWED_USER_ID}
 
@@ -219,6 +223,11 @@ collect_config() {
 
     echo -e "\n${BOLD}OpenAI${NC}"
     prompt_required_default OPENAI_API_KEY "OpenAI API Key" "${OPENAI_API_KEY:-}" "https://platform.openai.com/api-keys"
+
+    echo -e "\n${BOLD}Дополнительные AI-провайдеры${NC}"
+    prompt_optional_default OPENROUTER_API_KEY "OpenRouter API Key" "${OPENROUTER_API_KEY:-}" "https://openrouter.ai/keys"
+    prompt_optional_default GEMINI_API_KEY "Gemini API Key" "${GEMINI_API_KEY:-}" "https://aistudio.google.com/app/apikey"
+    prompt_optional_default ZAI_API_KEY "Z.ai API Key" "${ZAI_API_KEY:-}" "https://z.ai/manage-apikey/apikey-list"
 
     echo -e "\n${BOLD}Telegram Bot${NC}"
     prompt_required_default KIRA_BOT_TOKEN "Токен бота" "${KIRA_BOT_TOKEN:-}" "Создать: напиши @BotFather → /newbot"

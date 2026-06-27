@@ -114,6 +114,10 @@ export function isReflectionFactWorthSaving(fact: ReflectionFactLike): boolean {
     }
 }
 
+export function isReflectionMemoryNoiseCandidate(fact: ReflectionFactLike): boolean {
+    return getReflectionMemoryNoiseReasons(fact).length > 0;
+}
+
 export function getReflectionMemoryNoiseReasons(fact: ReflectionFactLike): ReflectionMemoryNoiseReason[] {
     if (fact.memoryKind === 'episode' || fact.tags?.includes('memory-episode')) return [];
 
@@ -122,8 +126,4 @@ export function getReflectionMemoryNoiseReasons(fact: ReflectionFactLike): Refle
     if (isReflectionOneOffActivity(fact)) reasons.push('one_off_activity');
     if (isReflectionTemporaryState(fact)) reasons.push('temporary_state');
     return reasons;
-}
-
-export function isReflectionMemoryNoiseCandidate(fact: ReflectionFactLike): boolean {
-    return getReflectionMemoryNoiseReasons(fact).length > 0;
 }

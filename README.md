@@ -42,14 +42,14 @@ make install-server
 
 Есть два пути запуска:
 
-1. На самой VPS: заходишь на сервер, запускаешь `make install-server`, дальше живёшь через `make deploy`, `make logs`, `make logs-follow`, `make pause`.
+1. На самой VPS: заходишь на сервер, запускаешь `make install-server`, дальше живёшь через `make deploy`, `make logs`, `make logs-follow`, `make logs-no-db`, `make pause`.
    Это основной и самый прямой путь, если у тебя есть shell-доступ к серверу.
 2. С локальной машины на удалённый VPS: запускаешь `make remote-install SERVER_IP=<ip>` у себя локально, а установка и деплой идут по SSH.
    Этот путь нужен, если удобнее управлять сервером с ноутбука и не работать внутри shell на VPS.
 
 Если `make` нет:
 
-1. На самой VPS используй `./scripts/ops/server-install.sh`, `./scripts/ops/server-deploy.sh deploy`, `./scripts/ops/server-deploy.sh logs`, `./scripts/ops/server-deploy.sh logs -f`.
+1. На самой VPS используй `./scripts/ops/server-install.sh`, `./scripts/ops/server-deploy.sh deploy`, `./scripts/ops/server-deploy.sh logs`, `./scripts/ops/server-deploy.sh logs -f`, `./scripts/ops/server-deploy.sh logs --no-postgres`, `./scripts/ops/server-deploy.sh logs --no-postgres --no-qdrant`.
 2. С локальной машины используй `./scripts/ops/install.sh --server-ip <ip>` и `./scripts/ops/deploy.sh --kira-mind-bot --admin-panel --server-ip <ip>`.
 
 Если проект уже поднят и нужно просто обновить код:
@@ -76,6 +76,7 @@ make deploy-clean
 | Обновить после `git pull` | `make deploy` |
 | Посмотреть статус и последние логи | `make status`, `make logs` |
 | Смотреть live-логи в реальном времени | `make logs-follow` |
+| Смотреть логи только приложений | `make logs-no-db` |
 | Временно остановить приложение | `make pause` |
 | Настроить Telegram User Client | раздел `Установка на VPS` -> `Получить Telegram Session String` |
 | Включить публичный режим в группе | раздел `Установка на VPS` -> `Включить публичный режим в группе` |
@@ -99,6 +100,8 @@ make deploy-clean
 | `make status` | Статус сервисов |
 | `make logs` | Последние логи всего стека |
 | `make logs-follow` | Live-логи всего стека |
+| `make logs-no-db` | Логи стека без `postgres` и `qdrant` |
+| `make logs-no-db-follow` | Live-логи стека без `postgres` и `qdrant` |
 | `make pause` | Остановить только `kira-mind-bot` и `admin-panel` |
 | `make restart` | Перезапустить app-сервисы |
 | `make stop` | Остановить весь стек |
@@ -110,6 +113,7 @@ make deploy-clean
 - обычное обновление: `make deploy`
 - временно притушить приложение: `make pause`
 - посмотреть последние логи: `make logs`
+- посмотреть логи только приложений: `make logs-no-db`
 - смотреть live-логи: `make logs-follow`
 
 Два пути установки и деплоя:
@@ -121,6 +125,7 @@ make deploy-clean
 
 `make` нужен только как shortcut на хосте. Docker-контейнерам он не нужен.
 `make logs -f` не подойдёт, потому что `-f` обрабатывает сам `make`; для follow-режима используй `make logs-follow`.
+Если нужен общий поток без шумных инфраструктурных логов, используй `make logs-no-db` или прямой вызов `./scripts/ops/server-deploy.sh logs --no-postgres --no-qdrant`.
 
 ---
 
@@ -385,6 +390,7 @@ make remote-deploy-admin SERVER_IP=<ip>
 Что можно делать в панели:
 
 - менять API-ключи и токены;
+- переключать AI preset для runtime-маршрутизации задач между OpenAI, OpenRouter, Gemini и Z.ai;
 - редактировать параметры PostgreSQL и Qdrant;
 - задавать Telegram User Client session string;
 - менять часовой пояс и срок хранения выполненных напоминаний;
@@ -472,6 +478,9 @@ make remote-deploy-admin SERVER_IP=<ip>
 
 | Переменная | Что включает |
 |------------|--------------|
+| `OPENROUTER_API_KEY` | OpenRouter как дополнительный AI provider для preset-ов |
+| `GEMINI_API_KEY` | Gemini как дополнительный AI provider для preset-ов |
+| `ZAI_API_KEY` | Z.ai / GLM как дополнительный AI provider для preset-ов |
 | `GOOGLE_MAPS_API_KEY` | Карты, адреса, маршруты, места рядом |
 | `IDEOGRAM_API_KEY` | Генерацию изображений |
 | `TELEGRAM_API_ID` | Telegram User Client |
@@ -595,8 +604,9 @@ Telegram Bot API / Telegram User Client
   webSearch / maps / imageAgent / imageGeneration
               |
               v
-  Services: PostgreSQL, Qdrant, OpenAI, Google Maps,
-            Ideogram, Playwright, Telegram MTProto
+  Services: PostgreSQL, Qdrant, OpenAI / OpenRouter /
+            Gemini / Z.ai, Google Maps, Ideogram,
+            Playwright, Telegram MTProto
               |
               v
   Schedulers: proactive, dmReport, memoryInsight,

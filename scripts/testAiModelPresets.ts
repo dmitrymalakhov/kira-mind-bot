@@ -17,21 +17,79 @@ function withPreset<T>(preset: string, fn: () => T): T {
     }
 }
 
-withPreset('hybrid-deepseek-gpt', () => {
+withPreset('hybrid-openrouter-gpt', () => {
     assert.deepStrictEqual(resolveModelForTask('intentClassification'), {
-        provider: 'deepseek',
-        model: 'deepseek-v4-flash',
+        provider: 'openai',
+        model: 'gpt-5.4-nano',
     });
     assert.deepStrictEqual(resolveModelForTask('conversation'), {
-        provider: 'deepseek',
-        model: 'deepseek-v4-pro',
+        provider: 'openrouter',
+        model: 'openrouter/auto',
     });
 });
 
 withPreset('hybrid-gemini-gpt', () => {
     assert.deepStrictEqual(resolveModelForTask('browserVision'), {
         provider: 'gemini',
+        model: 'gemini-3-flash-preview',
+    });
+    assert.deepStrictEqual(resolveModelForTask('conversation'), {
+        provider: 'gemini',
+        model: 'gemini-3-flash-preview',
+    });
+});
+
+withPreset('gemini-direct-balanced', () => {
+    assert.deepStrictEqual(resolveModelForTask('intentClassification'), {
+        provider: 'gemini',
         model: 'gemini-3.1-flash-lite',
+    });
+    assert.deepStrictEqual(resolveModelForTask('webSearchReasoning'), {
+        provider: 'openai',
+        model: 'gpt-5.4-mini',
+    });
+    assert.deepStrictEqual(resolveModelForTask('embedding'), {
+        provider: 'openai',
+        model: 'text-embedding-3-small',
+    });
+    assert.deepStrictEqual(resolveModelForTask('transcription'), {
+        provider: 'openai',
+        model: 'whisper-1',
+    });
+});
+
+withPreset('glm-balanced', () => {
+    assert.deepStrictEqual(resolveModelForTask('intentClassification'), {
+        provider: 'openai',
+        model: 'gpt-5.4-nano',
+    });
+    assert.deepStrictEqual(resolveModelForTask('intentDedup'), {
+        provider: 'openai',
+        model: 'gpt-5.4-nano',
+    });
+    assert.deepStrictEqual(resolveModelForTask('conversation'), {
+        provider: 'zai',
+        model: 'glm-5.2',
+    });
+    assert.deepStrictEqual(resolveModelForTask('browserPlanning'), {
+        provider: 'zai',
+        model: 'glm-5.2',
+    });
+    assert.deepStrictEqual(resolveModelForTask('browserVision'), {
+        provider: 'openai',
+        model: 'gpt-4o',
+    });
+    assert.deepStrictEqual(resolveModelForTask('embedding'), {
+        provider: 'openai',
+        model: 'text-embedding-3-small',
+    });
+});
+
+withPreset('hybrid-deepseek-gpt', () => {
+    assert.strictEqual(parseAiPresetName(process.env.AI_MODEL_PRESET), 'hybrid-openrouter-gpt');
+    assert.deepStrictEqual(resolveModelForTask('conversation'), {
+        provider: 'openrouter',
+        model: 'openrouter/auto',
     });
 });
 
@@ -42,6 +100,14 @@ assert.deepStrictEqual(getFallbackModel('conversation'), {
 assert.deepStrictEqual(getFallbackModel('browserVision'), {
     provider: 'openai',
     model: 'gpt-4o',
+});
+assert.deepStrictEqual(getFallbackModel('embedding'), {
+    provider: 'openai',
+    model: 'text-embedding-3-small',
+});
+assert.deepStrictEqual(getFallbackModel('transcription'), {
+    provider: 'openai',
+    model: 'whisper-1',
 });
 
 withPreset('invalid-preset', () => {

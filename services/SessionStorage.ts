@@ -20,6 +20,8 @@ interface PersistedSession {
     lastProactiveInsight?: SessionData['lastProactiveInsight'];
     pendingContactMemory?: SessionData['pendingContactMemory'];
     pendingContactLookup?: SessionData['pendingContactLookup'];
+    pendingPostpone?: SessionData['pendingPostpone'];
+    pendingReminderEdit?: SessionData['pendingReminderEdit'];
     pendingBrowserTask?: SessionData['pendingBrowserTask'];
     pendingHealthLog?: SessionData['pendingHealthLog'];
     pendingHealthDiscomfort?: SessionData['pendingHealthDiscomfort'];
@@ -46,6 +48,12 @@ function extract(data: SessionData): PersistedSession {
         lastProactiveInsight: pruneLastProactiveInsight(data.lastProactiveInsight, now),
         pendingContactMemory: data.pendingContactMemory,
         pendingContactLookup: data.pendingContactLookup,
+        pendingPostpone: data.pendingPostpone && (data.pendingPostpone.expiresAt ?? 0) > now
+            ? data.pendingPostpone
+            : undefined,
+        pendingReminderEdit: data.pendingReminderEdit && data.pendingReminderEdit.expiresAt > now
+            ? data.pendingReminderEdit
+            : undefined,
         pendingBrowserTask: data.pendingBrowserTask && data.pendingBrowserTask.expiresAt > now
             ? data.pendingBrowserTask
             : undefined,
@@ -80,6 +88,8 @@ function merge(initial: SessionData, persisted: PersistedSession): SessionData {
         lastProactiveInsight: persisted.lastProactiveInsight ?? initial.lastProactiveInsight,
         pendingContactMemory: persisted.pendingContactMemory ?? initial.pendingContactMemory,
         pendingContactLookup: persisted.pendingContactLookup ?? initial.pendingContactLookup,
+        pendingPostpone: persisted.pendingPostpone ?? initial.pendingPostpone,
+        pendingReminderEdit: persisted.pendingReminderEdit ?? initial.pendingReminderEdit,
         pendingBrowserTask: persisted.pendingBrowserTask ?? initial.pendingBrowserTask,
         pendingHealthLog: persisted.pendingHealthLog ?? initial.pendingHealthLog,
         pendingHealthDiscomfort: persisted.pendingHealthDiscomfort ?? initial.pendingHealthDiscomfort,
@@ -166,6 +176,12 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
                     ...persisted.workingMemory,
                     lastUpdatedAt: new Date(persisted.workingMemory.lastUpdatedAt),
                 };
+            }
+            if (persisted.pendingPostpone?.expiresAt && persisted.pendingPostpone.expiresAt <= now) {
+                persisted.pendingPostpone = undefined;
+            }
+            if (persisted.pendingReminderEdit?.expiresAt && persisted.pendingReminderEdit.expiresAt <= now) {
+                persisted.pendingReminderEdit = undefined;
             }
             if (persisted.pendingBrowserTask?.expiresAt && persisted.pendingBrowserTask.expiresAt <= now) {
                 persisted.pendingBrowserTask = undefined;

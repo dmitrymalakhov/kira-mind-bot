@@ -18,7 +18,7 @@ show_help() {
 Usage:
   ./scripts/ops/server-deploy.sh deploy [--clean]
   ./scripts/ops/server-deploy.sh status
-  ./scripts/ops/server-deploy.sh logs [-f|--follow] [service]
+  ./scripts/ops/server-deploy.sh logs [-f|--follow] [--no-postgres] [--no-qdrant] [service]
   ./scripts/ops/server-deploy.sh pause [service]
   ./scripts/ops/server-deploy.sh restart [service]
   ./scripts/ops/server-deploy.sh stop [service]
@@ -36,6 +36,8 @@ Commands:
 Options:
   --clean       Для deploy: выполнить down и безопасную Docker-очистку перед rebuild.
   -f, --follow  Для logs: следить за логами в реальном времени.
+  --no-postgres Для logs: исключить postgres из общего вывода логов.
+  --no-qdrant   Для logs: исключить qdrant из общего вывода логов.
 EOF
 }
 
@@ -43,18 +45,25 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
+COMMAND="${1:-help}"
+shift || true
+
+if [ "$COMMAND" = "help" ]; then
+    show_help
+    exit 0
+fi
+
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/server-common.sh"
 
 ensure_server_repo_root || error "Не найден серверный compose-сценарий в корне репозитория"
 resolve_compose_cmd || error "Docker Compose недоступен для текущего пользователя"
 
-COMMAND="${1:-help}"
-shift || true
-
 DEPLOY_CLEAN=false
 TARGET_SERVICE=""
 FOLLOW_LOGS=false
+EXCLUDE_POSTGRES_LOGS=false
+EXCLUDE_QDRANT_LOGS=false
 
 validate_service_name() {
     local service="$1"
@@ -78,6 +87,14 @@ case "$COMMAND" in
             case "$1" in
                 -f|--follow)
                     FOLLOW_LOGS=true
+                    shift
+                    ;;
+                --no-postgres)
+                    EXCLUDE_POSTGRES_LOGS=true
+                    shift
+                    ;;
+                --no-qdrant)
+                    EXCLUDE_QDRANT_LOGS=true
                     shift
                     ;;
                 *)
@@ -139,6 +156,7 @@ deploy_stack() {
 
 show_logs() {
     local args=(logs --tail 100)
+    local services=()
 
     if [ "$FOLLOW_LOGS" = true ]; then
         args+=(--follow)
@@ -149,6 +167,23 @@ show_logs() {
         args+=("$TARGET_SERVICE")
         compose "${args[@]}"
         return
+    fi
+
+    if [ "$EXCLUDE_POSTGRES_LOGS" = true ] || [ "$EXCLUDE_QDRANT_LOGS" = true ]; then
+        mapfile -t services < <(compose config --services)
+
+        if [ "$EXCLUDE_POSTGRES_LOGS" = true ]; then
+            services=($(printf '%s\n' "${services[@]}" | grep -vx 'postgres' || true))
+        fi
+
+        if [ "$EXCLUDE_QDRANT_LOGS" = true ]; then
+            services=($(printf '%s\n' "${services[@]}" | grep -vx 'qdrant' || true))
+        fi
+
+        if [ "${#services[@]}" -eq 0 ]; then
+            error "Не удалось сформировать список сервисов после исключения логов"
+        fi
+        args+=("${services[@]}")
     fi
 
     compose "${args[@]}"
@@ -209,5 +244,4 @@ case "$COMMAND" in
     pause) pause_services ;;
     restart) restart_services ;;
     stop) stop_services ;;
-    help) show_help ;;
 esac

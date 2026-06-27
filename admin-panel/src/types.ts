@@ -43,8 +43,15 @@ export interface ConfigSourceInfo {
   appliesImmediately?: boolean;
 }
 
-export type AiProvider = 'openai' | 'deepseek' | 'gemini';
-export type AiPresetName = 'gpt-max' | 'gpt-balanced' | 'gpt-lean' | 'hybrid-deepseek-gpt' | 'hybrid-gemini-gpt';
+export type AiProvider = 'openai' | 'openrouter' | 'gemini' | 'zai';
+export type AiPresetName =
+  | 'gpt-max'
+  | 'gpt-balanced'
+  | 'gpt-lean'
+  | 'hybrid-openrouter-gpt'
+  | 'hybrid-gemini-gpt'
+  | 'gemini-direct-balanced'
+  | 'glm-balanced';
 
 export interface AiModelRef {
   provider: AiProvider;
@@ -56,14 +63,40 @@ export interface AiPresetConfig {
   title: string;
   description: string;
   models: Record<string, AiModelRef>;
+  enabled?: boolean;
+  unavailableReason?: string;
 }
 
 export interface AiPresetResponse {
-  activePresetName: AiPresetName;
+  configuredPresetName: AiPresetName;
   storedPresetName?: AiPresetName | null;
   envDefaultPreset: AiPresetName;
+  hasRuntimeOverride: boolean;
+  activeSourceSummary: string;
+  activeSourceTechnicalPath: string;
   availablePresets: AiPresetConfig[];
   source: ConfigSourceInfo;
+}
+
+export type MonitoringCheckStatus = 'ok' | 'warn' | 'down' | 'disabled';
+export type MonitoringCheckCategory = 'runtime' | 'storage' | 'telegram' | 'ai';
+
+export interface MonitoringCheck {
+  key: string;
+  label: string;
+  category: MonitoringCheckCategory;
+  status: MonitoringCheckStatus;
+  summary: string;
+  details: string;
+  latencyMs?: number;
+  checkedAt: string;
+  meta?: Record<string, string | number | boolean | null | undefined>;
+}
+
+export interface MonitoringHealthResponse {
+  generatedAt: string;
+  overallStatus: 'ok' | 'degraded' | 'down';
+  checks: MonitoringCheck[];
 }
 
 export interface PersonalityProfile {

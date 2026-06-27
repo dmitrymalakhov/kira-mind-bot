@@ -1,0 +1,14 @@
+{
+  "defaultText": { "provider": "openai", "model": "gpt-5.4-mini" },
+  "intentClassification": { "provider": "openai", "model": "gpt-5.4-nano" },
+  "intentDedup": { "provider": "openai", "model": "gpt-5.4-nano" },
+  "conversation": { "provider": "openai", "model": "gpt-5.4-mini" },
+  "memoryExtraction": { "provider": "openai", "model": "gpt-5.4-nano" },
+  "memoryConsolidation": { "provider": "openai", "model": "gpt-5.4-mini" },
+  "messageAnalysis": { "provider": "openai", "model": "gpt-5.4-mini" },
+  "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4-mini" },
+  "browserPlanning": { "provider": "openai", "model": "gpt-5.4-nano" },
+  "browserVision": { "provider": "openai", "model": "gpt-4o" },
+  "embedding": { "provider": "openai", "model": "text-embedding-3-small" },
+  "transcription": { "provider": "openai", "model": "whisper-1" }
+}

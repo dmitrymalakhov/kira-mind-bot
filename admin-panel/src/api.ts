@@ -8,6 +8,7 @@ import type {
   MemoryFormPayload,
   MemoryQuery,
   MemoryResponse,
+  MonitoringHealthResponse,
   PersonalityConfig,
 } from './types';
 
@@ -45,13 +46,22 @@ export async function fetchAiPreset(): Promise<AiPresetResponse> {
   return r.json();
 }
 
+export async function fetchMonitoringHealth(): Promise<MonitoringHealthResponse> {
+  const r = await fetch('/api/monitoring/health');
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body.error || 'Failed to load monitoring health');
+  }
+  return r.json();
+}
+
 export async function saveAiPreset(preset: AiPresetName) {
   const r = await fetch('/api/ai-preset', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ preset }),
   });
-  return r.json() as Promise<{ success: boolean; activePresetName?: AiPresetName; message?: string; error?: string }>;
+  return r.json() as Promise<{ success: boolean; configuredPresetName?: AiPresetName; message?: string; error?: string }>;
 }
 
 export async function fetchPersonality(): Promise<PersonalityConfig> {
