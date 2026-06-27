@@ -29,6 +29,44 @@ export interface ContactMemorySaveOptions {
     askOnAmbiguous?: boolean;
 }
 
+export interface ContactIdentityScope {
+    status: 'resolved' | 'ambiguous';
+    queryName: string;
+    displayName?: string;
+    contact?: Contact;
+    candidateNames?: string[];
+}
+
+const NON_CONTACT_LEADING_WORDS_SOURCE = [
+    'я', 'мне', 'меня', 'мы', 'нам', 'нас', 'мой', 'моя', 'моё',
+    'ты', 'тебе', 'тебя', 'он', 'она', 'они', 'оно',
+    'сегодня', 'завтра', 'послезавтра', 'утром', 'вечером',
+    'напомни', 'напоминай', 'создай', 'поставь', 'добавь',
+    'могу', 'нужно', 'надо', 'хочу', 'пора', 'если',
+];
+
+const RUSSIAN_NAME_VARIANTS = new Map<string, string>([
+    ['yura', 'yurii'],
+    ['yuriy', 'yurii'],
+    ['yurii', 'yurii'],
+    ['dima', 'dmitrii'],
+    ['dimon', 'dmitrii'],
+    ['dmitriy', 'dmitrii'],
+    ['dmitrii', 'dmitrii'],
+    ['sasha', 'aleksandr'],
+    ['alexander', 'aleksandr'],
+    ['aleksandr', 'aleksandr'],
+    ['serezha', 'sergei'],
+    ['seryozha', 'sergei'],
+    ['seryoja', 'sergei'],
+    ['sergei', 'sergei'],
+    ['andrey', 'andrei'],
+    ['andrei', 'andrei'],
+    ['andryusha', 'andrei'],
+    ['evgeniy', 'evgenii'],
+    ['evgenii', 'evgenii'],
+]);
+
 export function normalizeContactLookupValue(s: string): string {
     return toLatin(s)
         .normalize('NFD')
@@ -38,6 +76,10 @@ export function normalizeContactLookupValue(s: string): string {
         .replace(/^@/, '')
         .replace(/\s+/g, ' ');
 }
+
+const NON_CONTACT_LEADING_WORDS = new Set(
+    NON_CONTACT_LEADING_WORDS_SOURCE.map(normalizeContactLookupValue)
+);
 
 export function contactDisplayName(contact: Contact): string {
     const fullName = [contact.firstName, contact.lastName].filter(Boolean).join(' ').trim();
@@ -63,6 +105,128 @@ export function contactIdentityTags(contactName: string, contact?: Contact): str
         tags.push(`contact_key:${normalizeContactLookupValue(display).replace(/\s+/g, '_')}`);
     }
     return [...new Set(tags.filter(Boolean))];
+}
+
+export function extractContactReferenceFromText(message: string): string | null {
+    const username = message.match(/@[a-zA-Z0-9_]{3,32}/)?.[0];
+    if (username) return username;
+
+    const patterns = [
+        /^([А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+){0,2})(?=\s+(?:опять|снова|молчит|пропал|прислал|написал|ответил|говорил|сказал|просил|попросил|попросила|хочет|жд[её]т|болеет|занят|занята|вернул(?:ся|ась)|улетает|прилетел|прилетела|не\b|у\b|со\b|с\b))/u,
+        /(?:о|об|про|для|к|ко|с|со|у|от|по)\s+([А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+){0,2})/u,
+        /(?:написать|позвонить|подарить|купить|встретиться|поговорить|обсудить)\s+с?\s*([А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+){0,2})/u,
+    ];
+
+    for (const pattern of patterns) {
+        const match = message.match(pattern);
+        const candidate = match?.[1]?.trim();
+        if (!candidate) continue;
+
+        const firstToken = normalizeContactLookupValue(candidate).split(/\s+/)[0] ?? '';
+        if (NON_CONTACT_LEADING_WORDS.has(firstToken)) continue;
+
+        return candidate;
+    }
+
+    return null;
+}
+
+export function resolveContactIdentityScope(message: string): ContactIdentityScope | null {
+    const contactName = extractContactReferenceFromText(message);
+    if (!contactName) return null;
+
+    const resolution = resolveContactIdentity(contactName);
+    if (resolution.status === 'resolved') {
+        return {
+            status: 'resolved',
+            queryName: contactName,
+            displayName: resolution.displayName,
+            contact: resolution.contact,
+        };
+    }
+
+    if (resolution.status === 'ambiguous') {
+        return {
+            status: 'ambiguous',
+            queryName: contactName,
+            candidateNames: resolution.candidates.map(contactDisplayName),
+        };
+    }
+
+    return null;
+}
+
+export function contactIdFromTags(tags: string[] | undefined): string | null {
+    const tag = (tags ?? []).find(value => String(value).startsWith('contact_id:'));
+    return tag ? String(tag).replace('contact_id:', '').trim() : null;
+}
+
+export function contactNamesFromTags(tags: string[] | undefined): Set<string> {
+    const names = new Set<string>();
+    for (const tag of tags ?? []) {
+        const value = String(tag);
+        if (value.startsWith('contact:') || value.startsWith('contact_name:') || value.startsWith('contact_alias:')) {
+            names.add(normalizeContactLookupValue(value.replace(/^contact(_name|_alias)?:/, '')));
+        }
+    }
+    return names;
+}
+
+export function hasContactMemoryTags(tags: string[] | undefined): boolean {
+    return (tags ?? []).some(tag =>
+        String(tag).startsWith('contact:') ||
+        String(tag).startsWith('contact_name:') ||
+        String(tag).startsWith('contact_alias:') ||
+        String(tag).startsWith('contact_id:') ||
+        String(tag).startsWith('contact_key:')
+    );
+}
+
+export function storedContactPrefix(content: string): string | null {
+    return content.match(/^\[([^\]]+)\]\s+/u)?.[1]?.trim() ?? null;
+}
+
+export function isContactMemoryEntry(memory: { content: string; tags?: string[] | undefined }): boolean {
+    return hasContactMemoryTags(memory.tags) || Boolean(storedContactPrefix(memory.content));
+}
+
+export function isMemoryEntryAllowedForContactScope(
+    memory: { content: string; tags?: string[] | undefined },
+    scope: ContactIdentityScope | null
+): boolean {
+    if (!isContactMemoryEntry(memory)) return true;
+    if (!scope) return false;
+    if (scope.status === 'ambiguous') return false;
+
+    const candidateContactId = contactIdFromTags(memory.tags);
+    if (candidateContactId) {
+        return scope.contact ? candidateContactId === String(scope.contact.id) : false;
+    }
+
+    const allowedNames = new Set(
+        contactIdentityTags(scope.queryName, scope.contact)
+            .filter(tag => tag.startsWith('contact:') || tag.startsWith('contact_name:') || tag.startsWith('contact_alias:'))
+            .map(tag => normalizeContactLookupValue(tag.replace(/^contact(_name|_alias)?:/, '')))
+    );
+    if (scope.displayName) allowedNames.add(normalizeContactLookupValue(scope.displayName));
+
+    const prefix = storedContactPrefix(memory.content);
+    if (prefix) {
+        const normalizedPrefix = normalizeContactLookupValue(prefix);
+        if (allowedNames.has(normalizedPrefix)) return true;
+        for (const allowedName of allowedNames) {
+            if (contactNamesLikelyMatch(normalizedPrefix, allowedName)) return true;
+        }
+    }
+
+    for (const name of contactNamesFromTags(memory.tags)) {
+        if (allowedNames.has(name)) return true;
+        for (const allowedName of allowedNames) {
+            if (contactNamesLikelyMatch(name, allowedName)) return true;
+        }
+    }
+
+    return false;
 }
 
 function stripContactLead(content: string, contactName: string): string {
@@ -121,6 +285,52 @@ function isCloseToken(query: string, value: string): boolean {
     }
     const maxDistance = Math.min(query.length, value.length) <= 4 ? 1 : 2;
     return levenshtein(query, value) <= maxDistance;
+}
+
+function canonicalizeContactNameToken(token: string): string {
+    return RUSSIAN_NAME_VARIANTS.get(token) ?? token;
+}
+
+export function contactNamesLikelyMatch(left: string, right: string): boolean {
+    const normalizedLeft = normalizeContactLookupValue(left);
+    const normalizedRight = normalizeContactLookupValue(right);
+    if (!normalizedLeft || !normalizedRight) return false;
+    if (normalizedLeft === normalizedRight) return true;
+
+    const leftTokens = normalizedLeft
+        .split(/\s+/)
+        .filter(Boolean)
+        .map(canonicalizeContactNameToken);
+    const rightTokens = normalizedRight
+        .split(/\s+/)
+        .filter(Boolean)
+        .map(canonicalizeContactNameToken);
+    if (leftTokens.length === 0 || rightTokens.length === 0) return false;
+
+    if (leftTokens.length === rightTokens.length) {
+        const sameOrder = leftTokens.every((token, index) => isCloseToken(token, rightTokens[index] ?? ''));
+        if (sameOrder) return true;
+        const swappedOrder = leftTokens.every((token, index) =>
+            isCloseToken(token, rightTokens[rightTokens.length - 1 - index] ?? '')
+        );
+        if (swappedOrder) return true;
+    }
+
+    let matchedTokens = 0;
+    const unmatchedRight = [...rightTokens];
+    for (const leftToken of leftTokens) {
+        const matchIndex = unmatchedRight.findIndex((rightToken) => isCloseToken(leftToken, rightToken));
+        if (matchIndex >= 0) {
+            matchedTokens++;
+            unmatchedRight.splice(matchIndex, 1);
+        }
+    }
+
+    const minimumTokenCount = Math.min(leftTokens.length, rightTokens.length);
+    if (minimumTokenCount <= 1) {
+        return leftTokens.length === rightTokens.length && matchedTokens >= 1;
+    }
+    return matchedTokens >= 2;
 }
 
 function plausibleContactMatches(query: string, contacts: Contact[]): Contact[] {
