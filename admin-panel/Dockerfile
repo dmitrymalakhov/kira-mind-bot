@@ -17,9 +17,10 @@ COPY admin-panel/monitoring.js ./monitoring.js
 COPY admin-panel/presetAvailability.js ./presetAvailability.js
 COPY admin-panel/runtime-health-metadata.json ./runtime-health-metadata.json
 COPY admin-panel/aiPresetRegistry.js ./aiPresetRegistry.js
-RUN mkdir -p ./src /app/ai
+RUN mkdir -p ./src /app/ai /app/utils
 COPY admin-panel/src/ai-model-presets.json ./src/ai-model-presets.json
 COPY ai/provider-registry.json /app/ai/provider-registry.json
 COPY ai/fallback-models.json /app/ai/fallback-models.json
+COPY utils/legacyPersonalitySanitizer.js /app/utils/legacyPersonalitySanitizer.js
 EXPOSE 3000
 CMD ["node", "server.js"]
