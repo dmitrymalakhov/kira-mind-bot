@@ -30,3 +30,5 @@
 - TypeScript smoke/regression tests в `scripts/test*.ts` запускаются через общие раннеры:
   - `npm run test:ts -- <file>` для одиночного теста;
   - `npm run test:ts:ai`, `test:ts:memory`, `test:ts:interaction`, `test:ts:all` для групповых прогонов.
+- Новые точечные тесты по умолчанию добавляются только как standalone-файлы в `scripts/test*.ts` и запускаются адресно через `npm run test:ts -- <file>`.
+- Не добавлять новые тесты в `package.json` и не подключать их в агрегирующие раннеры (`scripts/runTsTestSuite.ts`, общий `npm test`) без явного запроса пользователя.
