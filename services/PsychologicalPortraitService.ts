@@ -4,6 +4,8 @@ import { getVectorService } from './VectorServiceFactory';
 import { devLog } from '../utils';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { getActiveMemoryBotId } from '../utils/botIdentity';
+import type { Contact } from '../stores/ContactsStore';
+import { contactIdentityTags, contactDisplayName } from '../utils/contactMemory';
 
 const PORTRAIT_DOMAIN = 'contacts';
 const PORTRAIT_IMPORTANCE = 0.92;
@@ -163,6 +165,7 @@ export async function saveOrUpdatePortrait(
     ctx: BotContext,
     contactName: string,
     conversationText: string,
+    contact?: Contact,
 ): Promise<boolean> {
     const svc = getVectorService();
     if (!svc) return false;
@@ -170,7 +173,8 @@ export async function saveOrUpdatePortrait(
     const userId = String(ctx.from?.id);
     if (!userId) return false;
 
-    const tag = portraitTag(contactName);
+    const displayName = contact ? contactDisplayName(contact) : contactName;
+    const tag = portraitTag(displayName);
 
     // Ищем существующий портрет
     let oldPortraitText: string | undefined;
@@ -220,7 +224,7 @@ export async function saveOrUpdatePortrait(
             botId,
             timestamp: new Date(),
             importance: PORTRAIT_IMPORTANCE,
-            tags: [tag, `contact:${contactName}`],
+            tags: [tag, ...contactIdentityTags(contactName, contact)],
             userId,
             isAnchor: true,
             confidence: PORTRAIT_CONFIDENCE,
@@ -229,7 +233,7 @@ export async function saveOrUpdatePortrait(
             vividness: 0.68,
             specificity: 0.78,
         });
-        devLog(`PsychologicalPortraitService: saved portrait for "${contactName}"`);
+        devLog(`PsychologicalPortraitService: saved portrait for "${displayName}"`);
         return true;
     } catch (e) {
         console.error('PsychologicalPortraitService: save error', e);
@@ -243,6 +247,7 @@ export async function saveOrUpdatePortrait(
 export async function getContactPortrait(
     ctx: BotContext,
     contactName: string,
+    contact?: Contact,
 ): Promise<string | null> {
     const svc = getVectorService();
     if (!svc) return null;
@@ -251,7 +256,8 @@ export async function getContactPortrait(
     if (!userId) return null;
 
     try {
-        const results = await svc.getMemoriesByTag(userId, portraitTag(contactName));
+        const displayName = contact ? contactDisplayName(contact) : contactName;
+        const results = await svc.getMemoriesByTag(userId, portraitTag(displayName));
         return results.length > 0 ? results[0].content : null;
     } catch (e) {
         devLog('PsychologicalPortraitService: getPortrait error', e);

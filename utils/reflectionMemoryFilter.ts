@@ -17,6 +17,11 @@ export interface ReflectionFactLike {
     memoryKind?: string;
 }
 
+export type ReflectionMemoryNoiseReason =
+    | 'technical_process'
+    | 'one_off_activity'
+    | 'temporary_state';
+
 const REFLECTION_MIN_CONFIDENCE = 0.55;
 
 function factTemporalScope(fact: ReflectionFactLike): ReflectionTemporalScope {
@@ -63,14 +68,23 @@ function isReflectionOneOffActivity(fact: ReflectionFactLike): boolean {
 }
 
 function isReflectionTemporaryState(fact: ReflectionFactLike): boolean {
-    const temporalScope = factTemporalScope(fact);
-    if (temporalScope !== 'current_state') return false;
-
     const content = fact.content.toLowerCase();
-    if (/находится\s+в(?:\s|$)/iu.test(content) && !/больниц|клиник|реанимац|командировк|переех|переезд|жив[её]т/iu.test(content)) {
+    const durableLocationContext = /больниц|клиник|реанимац|командировк|переех|переезд|жив[её]т/iu.test(content);
+    if (/находится\s+в(?:\s|$)/iu.test(content) && !durableLocationContext) {
         return true;
     }
-    if (!/сейчас|пока|временно|до сих пор|находится|занимается|работает над|пытается|сегодня/iu.test(content)) {
+    if (/(?:сейчас|пока|сегодня)\s+в(?:\s|$)/iu.test(content) && !durableLocationContext) {
+        return true;
+    }
+
+    const temporalScope = factTemporalScope(fact);
+    const hasTemporaryMarker = /сейчас|пока|временно|до сих пор|находится|занимается|работает над|пытается|сегодня/iu.test(content);
+    if (temporalScope === 'unknown' && hasTemporaryMarker && (fact.importance ?? 0) < 0.78) {
+        return true;
+    }
+    if (temporalScope !== 'current_state') return false;
+
+    if (!hasTemporaryMarker) {
         return false;
     }
 
@@ -101,8 +115,15 @@ export function isReflectionFactWorthSaving(fact: ReflectionFactLike): boolean {
 }
 
 export function isReflectionMemoryNoiseCandidate(fact: ReflectionFactLike): boolean {
-    if (fact.memoryKind === 'episode' || fact.tags?.includes('memory-episode')) return false;
-    return isReflectionTechnicalNoise(fact) ||
-        isReflectionOneOffActivity(fact) ||
-        isReflectionTemporaryState(fact);
+    return getReflectionMemoryNoiseReasons(fact).length > 0;
+}
+
+export function getReflectionMemoryNoiseReasons(fact: ReflectionFactLike): ReflectionMemoryNoiseReason[] {
+    if (fact.memoryKind === 'episode' || fact.tags?.includes('memory-episode')) return [];
+
+    const reasons: ReflectionMemoryNoiseReason[] = [];
+    if (isReflectionTechnicalNoise(fact)) reasons.push('technical_process');
+    if (isReflectionOneOffActivity(fact)) reasons.push('one_off_activity');
+    if (isReflectionTemporaryState(fact)) reasons.push('temporary_state');
+    return reasons;
 }

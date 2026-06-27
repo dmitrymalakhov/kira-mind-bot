@@ -25,6 +25,14 @@ function isSelfReference(value: string): boolean {
     return /^(меня|мне|обо мне|про меня|мой профиль|мою память)$/i.test(value.trim());
 }
 
+function isAssistantSelfReference(value: string): boolean {
+    return /^(себя|себе|о себе|обо себе|про себя|тебя|тебе|о тебе|про тебя|твою память|твою биографию|твою жизнь)$/i.test(value.trim());
+}
+
+function isAssistantSelfClarification(value: string): boolean {
+    return /^(?:я\s+)?(?:имею\s+в\s*виду|имел(?:а)?\s+в\s*виду|говорю\s+про|про|о|об)\s+(?:тебя|тебе|себя|себе)|^(?:тебя|тебе|себя|себе)$/iu.test(value.trim());
+}
+
 function cleanLookupTarget(raw: string): string {
     return raw
         .replace(/[?.!]+$/g, '')
@@ -46,7 +54,7 @@ function extractContactLookupName(message: string): string | null {
         const match = text.match(pattern);
         if (!match?.[1]) continue;
         const target = cleanLookupTarget(match[1]);
-        if (!target || isSelfReference(target)) return null;
+        if (!target || isSelfReference(target) || isAssistantSelfReference(target)) return null;
         return target;
     }
 
@@ -226,6 +234,10 @@ export async function handlePendingContactLookupText(
     if (/^(отмена|cancel|стоп)$/i.test(text)) {
         ctx.session.pendingContactLookup = undefined;
         return { responseText: 'Ок, не смотрю память по контакту.' };
+    }
+    if (isAssistantSelfClarification(text)) {
+        ctx.session.pendingContactLookup = undefined;
+        return null;
     }
 
     const resolution = resolveContactIdentity(text);

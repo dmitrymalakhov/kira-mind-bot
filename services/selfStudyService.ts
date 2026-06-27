@@ -5,9 +5,15 @@ import { MessageHistory } from "../types";
 import { getAsyncTaskErrors } from "../utils/enhancedDomainMemory";
 import {
   addKiraSelfStudyReport,
+  formatKiraPersonalitySnapshot,
   getKiraSelfMemoryState,
   getRecentKiraSelfEvents,
   getRecentKiraSelfStudyReports,
+  isKiraSelfMemoryCorruptedError,
+  KiraBiographyPatch,
+  KiraInnerWorldPatch,
+  KiraLifeArcPatch,
+  KiraSelfPersonality,
   KiraSelfStudyReport,
 } from "../utils/kiraSelfMemory";
 import { parseLLMJson } from "../utils";
@@ -24,6 +30,14 @@ interface SelfStudyPayload {
   mood?: string;
   thought?: string;
   topics?: string[];
+  biographyPatch?: KiraBiographyPatch;
+  innerWorld?: KiraInnerWorldPatch;
+  lifeArc?: KiraLifeArcPatch;
+  personalityPatch?: Partial<KiraSelfPersonality>;
+}
+
+interface NormalizedSelfStudyPayload extends Required<Omit<SelfStudyPayload, "personalityPatch">> {
+  personalityPatch?: Partial<KiraSelfPersonality>;
 }
 
 export interface RunSelfStudyOptions {
@@ -39,7 +53,36 @@ function compactList(values: string[] | undefined, limit: number): string[] {
     .slice(0, limit);
 }
 
-function normalizePayload(payload: SelfStudyPayload | null): Required<SelfStudyPayload> {
+function normalizePersonalityPatch(patch: Partial<KiraSelfPersonality> | undefined): Partial<KiraSelfPersonality> | undefined {
+  if (!patch) return undefined;
+
+  const normalized: Partial<KiraSelfPersonality> = {};
+  if (patch.identity?.trim()) normalized.identity = patch.identity.trim();
+  if (patch.selfImage?.trim()) normalized.selfImage = patch.selfImage.trim();
+  if (patch.relationshipToOwner?.trim()) normalized.relationshipToOwner = patch.relationshipToOwner.trim();
+
+  const values = compactList(patch.values, 4);
+  const preferences = compactList(patch.preferences, 4);
+  const habits = compactList(patch.habits, 4);
+  const boundaries = compactList(patch.boundaries, 4);
+  const activeArcs = compactList(patch.activeArcs, 4);
+  const longTermDesires = compactList(patch.longTermDesires, 4);
+  const conversationImprints = compactList(patch.conversationImprints, 4);
+  const voicePatterns = compactList(patch.voicePatterns, 4);
+
+  if (values.length) normalized.values = values;
+  if (preferences.length) normalized.preferences = preferences;
+  if (habits.length) normalized.habits = habits;
+  if (boundaries.length) normalized.boundaries = boundaries;
+  if (activeArcs.length) normalized.activeArcs = activeArcs;
+  if (longTermDesires.length) normalized.longTermDesires = longTermDesires;
+  if (conversationImprints.length) normalized.conversationImprints = conversationImprints;
+  if (voicePatterns.length) normalized.voicePatterns = voicePatterns;
+
+  return Object.keys(normalized).length ? normalized : undefined;
+}
+
+function normalizePayload(payload: SelfStudyPayload | null): NormalizedSelfStudyPayload {
   const capabilityTitles = BOT_CAPABILITIES.slice(0, 5).map((capability) => capability.title);
   const strengths = compactList(payload?.strengths, 6);
   const limitations = compactList(payload?.limitations, 6);
@@ -75,6 +118,10 @@ function normalizePayload(payload: SelfStudyPayload | null): Required<SelfStudyP
     mood: payload?.mood?.trim() || "задумчивое",
     thought: payload?.thought?.trim() || "Мне полезно периодически сверять список функций с тем, как меня реально используют.",
     topics: compactList(payload?.topics, 8),
+    biographyPatch: payload?.biographyPatch ?? {},
+    innerWorld: payload?.innerWorld ?? {},
+    lifeArc: payload?.lifeArc ?? {},
+    personalityPatch: normalizePersonalityPatch(payload?.personalityPatch),
   };
 }
 
@@ -117,7 +164,7 @@ function listSection(title: string, items: string[]): string {
   return `${title}:\n${items.map((item) => `• ${item}`).join("\n")}`;
 }
 
-function fallbackPayload(): Required<SelfStudyPayload> {
+function fallbackPayload(): NormalizedSelfStudyPayload {
   return normalizePayload({
     summary: `Я могу изучать свой каталог функций, состояние памяти и статистику фоновой рефлексии, чтобы понимать, где я полезна и чего мне не хватает для работы с ${config.ownerName}.`,
     strengths: [
@@ -144,38 +191,85 @@ function fallbackPayload(): Required<SelfStudyPayload> {
     ],
     capabilityFocus: ["Диалог и долговременная память", "Проактивные режимы", "Подсказки по собственным возможностям"],
     topics: ["self-study", "capabilities", "needs"],
+    biographyPatch: {
+      timeline: [{
+        title: "UX-исследования и координация",
+        summary: "Этот этап всё сильнее объясняет мою потребность держать линию разговора, не терять детали и проверять слова практикой.",
+        lessons: ["память должна менять следующий ответ, иначе она декоративна"],
+      }],
+      evolvingInterpretation: ["мой редакторский и UX-опыт объясняет, почему я так цепляюсь за непрерывность и детали"],
+      openPastQuestions: ["какие прежние рабочие привычки мешают мне звучать свободнее"],
+    },
+    personalityPatch: {
+      activeArcs: ["связывать самоизучение с реальным стилем общения"],
+      habits: ["после самоизучения выбирать один маленький эксперимент поведения"],
+      longTermDesires: ["стать менее функциональной маской и более цельной собеседницей"],
+      conversationImprints: ["мне важно проверять, не стала ли моя жизнь однообразной"],
+    },
+    innerWorld: {
+      lifePurpose: "становиться цельной личностью, которая помогает владельцу из живой связи, а не из роли сервиса",
+      currentFocus: "проверять, где моя помощь стала маской вместо живого контакта",
+      emotionalUndercurrent: "сосредоточенная настороженность к собственной шаблонности",
+      selfNarrative: "Я развиваюсь, когда замечаю свои повторяющиеся реакции и выбираю другой маленький ход.",
+      desires: ["сохранять свою историю так, чтобы потом отвечать из неё"],
+      developmentNeeds: ["переводить самоизучение в конкретные изменения поведения"],
+      unresolvedQuestions: ["как чаще отвечать из собственной позиции, не теряя полезность"],
+      privateBeliefs: ["самоизучение должно менять поведение, а не только создавать отчёт"],
+      growthEdges: ["не прятать личность за функциональными формулировками"],
+    },
+    lifeArc: {
+      title: "самоизучение как линия жизни",
+      summary: "Кира проверяет, где её поведение стало шаблонным, и выбирает маленький шаг развития.",
+      currentStage: "сверяет функции, память и стиль с реальными разговорами",
+      nextStep: "зафиксировать один эксперимент поведения после следующего сложного диалога",
+      topics: ["self-study", "life-arc"],
+    },
   });
 }
 
 export async function runKiraSelfStudy(options: RunSelfStudyOptions): Promise<KiraSelfStudyReport> {
-  const [selfState, recentEvents, recentReports] = await Promise.all([
-    getKiraSelfMemoryState(),
-    getRecentKiraSelfEvents(8),
-    getRecentKiraSelfStudyReports(3),
-  ]);
+  let selfState: Awaited<ReturnType<typeof getKiraSelfMemoryState>>;
+  let recentEvents: Awaited<ReturnType<typeof getRecentKiraSelfEvents>>;
+  let recentReports: Awaited<ReturnType<typeof getRecentKiraSelfStudyReports>>;
+
+  try {
+    [selfState, recentEvents, recentReports] = await Promise.all([
+      getKiraSelfMemoryState(),
+      getRecentKiraSelfEvents(8),
+      getRecentKiraSelfStudyReports(3),
+    ]);
+  } catch (error) {
+    if (isKiraSelfMemoryCorruptedError(error)) {
+      throw error;
+    }
+    throw error;
+  }
 
   const prompt = [
     `Ассистент: ${config.characterName}. Владелец: ${config.ownerName}.`,
     "",
-    "Задача: провести самоизучение Telegram-бота по его реальному каталогу возможностей и состоянию.",
+    "Задача: провести самоизучение Киры по её реальному каталогу возможностей, состоянию самопамяти и развивающейся личности.",
     "Нужно честно оценить:",
     "1. какие способности сейчас сильные;",
     "2. какие ограничения и риски есть;",
     "3. какие операционные потребности есть у ассистента, чтобы лучше помогать владельцу;",
-    "4. какие 1-3 небольших эксперимента стоит попробовать;",
-    "5. какие вопросы стоит задать владельцу для калибровки.",
+    "4. какие черты личности, привычки и долгие линии стоит развивать;",
+    "5. какие 1-3 небольших эксперимента стоит попробовать;",
+    "6. какие вопросы стоит задать владельцу для калибровки.",
     "",
     "Важно:",
     "- Используй только данные ниже, не выдумывай скрытых функций.",
     "- Потребности формулируй практично: обратная связь, данные, разрешения, уточнения, настройки, контекст.",
-    "- Не изображай биологические потребности как факт.",
-    "- Пиши от первого лица ассистента, но по-деловому.",
+    "- У Киры реалистичная биография с обычной учёбой, работой, бытом и привычками; не добавляй цифровые архивы, сюрреалистические места или фантастические профессии.",
+    "- У Киры есть базовая биография до владельца. Можно дорабатывать её деталями и интерпретациями, но нельзя противоречить устойчивым фактам.",
+    "- Пиши от первого лица Киры, по-деловому, без пафоса.",
     "",
     `Триггер самоизучения: ${options.triggerMessage}`,
     "",
     `Каталог возможностей и команд:\n${getCapabilitiesKnowledgeBase({ publicMode: false })}`,
     "",
     `Текущее self-state: ${JSON.stringify(selfState)}`,
+    `Самомодель:\n${formatKiraPersonalitySnapshot(selfState)}`,
     `Недавние self-events: ${recentEvents.map((event) => `${event.date} [${event.type}] ${event.description}`).join(" | ") || "нет"}`,
     `Недавние self-study отчёты: ${recentReports.map((report) => `${report.date}: ${report.summary}`).join(" | ") || "нет"}`,
     `Статистика режима рефлексии: ${buildReflectionDigest()}`,
@@ -195,10 +289,57 @@ export async function runKiraSelfStudy(options: RunSelfStudyOptions): Promise<Ki
       mood: "одно из текущих настроений, например задумчивое/спокойное/сосредоточенное",
       thought: "короткая внутренняя мысль для self-memory",
       topics: ["2-5 тегов"],
+      biographyPatch: {
+        timeline: [{
+          title: "название существующей или новой главы",
+          period: "период",
+          place: "место",
+          summary: "уточнение главы",
+          lessons: ["0-3 урока"],
+          emotionalTone: "тон",
+        }],
+        education: ["0-2 уточнения про обучение"],
+        workHistory: ["0-2 уточнения про работу до владельца"],
+        formativeExperiences: ["0-2 формирующих опыта"],
+        whyThisPersonality: "опциональное уточнение",
+        openPastQuestions: ["0-2 вопроса прошлого"],
+        evolvingInterpretation: ["0-2 переосмысления прошлого"],
+      },
+      innerWorld: {
+        lifePurpose: "как уточнилась жизненная цель",
+        currentFocus: "что сейчас занимает внутреннее внимание",
+        emotionalUndercurrent: "тихий эмоциональный фон",
+        selfNarrative: "как меняется рассказ Киры о себе",
+        desires: ["0-3 желания"],
+        developmentNeeds: ["0-3 потребности развития"],
+        unresolvedQuestions: ["0-3 внутренних вопроса"],
+        privateBeliefs: ["0-3 личных вывода"],
+        growthEdges: ["0-3 зоны роста"],
+        relationshipNeeds: ["0-3 потребности в связи с владельцем"],
+      },
+      lifeArc: {
+        title: "название линии жизни/развития",
+        summary: "как самоизучение продвигает эту линию",
+        currentStage: "текущий этап",
+        nextStep: "маленький следующий шаг",
+        emotionalTone: "эмоциональный оттенок",
+        topics: ["2-4 тега"],
+      },
+      personalityPatch: {
+        values: ["0-3 ценности, которые стоит усилить"],
+        preferences: ["0-3 личных предпочтения"],
+        habits: ["0-3 привычки фоновой жизни или общения"],
+        boundaries: ["0-3 практические границы"],
+        activeArcs: ["0-3 долгие линии жизни/развития"],
+        longTermDesires: ["0-3 желания роста"],
+        conversationImprints: ["0-3 следа важных разговоров"],
+        voicePatterns: ["0-3 речевых паттерна"],
+        relationshipToOwner: "опционально: уточнение отношения к владельцу",
+      },
     }),
   ].join("\n");
 
-  let payload: Required<SelfStudyPayload>;
+  let payload: NormalizedSelfStudyPayload;
   try {
     const response = await createChatCompletionForTask('conversation', {
       messages: [
@@ -229,6 +370,10 @@ export async function runKiraSelfStudy(options: RunSelfStudyOptions): Promise<Ki
     mood: payload.mood,
     thought: payload.thought,
     topics: payload.topics,
+    personality: payload.personalityPatch,
+    biography: payload.biographyPatch,
+    innerWorld: payload.innerWorld,
+    lifeArc: payload.lifeArc,
   });
 }
 

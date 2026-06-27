@@ -10,6 +10,7 @@ const { Pool } = require('pg');
 const { AI_PRESETS, AI_PRESET_NAMES, parseAiPresetName } = require('./aiPresetRegistry');
 const { createMonitoringService } = require('./monitoring');
 const { getPresetAvailability } = require('./presetAvailability');
+const { hasLegacyDigitalBiography } = require('../utils/legacyPersonalitySanitizer');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -35,6 +36,17 @@ const DEFAULT_PERSONALITY = {
     proactiveMessageHint: 'как будто ты сама написала первой',
   },
 };
+
+function sanitizeLegacyPersonality(profile) {
+  const next = { ...profile };
+  if (typeof next.persona === 'string' && hasLegacyDigitalBiography(next.persona)) {
+    next.persona = DEFAULT_PERSONALITY.KiraMindBot.persona;
+  }
+  if (typeof next.biography === 'string' && hasLegacyDigitalBiography(next.biography)) {
+    next.biography = DEFAULT_PERSONALITY.KiraMindBot.biography;
+  }
+  return next;
+}
 const SESSION_SECRET = crypto.createHash('sha256')
   .update(ADMIN_PASSWORD + 'kira-panel-2024')
   .digest('hex');
@@ -1089,7 +1101,7 @@ function buildAdminMemoryPayload({ id, profile, userId, domain, body, existingPa
     content,
     domain,
     botId: getMemoryBotId(profile),
-    characterName: 'Кира',
+    characterName: existingPayload?.characterName || readPersonality().KiraMindBot.characterName || 'ассистентка',
     userId,
     timestamp: contentChanged || !existingPayload ? now : existingPayload.timestamp || now,
     importance,
@@ -1746,7 +1758,7 @@ function readPersonality() {
     const raw = JSON.parse(fs.readFileSync(PERSONALITY_FILE, 'utf8'));
     // Merge with defaults so missing keys always have a value
     return {
-      KiraMindBot: { ...DEFAULT_PERSONALITY.KiraMindBot, ...raw.KiraMindBot },
+      KiraMindBot: sanitizeLegacyPersonality({ ...DEFAULT_PERSONALITY.KiraMindBot, ...raw.KiraMindBot }),
     };
   } catch {
     return DEFAULT_PERSONALITY;
@@ -1769,7 +1781,7 @@ app.post('/api/personality', requireAuth, (req, res) => {
     if (!KiraMindBot) {
       return res.status(400).json({ error: 'Неверный формат данных' });
     }
-    writePersonality({ KiraMindBot });
+    writePersonality({ KiraMindBot: sanitizeLegacyPersonality(KiraMindBot) });
     res.json({ success: true, message: '✅ Личность сохранена. Перезапустите бота для применения.' });
   } catch (err) {
     res.status(500).json({ error: `Ошибка: ${err.message}` });

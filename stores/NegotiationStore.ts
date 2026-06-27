@@ -21,6 +21,8 @@ export interface NegotiationSession {
     /** Сообщение в чате с пользователем, которое обновляется по ходу переговоров */
     summaryChatId?: number;
     summaryMessageId?: number;
+    /** Контекст адаптации под стиль и особенности контакта */
+    contactCommunicationContext?: string;
 }
 
 const MAX_SUMMARY_LENGTH = 4000;
@@ -63,6 +65,7 @@ export interface PendingNegotiationStart {
     contactName: string;
     taskDescription: string;
     firstMessageText: string;
+    contactCommunicationContext?: string;
 }
 
 type SessionKey = string;

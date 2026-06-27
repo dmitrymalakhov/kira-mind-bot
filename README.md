@@ -534,6 +534,8 @@ make remote-deploy-admin SERVER_IP=<ip>
 | `REMINDER_EXPIRY_TIME_MS` | Сколько хранить выполненные напоминания |
 | `KIRA_PROACTIVE_ENABLED` | Может ли бот писать первым |
 | `KIRA_PROACTIVE_INTERVAL_MS` | Интервал проактивных сообщений |
+| `KIRA_INNER_DEVELOPMENT_ENABLED` | Автономное внутреннее развитие без отправки сообщений |
+| `KIRA_INNER_DEVELOPMENT_INTERVAL_MS` | Интервал автономного развития self-memory |
 | `DM_REPORT_ENABLED` | Периодические отчёты о входящих |
 | `MEMORY_INSIGHT_ENABLED` | Проактивные инсайты из памяти |
 | `MEMORY_CONSOLIDATION_ENABLED` | Фоновая консолидация памяти |
