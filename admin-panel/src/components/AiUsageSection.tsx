@@ -105,6 +105,22 @@ function buildQuery(filters: FilterDraft): AiUsageQuery {
   return query;
 }
 
+function validateFilters(filters: FilterDraft): string | null {
+  if (filters.period !== 'custom') {
+    return null;
+  }
+
+  if (!filters.from && !filters.to) {
+    return 'Для custom периода укажите хотя бы одну дату';
+  }
+
+  if (filters.from && filters.to && filters.from > filters.to) {
+    return 'Дата From должна быть раньше To';
+  }
+
+  return null;
+}
+
 function StatCard({ label, value, caption }: { label: string; value: string; caption?: string }) {
   return (
     <Paper
@@ -262,6 +278,12 @@ export function AiUsageSection() {
   }, [data]);
 
   const load = async (filters: FilterDraft, isManualRefresh = false) => {
+    const validationError = validateFilters(filters);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
     if (isManualRefresh) {
       setRefreshing(true);
     } else {
