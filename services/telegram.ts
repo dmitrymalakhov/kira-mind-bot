@@ -79,27 +79,6 @@ export interface TelegramUserClientHealth {
     lastErrorAt: string | null;
 }
 
-interface TelegramUserClientHealthInitOptions {
-    preloadContacts?: boolean;
-    silent?: boolean;
-}
-
-interface TelegramUserClientHealthDependencies {
-    createClient: (credentials: TelegramUserClientCredentials) => TelegramClient;
-    connectAndAuthorize: (client: TelegramClient, options?: { timeoutMs?: number }) => Promise<boolean>;
-    disconnectClient: (client: TelegramClient) => Promise<void>;
-    reinitializeClient: (options: TelegramUserClientHealthInitOptions) => Promise<TelegramClient | undefined>;
-}
-
-interface TelegramUserClientHealthRuntimeState {
-    telegramClient?: TelegramClient | null;
-    telegramClientInitPromise?: Promise<TelegramClient | undefined> | null;
-    telegramClientLastError?: string | null;
-    telegramClientLastErrorAt?: string | null;
-    telegramClientLastReadyAt?: string | null;
-    telegramClientInitStartedAt?: string | null;
-}
-
 function getTelegramUserClientCredentials(): TelegramUserClientCredentials | null {
     const rawApiId = process.env.TELEGRAM_API_ID?.trim();
     const apiHash = process.env.TELEGRAM_API_HASH?.trim();
@@ -222,64 +201,6 @@ async function connectAndAuthorizeTelegramClient(
             }
         );
     });
-}
-
-const defaultTelegramUserClientHealthDependencies: TelegramUserClientHealthDependencies = {
-    createClient: createTelegramClient,
-    connectAndAuthorize: connectAndAuthorizeTelegramClient,
-    disconnectClient: disconnectTelegramClientSafely,
-    reinitializeClient: (options) => initTelegramClient(options),
-};
-
-let telegramUserClientHealthDependencies: TelegramUserClientHealthDependencies = {
-    ...defaultTelegramUserClientHealthDependencies,
-};
-
-export function __setTelegramUserClientHealthTestDependencies(
-    overrides: Partial<TelegramUserClientHealthDependencies>
-): void {
-    telegramUserClientHealthDependencies = {
-        ...telegramUserClientHealthDependencies,
-        ...overrides,
-    };
-}
-
-export function __resetTelegramUserClientHealthTestDependencies(): void {
-    telegramUserClientHealthDependencies = {
-        ...defaultTelegramUserClientHealthDependencies,
-    };
-}
-
-export function __setTelegramUserClientHealthRuntimeState(
-    state: TelegramUserClientHealthRuntimeState
-): void {
-    if (Object.prototype.hasOwnProperty.call(state, "telegramClient")) {
-        telegramClient = state.telegramClient ?? null;
-    }
-    if (Object.prototype.hasOwnProperty.call(state, "telegramClientInitPromise")) {
-        telegramClientInitPromise = state.telegramClientInitPromise ?? null;
-    }
-    if (Object.prototype.hasOwnProperty.call(state, "telegramClientLastError")) {
-        telegramClientLastError = state.telegramClientLastError ?? null;
-    }
-    if (Object.prototype.hasOwnProperty.call(state, "telegramClientLastErrorAt")) {
-        telegramClientLastErrorAt = state.telegramClientLastErrorAt ?? null;
-    }
-    if (Object.prototype.hasOwnProperty.call(state, "telegramClientLastReadyAt")) {
-        telegramClientLastReadyAt = state.telegramClientLastReadyAt ?? null;
-    }
-    if (Object.prototype.hasOwnProperty.call(state, "telegramClientInitStartedAt")) {
-        telegramClientInitStartedAt = state.telegramClientInitStartedAt ?? null;
-    }
-}
-
-export function __resetTelegramUserClientHealthRuntimeState(): void {
-    telegramClient = null;
-    telegramClientInitPromise = null;
-    telegramClientLastError = null;
-    telegramClientLastErrorAt = null;
-    telegramClientLastReadyAt = null;
-    telegramClientInitStartedAt = null;
 }
 
 /**
@@ -813,147 +734,42 @@ export async function getTelegramUserClientHealth(): Promise<TelegramUserClientH
         };
     }
 
-    const buildHealth = (
-        status: TelegramHealthStatus,
-        options: {
-            summary: string;
-            details: string;
-            connected: boolean;
-            authorized: boolean;
-            reconnecting: boolean;
-            dc: number | null;
-            endpoint: string | null;
-        }
-    ): TelegramUserClientHealth => ({
-        status,
-        summary: options.summary,
-        details: options.details,
-        checkedAt,
-        configured: true,
-        connected: options.connected,
-        authorized: options.authorized,
-        reconnecting: options.reconnecting,
-        dc: options.dc,
-        endpoint: options.endpoint,
-        error: telegramClientLastError,
-        lastReadyAt: telegramClientLastReadyAt,
-        lastErrorAt: telegramClientLastErrorAt,
-    });
-
     try {
         if (telegramClient) {
             const connected = Boolean(telegramClient.connected) && !telegramClient.disconnected;
             const authorized = await telegramClient.isUserAuthorized();
             const diagnostics = buildTelegramClientDiagnostics(telegramClient);
+            const status: TelegramHealthStatus = diagnostics.reconnecting
+                ? 'warn'
+                : connected && authorized
+                    ? 'ok'
+                    : 'down';
 
-            if (diagnostics.reconnecting) {
-                return buildHealth('warn', {
-                    summary: 'Telegram user-client подключён, но находится в reconnect-состоянии.',
-                    details: telegramClientLastError || 'Клиент держит reconnect-loop и ещё не восстановил стабильное соединение.',
-                    connected,
-                    authorized,
-                    reconnecting: diagnostics.reconnecting,
-                    dc: diagnostics.dc,
-                    endpoint: diagnostics.endpoint,
-                });
-            }
-
-            if (connected && authorized) {
-                return buildHealth('ok', {
-                    summary: 'Telegram user-client подключён и авторизован.',
-                    details: 'Клиент прошёл connect() и isUserAuthorized().',
-                    connected,
-                    authorized,
-                    reconnecting: diagnostics.reconnecting,
-                    dc: diagnostics.dc,
-                    endpoint: diagnostics.endpoint,
-                });
-            }
-
-            if (authorized && !connected) {
-                const recoveredClient = await telegramUserClientHealthDependencies.reinitializeClient({
-                    preloadContacts: false,
-                    silent: true,
-                });
-                const recoveryTarget = recoveredClient ?? telegramClient;
-                const recoveryDiagnostics = buildTelegramClientDiagnostics(recoveryTarget);
-                const recoveryConnected = Boolean(recoveryTarget?.connected) && !Boolean(recoveryTarget?.disconnected);
-                const recoveryAuthorized = recoveredClient
-                    ? await recoveredClient.isUserAuthorized().catch(() => false)
-                    : authorized;
-
-                if (recoveryDiagnostics.reconnecting) {
-                    return buildHealth('warn', {
-                        summary: 'Telegram user-client восстанавливает соединение после stale-состояния.',
-                        details: telegramClientLastError || 'Рантайм-клиент был авторизован, но потерял активное соединение и сейчас переподключается.',
-                        connected: recoveryConnected,
-                        authorized: recoveryAuthorized,
-                        reconnecting: true,
-                        dc: recoveryDiagnostics.dc,
-                        endpoint: recoveryDiagnostics.endpoint,
-                    });
-                }
-
-                if (recoveryConnected && recoveryAuthorized) {
-                    return buildHealth('ok', {
-                        summary: 'Telegram user-client восстановил соединение и авторизован.',
-                        details: 'Healthcheck обнаружил stale runtime-client и успешно переподключил текущее соединение.',
-                        connected: true,
-                        authorized: true,
-                        reconnecting: false,
-                        dc: recoveryDiagnostics.dc,
-                        endpoint: recoveryDiagnostics.endpoint,
-                    });
-                }
-
-                diagnosticClient = telegramUserClientHealthDependencies.createClient(credentials);
-                const diagnosticAuthorized = await telegramUserClientHealthDependencies.connectAndAuthorize(
-                    diagnosticClient,
-                    { timeoutMs: 5000 }
-                );
-                const diagnosticDiagnostics = buildTelegramClientDiagnostics(diagnosticClient);
-                const diagnosticConnected = Boolean(diagnosticClient.connected) && !diagnosticClient.disconnected;
-
-                if (diagnosticDiagnostics.reconnecting || (diagnosticConnected && diagnosticAuthorized)) {
-                    return buildHealth(diagnosticDiagnostics.reconnecting ? 'warn' : 'warn', {
-                        summary: diagnosticDiagnostics.reconnecting
-                            ? 'Telegram user-client доступен, но runtime-клиент ещё восстанавливается.'
-                            : 'Telegram user-client доступен, но основной runtime-клиент остаётся stale.',
-                        details: diagnosticDiagnostics.reconnecting
-                            ? 'Временный диагностический клиент подключился, а основной runtime-клиент ещё не завершил восстановление.'
-                            : 'Временный диагностический клиент подтвердил доступность Telegram-сессии, но основной runtime-клиент ещё не переподключён.',
-                        connected: recoveryConnected,
-                        authorized: true,
-                        reconnecting: diagnosticDiagnostics.reconnecting,
-                        dc: diagnosticDiagnostics.dc,
-                        endpoint: diagnosticDiagnostics.endpoint,
-                    });
-                }
-
-                return buildHealth('down', {
-                    summary: 'Telegram user-client не готов к работе.',
-                    details: telegramClientLastError || 'Авторизация сохранена, но ни runtime-клиент, ни диагностическое подключение не подтвердили готовность.',
-                    connected: diagnosticConnected,
-                    authorized: diagnosticAuthorized,
-                    reconnecting: diagnosticDiagnostics.reconnecting,
-                    dc: diagnosticDiagnostics.dc,
-                    endpoint: diagnosticDiagnostics.endpoint,
-                });
-            }
-
-            return buildHealth('down', {
-                summary: 'Telegram user-client не готов к работе.',
-                details: telegramClientLastError || 'Клиент не подтвердил готовность.',
+            return {
+                status,
+                summary: status === 'ok'
+                    ? 'Telegram user-client подключён и авторизован.'
+                    : status === 'warn'
+                        ? 'Telegram user-client подключён, но находится в reconnect-состоянии.'
+                        : 'Telegram user-client не готов к работе.',
+                details: status === 'ok'
+                    ? 'Клиент прошёл connect() и isUserAuthorized().'
+                    : telegramClientLastError || 'Клиент не подтвердил готовность.',
+                checkedAt,
+                configured: true,
                 connected,
                 authorized,
                 reconnecting: diagnostics.reconnecting,
                 dc: diagnostics.dc,
                 endpoint: diagnostics.endpoint,
-            });
+                error: telegramClientLastError,
+                lastReadyAt: telegramClientLastReadyAt,
+                lastErrorAt: telegramClientLastErrorAt,
+            };
         }
 
-        diagnosticClient = telegramUserClientHealthDependencies.createClient(credentials);
-        const authorized = await telegramUserClientHealthDependencies.connectAndAuthorize(
+        diagnosticClient = createTelegramClient(credentials);
+        const authorized = await connectAndAuthorizeTelegramClient(
             diagnosticClient,
             { timeoutMs: 5000 }
         );
@@ -965,7 +781,8 @@ export async function getTelegramUserClientHealth(): Promise<TelegramUserClientH
                 ? 'ok'
                 : 'down';
 
-        return buildHealth(status, {
+        return {
+            status,
             summary: status === 'ok'
                 ? 'Telegram user-client подключён и авторизован.'
                 : status === 'warn'
@@ -974,28 +791,39 @@ export async function getTelegramUserClientHealth(): Promise<TelegramUserClientH
             details: status === 'ok'
                 ? 'Клиент прошёл connect() и isUserAuthorized().'
                 : telegramClientLastError || 'Клиент не подтвердил готовность.',
+            checkedAt,
+            configured: true,
             connected,
             authorized,
             reconnecting: diagnostics.reconnecting,
             dc: diagnostics.dc,
             endpoint: diagnostics.endpoint,
-        });
+            error: telegramClientLastError,
+            lastReadyAt: telegramClientLastReadyAt,
+            lastErrorAt: telegramClientLastErrorAt,
+        };
     } catch (error) {
         rememberTelegramClientError(error);
-        return buildHealth(currentDiagnostics.connected ? 'warn' : 'down', {
+        return {
+            status: currentDiagnostics.connected ? 'warn' : 'down',
             summary: currentDiagnostics.connected
                 ? 'Telegram user-client отвечает нестабильно.'
                 : 'Telegram user-client не отвечает.',
             details: toErrorMessage(error),
+            checkedAt,
+            configured: true,
             connected: currentDiagnostics.connected,
             authorized: currentDiagnostics.connected,
             reconnecting: currentDiagnostics.reconnecting,
             dc: currentDiagnostics.dc,
             endpoint: currentDiagnostics.endpoint,
-        });
+            error: telegramClientLastError,
+            lastReadyAt: telegramClientLastReadyAt,
+            lastErrorAt: telegramClientLastErrorAt,
+        };
     } finally {
         if (diagnosticClient) {
-            await telegramUserClientHealthDependencies.disconnectClient(diagnosticClient);
+            await disconnectTelegramClientSafely(diagnosticClient);
         }
     }
 }

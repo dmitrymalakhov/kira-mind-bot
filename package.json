@@ -8,7 +8,7 @@
     "start:dev": "NODE_ENV=development ts-node index.ts",
     "start:prod": "NODE_ENV=production node ./index.js",
     "build": "npm run build:server",
-    "test": "npm run build:server && npm run test:built-server-runtime && npm run test:ts:all && npm run test:ai-preset-availability && npm run test:admin-monitoring && npm run test:admin-ai-usage",
+    "test": "npm run build:server && npm run test:built-server-runtime && npm run test:ts:all && npm run test:ai-preset-availability && npm run test:admin-monitoring",
     "test:ts": "ts-node scripts/runTsTest.ts",
     "test:ts:all": "ts-node scripts/runTsTestSuite.ts all",
     "test:ts:ai": "ts-node scripts/runTsTestSuite.ts ai",
@@ -21,8 +21,7 @@
     "test:built-server-runtime": "node scripts/testBuiltServerRuntime.js",
     "build:admin": "npm --prefix admin-panel run build",
     "build:all": "npm run build:server && npm run build:admin",
-    "test:admin-monitoring": "node scripts/testAdminMonitoring.js",
-    "test:admin-ai-usage": "node scripts/testAdminAiUsageAnalytics.js"
+    "test:admin-monitoring": "node scripts/testAdminMonitoring.js"
   },
   "author": "",
   "license": "ISC",

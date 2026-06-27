@@ -72,6 +72,32 @@ async function testSummaryAndFilters() {
       })) };
     }
 
+    if (sql.includes('LIMIT 5') && sql.includes('SELECT\n      model AS key')) {
+      if (sql.includes('ORDER BY COUNT(*) DESC')) {
+        return { rows: [
+          { key: 'gpt-5.4-lite', calls: 9, successfulCalls: 9, failedCalls: 0, fallbackCalls: 0, inputTokens: 18, outputTokens: 9, totalTokens: 27, avgLatencyMs: 110 },
+          { key: 'gpt-5.4-mini', calls: 5, successfulCalls: 4, failedCalls: 1, fallbackCalls: 1, inputTokens: 70, outputTokens: 20, totalTokens: 90, avgLatencyMs: 210 },
+        ] };
+      }
+      return { rows: [
+        { key: 'gpt-5.4-mini', calls: 5, successfulCalls: 4, failedCalls: 1, fallbackCalls: 1, inputTokens: 70, outputTokens: 20, totalTokens: 90, avgLatencyMs: 210 },
+        { key: 'gpt-5.4-nano', calls: 3, successfulCalls: 3, failedCalls: 0, fallbackCalls: 0, inputTokens: 20, outputTokens: 10, totalTokens: 30, avgLatencyMs: 140 },
+      ] };
+    }
+
+    if (sql.includes('LIMIT 5') && sql.includes('SELECT\n      "taskKey" AS key')) {
+      if (sql.includes('ORDER BY COUNT(*) DESC')) {
+        return { rows: [
+          { key: 'conversation', calls: 6, successfulCalls: 5, failedCalls: 1, fallbackCalls: 1, inputTokens: 80, outputTokens: 25, totalTokens: 105, avgLatencyMs: 220 },
+          { key: 'heartbeat', calls: 5, successfulCalls: 5, failedCalls: 0, fallbackCalls: 0, inputTokens: 5, outputTokens: 5, totalTokens: 10, avgLatencyMs: 80 },
+        ] };
+      }
+      return { rows: [
+        { key: 'conversation', calls: 6, successfulCalls: 5, failedCalls: 1, fallbackCalls: 1, inputTokens: 80, outputTokens: 25, totalTokens: 105, avgLatencyMs: 220 },
+        { key: 'intentClassification', calls: 4, successfulCalls: 4, failedCalls: 0, fallbackCalls: 1, inputTokens: 20, outputTokens: 15, totalTokens: 35, avgLatencyMs: 170 },
+      ] };
+    }
+
     if (sql.includes('SELECT\n      model AS key')) {
       return { rows: [
         { key: 'gpt-5.4-mini', calls: 5, successfulCalls: 4, failedCalls: 1, fallbackCalls: 1, inputTokens: 70, outputTokens: 20, totalTokens: 90, avgLatencyMs: 210 },
@@ -123,6 +149,8 @@ async function testSummaryAndFilters() {
   assert.strictEqual(summary.breakdowns.providers.at(-1).key, 'other');
   assert.strictEqual(summary.recentFailures.length, 1);
   assert.strictEqual(summary.leaders.modelsByTokens[0].key, 'gpt-5.4-mini');
+  assert.strictEqual(summary.leaders.modelsByCalls[0].key, 'gpt-5.4-lite');
+  assert.strictEqual(summary.leaders.tasksByCalls[1].key, 'heartbeat');
 }
 
 async function testDailyBucketsAndEmptyResults() {

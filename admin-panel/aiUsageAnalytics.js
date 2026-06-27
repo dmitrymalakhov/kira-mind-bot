@@ -233,6 +233,41 @@ async function queryBreakdown(pool, whereSql, values, sqlExpr) {
   return buildBreakdownWithOther(result.rows);
 }
 
+async function queryLeaders(pool, whereSql, values, sqlExpr, orderMetric) {
+  const orderBy = orderMetric === 'calls'
+    ? 'COUNT(*) DESC, COALESCE(SUM("totalTokens"), 0) DESC, 1 ASC'
+    : 'COALESCE(SUM("totalTokens"), 0) DESC, COUNT(*) DESC, 1 ASC';
+  const result = await pool.query(
+    `SELECT
+      ${sqlExpr} AS key,
+      COUNT(*)::int AS calls,
+      COUNT(*) FILTER (WHERE success = true)::int AS "successfulCalls",
+      COUNT(*) FILTER (WHERE success = false)::int AS "failedCalls",
+      COUNT(*) FILTER (WHERE COALESCE("fallbackUsed", false) = true)::int AS "fallbackCalls",
+      COALESCE(SUM("inputTokens"), 0) AS "inputTokens",
+      COALESCE(SUM("outputTokens"), 0) AS "outputTokens",
+      COALESCE(SUM("totalTokens"), 0) AS "totalTokens",
+      COALESCE(AVG("latencyMs"), 0) AS "avgLatencyMs"
+    FROM ai_usage_logs
+    WHERE ${whereSql}
+    GROUP BY 1
+    ORDER BY ${orderBy}
+    LIMIT 5`,
+    values,
+  );
+  return result.rows.map((row) => ({
+    key: row.key || 'unknown',
+    calls: toNumber(row.calls),
+    successfulCalls: toNumber(row.successfulCalls),
+    failedCalls: toNumber(row.failedCalls),
+    fallbackCalls: toNumber(row.fallbackCalls),
+    inputTokens: toNumber(row.inputTokens),
+    outputTokens: toNumber(row.outputTokens),
+    totalTokens: toNumber(row.totalTokens),
+    avgLatencyMs: toNumber(row.avgLatencyMs),
+  }));
+}
+
 function normalizeTimeseriesRows(rows) {
   return rows.map((row) => ({
     bucketStart: row.bucketStart instanceof Date ? row.bucketStart.toISOString() : new Date(row.bucketStart).toISOString(),
@@ -260,6 +295,10 @@ async function buildAiUsageSummary({ pool, query = {}, now = new Date() }) {
     taskRows,
     presetRows,
     operationRows,
+    modelsByTokensRows,
+    modelsByCallsRows,
+    tasksByTokensRows,
+    tasksByCallsRows,
     recentFailuresResult,
   ] = await Promise.all([
     pool.query(
@@ -300,6 +339,10 @@ async function buildAiUsageSummary({ pool, query = {}, now = new Date() }) {
     queryBreakdown(pool, whereSql, values, '"taskKey"'),
     queryBreakdown(pool, whereSql, values, 'preset'),
     queryBreakdown(pool, whereSql, values, `COALESCE(operation, 'unknown')`),
+    queryLeaders(pool, whereSql, values, 'model', 'tokens'),
+    queryLeaders(pool, whereSql, values, 'model', 'calls'),
+    queryLeaders(pool, whereSql, values, '"taskKey"', 'tokens'),
+    queryLeaders(pool, whereSql, values, '"taskKey"', 'calls'),
     pool.query(
       `SELECT
         "createdAt",
@@ -362,10 +405,10 @@ async function buildAiUsageSummary({ pool, query = {}, now = new Date() }) {
     },
     breakdowns,
     leaders: {
-      modelsByTokens: [...breakdowns.models].sort((a, b) => b.totalTokens - a.totalTokens || b.calls - a.calls).slice(0, 5),
-      modelsByCalls: [...breakdowns.models].sort((a, b) => b.calls - a.calls || b.totalTokens - a.totalTokens).slice(0, 5),
-      tasksByTokens: [...breakdowns.tasks].sort((a, b) => b.totalTokens - a.totalTokens || b.calls - a.calls).slice(0, 5),
-      tasksByCalls: [...breakdowns.tasks].sort((a, b) => b.calls - a.calls || b.totalTokens - a.totalTokens).slice(0, 5),
+      modelsByTokens: modelsByTokensRows,
+      modelsByCalls: modelsByCallsRows,
+      tasksByTokens: tasksByTokensRows,
+      tasksByCalls: tasksByCallsRows,
     },
     recentFailures: recentFailuresResult.rows.map((row) => ({
       createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : new Date(row.createdAt).toISOString(),
