@@ -127,6 +127,40 @@ prompt_default() {
     eval "$VAR=\"${VAL:-$DEFAULT}\""
 }
 
+sanitize_instance_name() {
+    local raw="${1:-kira-mind-bot}"
+    local sanitized
+
+    sanitized="$(printf '%s' "$raw" \
+        | tr '[:upper:]' '[:lower:]' \
+        | tr -cs 'a-z0-9_-' '-' \
+        | sed -E 's/^-+//; s/-+$//; s/-{2,}/-/g')"
+
+    if [[ ! "$sanitized" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+        sanitized="kira-mind-bot"
+    fi
+
+    printf '%s' "$sanitized"
+}
+
+prompt_instance_name() {
+    local default_name="kira-mind-bot"
+    local val=""
+
+    while true; do
+        echo -e "  ${YELLOW}→ Используется для Docker project/volumes. Разрешены: a-z, 0-9, _ и -.${NC}"
+        read -r -p "  Техническое имя инстанса [$default_name]: " val
+        val="$(sanitize_instance_name "${val:-$default_name}")"
+
+        if [[ "$val" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+            KIRA_INSTANCE_NAME="$val"
+            return
+        fi
+
+        echo -e "  ${RED}Имя должно начинаться с латинской буквы или цифры и содержать только a-z, 0-9, _ и -.${NC}"
+    done
+}
+
 # OpenAI
 echo -e "\n${BOLD}OpenAI${NC}"
 prompt_required OPENAI_API_KEY "OpenAI API Key" "https://platform.openai.com/api-keys"
@@ -140,6 +174,9 @@ prompt_optional ZAI_API_KEY "Z.ai API Key" "https://z.ai/manage-apikey/apikey-li
 echo -e "\n${BOLD}Telegram Bot${NC}"
 prompt_required KIRA_BOT_TOKEN "Токен бота" "Создать: напиши @BotFather → /newbot"
 prompt_required KIRA_ALLOWED_USER_ID "Твой Telegram User ID" "Узнать: напиши @userinfobot"
+
+echo -e "\n${BOLD}Docker-инстанс${NC}"
+prompt_instance_name
 
 # Владелец
 echo -e "\n${BOLD}Имя владельца бота${NC}"
@@ -196,6 +233,7 @@ ZAI_API_KEY=${ZAI_API_KEY}
 
 KIRA_BOT_TOKEN=${KIRA_BOT_TOKEN}
 KIRA_ALLOWED_USER_ID=${KIRA_ALLOWED_USER_ID}
+KIRA_INSTANCE_NAME=${KIRA_INSTANCE_NAME:-kira-mind-bot}
 
 DB_HOST=postgres
 DB_PORT=5432

@@ -143,7 +143,13 @@ ssh root@${SERVER_IP} << EOF
   ls -la
   echo ""
 
-  # personality.json — создаём из шаблона только при первом деплое, никогда не перезаписываем
+    if [ -f "/root/source/kira-mind-bot/.env.production" ]; then
+      set -a; source /root/source/kira-mind-bot/.env.production; set +a
+    fi
+    KIRA_INSTANCE_NAME="\${KIRA_INSTANCE_NAME:-kira-mind-bot}"
+    echo "KIRA_INSTANCE_NAME=\$KIRA_INSTANCE_NAME" > .env
+
+    # personality.json — создаём из шаблона только при первом деплое, никогда не перезаписываем
   if [ ! -f "/root/source/personality.json" ]; then
     if [ -f "/root/source/personality.json.template" ]; then
       cp /root/source/personality.json.template /root/source/personality.json
@@ -158,7 +164,7 @@ ssh root@${SERVER_IP} << EOF
 
   if [ "$DEPLOY_ADMIN_PANEL" = true ]; then
     # Учётные данные admin-panel
-    ADMIN_STATE_FILE="/root/.kira-admin-state"
+    ADMIN_STATE_FILE="/root/source/.kira-admin-state"
     if [ -f "\$ADMIN_STATE_FILE" ]; then
       set -a; source "\$ADMIN_STATE_FILE"; set +a
     fi

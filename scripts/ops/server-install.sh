@@ -81,6 +81,42 @@ prompt_default() {
     eval "$VAR=\"${VAL:-$DEFAULT}\""
 }
 
+sanitize_instance_name() {
+    local raw="${1:-$DEFAULT_KIRA_INSTANCE_NAME}"
+    local sanitized
+
+    sanitized="$(printf '%s' "$raw" \
+        | tr '[:upper:]' '[:lower:]' \
+        | tr -cs 'a-z0-9_-' '-' \
+        | sed -E 's/^-+//; s/-+$//; s/-{2,}/-/g')"
+
+    if [[ ! "$sanitized" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+        sanitized="$DEFAULT_KIRA_INSTANCE_NAME"
+    fi
+
+    printf '%s' "$sanitized"
+}
+
+prompt_instance_name() {
+    local default_name
+    local val=""
+
+    default_name="$(sanitize_instance_name "${KIRA_INSTANCE_NAME:-$(basename "$REPO_ROOT")}")"
+
+    while true; do
+        echo -e "  ${YELLOW}→ Используется для Docker project/volumes. Разрешены: a-z, 0-9, _ и -.${NC}"
+        read -r -p "  Техническое имя инстанса [$default_name]: " val
+        val="$(sanitize_instance_name "${val:-$default_name}")"
+
+        if [[ "$val" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+            KIRA_INSTANCE_NAME="$val"
+            return
+        fi
+
+        echo -e "  ${RED}Имя должно начинаться с латинской буквы или цифры и содержать только a-z, 0-9, _ и -.${NC}"
+    done
+}
+
 load_existing_env() {
     if [ -f "$ENV_FILE" ]; then
         load_env_if_present
@@ -100,6 +136,7 @@ ZAI_API_KEY=${ZAI_API_KEY}
 
 KIRA_BOT_TOKEN=${KIRA_BOT_TOKEN}
 KIRA_ALLOWED_USER_ID=${KIRA_ALLOWED_USER_ID}
+KIRA_INSTANCE_NAME=${KIRA_INSTANCE_NAME:-$DEFAULT_KIRA_INSTANCE_NAME}
 
 DB_HOST=postgres
 DB_PORT=5432
@@ -232,6 +269,9 @@ collect_config() {
     echo -e "\n${BOLD}Telegram Bot${NC}"
     prompt_required_default KIRA_BOT_TOKEN "Токен бота" "${KIRA_BOT_TOKEN:-}" "Создать: напиши @BotFather → /newbot"
     prompt_required_default KIRA_ALLOWED_USER_ID "Твой Telegram User ID" "${KIRA_ALLOWED_USER_ID:-}" "Узнать: напиши @userinfobot"
+
+    echo -e "\n${BOLD}Docker-инстанс${NC}"
+    prompt_instance_name
 
     echo -e "\n${BOLD}Имя владельца бота${NC}"
     prompt_default OWNER_NAME "Как тебя зовут (для бота)" "${OWNER_NAME:-Пользователь}"

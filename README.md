@@ -472,6 +472,7 @@ make remote-deploy-admin SERVER_IP=<ip>
 | `OPENAI_API_KEY` | LLM, embeddings, web search, Whisper, анализ изображений |
 | `KIRA_BOT_TOKEN` | Токен Telegram-бота |
 | `KIRA_ALLOWED_USER_ID` | Telegram User ID владельца |
+| `KIRA_INSTANCE_NAME` | Имя Docker Compose-инстанса; нужно для нескольких копий на одном VPS |
 | `DB_PASSWORD` | Пароль PostgreSQL |
 
 ### Дополнительные функции
@@ -517,6 +518,26 @@ make remote-deploy-admin SERVER_IP=<ip>
 | `VECTOR_SEARCH_THRESHOLD` | Глобальный порог релевантности поиска памяти |
 
 `PineconeVectorService` есть в коде, но основной поддерживаемый вариант сейчас Qdrant.
+
+### Несколько инстансов на одном VPS
+
+Для запуска отдельных копий бота в разных папках задайте уникальный `KIRA_INSTANCE_NAME` и разные порты админки:
+
+```env
+# /opt/kira-mind-bot-me/.env.production
+KIRA_INSTANCE_NAME=kira-me
+ADMIN_PORT=8080
+```
+
+```env
+# /opt/kira-mind-bot-wife/.env.production
+KIRA_INSTANCE_NAME=kira-wife
+ADMIN_PORT=8081
+```
+
+`KIRA_INSTANCE_NAME` используется как Docker Compose project name и изолирует контейнеры, volumes и сеть стека. Если переменная не задана, используется `kira-mind-bot`.
+Qdrant доступен внутри Docker-сети по `http://qdrant:6333` и по умолчанию не публикуется на host-порты, чтобы разные инстансы не конфликтовали за `6333/6334`.
+Для каждой копии используйте отдельные `KIRA_BOT_TOKEN`, `KIRA_ALLOWED_USER_ID`, `.env.production` и `personality.json`.
 
 ### Telegram User Client
 
