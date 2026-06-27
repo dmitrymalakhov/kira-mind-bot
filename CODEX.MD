@@ -13,6 +13,7 @@
 - Contact-aware memory logic должна быть централизована:
   - правила идентичности контакта, tag-based matching и проверки subject-а не дублируются по модулям;
   - retrieval, proactive hints и memory-gap должны использовать одни и те же helper-ы contact-memory.
+  - `contact_username` считается сильным identity key наравне с `contact_id`, но не заменяет backward-compatible теги `contact_name/contact_alias/contact_key`.
 
 ## Локальные соглашения
 - Commit message пишутся в формате Conventional Commits: `<type>(optional-scope): <summary>`.

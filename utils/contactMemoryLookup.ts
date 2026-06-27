@@ -106,10 +106,15 @@ function contactFactMatchesName(content: string, tags: string[] | undefined, nam
 
     for (const tag of tags ?? []) {
         const value = String(tag);
-        if (!value.startsWith('contact:') && !value.startsWith('contact_name:') && !value.startsWith('contact_alias:')) {
+        if (!value.startsWith('contact:') &&
+            !value.startsWith('contact_name:') &&
+            !value.startsWith('contact_alias:') &&
+            !value.startsWith('contact_username:')) {
             continue;
         }
-        const normalizedTag = normalizeContactLookupValue(value.replace(/^contact(_name|_alias)?:/, ''));
+        const normalizedTag = normalizeContactLookupValue(
+            value.replace(/^contact(_name|_alias)?:/, '').replace(/^contact_username:/, '')
+        );
         if (normalizedNames.some(name => normalizedTag === name)) return true;
     }
 
@@ -135,12 +140,16 @@ async function getContactFacts(ctx: BotContext, contactName: string, contact?: C
         }
     }
 
-    const fallbackQueries = [...new Set([contactName, displayName].filter(Boolean))];
+    const fallbackQueries = [...new Set([contactName, displayName, contact?.username ? `@${String(contact.username).replace(/^@/, '')}` : ''].filter(Boolean))];
     for (const query of fallbackQueries) {
         const matches = await svc.searchAllDomains(query, userId, FALLBACK_CONTACT_SEARCH_LIMIT).catch(() => []);
         for (const match of matches) {
             if (seen.has(match.id)) continue;
-            if (!contactFactMatchesName(match.content, match.tags, [contactName, displayName])) continue;
+            if (!contactFactMatchesName(
+                match.content,
+                match.tags,
+                [contactName, displayName, contact?.username ? `@${String(contact.username).replace(/^@/, '')}` : ''].filter(Boolean)
+            )) continue;
             seen.set(match.id, match);
         }
     }

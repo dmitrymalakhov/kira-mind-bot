@@ -9,6 +9,7 @@ import { SearchResult } from '../services/interfaces/IVectorService';
 import {
     contactNamesLikelyMatch,
     contactIdentityTags,
+    contactUsernameFromTags,
     isContactMemoryEntry,
     normalizeContactLookupValue,
     resolveContactIdentity,
@@ -179,6 +180,7 @@ export async function isPersonKnownForMemoryGap(
         fallbackQueries.add(resolution.displayName);
         if (resolution.contact?.firstName) fallbackQueries.add(resolution.contact.firstName);
         if (resolution.contact?.lastName) fallbackQueries.add(resolution.contact.lastName);
+        if (resolution.contact?.username) fallbackQueries.add(`@${String(resolution.contact.username).replace(/^@/, '')}`);
     }
 
     for (const query of fallbackQueries) {
@@ -212,15 +214,22 @@ function memoryMatchesKnownName(
             value.startsWith('contact:') ||
             value.startsWith('contact_name:') ||
             value.startsWith('contact_alias:') ||
+            value.startsWith('contact_username:') ||
             value.startsWith('contact_key:')
         ) {
             memoryVariants.add(
                 normalizeContactLookupValue(
-                    value.replace(/^contact(_name|_alias|_key)?:/, '').replace(/_/g, ' ')
+                    value
+                        .replace(/^contact(_name|_alias|_key)?:/, '')
+                        .replace(/^contact_username:/, '')
+                        .replace(/_/g, ' ')
                 )
             );
         }
     }
+
+    const memoryUsername = contactUsernameFromTags(memory.tags);
+    if (memoryUsername && memoryUsername === normalizedName) return true;
 
     const memoryText = normalizeContactLookupValue(memory.content);
     if (!isSingleTokenQuery && memoryText.includes(normalizedName)) return true;

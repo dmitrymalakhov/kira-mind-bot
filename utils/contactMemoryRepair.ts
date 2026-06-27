@@ -16,6 +16,7 @@ export interface ContactIdentityRepairResult {
 function hasStableContactIdentity(tags: string[] | undefined): boolean {
     return (tags ?? []).some((tag) =>
         String(tag).startsWith('contact_id:') ||
+        String(tag).startsWith('contact_username:') ||
         String(tag).startsWith('contact_key:')
     );
 }
@@ -30,6 +31,7 @@ function legacyContactName(memory: Pick<MemoryEntry, 'content' | 'tags'>): strin
         if (value.startsWith('contact_name:')) return value.replace('contact_name:', '').trim();
         if (value.startsWith('contact:')) return value.replace('contact:', '').trim();
         if (value.startsWith('contact_alias:')) return value.replace('contact_alias:', '').trim();
+        if (value.startsWith('contact_username:')) return value.replace('contact_username:', '').trim();
     }
 
     const prefix = memory.content.match(/^\[([^\]]+)\]\s+/);

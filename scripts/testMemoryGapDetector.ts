@@ -65,29 +65,33 @@ function makeContext(): BotContext {
 }
 
 const contacts = ContactsStore.getInstance();
-contacts.saveContact({ id: 1001, firstName: "Юрий", lastName: "Никишенко" });
-contacts.saveContact({ id: 1002, firstName: "Дмитрий", lastName: "Малахов" });
+contacts.saveContact({ id: 1001, firstName: "Лира", lastName: "Примерова", username: "contact_alpha" });
+contacts.saveContact({ id: 1002, firstName: "Павел", lastName: "Тестов" });
+contacts.saveContact({ id: 1003, firstName: "Леди", lastName: "Тестория" });
 
-const knownYuriyMemory = makeSearchResult(
-    "[Юрий Никишенко] Рабочий контакт по PMP и оркестратору.",
-    ["contact_name:Юрий Никишенко", "contact_alias:Юра Никишенко"]
+const knownLiraMemory = makeSearchResult(
+    "[Лира Примерова] Рабочий контакт по PMP и оркестратору.",
+    ["contact_username:@contact_alpha"]
 );
-const dmitryMalakhovMemory = makeSearchResult(
-    "[Дмитрий Малахов] вылет в 01:50.",
-    ["contact_name:Дмитрий Малахов"]
+const pavelTestovMemory = makeSearchResult(
+    "[Павел Тестов] вылет в 01:50.",
+    ["contact_name:Павел Тестов"]
+);
+const ladyTestoriaMemory = makeSearchResult(
+    "[Леди Тестория] ждёт статус по проекту.",
+    ["contact_id:1003"]
 );
 
 const vectorService = makeVectorService(
     new Map<string, SearchResult[]>([
-        ["contact:Юрий Никишенко", [knownYuriyMemory]],
-        ["contact_name:Юрий Никишенко", [knownYuriyMemory]],
-        ["contact_alias:Юра Никишенко", [knownYuriyMemory]],
+        ["contact_username:@contact_alpha", [knownLiraMemory]],
+        ["contact_id:1003", [ladyTestoriaMemory]],
     ]),
     new Map<string, SearchResult[]>([
-        ["Юра Никишенко", [knownYuriyMemory]],
-        ["Юрий Никишенко", [knownYuriyMemory]],
-        ["Юрий", [knownYuriyMemory]],
-        ["Дмитрий", [dmitryMalakhovMemory]],
+        ["Лира Примерова", [knownLiraMemory]],
+        ["@contact_alpha", [knownLiraMemory]],
+        ["Павел", [pavelTestovMemory]],
+        ["Леди Тестория", [ladyTestoriaMemory]],
     ])
 );
 
@@ -95,7 +99,7 @@ const noSearchHits = async (): Promise<SearchResult[]> => [];
 
 async function run(): Promise<void> {
     assert.equal(
-        await isPersonKnownForMemoryGap(makeContext(), "Юра Никишенко", {
+        await isPersonKnownForMemoryGap(makeContext(), "Лира Примерова", {
             searchAllDomainsMemories: async () => [],
             vectorService,
         }),
@@ -103,7 +107,7 @@ async function run(): Promise<void> {
     );
 
     assert.equal(
-        await isPersonKnownForMemoryGap(makeContext(), "Дмитрий", {
+        await isPersonKnownForMemoryGap(makeContext(), "Павел", {
             searchAllDomainsMemories: noSearchHits,
             vectorService,
         }),
@@ -111,8 +115,16 @@ async function run(): Promise<void> {
     );
 
     assert.equal(
-        await isPersonKnownForMemoryGap(makeContext(), "Юрий Никишенко", {
-            searchAllDomainsMemories: async () => [knownYuriyMemory],
+        await isPersonKnownForMemoryGap(makeContext(), "Леди Тестория", {
+            searchAllDomainsMemories: async () => [],
+            vectorService,
+        }),
+        true
+    );
+
+    assert.equal(
+        await isPersonKnownForMemoryGap(makeContext(), "Лира Примерова", {
+            searchAllDomainsMemories: async () => [knownLiraMemory],
             vectorService: null,
         }),
         true

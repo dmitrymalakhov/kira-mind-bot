@@ -5,25 +5,26 @@ import {
     isMemoryEntryAllowedForContactScope,
     type ContactIdentityScope,
 } from "../utils/contactMemory";
+import type { Contact } from "../stores/ContactsStore";
 
 assert.equal(
-    extractContactReferenceFromText("Юра Никишенко опять пропал и не отвечает"),
-    "Юра Никишенко"
+    extractContactReferenceFromText("Лира Примерова опять пропала и не отвечает"),
+    "Лира Примерова"
 );
 
 assert.equal(
-    extractContactReferenceFromText("Дмитрий молчит уже неделю"),
-    "Дмитрий"
+    extractContactReferenceFromText("Павел молчит уже неделю"),
+    "Павел"
 );
 
 assert.equal(
-    extractContactReferenceFromText("Мне с утра очень надо поговорить с Юрой Никишенко"),
-    "Юрой Никишенко"
+    extractContactReferenceFromText("Мне с утра очень надо поговорить с Лирой Примеровой"),
+    "Лирой Примеровой"
 );
 
 assert.equal(
-    extractContactReferenceFromText("Напомни мне с утра поговорить с Юрой Никишенко"),
-    "Юрой Никишенко"
+    extractContactReferenceFromText("Напомни мне с утра поговорить с Лирой Примеровой"),
+    "Лирой Примеровой"
 );
 
 assert.equal(
@@ -41,24 +42,38 @@ assert.equal(
     null
 );
 
-assert.equal(contactNamesLikelyMatch("Юра Никишенко", "Юрий Никишенко"), true);
-assert.equal(contactNamesLikelyMatch("Юрий Никишенко", "Юра Никишенко"), true);
-assert.equal(contactNamesLikelyMatch("Дмитрий Малахов", "Юрий Никишенко"), false);
-assert.equal(contactNamesLikelyMatch("Юрий Никишенко", "Юрий Никонов"), false);
-assert.equal(contactNamesLikelyMatch("Дмитрий Малахов", "Дмитрий Сидоров"), false);
-assert.equal(contactNamesLikelyMatch("Дмитрий", "Дмитрий Малахов"), false);
+assert.equal(contactNamesLikelyMatch("Лира Примерова", "Лира Туманова"), false);
+assert.equal(contactNamesLikelyMatch("Лира Туманова", "Лира Примерова"), false);
+assert.equal(contactNamesLikelyMatch("Павел Тестов", "Лира Примерова"), false);
+assert.equal(contactNamesLikelyMatch("Лира Примерова", "Лира Дымова"), false);
+assert.equal(contactNamesLikelyMatch("Павел Тестов", "Павел Марков"), false);
+assert.equal(contactNamesLikelyMatch("Павел", "Павел Тестов"), false);
 
 const obliqueScope: ContactIdentityScope = {
     status: "resolved",
-    queryName: "Юрой Никишенко",
-    displayName: "Юра Никишенко",
+    queryName: "Лирой Примеровой",
+    displayName: "Лира Примерова",
+};
+
+const usernameScopedContact: Contact = {
+    id: 42,
+    firstName: "Леди",
+    lastName: "Тестория",
+    username: "contact_alpha",
+};
+
+const usernameScope: ContactIdentityScope = {
+    status: "resolved",
+    queryName: "Леди Тестория",
+    displayName: "Леди Тестория",
+    contact: usernameScopedContact,
 };
 
 assert.equal(
     isMemoryEntryAllowedForContactScope(
         {
-            content: "[Юрий Никишенко] ждёт отчёт по итогам Q2.",
-            tags: ["contact_name:Юрий Никишенко", "contact_alias:Юра Никишенко"],
+            content: "[Лира Примерова] ждёт отчёт по итогам Q2.",
+            tags: ["contact_name:Лира Примерова", "contact_alias:Лира Примерова"],
         },
         obliqueScope
     ),
@@ -68,8 +83,8 @@ assert.equal(
 assert.equal(
     isMemoryEntryAllowedForContactScope(
         {
-            content: "[Дмитрий Малахов] вылет в 01:50.",
-            tags: ["contact_name:Дмитрий Малахов"],
+            content: "[Павел Тестов] вылет в 01:50.",
+            tags: ["contact_name:Павел Тестов"],
         },
         obliqueScope
     ),
@@ -79,16 +94,38 @@ assert.equal(
 assert.equal(
     isMemoryEntryAllowedForContactScope(
         {
-            content: "[Дмитрий Малахов] просил вернуться к обсуждению позже.",
-            tags: ["contact_name:Дмитрий Малахов"],
+            content: "[Павел Тестов] просил вернуться к обсуждению позже.",
+            tags: ["contact_name:Павел Тестов"],
         },
         {
             status: "resolved",
-            queryName: "Дмитрий",
-            displayName: "Дмитрий",
+            queryName: "Павел",
+            displayName: "Павел",
         }
     ),
     false
+);
+
+assert.equal(
+    isMemoryEntryAllowedForContactScope(
+        {
+            content: "[Леди Тестория] прислала новые договорённости.",
+            tags: ["contact_username:@contact_alpha"],
+        },
+        usernameScope
+    ),
+    true
+);
+
+assert.equal(
+    isMemoryEntryAllowedForContactScope(
+        {
+            content: "[Леди Тестория] прислала новые договорённости.",
+            tags: ["contact_id:42"],
+        },
+        usernameScope
+    ),
+    true
 );
 
 console.log("contactMemory matching checks passed");

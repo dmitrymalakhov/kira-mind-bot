@@ -45,28 +45,6 @@ const NON_CONTACT_LEADING_WORDS_SOURCE = [
     'могу', 'нужно', 'надо', 'хочу', 'пора', 'если',
 ];
 
-const RUSSIAN_NAME_VARIANTS = new Map<string, string>([
-    ['yura', 'yurii'],
-    ['yuriy', 'yurii'],
-    ['yurii', 'yurii'],
-    ['dima', 'dmitrii'],
-    ['dimon', 'dmitrii'],
-    ['dmitriy', 'dmitrii'],
-    ['dmitrii', 'dmitrii'],
-    ['sasha', 'aleksandr'],
-    ['alexander', 'aleksandr'],
-    ['aleksandr', 'aleksandr'],
-    ['serezha', 'sergei'],
-    ['seryozha', 'sergei'],
-    ['seryoja', 'sergei'],
-    ['sergei', 'sergei'],
-    ['andrey', 'andrei'],
-    ['andrei', 'andrei'],
-    ['andryusha', 'andrei'],
-    ['evgeniy', 'evgenii'],
-    ['evgenii', 'evgenii'],
-]);
-
 export function normalizeContactLookupValue(s: string): string {
     return toLatin(s)
         .normalize('NFD')
@@ -100,7 +78,7 @@ export function contactIdentityTags(contactName: string, contact?: Contact): str
     ];
     if (contact) {
         tags.push(`contact_id:${contact.id}`);
-        if (contact.username) tags.push(`contact_username:${contact.username}`);
+        if (contact.username) tags.push(`contact_username:@${String(contact.username).replace(/^@/, '')}`);
     } else {
         tags.push(`contact_key:${normalizeContactLookupValue(display).replace(/\s+/g, '_')}`);
     }
@@ -161,6 +139,17 @@ export function contactIdFromTags(tags: string[] | undefined): string | null {
     return tag ? String(tag).replace('contact_id:', '').trim() : null;
 }
 
+export function contactUsernameFromTags(tags: string[] | undefined): string | null {
+    const tag = (tags ?? []).find(value => String(value).startsWith('contact_username:'));
+    if (!tag) return null;
+    return normalizeContactLookupValue(String(tag).replace('contact_username:', '').trim());
+}
+
+export function contactKeyFromTags(tags: string[] | undefined): string | null {
+    const tag = (tags ?? []).find(value => String(value).startsWith('contact_key:'));
+    return tag ? String(tag).replace('contact_key:', '').trim() : null;
+}
+
 export function contactNamesFromTags(tags: string[] | undefined): Set<string> {
     const names = new Set<string>();
     for (const tag of tags ?? []) {
@@ -178,6 +167,7 @@ export function hasContactMemoryTags(tags: string[] | undefined): boolean {
         String(tag).startsWith('contact_name:') ||
         String(tag).startsWith('contact_alias:') ||
         String(tag).startsWith('contact_id:') ||
+        String(tag).startsWith('contact_username:') ||
         String(tag).startsWith('contact_key:')
     );
 }
@@ -201,6 +191,33 @@ export function isMemoryEntryAllowedForContactScope(
     const candidateContactId = contactIdFromTags(memory.tags);
     if (candidateContactId) {
         return scope.contact ? candidateContactId === String(scope.contact.id) : false;
+    }
+
+    const allowedUsernames = new Set(
+        contactIdentityTags(scope.queryName, scope.contact)
+            .filter(tag => tag.startsWith('contact_username:'))
+            .map(tag => normalizeContactLookupValue(tag.replace('contact_username:', '')))
+    );
+    if (scope.contact?.username) {
+        allowedUsernames.add(normalizeContactLookupValue(scope.contact.username));
+    }
+
+    const candidateUsername = contactUsernameFromTags(memory.tags);
+    if (candidateUsername) {
+        return allowedUsernames.size > 0 && allowedUsernames.has(candidateUsername);
+    }
+
+    const candidateContactKey = contactKeyFromTags(memory.tags);
+    if (candidateContactKey) {
+        const allowedContactKeys = new Set(
+            contactIdentityTags(scope.queryName, scope.contact)
+                .filter(tag => tag.startsWith('contact_key:'))
+                .map(tag => String(tag).replace('contact_key:', '').trim())
+        );
+        if (!scope.contact) {
+            allowedContactKeys.add(normalizeContactLookupValue(scope.displayName ?? scope.queryName).replace(/\s+/g, '_'));
+        }
+        return allowedContactKeys.size > 0 && allowedContactKeys.has(candidateContactKey);
     }
 
     const allowedNames = new Set(
@@ -287,10 +304,6 @@ function isCloseToken(query: string, value: string): boolean {
     return levenshtein(query, value) <= maxDistance;
 }
 
-function canonicalizeContactNameToken(token: string): string {
-    return RUSSIAN_NAME_VARIANTS.get(token) ?? token;
-}
-
 export function contactNamesLikelyMatch(left: string, right: string): boolean {
     const normalizedLeft = normalizeContactLookupValue(left);
     const normalizedRight = normalizeContactLookupValue(right);
@@ -299,12 +312,10 @@ export function contactNamesLikelyMatch(left: string, right: string): boolean {
 
     const leftTokens = normalizedLeft
         .split(/\s+/)
-        .filter(Boolean)
-        .map(canonicalizeContactNameToken);
+        .filter(Boolean);
     const rightTokens = normalizedRight
         .split(/\s+/)
-        .filter(Boolean)
-        .map(canonicalizeContactNameToken);
+        .filter(Boolean);
     if (leftTokens.length === 0 || rightTokens.length === 0) return false;
 
     if (leftTokens.length === rightTokens.length) {
