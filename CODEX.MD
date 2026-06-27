@@ -9,6 +9,10 @@
   - bot runtime публикует узкие internal health endpoints;
   - admin backend агрегирует их вместе с infra/API checks;
   - бизнес-логика бота не должна содержать admin-oriented monitoring orchestration.
+- AI usage analytics считает токены только по `usage`, который вернул провайдер:
+  - исходящий HTTP-трафик не используется как источник правды для токенов;
+  - runtime пишет только дешёвые event-log записи в `ai_usage_logs`;
+  - все агрегации, breakdown и time-series считаются только в admin backend по запросу UI.
 - Reminder-flows, которые продолжаются следующим сообщением пользователя после callback-кнопки, считаются context-critical и должны переживать отдельные Telegram updates через session storage.
 - Contact-aware memory logic должна быть централизована:
   - правила идентичности контакта, tag-based matching и проверки subject-а не дублируются по модулям;
