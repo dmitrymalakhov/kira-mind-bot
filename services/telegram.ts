@@ -79,6 +79,42 @@ export interface TelegramUserClientHealth {
     lastErrorAt: string | null;
 }
 
+function resolveTelegramHealthState(
+    connected: boolean,
+    authorized: boolean,
+    reconnecting: boolean
+): { status: TelegramHealthStatus; summary: string; details: string } {
+    if (reconnecting) {
+        return {
+            status: 'warn',
+            summary: 'Telegram user-client подключён, но находится в reconnect-состоянии.',
+            details: 'Клиент держит reconnect-loop и ещё не восстановил стабильное соединение.',
+        };
+    }
+
+    if (connected && authorized) {
+        return {
+            status: 'ok',
+            summary: 'Telegram user-client подключён и авторизован.',
+            details: 'Клиент прошёл connect() и isUserAuthorized().',
+        };
+    }
+
+    if (authorized) {
+        return {
+            status: 'warn',
+            summary: 'Telegram user-client авторизован, но соединение сейчас не активно.',
+            details: 'Сессия валидна, но transport-соединение ещё не восстановилось.',
+        };
+    }
+
+    return {
+        status: 'down',
+        summary: 'Telegram user-client не готов к работе.',
+        details: 'Клиент не подтвердил готовность.',
+    };
+}
+
 function getTelegramUserClientCredentials(): TelegramUserClientCredentials | null {
     const rawApiId = process.env.TELEGRAM_API_ID?.trim();
     const apiHash = process.env.TELEGRAM_API_HASH?.trim();
@@ -739,22 +775,12 @@ export async function getTelegramUserClientHealth(): Promise<TelegramUserClientH
             const connected = Boolean(telegramClient.connected) && !telegramClient.disconnected;
             const authorized = await telegramClient.isUserAuthorized();
             const diagnostics = buildTelegramClientDiagnostics(telegramClient);
-            const status: TelegramHealthStatus = diagnostics.reconnecting
-                ? 'warn'
-                : connected && authorized
-                    ? 'ok'
-                    : 'down';
+            const health = resolveTelegramHealthState(connected, authorized, diagnostics.reconnecting);
 
             return {
-                status,
-                summary: status === 'ok'
-                    ? 'Telegram user-client подключён и авторизован.'
-                    : status === 'warn'
-                        ? 'Telegram user-client подключён, но находится в reconnect-состоянии.'
-                        : 'Telegram user-client не готов к работе.',
-                details: status === 'ok'
-                    ? 'Клиент прошёл connect() и isUserAuthorized().'
-                    : telegramClientLastError || 'Клиент не подтвердил готовность.',
+                status: health.status,
+                summary: health.summary,
+                details: telegramClientLastError || health.details,
                 checkedAt,
                 configured: true,
                 connected,
@@ -775,22 +801,12 @@ export async function getTelegramUserClientHealth(): Promise<TelegramUserClientH
         );
         const connected = Boolean(diagnosticClient.connected) && !diagnosticClient.disconnected;
         const diagnostics = buildTelegramClientDiagnostics(diagnosticClient);
-        const status: TelegramHealthStatus = diagnostics.reconnecting
-            ? 'warn'
-            : connected && authorized
-                ? 'ok'
-                : 'down';
+        const health = resolveTelegramHealthState(connected, authorized, diagnostics.reconnecting);
 
         return {
-            status,
-            summary: status === 'ok'
-                ? 'Telegram user-client подключён и авторизован.'
-                : status === 'warn'
-                    ? 'Telegram user-client подключён, но находится в reconnect-состоянии.'
-                    : 'Telegram user-client не готов к работе.',
-            details: status === 'ok'
-                ? 'Клиент прошёл connect() и isUserAuthorized().'
-                : telegramClientLastError || 'Клиент не подтвердил готовность.',
+            status: health.status,
+            summary: health.summary,
+            details: telegramClientLastError || health.details,
             checkedAt,
             configured: true,
             connected,

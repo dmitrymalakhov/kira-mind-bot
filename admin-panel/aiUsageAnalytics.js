@@ -352,7 +352,7 @@ async function buildAiUsageSummary({ pool, query = {}, now = new Date() }) {
         preset,
         COALESCE(operation, 'unknown') AS operation,
         COALESCE("fallbackUsed", false) AS "fallbackUsed",
-        errorMessage
+        "errorMessage"
       FROM ai_usage_logs
       WHERE ${whereSql} AND success = false
       ORDER BY "createdAt" DESC
