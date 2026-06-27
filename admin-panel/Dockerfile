@@ -14,6 +14,7 @@ RUN npm install --omit=dev
 COPY --from=builder /workspace/admin-panel/dist ./dist
 COPY admin-panel/server.js ./server.js
 COPY admin-panel/monitoring.js ./monitoring.js
+COPY admin-panel/aiUsageAnalytics.js ./aiUsageAnalytics.js
 COPY admin-panel/presetAvailability.js ./presetAvailability.js
 COPY admin-panel/runtime-health-metadata.json ./runtime-health-metadata.json
 COPY admin-panel/aiPresetRegistry.js ./aiPresetRegistry.js
