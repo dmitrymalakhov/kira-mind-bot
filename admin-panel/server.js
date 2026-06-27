@@ -9,6 +9,7 @@ const http = require('http');
 const { Pool } = require('pg');
 const { AI_PRESETS, AI_PRESET_NAMES, parseAiPresetName } = require('./aiPresetRegistry');
 const { createMonitoringService } = require('./monitoring');
+const { buildAiUsageSummary } = require('./aiUsageAnalytics');
 const { getPresetAvailability } = require('./presetAvailability');
 const { hasLegacyDigitalBiography } = require('../utils/legacyPersonalitySanitizer');
 
@@ -1747,6 +1748,18 @@ app.get('/api/monitoring/health', requireAuth, async (_, res) => {
     res.json(snapshot);
   } catch (err) {
     res.status(500).json({ error: `Не удалось собрать monitoring health: ${err.message}` });
+  }
+});
+
+app.get('/api/ai-usage/summary', requireAuth, async (req, res) => {
+  const pool = createDbPool();
+  try {
+    const summary = await buildAiUsageSummary({ pool, query: req.query, now: new Date() });
+    res.json(summary);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : `Ошибка AI usage analytics: ${err.message}` });
+  } finally {
+    await pool.end().catch(() => {});
   }
 });
 

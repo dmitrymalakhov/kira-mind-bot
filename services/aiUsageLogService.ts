@@ -6,6 +6,7 @@ export interface AiUsageLogPayload {
     provider: string;
     model: string;
     preset: string;
+    operation: string;
     inputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;

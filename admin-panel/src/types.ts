@@ -99,6 +99,110 @@ export interface MonitoringHealthResponse {
   checks: MonitoringCheck[];
 }
 
+export type AiUsageOperation = 'chat' | 'response' | 'embedding' | 'transcription' | 'unknown';
+
+export interface AiUsageQuery {
+  days?: string;
+  from?: string;
+  to?: string;
+  provider?: string;
+  model?: string;
+  taskKey?: string;
+  preset?: string;
+  operation?: AiUsageOperation | '';
+  success?: boolean;
+  fallbackUsed?: boolean;
+}
+
+export interface AiUsageTotals {
+  calls: number;
+  successfulCalls: number;
+  failedCalls: number;
+  fallbackCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  avgLatencyMs: number;
+  errorRate: number;
+  fallbackRate: number;
+}
+
+export interface AiUsageCoverage {
+  callsWithUsage: number;
+  callsWithoutUsage: number;
+  usageCoverageRate: number;
+}
+
+export interface AiUsageTimeseriesPoint {
+  bucketStart: string;
+  calls: number;
+  successfulCalls: number;
+  failedCalls: number;
+  fallbackCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+export interface AiUsageBreakdownRow {
+  key: string;
+  calls: number;
+  successfulCalls: number;
+  failedCalls: number;
+  fallbackCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  avgLatencyMs: number;
+}
+
+export interface AiUsageFailureRecord {
+  createdAt: string;
+  provider: string;
+  model: string;
+  taskKey: string;
+  preset: string;
+  operation: AiUsageOperation;
+  fallbackUsed: boolean;
+  errorMessage: string;
+}
+
+export interface AiUsageSummaryResponse {
+  generatedAt: string;
+  filters: {
+    days?: number;
+    from?: string;
+    to?: string;
+    provider?: string;
+    model?: string;
+    taskKey?: string;
+    preset?: string;
+    operation?: AiUsageOperation;
+    success?: boolean;
+    fallbackUsed?: boolean;
+  };
+  totals: AiUsageTotals;
+  coverage: AiUsageCoverage;
+  timeseries: {
+    bucket: 'hour' | 'day';
+    points: AiUsageTimeseriesPoint[];
+  };
+  breakdowns: {
+    providers: AiUsageBreakdownRow[];
+    models: AiUsageBreakdownRow[];
+    tasks: AiUsageBreakdownRow[];
+    presets: AiUsageBreakdownRow[];
+    operations: AiUsageBreakdownRow[];
+  };
+  leaders: {
+    modelsByTokens: AiUsageBreakdownRow[];
+    modelsByCalls: AiUsageBreakdownRow[];
+    tasksByTokens: AiUsageBreakdownRow[];
+    tasksByCalls: AiUsageBreakdownRow[];
+  };
+  recentFailures: AiUsageFailureRecord[];
+}
+
 export interface PersonalityProfile {
   characterName: string;
   persona: string;

@@ -5,6 +5,7 @@ const SUITES = {
     ai: [
         "testAiModelPresets.ts",
         "testAiRuntimeRouting.ts",
+        "testAiUsageLogging.ts",
     ],
     memory: [
         "testSessionStorage.ts",
@@ -23,10 +24,12 @@ const SUITES = {
         "testSpeechTextPreparation.ts",
         "testGroupChatContext.ts",
         "testIncomingTelegramQueue.ts",
+        "testTelegramUserClientHealth.ts",
     ],
     all: [
         "testAiModelPresets.ts",
         "testAiRuntimeRouting.ts",
+        "testAiUsageLogging.ts",
         "testSessionStorage.ts",
         "testVoiceReply.ts",
         "testRussianSpeechNumbers.ts",
@@ -41,6 +44,7 @@ const SUITES = {
         "testKiraSelfMemory.ts",
         "testTodayImportance.ts",
         "testIncomingTelegramQueue.ts",
+        "testTelegramUserClientHealth.ts",
     ],
 } satisfies Record<string, string[]>;
 

@@ -26,6 +26,7 @@ import type {
   MonitoringHealthResponse,
 } from '../types';
 import { fetchMonitoringHealth } from '../api';
+import { AiUsageSection } from './AiUsageSection';
 
 const CATEGORY_LABELS: Record<MonitoringCheckCategory, string> = {
   runtime: 'Runtime',
@@ -58,6 +59,45 @@ function getOverallStatusLabel(status: MonitoringHealthResponse['overallStatus']
   if (status === 'ok') return 'Все основные зависимости доступны';
   if (status === 'degraded') return 'Есть деградации, но не всё упало';
   return 'Есть критические недоступные зависимости';
+}
+
+function buildOverallStatusDetails(data: MonitoringHealthResponse | null): string {
+  if (!data?.checks?.length) {
+    return 'Нет данных по проверкам.';
+  }
+
+  const downChecks = data.checks.filter((check) => check.status === 'down');
+  const warnChecks = data.checks.filter((check) => check.status === 'warn');
+
+  if (data.overallStatus === 'down') {
+    const downSummary = downChecks
+      .slice(0, 3)
+      .map((check) => `${check.label}: ${check.summary}`)
+      .join('; ');
+    const extraDown = downChecks.length > 3 ? `; ещё ${downChecks.length - 3}` : '';
+    const warnHint = warnChecks.length ? ` Дополнительно деградируют: ${warnChecks.map((check) => check.label).slice(0, 3).join(', ')}.` : '';
+    return downChecks.length
+      ? `Критично недоступны: ${downSummary}${extraDown}.${warnHint}`.trim()
+      : 'Есть критические недоступные зависимости, но snapshot не вернул список проблемных checks.';
+  }
+
+  if (data.overallStatus === 'degraded') {
+    const warnSummary = warnChecks
+      .slice(0, 3)
+      .map((check) => `${check.label}: ${check.summary}`)
+      .join('; ');
+    const extraWarn = warnChecks.length > 3 ? `; ещё ${warnChecks.length - 3}` : '';
+    return warnChecks.length
+      ? `Деградации: ${warnSummary}${extraWarn}.`
+      : 'Есть деградации, но snapshot не вернул проблемные checks.';
+  }
+
+  const disabledChecks = data.checks.filter((check) => check.status === 'disabled');
+  if (disabledChecks.length) {
+    return `Основные зависимости доступны. Отключены проверки: ${disabledChecks.map((check) => check.label).slice(0, 3).join(', ')}${disabledChecks.length > 3 ? ` и ещё ${disabledChecks.length - 3}` : ''}.`;
+  }
+
+  return 'Все обязательные проверки сейчас проходят успешно.';
 }
 
 function getStatusAppearance(status: MonitoringCheckStatus | MonitoringHealthResponse['overallStatus']) {
@@ -242,6 +282,7 @@ export function MonitoringSection() {
   }
 
   const overallAppearance = getStatusAppearance(data?.overallStatus ?? 'down');
+  const overallDetails = buildOverallStatusDetails(data);
 
   return (
     <Box>
@@ -286,6 +327,9 @@ export function MonitoringSection() {
               </Typography>
             </Box>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              {overallDetails}
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
               Последний snapshot: {formatDateTime(data?.generatedAt)}
             </Typography>
           </Box>
@@ -326,6 +370,8 @@ export function MonitoringSection() {
           );
         })}
       </Stack>
+
+      <AiUsageSection />
     </Box>
   );
 }

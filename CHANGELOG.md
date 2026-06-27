@@ -2,6 +2,8 @@
 
 ## 2026-06-21
 
+- В админке `Мониторинг` добавлена AI usage analytics поверх `ai_usage_logs`: KPI по вызовам и токенам, таймсерия, breakdown по provider/model/task/preset/operation и список последних ошибок.
+- Логи AI usage расширены полем `operation` и индексами по ключевым разрезам, чтобы точный учёт токенов строился по `usage` ответа провайдера без анализа исходящего трафика и без тяжёлой runtime-агрегации.
 - Исправлены ложные post-response follow-up из памяти: `proactive hint` больше не запускается после reminder/document/image/browser-сценариев и не должен поднимать contact-memory другого человека как реплику о владельце.
 - Проверка `memory gap` для упомянутых людей стала contact-aware: сначала используются `resolveContactIdentity` и `contact_*` теги, затем fallback-поиск по вариантам имени, включая кейсы вроде `Юра` / `Юрий`.
 - Общая contact-memory логика вынесена в переиспользуемые helper-ы, чтобы retrieval, proactive hints и memory-gap работали по одним правилам идентичности контактов.
