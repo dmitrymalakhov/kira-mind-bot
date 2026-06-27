@@ -244,8 +244,14 @@ function contactNamesFromTags(tags: string[] | undefined): Set<string> {
     const names = new Set<string>();
     for (const tag of tags ?? []) {
         const value = String(tag);
-        if (value.startsWith('contact:') || value.startsWith('contact_name:') || value.startsWith('contact_alias:')) {
-            names.add(value.replace(/^contact(_name|_alias)?:/, '').trim().toLowerCase());
+        if (value.startsWith('contact:') || value.startsWith('contact_name:') || value.startsWith('contact_alias:') || value.startsWith('contact_username:')) {
+            names.add(
+                value
+                    .replace(/^contact(_name|_alias)?:/, '')
+                    .replace(/^contact_username:/, '')
+                    .trim()
+                    .toLowerCase()
+            );
         }
     }
     return names;
@@ -254,6 +260,7 @@ function contactNamesFromTags(tags: string[] | undefined): Set<string> {
 function hasStableContactIdentity(tags: string[] | undefined): boolean {
     return (tags ?? []).some(t =>
         String(t).startsWith('contact_id:') ||
+        String(t).startsWith('contact_username:') ||
         String(t).startsWith('contact_key:')
     );
 }
@@ -271,6 +278,7 @@ function isContactLikeMemory(memory: Pick<MemoryEntry, 'content' | 'tags'>): boo
             String(t).startsWith('contact_name:') ||
             String(t).startsWith('contact_alias:') ||
             String(t).startsWith('contact_id:') ||
+            String(t).startsWith('contact_username:') ||
             String(t).startsWith('contact_key:')
         );
 }
@@ -311,6 +319,7 @@ function normalizeMemoryTags(tags: string[]): string[] {
         tag.startsWith('contact_name:') ||
         tag.startsWith('contact_alias:') ||
         tag.startsWith('contact_id:') ||
+        tag.startsWith('contact_username:') ||
         tag.startsWith('contact_key:')
     );
     if (isContact) {
@@ -1214,7 +1223,11 @@ function inferRelation(
     if (allTags.has('memory-episode') || /эпизод памяти/.test(lc)) {
         return { type: 'same_episode', weight: Math.max(0.65, score), cue: 'same episode/context' };
     }
-    if ([...allTags].some(tag => String(tag).startsWith('contact:') || String(tag).startsWith('contact_id:'))) {
+    if ([...allTags].some(tag =>
+        String(tag).startsWith('contact:') ||
+        String(tag).startsWith('contact_id:') ||
+        String(tag).startsWith('contact_username:')
+    )) {
         return { type: 'person_link', weight: Math.max(0.64, score), cue: 'same contact/entity' };
     }
     if (/планир|собира|хоч|цель|нужно|надо|шаг|сделать|дедлайн/.test(lc)) {

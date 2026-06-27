@@ -2,6 +2,11 @@
 
 ## 2026-06-21
 
+- Исправлены ложные post-response follow-up из памяти: `proactive hint` больше не запускается после reminder/document/image/browser-сценариев и не должен поднимать contact-memory другого человека как реплику о владельце.
+- Проверка `memory gap` для упомянутых людей стала contact-aware: сначала используются `resolveContactIdentity` и `contact_*` теги, затем fallback-поиск по вариантам имени, включая кейсы вроде `Юра` / `Юрий`.
+- Общая contact-memory логика вынесена в переиспользуемые helper-ы, чтобы retrieval, proactive hints и memory-gap работали по одним правилам идентичности контактов.
+- `contact_username` добавлен как сильный identity key без ломки обратной совместимости: runtime понимает старые `contact_name/contact_alias/contact_id/contact_key` и новые `contact_username`, не полагаясь на хардкод словарей имён.
+- TS-тесты переведены на общий suite-runner: вместо длинной цепочки однотипных `ts-node scripts/test*.ts` в `package.json` теперь используются команды `test:ts`, `test:ts:ai`, `test:ts:memory`, `test:ts:interaction` и `test:ts:all`.
 - В админке блок `AI Presets` теперь явно показывает активный preset, базовое значение из `env/default` и факт runtime-переопределения без технически перегруженного текста про источник.
 - Исправлены фантомные факты в ответах “что важного сегодня”: reminder-memory теперь привязывается к напоминанию через `source_reminder:<id>`, синхронно обновляется при переносе/редактировании/отмене/выполнении, а `todayImportance` отфильтровывает устаревшие `planned/future_plan` факты, если активное напоминание по тому же событию уже перенесено.
 - AI runtime переведён на capability-first схему для `chat`, `responses`, `embedding` и `transcription`; прямые OpenAI-вызовы из прикладных сервисов убраны.

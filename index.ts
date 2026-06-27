@@ -166,6 +166,17 @@ function canSendResultAsVoice(result: ProcessingResult): boolean {
         !result.generatedImageUrl;
 }
 
+function shouldRunProactiveHint(result: ProcessingResult, processedMessage: string): boolean {
+    if (!result.responseText?.trim()) return false;
+    if (result.reminderCreated) return false;
+    if (result.messageDraft) return false;
+    if (result.imageGenerated || result.generatedImageUrl) return false;
+    if (result.icsFilePath || result.documentFilePath) return false;
+    if (result.negotiationSummarySent) return false;
+    if (/^Продолжи задачу в браузере через Playwright\.|browserSessionId:/i.test(processedMessage)) return false;
+    return true;
+}
+
 async function replyWithGeneratedVoiceAndStore(ctx: BotContext, text: string) {
     await ctx.api.sendChatAction(ctx.chat!.id, "record_voice");
     return withTelegramVoiceFile(text, async (voice) => {
@@ -964,7 +975,9 @@ bot.on("message:text", async (ctx, next) => {
                 }
 
                 // Проактивная память: бот может вспомнить что-то уместное из долговременной памяти
-                maybeProactiveHint(ctx, message, result.responseText).catch(() => {});
+                if (shouldRunProactiveHint(result, messageForProcessing)) {
+                    maybeProactiveHint(ctx, message, result.responseText).catch(() => {});
+                }
                 // Reconsolidation: использованные воспоминания подтверждаются или обновляются после нового обмена.
                 reconsolidateAfterResponse(ctx, message, result.responseText, result.recalledMemories).catch(() => {});
                 // Детекция пробелов: если упомянут незнакомый человек — задать уточняющий вопрос

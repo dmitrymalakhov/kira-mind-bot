@@ -5,6 +5,12 @@ import { devLog, parseLLMJson } from '../utils';
 import { config } from '../config';
 import { addToHistory } from './history';
 import { persistSessionNow } from '../services/SessionStorage';
+import {
+    hasContactMemoryTags,
+    isMemoryEntryAllowedForContactScope,
+    resolveContactIdentityScope,
+    storedContactPrefix,
+} from './contactMemory';
 
 /** Минимальный интервал между проактивными подсказками (20 минут) */
 const HINT_COOLDOWN_MS = 20 * 60 * 1000;
@@ -14,6 +20,12 @@ const TEMPORAL_URGENCY_DAYS = 3;
 
 /** Максимальное время на вычисление подсказки (исключая искусственную задержку) */
 const HINT_COMPUTE_TIMEOUT_MS = 4000;
+const PROACTIVE_TOKEN_STOPWORDS = new Set([
+    'что', 'как', 'кто', 'где', 'куда', 'когда', 'почему', 'зачем', 'это', 'этот', 'эта', 'эти',
+    'про', 'для', 'мне', 'тебе', 'меня', 'тебя', 'него', 'неё', 'него', 'она', 'они', 'оно',
+    'очень', 'надо', 'нужно', 'утром', 'вечером', 'сегодня', 'завтра', 'послезавтра',
+]);
+const TRAVEL_MEMORY_RE = /\b(вылет|рейс|перел[её]т|поездк|командировк|отпуск|аэропорт|самол[её]т)\b/iu;
 
 function withTimeout<T>(fn: () => Promise<T>, ms: number): Promise<T> {
     return Promise.race([
@@ -24,6 +36,32 @@ function withTimeout<T>(fn: () => Promise<T>, ms: number): Promise<T> {
 
 /** In-process Set для дедупликации: один и тот же факт не всплывает дважды подряд */
 const recentlyHintedIds = new Set<string>();
+
+function tokenizeForProactiveOverlap(value: string): Set<string> {
+    const tokens = value.toLowerCase().match(/[\p{L}\p{N}_-]{3,}/gu) ?? [];
+    return new Set(tokens.filter(token => !PROACTIVE_TOKEN_STOPWORDS.has(token)));
+}
+
+function tokenOverlapRatio(left: Set<string>, right: Set<string>): number {
+    if (left.size === 0 || right.size === 0) return 0;
+    let overlap = 0;
+    for (const token of left) {
+        if (right.has(token)) overlap++;
+    }
+    return overlap / Math.min(left.size, right.size);
+}
+
+function hasExplicitEntityOverlap(userMessage: string, content: string): boolean {
+    const userEntities = userMessage.match(/[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+){0,2}/gu) ?? [];
+    if (userEntities.length === 0) return false;
+
+    const loweredContent = content.toLowerCase();
+    return userEntities.some(entity => loweredContent.includes(entity.toLowerCase()));
+}
+
+function isLikelyContactMemory(memory: { content: string; tags?: string[] | undefined }): boolean {
+    return hasContactMemoryTags(memory.tags) || Boolean(storedContactPrefix(memory.content));
+}
 
 /**
  * Проверяет память на наличие уместного проактивного напоминания и отправляет его пользователю.
@@ -56,6 +94,26 @@ export async function maybeProactiveHint(
 
     try {
         await withTimeout(async () => {
+        const contactScope = resolveContactIdentityScope(userMessage);
+        const userTokens = tokenizeForProactiveOverlap(userMessage);
+        const responseTokens = tokenizeForProactiveOverlap(botResponse);
+
+        const isCandidateRelevant = (memory: { content: string; tags?: string[] | undefined }, isUrgent: boolean): boolean => {
+            if (isLikelyContactMemory(memory) && !isMemoryEntryAllowedForContactScope(memory, contactScope)) {
+                return false;
+            }
+
+            const contentTokens = tokenizeForProactiveOverlap(memory.content);
+            const userOverlap = tokenOverlapRatio(userTokens, contentTokens);
+            const responseOverlap = tokenOverlapRatio(responseTokens, contentTokens);
+            const explicitOverlap = hasExplicitEntityOverlap(userMessage, memory.content);
+
+            if (explicitOverlap || userOverlap >= 0.2 || responseOverlap >= 0.25) return true;
+            if (!isUrgent) return false;
+            if (TRAVEL_MEMORY_RE.test(memory.content)) return false;
+            return userOverlap >= 0.1 || responseOverlap >= 0.12;
+        };
+
         // 1. Ищем срочные временные факты
         const recentMemories = await svc.getRecentMemories(userId, 30);
         const now = new Date();
@@ -63,22 +121,26 @@ export async function maybeProactiveHint(
             if (!m.expiresAt) return false;
             if (recentlyHintedIds.has(m.id)) return false;
             const daysLeft = (new Date(m.expiresAt).getTime() - now.getTime()) / 86_400_000;
-            return daysLeft >= 0 && daysLeft <= TEMPORAL_URGENCY_DAYS;
+            return daysLeft >= 0 &&
+                daysLeft <= TEMPORAL_URGENCY_DAYS &&
+                isCandidateRelevant(m, true);
         });
 
         // 2. Ищем контекстно-близкие факты (score ≥ 0.65), которых нет в recentlyHinted
         const relatedFacts = await svc.searchAllDomains(userMessage, userId, 6);
         const topRelated = relatedFacts.filter(
-            (f) => f.score >= 0.65 && !recentlyHintedIds.has(f.id)
+            (f) => f.score >= 0.65 &&
+                !recentlyHintedIds.has(f.id) &&
+                isCandidateRelevant(f, false)
         ).slice(0, 3);
 
         if (urgentFacts.length === 0 && topRelated.length === 0) return;
 
         // Формируем список кандидатов для LLM
-        type Candidate = { id: string; content: string; isUrgent: boolean; expiresAt?: Date };
+        type Candidate = { id: string; content: string; isUrgent: boolean; expiresAt?: Date; tags?: string[] };
         const candidates: Candidate[] = [
-            ...urgentFacts.map((f) => ({ id: f.id, content: f.content, isUrgent: true, expiresAt: f.expiresAt })),
-            ...topRelated.map((f) => ({ id: f.id, content: f.content, isUrgent: false })),
+            ...urgentFacts.map((f) => ({ id: f.id, content: f.content, isUrgent: true, expiresAt: f.expiresAt, tags: f.tags })),
+            ...topRelated.map((f) => ({ id: f.id, content: f.content, isUrgent: false, tags: f.tags })),
         ];
 
         const factsText = candidates.map((c, i) => {

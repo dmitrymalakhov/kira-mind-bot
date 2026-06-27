@@ -58,7 +58,7 @@ function contactIdentityTagsLocal(contactName: string, contact?: Contact): strin
     ];
     if (contact) {
         tags.push(`contact_id:${contact.id}`);
-        if (contact.username) tags.push(`contact_username:${contact.username}`);
+        if (contact.username) tags.push(`contact_username:@${String(contact.username).replace(/^@/, '')}`);
     } else {
         tags.push(`contact_key:${normalizeContactLookupValueLocal(display).replace(/\s+/g, '_')}`);
     }
@@ -87,10 +87,18 @@ function contactFactMatches(content: string, tags: string[] | undefined, contact
             .filter(tag => tag.startsWith('contact_id:'))
             .map(tag => tag.replace('contact_id:', '').trim())
     );
+    const expectedUsernames = new Set(
+        contactIdentityTagsLocal(contactName, contact)
+            .filter(tag => tag.startsWith('contact_username:'))
+            .map(tag => normalizeContactLookupValueLocal(tag.replace('contact_username:', '').trim()))
+    );
 
     for (const tag of tags ?? []) {
         const value = String(tag);
         if (value.startsWith('contact_id:') && expectedIds.has(value.replace('contact_id:', '').trim())) {
+            return true;
+        }
+        if (value.startsWith('contact_username:') && expectedUsernames.has(normalizeContactLookupValueLocal(value.replace('contact_username:', '').trim()))) {
             return true;
         }
         if (value.startsWith('contact:') || value.startsWith('contact_name:') || value.startsWith('contact_alias:')) {
