@@ -12,6 +12,7 @@ const { createMonitoringService } = require('./monitoring');
 const { buildAiUsageSummary } = require('./aiUsageAnalytics');
 const { getPresetAvailability } = require('./presetAvailability');
 const { hasLegacyDigitalBiography } = require('../utils/legacyPersonalitySanitizer');
+const COMMON_TIMEZONES = require('./src/timezones.json');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -66,6 +67,7 @@ const SENSITIVE_KEYS = new Set([
 
 const GROUP_RUNTIME_SETTING_KEYS = new Set(['GROUP_CHAT_CONTEXT_ENABLED', 'GROUP_REPLY_TO_BOT_ENABLED']);
 const GLOBAL_SETTING_PREFIX = 'global:';
+const ALLOWED_TIMEZONES = new Set(COMMON_TIMEZONES.map((item) => item.value));
 
 const EDITABLE_KEYS = new Set([
   'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'KIRA_BOT_TOKEN',
@@ -138,6 +140,16 @@ function buildAiPresetResponseEntry(name, vars) {
     ...preset,
     ...availability,
   };
+}
+
+function getDefaultTimeZone() {
+  return COMMON_TIMEZONES[0]?.value || 'Europe/Moscow';
+}
+
+function normalizeAllowedTimeZone(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return getDefaultTimeZone();
+  return ALLOWED_TIMEZONES.has(normalized) ? normalized : null;
 }
 
 function writeEnvFile(updates) {
@@ -378,6 +390,14 @@ app.post('/api/config', requireAuth, async (req, res) => {
   for (const [key, value] of Object.entries(req.body)) {
     if (!EDITABLE_KEYS.has(key)) continue;
     if (typeof value === 'string' && value.includes('••••')) continue;
+    if (key === 'USER_TIMEZONE') {
+      const normalizedTimeZone = normalizeAllowedTimeZone(value);
+      if (!normalizedTimeZone) {
+        return res.status(400).json({ error: 'Недопустимая временная зона. Выберите значение из списка.' });
+      }
+      envUpdates[key] = normalizedTimeZone;
+      continue;
+    }
     if (GROUP_RUNTIME_SETTING_KEYS.has(key)) {
       runtimeUpdates[key] = value;
     } else {
@@ -1274,7 +1294,9 @@ function normalizeIntegerQuery(value, fallback, max) {
 
 function getUserTimeZone() {
   const vars = readEnvFile();
-  return vars.USER_TIMEZONE || process.env.USER_TIMEZONE || 'Europe/Moscow';
+  return normalizeAllowedTimeZone(vars.USER_TIMEZONE)
+    || normalizeAllowedTimeZone(process.env.USER_TIMEZONE)
+    || getDefaultTimeZone();
 }
 
 function formatHealthDateTime(value) {
