@@ -12,7 +12,12 @@ export interface ConfigResponse {
   [key: string]: ConfigEntry;
 }
 
-export type FieldType = 'text' | 'password' | 'number' | 'toggle' | 'textarea' | 'duration';
+export type FieldType = 'text' | 'password' | 'number' | 'toggle' | 'textarea' | 'duration' | 'select';
+
+export interface FieldOption {
+  value: string;
+  label: string;
+}
 
 export interface FieldDef {
   key: string;
@@ -21,6 +26,9 @@ export interface FieldDef {
   required?: boolean;
   hint?: string;
   placeholder?: string;
+  options?: FieldOption[];
+  sm?: number;
+  md?: number;
 }
 
 export interface SectionDef {

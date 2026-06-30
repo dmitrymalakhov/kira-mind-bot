@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+    addZonedDays,
     formatPromptDateTime,
     getZonedDateKey,
     getZonedDayContext,
@@ -30,6 +31,12 @@ const morningReminder = new Date("2026-07-01T06:00:00.000Z");
 assert.equal(getZonedDateKey(dayBoundaryNow, userTimeZone), "2026-07-01");
 assert.equal(getZonedDateKey(morningReminder, userTimeZone), "2026-07-01");
 assert.equal(isSameZonedDate(dayBoundaryNow, morningReminder, userTimeZone), true);
+
+const dstTimeZone = "Europe/Berlin";
+const dstBoundary = new Date("2026-03-28T22:30:00.000Z");
+const dstNextDay = addZonedDays(dstBoundary, 1, dstTimeZone);
+assert.equal(getZonedDateKey(dstBoundary, dstTimeZone), "2026-03-28");
+assert.equal(getZonedDateKey(dstNextDay, dstTimeZone), "2026-03-29");
 
 console.log("user timezone helpers passed");
 process.exit(0);

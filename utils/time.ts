@@ -112,6 +112,27 @@ export function getZonedDateTimeParts(date: Date, timeZone: string = USER_TIMEZO
     };
 }
 
+export function getTimeZoneOffsetMs(date: Date, timeZone: string = USER_TIMEZONE): number {
+    const parts = getZonedDateTimeParts(date, timeZone);
+    const asUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second, 0);
+    return asUtc - date.getTime();
+}
+
+export function zonedDateTimeToDate(
+    year: number,
+    month: number,
+    day: number,
+    hour: number,
+    minute: number,
+    timeZone: string = USER_TIMEZONE
+): Date {
+    let utcMs = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+    for (let i = 0; i < 3; i++) {
+        utcMs = Date.UTC(year, month - 1, day, hour, minute, 0, 0) - getTimeZoneOffsetMs(new Date(utcMs), timeZone);
+    }
+    return new Date(utcMs);
+}
+
 export function getZonedDayContext(date: Date, timeZone: string = USER_TIMEZONE): ZonedDayContext {
     const parts = getZonedDateTimeParts(date, timeZone);
     return {
@@ -130,6 +151,19 @@ export function getZonedDateKey(date: Date, timeZone: string = USER_TIMEZONE): s
 
 export function addDays(date: Date, days: number): Date {
     return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+export function addZonedDays(date: Date, days: number, timeZone: string = USER_TIMEZONE): Date {
+    const parts = getZonedDateTimeParts(date, timeZone);
+    const targetDay = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days, 0, 0, 0, 0));
+    return zonedDateTimeToDate(
+        targetDay.getUTCFullYear(),
+        targetDay.getUTCMonth() + 1,
+        targetDay.getUTCDate(),
+        parts.hour,
+        parts.minute,
+        timeZone
+    );
 }
 
 export function isSameZonedDate(left: Date, right: Date, timeZone: string = USER_TIMEZONE): boolean {

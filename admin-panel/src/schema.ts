@@ -1,5 +1,29 @@
 import type { SectionDef } from './types';
 
+const COMMON_TIMEZONES = [
+  { value: 'Europe/Moscow', label: 'Europe/Moscow (Москва)' },
+  { value: 'Europe/Kaliningrad', label: 'Europe/Kaliningrad' },
+  { value: 'Europe/Samara', label: 'Europe/Samara' },
+  { value: 'Asia/Yekaterinburg', label: 'Asia/Yekaterinburg' },
+  { value: 'Asia/Omsk', label: 'Asia/Omsk' },
+  { value: 'Asia/Krasnoyarsk', label: 'Asia/Krasnoyarsk' },
+  { value: 'Asia/Irkutsk', label: 'Asia/Irkutsk' },
+  { value: 'Asia/Yakutsk', label: 'Asia/Yakutsk' },
+  { value: 'Asia/Vladivostok', label: 'Asia/Vladivostok' },
+  { value: 'Asia/Sakhalin', label: 'Asia/Sakhalin' },
+  { value: 'Asia/Magadan', label: 'Asia/Magadan' },
+  { value: 'Asia/Kamchatka', label: 'Asia/Kamchatka' },
+  { value: 'Europe/Berlin', label: 'Europe/Berlin' },
+  { value: 'Europe/London', label: 'Europe/London' },
+  { value: 'America/New_York', label: 'America/New_York' },
+  { value: 'America/Los_Angeles', label: 'America/Los_Angeles' },
+  { value: 'Asia/Dubai', label: 'Asia/Dubai' },
+  { value: 'Asia/Almaty', label: 'Asia/Almaty' },
+  { value: 'Asia/Bangkok', label: 'Asia/Bangkok' },
+  { value: 'Asia/Tokyo', label: 'Asia/Tokyo' },
+  { value: 'UTC', label: 'UTC' },
+];
+
 export const CONFIG_SCHEMA: SectionDef[] = [
   {
     id: 'api',
@@ -233,12 +257,20 @@ export const CONFIG_SCHEMA: SectionDef[] = [
     title: 'Общие настройки',
     icon: '⚙️',
     fields: [
-      { key: 'USER_TIMEZONE', label: 'Временная зона', type: 'text', placeholder: 'Europe/Moscow' },
+      {
+        key: 'USER_TIMEZONE',
+        label: 'Временная зона',
+        type: 'select',
+        placeholder: 'Europe/Moscow',
+        options: COMMON_TIMEZONES,
+        md: 7,
+      },
       {
         key: 'REMINDER_EXPIRY_TIME_MS',
         label: 'Срок хранения напоминаний',
         type: 'duration',
         hint: 'Через сколько времени выполненные напоминания удаляются',
+        md: 5,
       },
       {
         key: 'PROACTIVE_ONLY_PRIVATE_CHAT',

@@ -26,7 +26,7 @@ import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { applyReminderEditInput } from '../utils/reminderEditor';
 import { syncReminderMemoryMutation } from '../services/ReminderMemorySync';
 import { USER_TIMEZONE } from '../constants';
-import { addDays, formatPromptDateTime, getZonedDateKey } from '../utils/time';
+import { addZonedDays, formatPromptDateTime, getZonedDateKey } from '../utils/time';
 
 /**
  * Ищет напоминание по текстовому запросу и отменяет его.
@@ -153,7 +153,7 @@ function filterByPeriod(
     if (!period) return reminders;
     const now = new Date();
     const todayKey = getZonedDateKey(now, USER_TIMEZONE);
-    const tomorrowKey = getZonedDateKey(addDays(now, 1), USER_TIMEZONE);
+    const tomorrowKey = getZonedDateKey(addZonedDays(now, 1, USER_TIMEZONE), USER_TIMEZONE);
     return reminders.filter((r) => {
         const d = new Date(r.dueDate);
         if (period === 'today') {
@@ -163,7 +163,7 @@ function filterByPeriod(
             return getZonedDateKey(d, USER_TIMEZONE) === tomorrowKey;
         }
         if (period === 'week') {
-            const weekLater = addDays(now, 7);
+            const weekLater = addZonedDays(now, 7, USER_TIMEZONE);
             return d >= now && d <= weekLater;
         }
         return true;

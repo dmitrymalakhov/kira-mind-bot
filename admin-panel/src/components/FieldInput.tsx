@@ -8,6 +8,7 @@ import {
   IconButton,
   InputAdornment,
   Tooltip,
+  MenuItem,
 } from '@mui/material';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
@@ -82,6 +83,26 @@ export function FieldInput({ field, value, onChange, displayValue }: Props) {
         valueMs={value}
         onChange={(ms) => onChange(field.key, ms)}
       />
+    );
+  }
+
+  if (field.type === 'select') {
+    return (
+      <TextField
+        select
+        label={field.label}
+        value={resolvedValue || field.placeholder || ''}
+        onChange={(e) => onChange(field.key, e.target.value)}
+        fullWidth
+        helperText={field.hint}
+        FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px' } }}
+      >
+        {(field.options ?? []).map((option) => (
+          <MenuItem key={option.value} value={option.value}>
+            {option.label}
+          </MenuItem>
+        ))}
+      </TextField>
     );
   }
 
