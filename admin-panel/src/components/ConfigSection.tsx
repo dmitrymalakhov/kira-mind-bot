@@ -34,24 +34,17 @@ function getEntryValue(entry?: ConfigResponse[string]): string {
   return entry.value ?? '';
 }
 
-function normalizeFieldValue(field: SectionDef['fields'][number], value: string): string {
-  if (field.type !== 'select') return value;
-  const allowed = new Set((field.options ?? []).map((option) => option.value));
-  if (value && allowed.has(value)) return value;
-  return field.options?.[0]?.value ?? field.placeholder ?? '';
-}
-
 export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
   function ConfigSection({ section, config, onUpdate, onToast }, ref) {
     const [localValues, setLocalValues] = useState<Record<string, string>>(() =>
-      Object.fromEntries(section.fields.map((field) => [field.key, normalizeFieldValue(field, getEntryValue(config[field.key]))]))
+      Object.fromEntries(section.fields.map((field) => [field.key, getEntryValue(config[field.key])]))
     );
     const [saving, setSaving] = useState(false);
     const [autoRestart, setAutoRestart] = useState(false);
 
     useEffect(() => {
       setLocalValues(
-        Object.fromEntries(section.fields.map((field) => [field.key, normalizeFieldValue(field, getEntryValue(config[field.key]))]))
+        Object.fromEntries(section.fields.map((field) => [field.key, getEntryValue(config[field.key])]))
       );
     }, [config, section.fields]);
 
@@ -59,7 +52,7 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
       getUpdates() {
         const updates: Record<string, string | null> = {};
         for (const field of section.fields) {
-          const value = normalizeFieldValue(field, localValues[field.key] ?? '');
+          const value = localValues[field.key] ?? '';
           if (value.includes('••••')) continue;
           if (value === getEntryValue(config[field.key])) continue;
           updates[field.key] = value;
@@ -77,7 +70,7 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
       try {
         const updates: Record<string, string | null> = {};
         for (const field of section.fields) {
-          const value = normalizeFieldValue(field, localValues[field.key] ?? '');
+          const value = localValues[field.key] ?? '';
           if (value.includes('••••')) continue;
           if (value === getEntryValue(config[field.key])) continue;
           updates[field.key] = value;
@@ -95,7 +88,7 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
           const newCfg = await fetchConfig();
           onUpdate(newCfg);
           setLocalValues(
-            Object.fromEntries(section.fields.map((field) => [field.key, normalizeFieldValue(field, getEntryValue(newCfg[field.key]))]))
+            Object.fromEntries(section.fields.map((field) => [field.key, getEntryValue(newCfg[field.key])]))
           );
         } else {
           onToast(result.error || 'Ошибка сохранения', 'error');

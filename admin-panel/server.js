@@ -146,10 +146,14 @@ function getDefaultTimeZone() {
   return COMMON_TIMEZONES[0]?.value || 'Europe/Moscow';
 }
 
-function normalizeAllowedTimeZone(value) {
+function parseAllowedTimeZone(value) {
   const normalized = String(value || '').trim();
-  if (!normalized) return getDefaultTimeZone();
+  if (!normalized) return null;
   return ALLOWED_TIMEZONES.has(normalized) ? normalized : null;
+}
+
+function normalizeAllowedTimeZone(value) {
+  return parseAllowedTimeZone(value) || getDefaultTimeZone();
 }
 
 function writeEnvFile(updates) {
@@ -1294,8 +1298,8 @@ function normalizeIntegerQuery(value, fallback, max) {
 
 function getUserTimeZone() {
   const vars = readEnvFile();
-  return normalizeAllowedTimeZone(vars.USER_TIMEZONE)
-    || normalizeAllowedTimeZone(process.env.USER_TIMEZONE)
+  return parseAllowedTimeZone(vars.USER_TIMEZONE)
+    || parseAllowedTimeZone(process.env.USER_TIMEZONE)
     || getDefaultTimeZone();
 }
 

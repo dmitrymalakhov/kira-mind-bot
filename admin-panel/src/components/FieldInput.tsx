@@ -87,16 +87,27 @@ export function FieldInput({ field, value, onChange, displayValue }: Props) {
   }
 
   if (field.type === 'select') {
+    const allowedValues = new Set((field.options ?? []).map((option) => option.value));
+    const hasUnsupportedValue = Boolean(resolvedValue) && !allowedValues.has(resolvedValue);
+    const helperText = hasUnsupportedValue
+      ? `${field.hint ? `${field.hint} ` : ''}Текущее значение больше недоступно в списке. Выбери поддерживаемую временную зону, если хочешь его изменить.`
+      : field.hint;
+
     return (
       <TextField
         select
         label={field.label}
-        value={resolvedValue || field.placeholder || ''}
+        value={hasUnsupportedValue ? resolvedValue : (resolvedValue || field.placeholder || '')}
         onChange={(e) => onChange(field.key, e.target.value)}
         fullWidth
-        helperText={field.hint}
+        helperText={helperText}
         FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px' } }}
       >
+        {hasUnsupportedValue && (
+          <MenuItem value={resolvedValue} disabled>
+            {resolvedValue} (недоступно)
+          </MenuItem>
+        )}
         {(field.options ?? []).map((option) => (
           <MenuItem key={option.value} value={option.value}>
             {option.label}
