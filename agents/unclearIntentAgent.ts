@@ -3,6 +3,7 @@ import { MessageClassification, ProcessingResult } from "../orchestrator";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { config } from "../config";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
+import { formatPromptDateTime } from "../utils/time";
 
 const INTENT_LABELS: Partial<Record<MessageClassification["intent"], string>> = {
     "НАПОМИНАНИЕ": "поставить напоминание",
@@ -47,14 +48,7 @@ export async function unclearIntentAgent(
 
         // Текущая дата и время для контекста
         const currentDate = new Date();
-        const formattedDateTime = currentDate.toLocaleString('ru-RU', {
-            day: 'numeric',
-            month: 'long',
-            year: 'numeric',
-            hour: 'numeric',
-            minute: 'numeric',
-            weekday: 'long'
-        });
+        const formattedDateTime = formatPromptDateTime(currentDate);
 
         // Анализ деталей классификации
         let contextHints = "";

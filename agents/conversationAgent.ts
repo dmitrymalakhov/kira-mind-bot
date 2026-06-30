@@ -19,6 +19,7 @@ import { isGroupChatContextEnabled } from "../services/groupChatFeatureSettings"
 import { maybeEvolveKiraSelfFromConversation } from "../services/kiraSelfEvolutionService";
 import { devLog } from "../utils";
 import { isTodayImportanceRequest } from "../utils/todayImportanceIntent";
+import { formatPromptDateTime } from "../utils/time";
 
 
 /**
@@ -58,14 +59,7 @@ export async function conversationAgent(
 
         // Текущая дата и время для контекста
         const currentDate = new Date();
-        const formattedDateTime = currentDate.toLocaleString('ru-RU', {
-            day: 'numeric',
-            month: 'long',
-            year: 'numeric',
-            hour: 'numeric',
-            minute: 'numeric',
-            weekday: 'long'
-        });
+        const formattedDateTime = formatPromptDateTime(currentDate);
 
         const domain = injectedMemoryContext?.domain || await detectDomain(ctx, message);
         const domainContext = injectedMemoryContext?.context || await getDomainContext(ctx, domain, message);

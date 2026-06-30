@@ -21,6 +21,8 @@ import {
     buildContactCommunicationContext,
     refineMessageForRecipient,
 } from "../utils/contactCommunicationContext";
+import { formatPromptDateTime } from "../utils/time";
+import { USER_TIMEZONE } from "../constants";
 
 export type MessageDeliveryMode = "text" | "voice";
 
@@ -167,7 +169,7 @@ async function analyzeAndGenerateMessage(
             : '';
 
         const prompt = `
-        Текущая дата и время: ${currentDate.toLocaleString('ru-RU')}
+        Текущая дата и время: ${formatPromptDateTime(currentDate)}
 
         Запрос пользователя: "${message}"
         ${historyContext}
@@ -561,6 +563,7 @@ export async function sendMessagesAgent(
 
         if (scheduledTime) {
             scheduledTimeDisplay = scheduledTime.toLocaleString('ru-RU', {
+                timeZone: USER_TIMEZONE,
                 day: 'numeric',
                 month: 'long',
                 hour: 'numeric',

@@ -25,6 +25,8 @@ import { buildQuickChoiceKeyboard } from '../utils/quickChoice';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { applyReminderEditInput } from '../utils/reminderEditor';
 import { syncReminderMemoryMutation } from '../services/ReminderMemorySync';
+import { USER_TIMEZONE } from '../constants';
+import { addDays, formatPromptDateTime, getZonedDateKey } from '../utils/time';
 
 /**
  * Ищет напоминание по текстовому запросу и отменяет его.
@@ -150,19 +152,18 @@ function filterByPeriod(
 ) {
     if (!period) return reminders;
     const now = new Date();
+    const todayKey = getZonedDateKey(now, USER_TIMEZONE);
+    const tomorrowKey = getZonedDateKey(addDays(now, 1), USER_TIMEZONE);
     return reminders.filter((r) => {
         const d = new Date(r.dueDate);
         if (period === 'today') {
-            return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+            return getZonedDateKey(d, USER_TIMEZONE) === todayKey;
         }
         if (period === 'tomorrow') {
-            const tomorrow = new Date(now);
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            return d.getFullYear() === tomorrow.getFullYear() && d.getMonth() === tomorrow.getMonth() && d.getDate() === tomorrow.getDate();
+            return getZonedDateKey(d, USER_TIMEZONE) === tomorrowKey;
         }
         if (period === 'week') {
-            const weekLater = new Date(now);
-            weekLater.setDate(weekLater.getDate() + 7);
+            const weekLater = addDays(now, 7);
             return d >= now && d <= weekLater;
         }
         return true;
@@ -229,7 +230,7 @@ async function updateAllReminders(
             messages: [
                 {
                     role: 'system',
-                    content: `Текущая дата и время: ${now.toLocaleString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: 'numeric', weekday: 'long' })}.
+                    content: `Текущая дата и время: ${formatPromptDateTime(now, USER_TIMEZONE)} (${USER_TIMEZONE}).
 Пользователь хочет перенести ВСЕ напоминания. Определи: это сдвиг на фиксированный интервал ("через X часов", "на неделю вперёд") или конкретное новое время ("на завтра в 9", "на пятницу в 10")?
 Верни JSON: {"shiftMinutes": число минут сдвига или null, "newDueDate": "ISO 8601 конкретного времени или null"}`,
                 },

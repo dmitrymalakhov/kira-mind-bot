@@ -16,6 +16,8 @@ import {
 import { getProactiveChatId } from "../utils/allowedUserChatStore";
 import { getActiveBotProfile } from "../utils/botIdentity";
 import { parseLLMJson } from "../utils";
+import { USER_TIMEZONE } from "../constants";
+import { formatDateInTimeZone, getZonedDayContext, isZonedHourWithinRange } from "../utils/time";
 import { getSetting, setSetting } from "./botSettingsService";
 import { appendPersistedHistory } from "./SessionStorage";
 
@@ -66,30 +68,12 @@ function getDayContext(): {
   timeOfDay: string;
   season: string;
 } {
-  const now = new Date();
-  const day = now.getDay();
-  const hour = now.getHours();
-  const month = now.getMonth() + 1;
-
-  const weekdays = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
-
-  let timeOfDay: string;
-  if (hour >= 6 && hour < 12) timeOfDay = "утро";
-  else if (hour >= 12 && hour < 17) timeOfDay = "день";
-  else if (hour >= 17 && hour < 22) timeOfDay = "вечер";
-  else timeOfDay = "ночь";
-
-  let season: string;
-  if (month >= 3 && month <= 5) season = "весна";
-  else if (month >= 6 && month <= 8) season = "лето";
-  else if (month >= 9 && month <= 11) season = "осень";
-  else season = "зима";
-
+  const ctx = getZonedDayContext(new Date(), USER_TIMEZONE);
   return {
-    weekday: weekdays[day],
-    isWeekend: day === 0 || day === 6,
-    timeOfDay,
-    season,
+    weekday: ctx.weekday,
+    isWeekend: ctx.isWeekend,
+    timeOfDay: ctx.timeOfDay,
+    season: ctx.season,
   };
 }
 
@@ -98,19 +82,10 @@ function inQuietHours(now: Date): boolean {
     return false;
   }
 
-  const hour = now.getHours();
+  const { hour } = getZonedDayContext(now, USER_TIMEZONE);
   const start = config.kiraLifeProactiveQuietHourStart;
   const end = config.kiraLifeProactiveQuietHourEnd;
-
-  if (start === end) {
-    return true;
-  }
-
-  if (start < end) {
-    return hour >= start && hour < end;
-  }
-
-  return hour >= start || hour < end;
+  return isZonedHourWithinRange(hour, start, end);
 }
 
 async function maybeGenerateLifeEvent(purpose: "inner" | "proactive"): Promise<void> {
@@ -132,7 +107,7 @@ async function maybeGenerateLifeEvent(purpose: "inner" | "proactive"): Promise<v
     .slice(0, 5)
     .map((e) => {
       const arc = e.arc ? ` / линия: ${e.arc}` : "";
-      return `${new Date(e.date).toLocaleDateString("ru-RU", { weekday: "short", day: "numeric" })}: ${e.description}${arc}`;
+      return `${formatDateInTimeZone(new Date(e.date), { weekday: "short", day: "numeric" }, USER_TIMEZONE)}: ${e.description}${arc}`;
     })
     .join(" | ");
 
