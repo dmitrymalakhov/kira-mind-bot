@@ -8,6 +8,7 @@ import {
   IconButton,
   InputAdornment,
   Tooltip,
+  MenuItem,
 } from '@mui/material';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
@@ -82,6 +83,37 @@ export function FieldInput({ field, value, onChange, displayValue }: Props) {
         valueMs={value}
         onChange={(ms) => onChange(field.key, ms)}
       />
+    );
+  }
+
+  if (field.type === 'select') {
+    const allowedValues = new Set((field.options ?? []).map((option) => option.value));
+    const hasUnsupportedValue = Boolean(resolvedValue) && !allowedValues.has(resolvedValue);
+    const helperText = hasUnsupportedValue
+      ? `${field.hint ? `${field.hint} ` : ''}Текущее значение больше недоступно в списке. Выбери поддерживаемую временную зону, если хочешь его изменить.`
+      : field.hint;
+
+    return (
+      <TextField
+        select
+        label={field.label}
+        value={hasUnsupportedValue ? resolvedValue : (resolvedValue || field.placeholder || '')}
+        onChange={(e) => onChange(field.key, e.target.value)}
+        fullWidth
+        helperText={helperText}
+        FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px' } }}
+      >
+        {hasUnsupportedValue && (
+          <MenuItem value={resolvedValue} disabled>
+            {resolvedValue} (недоступно)
+          </MenuItem>
+        )}
+        {(field.options ?? []).map((option) => (
+          <MenuItem key={option.value} value={option.value}>
+            {option.label}
+          </MenuItem>
+        ))}
+      </TextField>
     );
   }
 

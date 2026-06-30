@@ -1,4 +1,5 @@
 import type { SectionDef } from './types';
+import COMMON_TIMEZONES from './timezones.json';
 
 export const CONFIG_SCHEMA: SectionDef[] = [
   {
@@ -233,12 +234,20 @@ export const CONFIG_SCHEMA: SectionDef[] = [
     title: 'Общие настройки',
     icon: '⚙️',
     fields: [
-      { key: 'USER_TIMEZONE', label: 'Временная зона', type: 'text', placeholder: 'Europe/Moscow' },
+      {
+        key: 'USER_TIMEZONE',
+        label: 'Временная зона',
+        type: 'select',
+        placeholder: 'Europe/Moscow',
+        options: COMMON_TIMEZONES,
+        md: 7,
+      },
       {
         key: 'REMINDER_EXPIRY_TIME_MS',
         label: 'Срок хранения напоминаний',
         type: 'duration',
         hint: 'Через сколько времени выполненные напоминания удаляются',
+        md: 5,
       },
       {
         key: 'PROACTIVE_ONLY_PRIVATE_CHAT',

@@ -6,26 +6,23 @@ import { USER_TIMEZONE } from "../constants";
 import { getProactiveChatId } from "../utils/allowedUserChatStore";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
+import { getZonedDateKey, getZonedDateTimeParts } from "../utils/time";
 
 let timer: NodeJS.Timeout | undefined;
 let lastSentDate = "";
 
 function todayDateKey(): string {
-    return new Date().toLocaleDateString("ru-RU", { timeZone: USER_TIMEZONE });
+    return getZonedDateKey(new Date(), USER_TIMEZONE);
 }
 
 function getRemindersForToday(chatId: number) {
     const now = new Date();
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date(now);
-    todayEnd.setHours(23, 59, 59, 999);
 
     return ReminderRegistry.getInstance()
         .getActiveByChatId(chatId)
         .filter(r => {
             const due = new Date(r.dueDate);
-            return due >= todayStart && due <= todayEnd;
+            return getZonedDateKey(due, USER_TIMEZONE) === getZonedDateKey(now, USER_TIMEZONE);
         })
         .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
 }
@@ -92,12 +89,11 @@ export function startMorningDigestScheduler(bot: Bot<BotContext>): void {
     // Проверяем каждую минуту — если час совпал и дайджест ещё не отправлялся сегодня
     timer = setInterval(() => {
         const now = new Date();
-        const hour = now.getHours();
-        const minute = now.getMinutes();
+        const { hour, minute } = getZonedDateTimeParts(now, USER_TIMEZONE);
         if (hour === config.morningDigestHour && minute < 5) {
             runDigest(bot).catch(e => console.error("[morning-digest] failed:", e));
         }
     }, 60_000);
 
-    console.info(`[morning-digest] scheduler started, fires at ${config.morningDigestHour}:00`);
+    console.info(`[morning-digest] scheduler started, fires at ${config.morningDigestHour}:00 ${USER_TIMEZONE}`);
 }

@@ -3,6 +3,7 @@ import { ProcessingResult } from "../orchestrator";
 import { devLog, processMarkdownLinks } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { createResponseForTask } from "../ai/responseCompletion";
+import { formatDateInTimeZone } from "../utils/time";
 
 interface WebSearchResult {
     success: boolean;
@@ -68,7 +69,7 @@ async function performWebSearch(query: string): Promise<WebSearchResult> {
                     content: [
                         {
                             type: "input_text",
-                            text: `${getBotPersona()} Стиль общения: ${getCommunicationStyle()} Текущая дата: ${new Date().toLocaleString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' })}. При работе с информацией: - Подбирай наиболее полезную информацию. - Предупреждай, когда данные могут быть устаревшими или неточными. - Обобщай сведения из нескольких источников. Если информация не найдена, сообщи об этом и предложи альтернативы. Используй историю сообщений для контекста.
+                            text: `${getBotPersona()} Стиль общения: ${getCommunicationStyle()} Текущая дата: ${formatDateInTimeZone(new Date(), { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' })}. При работе с информацией: - Подбирай наиболее полезную информацию. - Предупреждай, когда данные могут быть устаревшими или неточными. - Обобщай сведения из нескольких источников. Если информация не найдена, сообщи об этом и предложи альтернативы. Используй историю сообщений для контекста.
 
 Если запрос про афишу, расписание, ближайшие игры, квизы, мероприятия, билеты, запись или регистрацию: ищи актуальные официальные страницы и страницы агрегаторов, укажи ближайшие даты/время/места/стоимость и прямые ссылки на регистрацию, если они доступны. Не подменяй такой запрос поиском заведений на карте. В конце коротко предложи следующий шаг: помочь выбрать игру или открыть запись/регистрацию, но не утверждай, что пользователь уже записан без явной просьбы и подтверждения.`,
                         },

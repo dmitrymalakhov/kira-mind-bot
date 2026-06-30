@@ -49,14 +49,14 @@ export function DurationInput({ label, hint, valueMs, onChange }: Props) {
   };
 
   return (
-    <Box>
+    <Box sx={{ width: '100%' }}>
       <Typography
         variant="caption"
         sx={{ display: 'block', mb: 0.75, color: 'text.secondary', fontWeight: 500 }}
       >
         {label}
       </Typography>
-      <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+      <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start', width: '100%' }}>
         <TextField
           value={amount}
           onChange={(e) => {
@@ -65,10 +65,10 @@ export function DurationInput({ label, hint, valueMs, onChange }: Props) {
           }}
           type="number"
           inputProps={{ min: 1, style: { textAlign: 'right' } }}
-          sx={{ width: 90 }}
-          size="small"
+          size="medium"
+          sx={{ flex: 1, minWidth: 0 }}
         />
-        <FormControl size="small" sx={{ minWidth: 72 }}>
+        <FormControl size="medium" sx={{ width: 112, flexShrink: 0 }}>
           <Select
             value={unit}
             onChange={(e) => {
