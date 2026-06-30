@@ -20,6 +20,7 @@ COPY admin-panel/runtime-health-metadata.json ./runtime-health-metadata.json
 COPY admin-panel/aiPresetRegistry.js ./aiPresetRegistry.js
 RUN mkdir -p ./src /app/ai /app/utils
 COPY admin-panel/src/ai-model-presets.json ./src/ai-model-presets.json
+COPY admin-panel/src/timezones.json ./src/timezones.json
 COPY ai/provider-registry.json /app/ai/provider-registry.json
 COPY ai/fallback-models.json /app/ai/fallback-models.json
 COPY utils/legacyPersonalitySanitizer.js /app/utils/legacyPersonalitySanitizer.js
