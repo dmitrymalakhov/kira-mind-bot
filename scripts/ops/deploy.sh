@@ -109,6 +109,19 @@ echo ""
 echo "🖥️  --- Выполнение на сервере ---"
 ssh root@${SERVER_IP} << EOF
   set -e
+
+  cleanup_failed_build() {
+    status="\$?"
+    if [ "\$status" -ne 0 ]; then
+      echo ""
+      echo "🧹 Сборка прервана — очищаю Docker build cache, чтобы сервер не остался без места..."
+      docker builder prune -af 2>/dev/null || true
+      docker image prune -f 2>/dev/null || true
+      df -h / | tail -1 || true
+    fi
+  }
+  trap cleanup_failed_build EXIT
+
   cd /root/source
 
   echo ""
@@ -132,8 +145,16 @@ ssh root@${SERVER_IP} << EOF
 
   echo "🗑️  Очистка Docker..."
   docker container prune -f 2>/dev/null || true
-  docker image prune -af 2>/dev/null || true
-  docker builder prune -af 2>/dev/null || true
+  FREE_MB=\$(df -Pm / | awk 'NR==2 {print \$4}')
+  if [ "\${FREE_MB:-0}" -lt 2048 ]; then
+    echo "  Свободно \${FREE_MB:-0} MB — выполняю полную очистку image/build cache."
+    docker image prune -af 2>/dev/null || true
+    docker builder prune -af 2>/dev/null || true
+  else
+    echo "  Свободно \${FREE_MB:-0} MB — сохраняю свежий build cache."
+    docker image prune -f 2>/dev/null || true
+    docker builder prune -f --filter until=168h 2>/dev/null || true
+  fi
   df -h / | tail -1
   echo ""
 
@@ -189,7 +210,7 @@ ssh root@${SERVER_IP} << EOF
     local name="\$1"
     echo "🚀 Деплой: \$name"
     docker-compose -f docker-compose.yml stop "\$name" 2>/dev/null || true
-    docker-compose -f docker-compose.yml build --no-cache "\$name"
+    docker-compose -f docker-compose.yml build "\$name"
     docker-compose -f docker-compose.yml up "\$name" -d
     echo "✅ \$name запущен."
     DEPLOYED_SERVICES="\$DEPLOYED_SERVICES \$name"
@@ -199,8 +220,16 @@ ssh root@${SERVER_IP} << EOF
   if [ "$DEPLOY_ADMIN_PANEL" = true ];      then deploy_service admin-panel; fi
 
   echo ""
-  echo "🧹 Очистка Docker build cache после сборки..."
-  docker builder prune -af 2>/dev/null || true
+  echo "🧹 Очистка Docker cache после сборки..."
+  docker image prune -f 2>/dev/null || true
+  FREE_MB=\$(df -Pm / | awk 'NR==2 {print \$4}')
+  if [ "\${FREE_MB:-0}" -lt 1536 ]; then
+    echo "  Свободно \${FREE_MB:-0} MB — очищаю build cache."
+    docker builder prune -af 2>/dev/null || true
+  else
+    echo "  Свободно \${FREE_MB:-0} MB — оставляю свежий build cache для следующего деплоя."
+    docker builder prune -f --filter until=168h 2>/dev/null || true
+  fi
   docker image prune -f 2>/dev/null || true
   docker system df 2>/dev/null || true
 

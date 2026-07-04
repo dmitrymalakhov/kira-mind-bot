@@ -34,6 +34,7 @@ import { startPersonalChatMemoryIndexer } from "./services/personalChatMemoryInd
 import { startReflectionModeScheduler } from "./services/reflectionModeScheduler";
 import { startMorningDigestScheduler } from "./services/morningDigestScheduler";
 import { startChatGroupTracker } from "./services/chatGroupTracker";
+import { startChatPromptWatchPolling } from "./services/chatPromptWatchers";
 import { startInboxGuardianScheduler } from "./services/inboxGuardianScheduler";
 import { initReflectionMode } from "./services/reflectionModeService";
 import { maybeProactiveHint } from "./utils/proactiveMemory";
@@ -1866,6 +1867,7 @@ async function startBot() {
         startMorningDigestScheduler(bot);
         startInboxGuardianScheduler(bot);
         startChatGroupTracker(bot);
+        startChatPromptWatchPolling(bot.api);
         await bot.api.setMyCommands(getTelegramMenuCommands());
         await bot.start();
 

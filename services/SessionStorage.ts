@@ -28,6 +28,7 @@ interface PersistedSession {
     pendingQuickChoices?: SessionData['pendingQuickChoices'];
     studyChatRequest?: SessionData['studyChatRequest'];
     chatAnalysisPeriodRequest?: SessionData['chatAnalysisPeriodRequest'];
+    chatPromptWatchState?: SessionData['chatPromptWatchState'];
 }
 
 function extract(data: SessionData): PersistedSession {
@@ -64,6 +65,7 @@ function extract(data: SessionData): PersistedSession {
         pendingQuickChoices: prunePendingQuickChoices(data.pendingQuickChoices, now),
         studyChatRequest: pruneStudyChatRequest(data.studyChatRequest, now),
         chatAnalysisPeriodRequest: pruneChatAnalysisPeriodRequest(data.chatAnalysisPeriodRequest, now),
+        chatPromptWatchState: pruneChatPromptWatchState(data.chatPromptWatchState, now),
     };
 }
 
@@ -88,6 +90,7 @@ function merge(initial: SessionData, persisted: PersistedSession): SessionData {
         pendingQuickChoices: persisted.pendingQuickChoices ?? initial.pendingQuickChoices,
         studyChatRequest: persisted.studyChatRequest ?? initial.studyChatRequest,
         chatAnalysisPeriodRequest: persisted.chatAnalysisPeriodRequest ?? initial.chatAnalysisPeriodRequest,
+        chatPromptWatchState: persisted.chatPromptWatchState ?? initial.chatPromptWatchState,
     };
 }
 
@@ -135,6 +138,15 @@ function pruneChatAnalysisPeriodRequest(
     if (!request.expiresAt && !request.createdAt) return undefined;
     if (request.createdAt && now - request.createdAt > STUDY_CHAT_REQUEST_FALLBACK_TTL_MS) return undefined;
     return request;
+}
+
+function pruneChatPromptWatchState(
+    state: SessionData['chatPromptWatchState'],
+    now: number
+): SessionData['chatPromptWatchState'] {
+    if (!state) return undefined;
+    if (!state.expiresAt || state.expiresAt <= now) return undefined;
+    return state;
 }
 
 /**
@@ -185,6 +197,7 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
             persisted.pendingQuickChoices = prunePendingQuickChoices(persisted.pendingQuickChoices, now);
             persisted.studyChatRequest = pruneStudyChatRequest(persisted.studyChatRequest, now);
             persisted.chatAnalysisPeriodRequest = pruneChatAnalysisPeriodRequest(persisted.chatAnalysisPeriodRequest, now);
+            persisted.chatPromptWatchState = pruneChatPromptWatchState(persisted.chatPromptWatchState, now);
             persisted.lastProactiveInsight = pruneLastProactiveInsight(persisted.lastProactiveInsight, now);
             // Возвращаем PersistedSession — Grammy session.initial() объединится с ним через Object.assign
             return persisted as unknown as SessionData;
@@ -269,6 +282,8 @@ export async function appendPersistedHistory(
                 : persisted.lastBrowserTask,
             pendingQuickChoices: prunePendingQuickChoices(persisted.pendingQuickChoices, now),
             studyChatRequest: pruneStudyChatRequest(persisted.studyChatRequest, now),
+            chatAnalysisPeriodRequest: pruneChatAnalysisPeriodRequest(persisted.chatAnalysisPeriodRequest, now),
+            chatPromptWatchState: pruneChatPromptWatchState(persisted.chatPromptWatchState, now),
         };
 
         await repo.upsert({ key, data: JSON.stringify(next) }, ['key']);
@@ -316,6 +331,8 @@ export async function saveProactiveInsight(
                 : persisted.lastBrowserTask,
             pendingQuickChoices: prunePendingQuickChoices(persisted.pendingQuickChoices, now),
             studyChatRequest: pruneStudyChatRequest(persisted.studyChatRequest, now),
+            chatAnalysisPeriodRequest: pruneChatAnalysisPeriodRequest(persisted.chatAnalysisPeriodRequest, now),
+            chatPromptWatchState: pruneChatPromptWatchState(persisted.chatPromptWatchState, now),
         };
 
         await repo.upsert({ key, data: JSON.stringify(next) }, ['key']);
