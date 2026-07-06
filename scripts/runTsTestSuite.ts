@@ -16,6 +16,7 @@ const SUITES = {
         "testConversationSelfMemoryFallback.ts",
         "testKiraSelfMemory.ts",
         "testTodayImportance.ts",
+        "testProactiveMemoryEvidence.ts",
     ],
     interaction: [
         "testVoiceReply.ts",
@@ -40,6 +41,7 @@ const SUITES = {
         "testConversationSelfMemoryFallback.ts",
         "testKiraSelfMemory.ts",
         "testTodayImportance.ts",
+        "testProactiveMemoryEvidence.ts",
         "testIncomingTelegramQueue.ts",
     ],
 } satisfies Record<string, string[]>;

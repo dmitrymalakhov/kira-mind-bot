@@ -11,6 +11,7 @@ import {
     resolveContactIdentityScope,
     storedContactPrefix,
 } from './contactMemory';
+import { formatProactiveMemoryEvidence } from './proactiveMemoryEvidence';
 
 /** Минимальный интервал между проактивными подсказками (20 минут) */
 const HINT_COOLDOWN_MS = 20 * 60 * 1000;
@@ -137,17 +138,17 @@ export async function maybeProactiveHint(
         if (urgentFacts.length === 0 && topRelated.length === 0) return;
 
         // Формируем список кандидатов для LLM
-        type Candidate = { id: string; content: string; isUrgent: boolean; expiresAt?: Date; tags?: string[] };
+        type Candidate = { id: string; content: string; isUrgent: boolean; expiresAt?: Date; tags?: string[]; timestamp?: Date; sourceContext?: string; sourceMessageIds?: string[] };
         const candidates: Candidate[] = [
-            ...urgentFacts.map((f) => ({ id: f.id, content: f.content, isUrgent: true, expiresAt: f.expiresAt, tags: f.tags })),
-            ...topRelated.map((f) => ({ id: f.id, content: f.content, isUrgent: false, tags: f.tags })),
+            ...urgentFacts.map((f) => ({ id: f.id, content: f.content, isUrgent: true, expiresAt: f.expiresAt, tags: f.tags, timestamp: f.timestamp, sourceContext: f.sourceContext, sourceMessageIds: f.sourceMessageIds })),
+            ...topRelated.map((f) => ({ id: f.id, content: f.content, isUrgent: false, tags: f.tags, timestamp: f.timestamp, sourceContext: f.sourceContext, sourceMessageIds: f.sourceMessageIds })),
         ];
 
         const factsText = candidates.map((c, i) => {
             const urgencyTag = c.isUrgent
                 ? ` [СРОЧНО, истекает ${new Date(c.expiresAt!).toLocaleDateString('ru-RU')}]`
                 : '';
-            return `${i}. ${c.content}${urgencyTag}`;
+            return `${i}. ${c.content}${urgencyTag}\n   Доказательство контекста: ${formatProactiveMemoryEvidence(c)}`;
         }).join('\n');
 
         const prompt = `Ты — личный ИИ-ассистент. Ты только что ответила пользователю.
@@ -164,6 +165,10 @@ ${factsText}
 - Упоминай только если это уместно в контексте разговора ИЛИ факт помечен [СРОЧНО]
 - Не навязывайся и не дублируй то, что уже сказала в ответе
 - Реплика должна быть естественной (1–2 предложения), как будто ты вспомнила что-то важное
+- Обязательно дай человеческий контекст: кто/из какого чата сообщил, когда это было и что именно осталось открытым, если эти данные есть в доказательстве
+- Не говори расплывчато «помню, ты обмолвился»; лучше: «ты обсуждал с Колей проблему Максима…»
+- Если источник или участники неясны, не маскируй это уверенностью: коротко скажи, что в памяти нет точного источника, или верни shouldHint: false
+- В конце мягко предложи действие или перенос напоминания, если сейчас неудобно
 - Если ни один факт не уместен — верни shouldHint: false
 
 Ответь только JSON:
