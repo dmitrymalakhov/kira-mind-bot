@@ -18,6 +18,10 @@
   - правила идентичности контакта, tag-based matching и проверки subject-а не дублируются по модулям;
   - retrieval, proactive hints и memory-gap должны использовать одни и те же helper-ы contact-memory.
   - `contact_username` считается сильным identity key наравне с `contact_id`, но не заменяет backward-compatible теги `contact_name/contact_alias/contact_key`.
+- Проактивные подсказки из памяти должны быть provenance-aware:
+  - вместе с фактом в LLM передаётся компактное evidence: источник/чат, время, открытые линии и последние `sourceMessageIds`, если они есть;
+  - подсказка должна объяснять контекст человечески и не подставлять выдуманные имена, если источник неясен;
+  - формат evidence живёт отдельно от orchestration в `utils/proactiveMemoryEvidence.ts`, чтобы его можно было тестировать без загрузки runtime-конфига.
 
 ## Локальные соглашения
 - Commit message пишутся в формате Conventional Commits: `<type>(optional-scope): <summary>`.
