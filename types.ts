@@ -26,6 +26,21 @@ export interface UnauthorizedChatInfo {
     isInContacts?: boolean; // Флаг, находится ли пользователь в контактах
 }
 
+export interface ChatPromptWatchWizardState {
+    step: 'source' | 'target' | 'prompt' | 'confirm';
+    sourceChatId?: string;
+    sourceChatTitle?: string;
+    sourceChatType?: string;
+    targetChatId?: string;
+    targetChatTitle?: string;
+    targetChatType?: string;
+    prompt?: string;
+    sourcePage?: number;
+    targetPage?: number;
+    createdAt: number;
+    expiresAt: number;
+}
+
 export interface SessionData {
     reminders: Reminder[];
     messageEditing?: boolean;
@@ -237,6 +252,8 @@ export interface SessionData {
         /** Чаты ожидающие сохранения в группу (quick-save после inline анализа) */
         pendingChatNames?: string[];
     };
+    /** Состояние мастера настройки промпт-наблюдения за групповым чатом */
+    chatPromptWatchState?: ChatPromptWatchWizardState;
     /** Снимок последней оркестрации для LLM-дедупликации повторных запросов */
     lastIntentDedup?: {
         message: string;

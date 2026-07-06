@@ -412,6 +412,68 @@ export interface GroupChat {
     title: string;
 }
 
+export interface TelegramReadableChat {
+    id: number;
+    title: string;
+    chatType: 'private' | 'group' | 'channel' | 'unknown';
+    username?: string;
+}
+
+function dialogChatType(dialog: any): TelegramReadableChat['chatType'] {
+    if (dialog.isUser) return 'private';
+    if (dialog.isGroup) return 'group';
+    if (dialog.isChannel) return 'channel';
+    return 'unknown';
+}
+
+function dialogTitle(dialog: any): string {
+    const entity = dialog.entity || {};
+    const title = dialog.title || dialog.name || entity.title;
+    if (title) return String(title).trim();
+
+    const nameParts = [entity.firstName || entity.first_name, entity.lastName || entity.last_name]
+        .map((part) => String(part || '').trim())
+        .filter(Boolean);
+    return nameParts.join(' ') || 'Без названия';
+}
+
+/**
+ * Возвращает чаты, доступные пользовательскому Telegram-аккаунту через MTProto.
+ * Используется для источников наблюдений, куда бот может быть не добавлен.
+ */
+export async function listReadableTelegramChats(limit = 200): Promise<TelegramReadableChat[]> {
+    try {
+        const client = await initTelegramClient();
+        if (!client) return [];
+
+        const dialogs = await client.getDialogs({ limit });
+        const result: TelegramReadableChat[] = [];
+        const seen = new Set<number>();
+
+        for (const dialog of dialogs as any[]) {
+            const id = dialog.id != null ? Number(dialog.id) : NaN;
+            if (!Number.isFinite(id) || seen.has(id)) continue;
+            seen.add(id);
+
+            const title = dialogTitle(dialog);
+            if (!title) continue;
+
+            const username = dialog.entity?.username ? String(dialog.entity.username) : undefined;
+            result.push({
+                id,
+                title,
+                chatType: dialogChatType(dialog),
+                username,
+            });
+        }
+
+        return result.sort((a, b) => a.title.localeCompare(b.title, 'ru'));
+    } catch (error) {
+        console.error("Ошибка при получении списка Telegram-чатов:", error);
+        return [];
+    }
+}
+
 /**
  * Ищет группу или канал по названию (точное или частичное совпадение).
  * @param client Клиент Telegram

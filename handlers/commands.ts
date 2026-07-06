@@ -9,6 +9,7 @@ import { sendMessage } from "../utils";
 import { addToHistory } from "../utils/history";
 import { registerMemoryCommands } from "./memoryCommands";
 import { registerChatGroupCommands } from "./chatGroupCommands";
+import { registerChatPromptWatchCommands } from "./chatPromptWatchCommands";
 import { registerHealthCommands } from "./healthCommands";
 import { USER_TIMEZONE } from "../constants";
 import { answerCapabilitiesQuestion } from "../capabilities";
@@ -38,6 +39,7 @@ function formatToggleState(enabled: boolean): string {
 
 export function registerCommandHandlers(bot: Bot<BotContext>) {
     registerMemoryCommands(bot);
+    registerChatPromptWatchCommands(bot);
     registerChatGroupCommands(bot);
     registerHealthCommands(bot);
     bot.command("telegram_reset", async (ctx) => {

@@ -230,6 +230,10 @@ export function registerChatGroupCommands(bot: Bot<BotContext>) {
 
     // ── Обработка текстовых ответов пользователя ──────────────────────────────
     bot.on('message:text', async (ctx, next) => {
+        const watchState = ctx.session.chatPromptWatchState;
+        if (watchState && watchState.expiresAt > Date.now()) return next();
+        if (watchState) delete ctx.session.chatPromptWatchState;
+
         const state = ctx.session.chatGroupState;
         if (!state) return next();
 
