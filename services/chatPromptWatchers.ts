@@ -15,6 +15,9 @@ const RECENT_CONTEXT_MESSAGES = 18;
 const MIN_MATCH_CONFIDENCE = 0.55;
 const MAX_IMAGE_ANALYSES_PER_POLL = 4;
 const MAX_IMAGE_DOWNLOAD_BYTES = 8 * 1024 * 1024;
+// Жёсткий лимит времени одного poll: если MTProto-вызов зависнет без таймаута,
+// watchdog сбросит pollRunning, чтобы polling не остановился навсегда.
+const POLL_STUCK_TIMEOUT_MS = 5 * 60 * 1000;
 
 export interface ChatPromptWatcher {
     id: string;
@@ -73,6 +76,7 @@ let parsedCache: { raw: string; watchers: ChatPromptWatcher[] } | undefined;
 const pollWatermarks = new Map<string, number>();
 let pollTimer: NodeJS.Timeout | undefined;
 let pollRunning = false;
+let pollStartedAt = 0;
 
 function readMsEnv(name: string, fallback: number): number {
     const raw = process.env[name];
@@ -181,13 +185,29 @@ function limitText(text: string, maxLength: number): string {
     return `${normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
-function errorToMessage(error: unknown): string {
+export function errorToMessage(error: unknown): string {
     if (error instanceof Error) return error.message;
     try {
         return JSON.stringify(error);
     } catch {
         return String(error);
     }
+}
+
+/**
+ * Временная ли ошибка отправки уведомления в целевой чат.
+ * Временные → ретрай на следующем poll (watermark не двигаем).
+ * Постоянные (Forbidden/chat not found/blocked) → продвигаем watermark и пишем lastMatchedAt,
+ * иначе watcher зациклится на одной пачке с повторными LLM-вызовами и спамом.
+ */
+function isTransientDeliveryError(error: unknown): boolean {
+    const text = errorToMessage(error).toLowerCase();
+    if (text.includes("flood")) return true;
+    if (text.includes("timeout") || text.includes("timed out")) return true;
+    if (text.includes("etimedout") || text.includes("enotfound") || text.includes("econnreset")) return true;
+    if (text.includes("network") || text.includes("temporarily") || text.includes("retry")) return true;
+    if (text.includes("429") || text.includes("500") || text.includes("502") || text.includes("503") || text.includes("504")) return true;
+    return false;
 }
 
 function messageSortKey(msg: WatchedChatMessage): number {
@@ -279,7 +299,7 @@ function severityLabel(severity: WatchAnalysisResult["severity"]): string {
     return "не указана";
 }
 
-function toTelegramChatId(chatId: string): number | string {
+export function toTelegramChatId(chatId: string): number | string {
     const parsed = Number(chatId);
     return Number.isSafeInteger(parsed) ? parsed : chatId;
 }
@@ -452,7 +472,20 @@ async function processChatPromptWatchBatch(
         if (!result || !isMatch || confidence < MIN_MATCH_CONFIDENCE) return true;
 
         const notificationText = buildNotificationText(watcher, sourceTitle, result);
-        await deliverWatchNotification(api, watcher, notificationText);
+        try {
+            await deliverWatchNotification(api, watcher, notificationText);
+        } catch (deliveryError) {
+            // Постоянная ошибка доставки (чат удалён/заблокирован/бот кикнут) —
+            // не зацикливаемся на этой пачке: продвигаем watermark и ставим cooldown,
+            // чтобы не дёргать LLM повторно и не плодить спам при восстановлении.
+            if (isTransientDeliveryError(deliveryError)) throw deliveryError;
+            console.warn(
+                `[chatPromptWatchers] watcher ${watcher.id} target chat permanently unavailable, advancing watermark:`,
+                deliveryError,
+            );
+            await updateWatcherAfterNotification(watcher.id, notificationText);
+            return true;
+        }
         await updateWatcherAfterNotification(watcher.id, notificationText);
         return true;
     } catch (error) {
@@ -627,7 +660,9 @@ async function pollChatPromptWatchersOnce(api: Api): Promise<void> {
     const watchers = (await loadWatchers()).filter((watcher) => watcher.enabled);
     if (!watchers.length) return;
 
-    const client = await initTelegramClient();
+    // preloadContacts: false — лишний MTProto-вызов на каждом poll не нужен.
+    // Тот же паттерн используют chatGroupTracker и personalChatMemoryIndexer.
+    const client = await initTelegramClient({ preloadContacts: false });
     if (!client) return;
 
     const messagesBySource = new Map<string, WatchedChatMessage[]>();
@@ -716,14 +751,28 @@ async function pollChatPromptWatchersOnce(api: Api): Promise<void> {
 
 function scheduleNextPoll(api: Api): void {
     pollTimer = setTimeout(async () => {
+        if (pollRunning) {
+            // Watchdog: если предыдущий poll идёт дольше POLL_STUCK_TIMEOUT_MS
+            // (например, MTProto-вызов завис без таймаута), принудительно сбрасываем
+            // флаг, чтобы polling продолжился, а не остановился навсегда.
+            const stuckFor = Date.now() - pollStartedAt;
+            if (pollStartedAt && stuckFor > POLL_STUCK_TIMEOUT_MS) {
+                console.error(
+                    `[chatPromptWatchers] poll stuck for ${Math.round(stuckFor / 1000)}s, force-resetting pollRunning`,
+                );
+                pollRunning = false;
+            }
+        }
         if (!pollRunning) {
             pollRunning = true;
+            pollStartedAt = Date.now();
             try {
                 await pollChatPromptWatchersOnce(api);
             } catch (error) {
                 console.error("[chatPromptWatchers] poll error:", error);
             } finally {
                 pollRunning = false;
+                pollStartedAt = 0;
             }
         }
         scheduleNextPoll(api);
@@ -765,6 +814,7 @@ export async function removeChatPromptWatcher(id: string): Promise<boolean> {
     const watchers = await loadWatchers();
     const updated = watchers.filter((watcher) => watcher.id !== normalizedId);
     if (updated.length === watchers.length) return false;
+    pollWatermarks.delete(normalizedId);
     await saveWatchers(updated);
     return true;
 }
