@@ -5,33 +5,33 @@ function testEpisodeSourceIsHumanReadable(): void {
     const evidence = formatProactiveMemoryEvidence({
         content: [
             '[ЭПИЗОД ПАМЯТИ: episode-1]',
-            'Источник: личная переписка с Коля (@kolya)',
+            'Источник: личная переписка с контактом из переписки (@contact)',
             'Когда: 2026-07-04T18:00:00.000Z — 2026-07-04T18:20:00.000Z',
-            'Кратко: обсуждали проблему Максима и не нашли решение.',
-            'Открытые линии: решить, что делать с проблемой Максима',
+            'Кратко: обсуждали рабочий вопрос и не нашли решение.',
+            'Открытые линии: решить, что делать с проблемой проекта',
         ].join('\n'),
-        tags: ['memory-episode', 'source_contact:Коля'],
+        tags: ['memory-episode', 'source_contact:Контакт'],
         sourceMessageIds: ['123:10', '123:11', '123:12', '123:13'],
     });
 
-    assert.ok(evidence.includes('откуда: личная переписка с Коля (@kolya)'));
+    assert.ok(evidence.includes('откуда: личная переписка с контактом из переписки (@contact)'));
     assert.ok(evidence.includes('когда: 2026-07-04T18:00:00.000Z'));
-    assert.ok(evidence.includes('незакрыто: решить, что делать с проблемой Максима'));
+    assert.ok(evidence.includes('незакрыто: решить, что делать с проблемой проекта'));
     assert.ok(evidence.includes('messageIds: 123:11, 123:12, 123:13'));
 }
 
 function testFallbackSourceContextAndContactTag(): void {
     const withContext = formatProactiveMemoryEvidence({
-        content: 'Максиму нужно отправить варианты решения.',
-        sourceContext: 'Личная переписка с Димой: 2026-07-05T06:00:00.000Z — 2026-07-05T06:10:00.000Z.',
+        content: 'По проекту нужно отправить варианты решения.',
+        sourceContext: 'Личная переписка с контактом: 2026-07-05T06:00:00.000Z — 2026-07-05T06:10:00.000Z.',
     });
-    assert.ok(withContext.includes('откуда: Личная переписка с Димой'));
+    assert.ok(withContext.includes('откуда: Личная переписка с контактом'));
 
     const withTag = formatProactiveMemoryEvidence({
-        content: 'Есть открытый вопрос по Максу.',
-        tags: ['source_contact:Дима'],
+        content: 'Есть открытый вопрос по проекту.',
+        tags: ['source_contact:Контакт'],
     });
-    assert.ok(withTag.includes('откуда: Дима'));
+    assert.ok(withTag.includes('откуда: Контакт'));
 }
 
 testEpisodeSourceIsHumanReadable();
