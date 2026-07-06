@@ -83,6 +83,10 @@ export function setBotRef(bot: Bot<BotContext>): void {
     _botRef = bot;
 }
 
+export function getBotRef(): Bot<BotContext> | null {
+    return _botRef;
+}
+
 /**
  * Перепланирует существующее напоминание: отменяет старый таймер и ставит новый.
  * Используется при изменении времени/текста через текстовую команду.
