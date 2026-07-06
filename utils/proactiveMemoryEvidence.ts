@@ -6,16 +6,29 @@ type ProactiveMemoryCandidateInput = {
     sourceMessageIds?: string[];
 };
 
+type FormatProactiveMemoryEvidenceOptions = {
+    /**
+     * Технические Telegram/message identifiers полезны для диагностики, но по умолчанию не должны попадать
+     * в LLM prompt: дешёвые модели могут процитировать их пользователю.
+     */
+    includeMessageIds?: boolean;
+    /** Детерминированный default убирает зависимость форматирования от TZ Docker/host. */
+    timeZone?: string;
+};
+
+const DEFAULT_EVIDENCE_TIME_ZONE = 'UTC';
+
 function normalizeDate(value: Date | string | undefined): Date | undefined {
     if (!value) return undefined;
     const date = value instanceof Date ? value : new Date(value);
     return Number.isFinite(date.getTime()) ? date : undefined;
 }
 
-function formatMemoryDate(date: Date | string | undefined): string | undefined {
+function formatMemoryDate(date: Date | string | undefined, timeZone = DEFAULT_EVIDENCE_TIME_ZONE): string | undefined {
     const normalized = normalizeDate(date);
     if (!normalized) return undefined;
     return normalized.toLocaleString('ru-RU', {
+        timeZone,
         day: '2-digit',
         month: '2-digit',
         year: 'numeric',
@@ -37,12 +50,15 @@ function extractContentLine(content: string, label: string): string | undefined 
     return line?.trim().slice(prefix.length).trim() || undefined;
 }
 
-export function formatProactiveMemoryEvidence(memory: ProactiveMemoryCandidateInput): string {
+export function formatProactiveMemoryEvidence(
+    memory: ProactiveMemoryCandidateInput,
+    options: FormatProactiveMemoryEvidenceOptions = {},
+): string {
     const sourceContext = memory.sourceContext?.replace(/\s+/g, ' ').trim();
     const explicitSource = extractContentLine(memory.content, 'Источник') || sourceContext || extractSourceContact(memory.tags);
-    const explicitWhen = extractContentLine(memory.content, 'Когда') || formatMemoryDate(memory.timestamp);
+    const explicitWhen = extractContentLine(memory.content, 'Когда') || formatMemoryDate(memory.timestamp, options.timeZone);
     const openLoops = extractContentLine(memory.content, 'Открытые линии');
-    const sourceMessages = memory.sourceMessageIds?.length
+    const sourceMessages = options.includeMessageIds && memory.sourceMessageIds?.length
         ? `messageIds: ${memory.sourceMessageIds.slice(-3).join(', ')}`
         : undefined;
 
