@@ -24,6 +24,7 @@ const SUITES = {
         "testSpeechTextPreparation.ts",
         "testGroupChatContext.ts",
         "testIncomingTelegramQueue.ts",
+        "testChatPromptWatchers.ts",
     ],
     all: [
         "testAiModelPresets.ts",
@@ -43,6 +44,7 @@ const SUITES = {
         "testTodayImportance.ts",
         "testProactiveMemoryEvidence.ts",
         "testIncomingTelegramQueue.ts",
+        "testChatPromptWatchers.ts",
     ],
 } satisfies Record<string, string[]>;
 
