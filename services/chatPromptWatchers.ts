@@ -15,9 +15,16 @@ const RECENT_CONTEXT_MESSAGES = 18;
 const MIN_MATCH_CONFIDENCE = 0.55;
 const MAX_IMAGE_ANALYSES_PER_POLL = 4;
 const MAX_IMAGE_DOWNLOAD_BYTES = 8 * 1024 * 1024;
-// Жёсткий лимит времени одного poll: если MTProto-вызов зависнет без таймаута,
-// watchdog сбросит pollRunning, чтобы polling не остановился навсегда.
-const POLL_STUCK_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Жёсткий лимит времени одного poll: если MTProto-вызов зависнет без таймаута,
+ * watchdog пометит poll как зависший. Растёт вместе с интервалом, чтобы при длинном
+ * pollInterval (например 5 мин) watchdog не срабатывал почти сразу.
+ */
+function pollStuckTimeoutMs(): number {
+    if (pollTimingOverride) return pollTimingOverride.stuckTimeoutMs;
+    return Math.max(pollIntervalMs() * 3, 5 * 60 * 1000);
+}
 
 export interface ChatPromptWatcher {
     id: string;
@@ -77,6 +84,13 @@ const pollWatermarks = new Map<string, number>();
 let pollTimer: NodeJS.Timeout | undefined;
 let pollRunning = false;
 let pollStartedAt = 0;
+// Счётчик для защиты от зависших poll-ов. Каждый poll при старте запоминает текущее
+// значение. Если watchdog решает, что poll завис, он увеличивает счётчик и запускает
+// новый poll. Когда зависший poll наконец отвиснет и завершится, он сравнит своё
+// запомненное значение с текущим: если они разные — значит его уже «заменили» новым
+// poll, и он молча завершается, не сбрасывая флаг pollRunning и не планируя новый таймер
+// (иначе получилось бы две параллельных timer-цепочки).
+let pollGeneration = 0;
 
 function readMsEnv(name: string, fallback: number): number {
     const raw = process.env[name];
@@ -195,19 +209,42 @@ export function errorToMessage(error: unknown): string {
 }
 
 /**
- * Временная ли ошибка отправки уведомления в целевой чат.
- * Временные → ретрай на следующем poll (watermark не двигаем).
- * Постоянные (Forbidden/chat not found/blocked) → продвигаем watermark и пишем lastMatchedAt,
- * иначе watcher зациклится на одной пачке с повторными LLM-вызовами и спамом.
+ * Достаёт HTTP/Telegram статус из ошибки любой формы.
+ * GrammyError держит код в `error_code` (например 403), у fetch-ошибок — `status`/`statusCode`,
+ * у axios-подобных — `response.status`.
  */
-function isTransientDeliveryError(error: unknown): boolean {
-    const text = errorToMessage(error).toLowerCase();
-    if (text.includes("flood")) return true;
-    if (text.includes("timeout") || text.includes("timed out")) return true;
-    if (text.includes("etimedout") || text.includes("enotfound") || text.includes("econnreset")) return true;
-    if (text.includes("network") || text.includes("temporarily") || text.includes("retry")) return true;
-    if (text.includes("429") || text.includes("500") || text.includes("502") || text.includes("503") || text.includes("504")) return true;
-    return false;
+export function getErrorStatus(error: unknown): number | undefined {
+    const candidate = error as {
+        error_code?: number;
+        status?: number;
+        statusCode?: number;
+        response?: { status?: number; statusCode?: number };
+    };
+    const status = candidate?.error_code ?? candidate?.status ?? candidate?.statusCode
+        ?? candidate?.response?.status ?? candidate?.response?.statusCode;
+    return typeof status === "number" ? status : undefined;
+}
+
+/**
+ * Временная ли ошибка отправки уведомления в целевой чат.
+ *
+ * Логика намеренно консервативная: permanent считаем только надёжные коды
+ * Bot API 400/403 (чат не найден/заблокирован/бот кикнут/нет прав) — для них
+ * продвигаем watermark и ставим cooldown, иначе watcher зациклится с повторными
+ * LLM-вызовами и спамом. Всё остальное (429, 5xx, сетевые сбои без кода) —
+ * transient: безопаснее лишний раз ретраить, чем потерять уведомление.
+ */
+export function isTransientDeliveryError(error: unknown): boolean {
+    const status = getErrorStatus(error);
+    if (status !== undefined) {
+        // Bot API: 400/403 — целевой чат недоступен (не найден/заблокирован/бот кикнут).
+        // Остальные коды (429, 5xx) — временные, ретраим.
+        return status !== 400 && status !== 403;
+    }
+    // Нет статуса — скорее всего сетевая ошибка. Перечисленные errno точно временные;
+    // для всех прочих unknown тоже считаем transient, чтобы не потерять уведомление
+    // (лучше лишний ретрай, чем permanent-проглатывание).
+    return true;
 }
 
 function messageSortKey(msg: WatchedChatMessage): number {
@@ -345,30 +382,74 @@ function buildNotificationText(
     return limitText(lines.join("\n"), 3900);
 }
 
-async function deliverWatchNotification(api: Api, watcher: ChatPromptWatcher, notificationText: string): Promise<void> {
+export interface WatchDeliveryResult {
+    /** Доставлено в целевой чат. */
+    deliveredToTarget: boolean;
+    /** Доставлено в чат владельца как fallback (целевой недоступен). */
+    deliveredToOwner: boolean;
+}
+
+/**
+ * Срабатывает, когда не удалось доставить уведомление ни в целевой чат, ни владельцу.
+ * Хранит ошибки раздельно: классификацию permanent/transient обработчик делает
+ * по исходной ошибке целевого чата, а не по ошибке fallback-отправки.
+ */
+export class WatchDeliveryError extends Error {
+    readonly targetError: unknown;
+    readonly fallbackError: unknown | undefined;
+
+    constructor(targetError: unknown, fallbackError: unknown | undefined) {
+        const targetMsg = errorToMessage(targetError);
+        const fallbackMsg = fallbackError !== undefined ? errorToMessage(fallbackError) : undefined;
+        super(
+            fallbackMsg !== undefined
+                ? `target chat failed (${targetMsg}); owner fallback also failed (${fallbackMsg})`
+                : `target chat failed (${targetMsg})`,
+        );
+        this.name = "WatchDeliveryError";
+        this.targetError = targetError;
+        this.fallbackError = fallbackError;
+    }
+}
+
+async function deliverWatchNotification(
+    api: Api,
+    watcher: ChatPromptWatcher,
+    notificationText: string,
+): Promise<WatchDeliveryResult> {
     const targetChatId = toTelegramChatId(watcher.targetChatId);
 
+    let targetError: unknown;
     try {
         await api.sendMessage(targetChatId, notificationText);
-        return;
-    } catch (targetError) {
-        console.error(`[chatPromptWatchers] failed to send watcher ${watcher.id} notification to target:`, targetError);
+        return { deliveredToTarget: true, deliveredToOwner: false };
+    } catch (error) {
+        targetError = error;
+        console.error(`[chatPromptWatchers] failed to send watcher ${watcher.id} notification to target:`, error);
+    }
 
-        const ownerChatId = await getProactiveChatId();
-        if (String(ownerChatId) === String(targetChatId)) {
-            throw targetError;
-        }
+    // Целевой чат недоступен — пробуем fallback владельцу, если это не тот же чат.
+    const ownerChatId = await getProactiveChatId();
+    if (String(ownerChatId) === String(targetChatId)) {
+        throw new WatchDeliveryError(targetError, undefined);
+    }
 
-        const fallbackText = limitText([
-            "📡 Сработало наблюдение, но целевой чат недоступен.",
-            `Наблюдение: ${watcher.id}`,
-            `Куда пыталась писать: ${watcher.targetChatTitle || watcher.targetChatId}`,
-            `Ошибка отправки: ${compactText(errorToMessage(targetError), 450)}`,
-            "",
-            notificationText,
-        ].join("\n"), 3900);
+    const fallbackText = limitText([
+        "📡 Сработало наблюдение, но целевой чат недоступен.",
+        `Наблюдение: ${watcher.id}`,
+        `Куда пыталась писать: ${watcher.targetChatTitle || watcher.targetChatId}`,
+        `Ошибка отправки: ${compactText(errorToMessage(targetError), 450)}`,
+        "",
+        notificationText,
+    ].join("\n"), 3900);
 
+    try {
         await api.sendMessage(ownerChatId, fallbackText);
+        return { deliveredToTarget: false, deliveredToOwner: true };
+    } catch (fallbackError) {
+        // Обе попытки провалились. Кидаем структурированную ошибку, чтобы обработчик
+        // классифицировал permanent/transient по исходной target-ошибке, а не по этой.
+        throw new WatchDeliveryError(targetError, fallbackError);
     }
 }
 
@@ -475,16 +556,19 @@ async function processChatPromptWatchBatch(
         try {
             await deliverWatchNotification(api, watcher, notificationText);
         } catch (deliveryError) {
-            // Постоянная ошибка доставки (чат удалён/заблокирован/бот кикнут) —
-            // не зацикливаемся на этой пачке: продвигаем watermark и ставим cooldown,
-            // чтобы не дёргать LLM повторно и не плодить спам при восстановлении.
-            if (isTransientDeliveryError(deliveryError)) throw deliveryError;
+            // Решаем, повторять ли позже, по исходной ошибке целевого чата, а не по ошибке
+            // повторной отправки владельцу. Ошибка отправки владельцу может быть сетевой
+            // (без 400/403), и если классифицировать по ней, сценарий «целевой чат отдал 403,
+            // а до владельца временно не дошло по сети» зациклится: те же сообщения будут
+            // прогоняться через LLM каждый poll.
+            const classificationError = deliveryError instanceof WatchDeliveryError
+                ? deliveryError.targetError
+                : deliveryError;
+            if (isTransientDeliveryError(classificationError)) throw deliveryError;
             console.warn(
-                `[chatPromptWatchers] watcher ${watcher.id} target chat permanently unavailable, advancing watermark:`,
-                deliveryError,
+                `[chatPromptWatchers] watcher ${watcher.id}: целевой чат недоступен навсегда, пропускаю эти сообщения`,
+                classificationError,
             );
-            await updateWatcherAfterNotification(watcher.id, notificationText);
-            return true;
         }
         await updateWatcherAfterNotification(watcher.id, notificationText);
         return true;
@@ -656,7 +740,69 @@ function initialMessagesSinceWatcherCreation(watcher: ChatPromptWatcher, message
     return messages.filter((message) => message.date.getTime() >= createdAt);
 }
 
-async function pollChatPromptWatchersOnce(api: Api): Promise<void> {
+// Заменяемая ссылка на функцию опроса. Нужна только для тестов: позволяет подставить
+// заглушку вместо настоящего опроса (который лезет в MTProto и БД) и проверить
+// поведение планировщика изоляции.
+let runPoll: (api: Api) => Promise<void> = pollChatPromptWatchersOnceImpl;
+
+/** Только для тестов: подменяет функцию опроса. Возвращает функцию, восстанавливающую оригинал. */
+export function __setPollFnForTests(fn: (api: Api) => Promise<void>): () => void {
+    const previous = runPoll;
+    runPoll = fn;
+    return () => { runPoll = previous; };
+}
+
+// Только для тестов: позволяет задать маленькие интервал и таймаут watchdog-а,
+// чтобы не ждать реальные минуты. В проде остаётся undefined — используются env/дефолты.
+interface PollTimingOverride {
+    intervalMs: number;
+    stuckTimeoutMs: number;
+}
+let pollTimingOverride: PollTimingOverride | undefined;
+
+/** Только для тестов: задаёт интервал опроса и таймаут watchdog-а. Возвращает функцию восстановления. */
+export function __setPollTimingForTests(timing: PollTimingOverride): () => void {
+    const previous = pollTimingOverride;
+    pollTimingOverride = timing;
+    return () => { pollTimingOverride = previous; };
+}
+
+/** Только для тестов: снимок состояния планировщика. */
+export interface PollSchedulerState {
+    pollRunning: boolean;
+    pollStartedAt: number;
+    pollGeneration: number;
+}
+/** Только для тестов: возвращает текущее состояние планировщика. */
+export function __getPollSchedulerStateForTests(): PollSchedulerState {
+    return {
+        pollRunning,
+        pollStartedAt,
+        pollGeneration,
+    };
+}
+
+/** Только для тестов: имитирует срабатывание watchdog — увеличивает счётчик циклов (см. pollGeneration). */
+export function __bumpPollGenerationForTests(): void {
+    pollGeneration += 1;
+}
+
+/** Только для тестов: останавливает планировщик и сбрасывает его состояние. */
+export function __stopPollSchedulerForTests(): void {
+    if (pollTimer) {
+        clearTimeout(pollTimer);
+        pollTimer = undefined;
+    }
+    if (watchdogTimer) {
+        clearInterval(watchdogTimer);
+        watchdogTimer = undefined;
+    }
+    pollRunning = false;
+    pollStartedAt = 0;
+    pollGeneration = 0;
+}
+
+async function pollChatPromptWatchersOnceImpl(api: Api): Promise<void> {
     const watchers = (await loadWatchers()).filter((watcher) => watcher.enabled);
     if (!watchers.length) return;
 
@@ -749,38 +895,77 @@ async function pollChatPromptWatchersOnce(api: Api): Promise<void> {
     }
 }
 
+/**
+ * Запускает один цикл опроса watchers. Возвращает true, если по завершении нужно
+ * планировать следующий цикл (нормальный случай). Возвращает false, если за время
+ * опроса watchdog признал его зависшим и запустил новый — тогда этот вызов «устарел»
+ * и не должен планировать ещё один таймер (новый цикл уже запущен watchdog-ом).
+ */
+export async function runOnePoll(api: Api): Promise<boolean> {
+    pollRunning = true;
+    pollStartedAt = Date.now();
+    const generation = pollGeneration;
+    try {
+        await runPoll(api);
+    } catch (error) {
+        console.error("[chatPromptWatchers] poll error:", error);
+    }
+    // За время опроса watchdog мог решить, что мы зависли, и запустить новый poll
+    // (увеличив pollGeneration). В этом случае мы — устаревший вызов: не трогаем
+    // pollRunning (он принадлежит новому poll) и не планируем таймер.
+    if (generation !== pollGeneration) return false;
+    pollRunning = false;
+    pollStartedAt = 0;
+    return true;
+}
+
 function scheduleNextPoll(api: Api): void {
     pollTimer = setTimeout(async () => {
+        // Если предыдущий poll ещё идёт — пропускаем этот запуск. Watchdog на отдельном
+        // таймере проверит, завис ли он, и при необходимости прервёт.
         if (pollRunning) {
-            // Watchdog: если предыдущий poll идёт дольше POLL_STUCK_TIMEOUT_MS
-            // (например, MTProto-вызов завис без таймаута), принудительно сбрасываем
-            // флаг, чтобы polling продолжился, а не остановился навсегда.
-            const stuckFor = Date.now() - pollStartedAt;
-            if (pollStartedAt && stuckFor > POLL_STUCK_TIMEOUT_MS) {
-                console.error(
-                    `[chatPromptWatchers] poll stuck for ${Math.round(stuckFor / 1000)}s, force-resetting pollRunning`,
-                );
-                pollRunning = false;
-            }
+            scheduleNextPoll(api);
+            return;
         }
-        if (!pollRunning) {
-            pollRunning = true;
-            pollStartedAt = Date.now();
-            try {
-                await pollChatPromptWatchersOnce(api);
-            } catch (error) {
-                console.error("[chatPromptWatchers] poll error:", error);
-            } finally {
-                pollRunning = false;
-                pollStartedAt = 0;
-            }
-        }
+        const shouldContinue = await runOnePoll(api);
+        if (shouldContinue) scheduleNextPoll(api);
+    }, pollTimingOverride?.intervalMs ?? pollIntervalMs());
+}
+
+/**
+ * Независимый watchdog на отдельном setInterval. Проверяет, не завис ли текущий poll:
+ * если poll идёт дольше pollStuckTimeoutMs(), watchdog прерывает его и запускает новый.
+ *
+ * Почему отдельный таймер, а не проверка внутри poll-цикла: scheduleNextPoll планирует
+ * следующий запуск только после завершения текущего. Если poll зависнет в await
+ * (например, MTProto-вызов без таймаута), poll-цикл остановится целиком и никакая
+ * проверка внутри него никогда не сработает. Отдельный setInterval тикает независимо.
+ */
+let watchdogTimer: NodeJS.Timeout | undefined;
+
+function startWatchdog(api: Api): void {
+    if (watchdogTimer) return;
+    const checkEveryMs = pollTimingOverride?.intervalMs ?? pollIntervalMs();
+    watchdogTimer = setInterval(() => {
+        if (!pollRunning || !pollStartedAt) return;
+        const stuckFor = Date.now() - pollStartedAt;
+        if (stuckFor <= pollStuckTimeoutMs()) return;
+        console.error(
+            `[chatPromptWatchers] poll завис на ${Math.round(stuckFor / 1000)}с, прерываю и запускаю новый`,
+        );
+        // Сбрасываем состояние poll и увеличиваем счётчик, чтобы зависший poll, когда
+        // наконец отвиснет, понял, что его уже заменили, и не запланировал лишний таймер.
+        pollRunning = false;
+        pollStartedAt = 0;
+        pollGeneration += 1;
+        // Запускаем новый poll — зависший сам свой таймер уже не запланирует.
         scheduleNextPoll(api);
-    }, pollIntervalMs());
+    }, checkEveryMs);
 }
 
 export function startChatPromptWatchPolling(api: Api): void {
     if (pollTimer) clearTimeout(pollTimer);
+    startWatchdog(api);
     scheduleNextPoll(api);
     console.info("[chatPromptWatchers] started, polling Telegram sources");
 }
