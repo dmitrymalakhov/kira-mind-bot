@@ -1,251 +1,114 @@
 # ROADMAP
 
+Этот файл описывает только актуальные направления работ. Уже реализованные изменения фиксируются в `CHANGELOG.md`, а не дублируются здесь.
+
 ## AI Model Presets
 
-- Зафиксировать e2e-покрытие для runtime-переключения preset-а через реальную runtime-настройку без redeploy, а не только через тестовую подмену окружения.
-- Добавить отдельные quality-check сценарии для пресета `glm-balanced` на реальных задачах:
-  - `conversation`
-  - `messageAnalysis`
-  - `browserPlanning`
-  - `memoryExtraction`
+- Цель: довести preset runtime до уровня проверенной production-функции, а не только конфигурируемого механизма.
+- Текущий статус: runtime-switch preset-а, availability checks и task-aware routing уже есть; базовая preset-инфраструктура закрыта.
+- Ближайший шаг:
+  - зафиксировать e2e-покрытие для runtime-переключения preset-а без redeploy;
+  - добавить quality-check сценарии для `glm-balanced` на реальных задачах:
+    - `conversation`;
+    - `messageAnalysis`;
+    - `browserPlanning`;
+    - `memoryExtraction`.
+- Acceptance:
+  - переключение preset-а подтверждено end-to-end через реальную runtime-настройку;
+  - для `glm-balanced` есть отдельный набор regression/quality-check сценариев по ключевым task key.
 
-## LLM Provider Abstraction
+## Admin Settings Registry
 
-- До включения OpenRouter / Gemini / Z.ai в проде проверить:
-  - совместимость structured output;
-  - качество на интентах, анализе переписки и обычных ответах;
-  - поведение при rate limits / timeout / provider outage.
+- Цель: убрать остаточный special-case layout в админке и сделать единый источник правды для секций настроек.
+- Текущий статус: sidebar-группы уже вынесены отдельно, но `CONFIG_SCHEMA` всё ещё участвует в порядке рендера, а `ModelSettingsSection` живёт отдельным special-case вне общего registry.
+- Ближайший шаг:
+  - ввести единый registry экранов/секций для вкладки `Настройки`;
+  - собирать из него sidebar, main content и save-all orchestration;
+  - оставить `CONFIG_SCHEMA` только источником полей для schema-based секций.
+- Acceptance:
+  - порядок секций задаётся одним registry;
+  - custom-секции и schema-based секции рендерятся через общий контракт;
+  - ручной special-case для `AI Presets` в layout больше не нужен.
 
-## Admin Panel Layout
+## AI Runtime: Token Contract И Telemetry
 
-- Не держать layout `AI Presets` и других custom-секций отдельными JSX special-case блоками вне общего registry.
-- Ввести единый registry секций настроек для вкладки `Настройки`, где каждая секция описывает:
-  - `id`;
-  - `tab`;
-  - `order`;
-  - `navLabel` / `caption`;
-  - `renderKind`: schema-based или custom component.
-- `CONFIG_SCHEMA` оставить только как описание полей для простых form-секций, а не как единственный источник layout-порядка.
-- Sidebar и main content собирать из одного и того же registry, чтобы порядок нельзя было разъехать отдельным ручным рендером.
+- Цель: закрыть остаточный runtime debt вокруг токен-параметров и подготовить базу для безопасной оптимизации prompt-ов.
+- Текущий статус: provider adapter layer уже нормализует `max_tokens` / `max_completion_tokens`, usage logging уже пишет базовые токены, latency и fallback.
+- Ближайший шаг:
+  - заменить legacy `max_tokens` в `browserVision` callers на канонический параметр, чтобы не зависеть от implicit normalization;
+  - сохранить runtime-regression test на контракт, где GPT-5.x получает в OpenAI client уже `max_completion_tokens`;
+  - расширить usage telemetry полями:
+    - `cachedInputTokens`;
+    - `uncachedInputTokens`;
+    - `promptVersion`;
+    - `promptCacheKey`;
+    - `messageCount`;
+    - `promptChars`;
+    - `maxCompletionTokens`;
+  - не логировать prompt, body, историю сообщений и другие приватные данные.
+- Acceptance:
+  - `browserVision` callers больше не используют legacy token param;
+  - runtime-тест фиксирует canonical token contract для GPT-5.x и fallback;
+  - usage model поддерживает расширенную telemetry без записи приватного prompt content.
 
-## Model Presets
+## LLM Prompt Efficiency
 
-- Не добавлять обратно OpenAI-only registry, ручные model overrides и параллельные preset-слои рядом с AI preset registry.
-- Не объединять `pendingPostpone` с `pendingReminderEdit`: кастомный перенос должен идти через полноценный postpone-flow со статусом `Postponed`, очисткой старой клавиатуры и счётчиком переносов.
+- Цель: уменьшить input cost и стабилизировать prompt shape без ухудшения качества ответов.
+- Текущий статус: базовая task-aware routing-инфраструктура готова, но prompt budget, versioned static prefix и provider prompt caching ещё не оформлены как единая система.
+- Ближайший шаг:
+  - Этап 1. Prompt budget:
+    - добавить `utils/promptBudget.ts`;
+    - собирать dynamic context из секций с приоритетами и лимитом по символам;
+    - детерминированно отсекать низкоприоритетные части контекста.
+  - Этап 2. Stable prompt prefix + versioning:
+    - разделить стабильный prefix и динамический runtime context;
+    - завести version per task key.
+  - Этап 3. Provider prompt caching:
+    - передавать cache-specific параметры только при явной capability;
+    - расширять capability map только теми флагами, которые реально используются runtime-кодом.
+  - Этап 4. Safe local result cache hardening:
+    - сохранить `llmCache`;
+    - добавить version-aware invalidation и size cap.
+- Acceptance:
+  - prompt assembly для тяжёлых сценариев собирается через явный budget helper;
+  - static prefix можно версионировать независимо от dynamic context;
+  - prompt caching не шлёт provider-specific поля без capability;
+  - локальный result cache ограничен по версии и размеру.
 
-## GPT-5 Token Params / AI Runtime Debt
+## Dialogue Summarization
 
-- Привести оставшиеся `browserVision`-вызовы к каноническому контракту токен-лимитов, чтобы код не зависел от implicit-нормализации wrapper-а при будущей смене preset-а на GPT-5.x.
-- Добавить регрессионный runtime-тест на сценарий:
-  - `createChatCompletionForTask(...)` получает legacy `max_tokens`;
-  - основная модель или fallback-модель резолвится в `gpt-5.x`;
-  - в OpenAI client уходит уже `max_completion_tokens`, а не `max_tokens`.
+- Цель: превратить summarization из рабочего, но грубого механизма в управляемый и предсказуемый слой контекста.
+- Текущий статус: summarizer уже использует task-aware wrapper, но prompt перегружен persona-контекстом, а хранение последних сообщений требует корректировки.
+- Ближайший шаг:
+  - убрать persona-heavy system prompt из summarizer-а;
+  - ограничить summary устойчивыми фактами, незавершёнными планами, важным эмоциональным контекстом и темами для продолжения диалога;
+  - исправить сохранение истории на последние 5 сообщений, а не `slice(0, 5)`;
+  - добавить runtime-тесты на summarizer behavior, включая active preset, fallback и usage logging.
+- Acceptance:
+  - summarizer не тянет лишний persona/context ballast;
+  - summary остаётся коротким и смысловым;
+  - после суммаризации сохраняются именно последние сообщения;
+  - поведение summarizer-а покрыто отдельными runtime-тестами.
 
-## LLM Token Optimization
+## Provider Readiness И Reminder Flow Invariants
 
-### 1. Baseline и телеметрия
+- Цель: не потерять важные системные инварианты при следующем раунде развития провайдеров и reminder-flow.
+- Текущий статус: abstraction layer уже выделен, а reminder state-machine разделяет `pendingPostpone` и `pendingReminderEdit`.
+- Ближайший шаг:
+  - использовать `LLM Provider Abstraction` как production-readiness checklist для новых провайдеров:
+    - structured output;
+    - поведение при rate limit / timeout / outage;
+    - качество на `intent`, `analysis`, `conversation`;
+  - не объединять `pendingPostpone` и `pendingReminderEdit`: кастомный перенос должен оставаться в postpone-flow со статусом `Postponed`, очисткой старой клавиатуры и счётчиком переносов.
+- Acceptance:
+  - новый провайдер не считается готовым без проверки structured output, отказоустойчивости и качества;
+  - reminder edit и postpone остаются раздельными state-машинами без регрессии поведения.
 
-- Перед изменением prompt-ов собрать baseline минимум по следующим task key:
-  - `conversation`;
-  - `intentClassification`;
-  - `intentDedup`;
-  - `messageAnalysis`;
-  - `memoryExtraction`;
-  - `memoryConsolidation`;
-  - `browserPlanning`.
-- Расширить единый usage log полями:
-  - `inputTokens`;
-  - `cachedInputTokens`;
-  - `uncachedInputTokens`;
-  - `outputTokens`;
-  - `totalTokens`;
-  - `promptChars`;
-  - `messageCount`;
-  - `maxCompletionTokens`;
-  - `promptVersion`;
-  - `promptCacheKey`;
-  - `latencyMs`;
-  - `fallbackUsed`.
-- Для OpenAI читать `prompt_tokens_details.cached_tokens`.
-- Для OpenRouter, Gemini и других провайдеров нормализовать собственные cache hit/miss поля в общую usage-модель.
-- Считать `cacheHitRatio = cachedInputTokens / inputTokens`.
-- Не логировать полный prompt, историю, память пользователя и другие приватные данные.
+## База уже есть
 
-### 2. Prompt budget и сокращение динамического контекста
-
-- Добавить небольшую утилиту `utils/promptBudget.ts`, которая собирает prompt из секций по приоритету и character budget.
-- Не внедрять отдельный tokenizer-сервис на первом этапе: использовать детерминированный лимит по символам.
-- Для `conversation` начать с общего dynamic-context budget около `12_000` символов.
-- Разделить контекст на секции:
-  - текущее сообщение — обязательное;
-  - релевантная память;
-  - последние сообщения;
-  - dialogue summary;
-  - group context;
-  - релевантные self-events;
-  - необязательное состояние ассистента.
-- При превышении budget исключать сначала:
-  1. нерелевантные recent self-events;
-  2. recent thoughts/topics;
-  3. необязательное состояние ассистента;
-  4. старые сообщения истории;
-  5. низкоприоритетные фрагменты памяти.
-- Передавать не более 6 последних сообщений и не более 6 000 символов истории.
-- Не дублировать текущее пользовательское сообщение в истории.
-- Dialogue summary добавлять только при продолжении темы или когда реально используется история.
-- Self-events добавлять только для вопросов о жизни/состоянии ассистента либо при наличии релевантных результатов поиска.
-- Ограничить размер domain memory, group context и self-events локальными лимитами и включить их в общий budget.
-
-### 3. Стабильная структура prompt-а
-
-- Перестроить `conversationAgent`, чтобы prompt не собирался одним большим динамическим template literal.
-- Разделить messages на:
-  1. стабильный system prefix;
-  2. динамический runtime context;
-  3. память, история и текущее сообщение пользователя.
-- В стабильном prefix оставить только:
-  - persona;
-  - краткую биографию;
-  - базовый стиль общения;
-  - постоянные правила ответа;
-  - неизменяемые structured-output инструкции.
-- Перенести из стабильного prefix в динамический хвост:
-  - дату и время;
-  - настроение;
-  - user/chat-specific данные;
-  - память;
-  - историю;
-  - group context;
-  - результаты инструментов;
-  - текущее сообщение.
-- Удалить дублирование одинаковых инструкций между system и user messages.
-- Сохранять стабильный порядок system messages, tools и JSON-инструкций для каждого task key.
-
-### 4. Provider prompt caching
-
-- Добавить capability metadata провайдеров и моделей:
-  - `supportsPromptCacheKey`;
-  - `supportsPromptCacheRetention`;
-  - `supportsCachedTokenUsage`;
-  - `supportsJsonObjectMode`.
-- Для task key завести стабильные версии prompt, например:
-  - `conversation:v1`;
-  - `intent-classification:v1`;
-  - `intent-dedup:v1`;
-  - `memory-extraction:v1`;
-  - `memory-consolidation:v1`;
-  - `browser-planning:v1`.
-- Менять версию только при изменении стабильного prefix.
-- Для OpenAI передавать `prompt_cache_key`, если параметр поддерживается текущим SDK и моделью.
-- Для поддерживаемых моделей предусмотреть `prompt_cache_retention`, но включать extended retention только для реально повторяемых длинных prefix.
-- Не включать в cache key user ID, chat ID и request ID.
-- Не передавать OpenAI-specific параметры внешним OpenAI-compatible провайдерам без явной capability.
-- Не раздувать prompt ради достижения порога кэширования: сокращение физического количества токенов приоритетнее cache discount.
-
-### 5. Локальный result cache
-
-- Использовать локальный `llmCache` только для безопасных повторяемых операций:
-  - intent dedup;
-  - classification идентичного нормализованного входа;
-  - extraction из неизменяемого текста;
-  - повторный анализ одного и того же набора сообщений.
-- Ключ должен включать:
-  - task key;
-  - prompt version;
-  - provider/model или активный preset;
-  - нормализованный вход;
-  - параметры, влияющие на результат.
-- Не кэшировать обычные conversation-ответы и другие живые контекстные сценарии.
-- Добавить TTL, ограничение размера и автоматическую инвалидизацию через prompt version.
-
-### 6. Completion limits и structured output
-
-- Добавить task-specific completion defaults в общий AI wrapper.
-- Начальные ориентиры:
-  - `intentClassification` — до 500 токенов;
-  - `intentDedup` — до 180 токенов;
-  - `memoryExtraction` — до 700 токенов;
-  - `memoryConsolidation` — до 900 токенов;
-  - `conversation` — до 700 токенов;
-  - `messageAnalysis` — до 1 200 токенов;
-  - `browserPlanning` — до 700 токенов.
-- Для коротких разговорных ответов разрешить локальный лимит 300–400 токенов.
-- Caller-specific лимит должен иметь приоритет над default.
-- Fallback должен сохранять тот же completion limit.
-- Для JSON-задач использовать structured output / JSON object mode при наличии capability.
-- Не повторять большой запрос только из-за markdown fences или легко исправимого JSON.
-
-### 7. Dialogue summarization
-
-- Проверить, что `services/dialogueSummarizer.ts` и остальные суммаризационные/экстракционные сценарии действительно используют task-aware wrapper end-to-end, а не только task-aware model resolution.
-- Добавить для них явные runtime-тесты на active preset, fallback и usage logging.
-- Удалить persona, биографию и характер из prompt суммаризатора.
-- Сохранять только:
-  - устойчивые факты о пользователе;
-  - незавершённые планы и договорённости;
-  - важный эмоциональный контекст;
-  - темы, необходимые для продолжения разговора.
-- Ограничить summary примерно 100 словами.
-- После суммаризации сохранять последние 5 сообщений через `slice(-5)`.
-- Не суммаризировать повторно уже обработанную историю без новых сообщений.
-
-### 8. Тесты и rollout
-
-- Добавить unit-тесты для prompt budget:
-  - обязательные секции;
-  - приоритеты;
-  - общий лимит;
-  - Unicode/emoji;
-  - детерминированность;
-  - сохранение самых новых сообщений.
-- Добавить тесты стабильности prompt prefix:
-  - одинаковые task key дают одинаковый static prefix;
-  - дата, настроение и история не изменяют static prefix;
-  - изменение prompt version меняет cache key.
-- Добавить тесты normalizer-а cached usage для OpenAI и второго провайдера.
-- Внедрять изменения последовательно:
-  1. baseline-телеметрия;
-  2. completion limits;
-  3. сокращение динамического контекста;
-  4. стабильный prefix;
-  5. provider prompt caching;
-  6. локальный result cache для безопасных task key.
-- После каждого этапа сравнивать:
-  - средний input/output по task key;
-  - cache hit ratio;
-  - latency;
-  - fallback rate;
-  - ошибки structured output;
-  - пользовательские признаки деградации качества.
-
-### Acceptance targets
-
-- Средний input обычного `conversation` снижен минимум на 25%.
-- Input коротких автономных сообщений снижен минимум на 40%.
-- Output коротких conversation-ответов снижен минимум на 15%.
-- После прогрева измеряется заметная доля `cachedInputTokens` для повторяемых длинных system prefix.
-- Локальный result cache полностью исключает повторный API-вызов для безопасных идентичных операций.
-- Fallback rate и ошибки structured output не растут заметно относительно baseline.
-- Публичное поведение Telegram-команд и основные пользовательские сценарии не меняются.
-- Все новые экспорты именованные, в новом коде нет `any`.
-- `npm run build:server` и существующие тесты проходят.
-
-## Уже сделано
-
-- В админке появился отдельный live-раздел `Мониторинг` с агрегированными health checks для контейнера бота, PostgreSQL, Qdrant, Telegram Bot API, Telegram User Client и AI-провайдеров.
-- Все прикладные вызовы `openai.chat.completions.create` переведены на task-aware wrapper `createChatCompletionForTask(...)`; legacy-слой `openAiModels` удалён из runtime-конфига.
-- Browser planning и browser vision уже резолвят модель через task-aware preset runtime.
-- `embeddings` и `audio.transcriptions` переведены на отдельные runtime-операции `createEmbeddingForTask(...)` и `createTranscriptionForTask(...)`; прямые вызовы OpenAI из прикладных сервисов убраны.
-- Вынесен capability-first слой provider adapters и descriptor-ов для OpenAI / Gemini / OpenRouter / Z.ai:
-  - preset registry по-прежнему отвечает только за `task -> provider + model`;
-  - provider-specific capabilities, monitoring metadata, поддержка `responses.create` и нормализация chat params вынесены из runtime-слоя;
-  - `model.startsWith('gpt-5')` заменён на capability metadata модели.
-- Добавлены единый provider registry (`envKey`, `label`, `baseURL`, monitoring, capability map) и отдельный model catalog.
-- Fallback policy для runtime и admin availability централизована в общей матрице `ai/fallback-models.json`; локальные копии fallback-правил убраны.
-- Добавлен runtime-aware AI preset registry в админке:
-  - доступны `gpt-*`, `hybrid-openrouter-gpt`, `hybrid-gemini-gpt`, `gemini-direct-balanced`, `glm-balanced`;
-  - недоступные preset-ы блокируются в UI и отклоняются API при отсутствии обязательных ключей.
-- В админке исправлен фактический порядок секции `AI Presets`: она теперь отображается сразу после `API Ключи`, а не отдельным блоком внизу списка настроек.
-- Сборка `admin-panel` переведена на root Docker build context, чтобы server-side часть панели использовала общие runtime JSON-реестры без дублирования metadata.
-- Кнопка `Своё время` у напоминаний уже использует общий LLM-разбор даты с сохранением postpone-flow.
-- Серверный VPS-first сценарий, `Dockerfile.server`, `tsconfig.server.json`, `server-install.sh`, `server-deploy.sh` и корневой `Makefile` уже добавлены.
+- task-aware wrappers для chat, embeddings и transcriptions уже внедрены;
+- provider registry, model catalog и fallback matrix уже централизованы;
+- runtime-aware AI preset registry и availability checks уже есть в админке;
+- live-раздел `Мониторинг` уже реализован;
+- root Docker build context для `admin-panel` уже переведён на общие runtime-реестры;
+- `Своё время` в напоминаниях уже идёт через общий postpone-flow.
