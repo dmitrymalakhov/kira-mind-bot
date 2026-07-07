@@ -10,6 +10,8 @@ const SUITES = {
     memory: [
         "testSessionStorage.ts",
         "testReflectionMemoryFilter.ts",
+        "testFactAttributionFilter.ts",
+        "testUserSynthesisFilter.ts",
         "testLegacyPersonalitySanitizer.ts",
         "testContactCommunicationContext.ts",
         "testContactMemoryMatching.ts",
@@ -37,6 +39,8 @@ const SUITES = {
         "testSpeechTextPreparation.ts",
         "testGroupChatContext.ts",
         "testReflectionMemoryFilter.ts",
+        "testFactAttributionFilter.ts",
+        "testUserSynthesisFilter.ts",
         "testLegacyPersonalitySanitizer.ts",
         "testContactCommunicationContext.ts",
         "testContactMemoryMatching.ts",

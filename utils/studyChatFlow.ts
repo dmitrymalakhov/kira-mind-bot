@@ -4,6 +4,7 @@ import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { config } from '../config';
 import { parseLLMJson } from '../utils';
 import type { MemoryStatus } from '../types';
+import { filterUserFactsForThirdPartyEvents } from './factAttributionFilter';
 
 const BATCH_SIZE = 100;
 const MAX_MESSAGES = 5000;
@@ -352,11 +353,13 @@ function buildUserFactsPrompt(
 - Хобби и интересы: что любит, чем занимается в свободное время
 - Финансы: траты, планы покупок, статус
 - Характер и поведение: паттерны, реакции, ценности
-- Планы и желания: куда хочет поехать, что купить, что сделать
+- Планы и желания: куда хочет поехать, что купить, что сделать — но только планы, которые ${ownerName} инициирует сам или прямо называет своими
 - Косвенные выводы: "опять не сплю" → проблемы со сном
 
 НЕ включай: факты о ${contactName} или третьих лицах.
 НЕ включай: тривиальное ("написал сообщение"), единичные оговорки без контекста.
+ВАЖНО ПРО АТРИБУЦИЮ СОБЫТИЙ: если событие/праздник/ДР/годовщина/встреча/игра/поездка инициированы собеседником или принадлежат ему (его ДР, его отпуск, его корпоратив), а ${ownerName} лишь приглашён/вписан/идёт как гость — это факт О СОБЕСЕДНИКЕ, не о ${ownerName}. Не превращай приглашение в факт о владельце.
+Пример: "${contactName}: хочу собрать встречу на свой праздник, ты как?" → это событие ${contactName}, НЕ ${ownerName}; не извлекай «у ${ownerName} личный праздник».
 Если переписка старше 6 месяцев — снижай importance для планов и временных состояний.
 Для каждого факта укажи temporalScope:
 - stable/preference/routine/relationship — устойчивое знание
@@ -427,6 +430,7 @@ function buildContactFactsPrompt(
 - Характер и поведение: паттерны, реакции
 - Здоровье и самочувствие
 - Отношение к ${ownerName} и ситуациям
+- События и инициативы контакта: его праздник/годовщина/встреча/игра/поездка, которые он инициирует или которые принадлежат ему (например «хочу собрать встречу на свой праздник») — это факты о ${contactName}
 
 НЕ включай: факты о ${ownerName}.
 НЕ включай: тривиальное, единичные случайные фразы без контекста.
@@ -683,13 +687,17 @@ function isTooGenericForLongTermMemory(fact: ExtractedFactAboutUser): boolean {
     const lc = fact.content.toLowerCase();
     if (fact.content.length < 14) return true;
     if (/^(пользователь|собеседник|контакт)\s+(общался|написал|спросил|ответил|обсуждал)/iu.test(lc)) return true;
-    if (/^(дмитрий|он|она|контакт)\s+(общался|написал|спросил|ответил|обсуждал)/iu.test(lc)) return true;
+    if (/^(он|она|контакт)\s+(общался|написал|спросил|ответил|обсуждал)/iu.test(lc)) return true;
     if (/переписывал[аи]сь|была переписка|в чате обсуждал/iu.test(lc) && (fact.importance ?? 0) < 0.65) return true;
     return false;
 }
 
-function deterministicQualityGate(facts: ExtractedFactAboutUser[]): ExtractedFactAboutUser[] {
-    return deduplicateExact(facts)
+function deterministicQualityGate(facts: ExtractedFactAboutUser[], contactName?: string): ExtractedFactAboutUser[] {
+    return filterUserFactsForThirdPartyEvents(
+        deduplicateExact(facts),
+        config.ownerName,
+        contactName,
+    )
         .map((fact) => {
             const confidence = clamp01(fact.confidence, 0.62);
             const warnings = [...(fact.qualityWarnings ?? [])];
@@ -760,6 +768,7 @@ ${factsText}
 - keep: факт явно поддержан перепиской и полезен в будущем.
 - rewrite: факт поддержан, но формулировка слишком широкая/путает атрибуцию/нужна осторожность.
 - drop: факт не поддержан, слишком общий, тривиальный, пересказывает сам факт переписки, путает ${ownerName} и ${contactName}, или превращает один эпизод в черту характера.
+- КРИТИЧНО для subject=user: если факт описывает событие/праздник/ДР/годовщину/встречу/игру/поездку, проверь, ЧЕЙ это праздник/инициатива. Если инициатор и «именинник» — ${contactName}, а ${ownerName} лишь приглашён/вписан — это факт о ${contactName}, для subject=user делай drop (или rewrite в «приглашён на событие собеседника» с понижением confidence).
 - Нельзя выводить устойчивую черту из одного слабого намёка. Лучше rewrite в узкий временный факт или lower confidence.
 - Факты о планах, настроении и текущем состоянии должны иметь lower confidence, если не ясно, актуальны ли они после периода.
 - Проверяй временную природу: future_plan=status planned, past_event=status done, current_state=актуально только на момент переписки.
@@ -846,7 +855,7 @@ async function critiqueFactsAgainstConversation(
     periodLabel: string,
     options: FactExtractionOptions = {}
 ): Promise<ExtractedFactAboutUser[]> {
-    const gated = deterministicQualityGate(facts);
+    const gated = deterministicQualityGate(facts, contactName);
     if (gated.length === 0) return [];
 
     if (conversationText.length > MAX_CRITIC_CONTEXT_CHARS) {
@@ -884,7 +893,7 @@ async function critiqueFactsAgainstConversation(
         }
     }
 
-    return deterministicQualityGate(reviewed);
+    return deterministicQualityGate(reviewed, contactName);
 }
 
 function withTemporalDefaults(

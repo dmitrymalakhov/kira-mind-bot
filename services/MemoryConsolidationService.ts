@@ -4,6 +4,7 @@ import { config } from '../config';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { devLog, parseLLMJson } from '../utils';
 import { getVectorService } from './VectorServiceFactory';
+import { isEligibleForUserSynthesis } from '../utils/userSynthesisFilter';
 
 const CHAPTER_TAG = 'memory-chapter';
 const DEFAULT_LIMIT = 600;
@@ -271,6 +272,8 @@ export async function runMemoryConsolidationForUser(
         if (isChapter(memory)) return false;
         if (isPortrait(memory)) return false;
         if (memory.status === 'expired') return false;
+        // Глава строится о владельце: исключаем чужие/contact-источники.
+        if (!isEligibleForUserSynthesis(memory)) return false;
         if (new Date(memory.timestamp).getTime() < cutoff) return false;
         return true;
     });
