@@ -4,6 +4,7 @@ import { config } from '../config';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { devLog, parseLLMJson } from '../utils';
 import { getVectorService } from './VectorServiceFactory';
+import { isEligibleForUserSynthesis } from '../utils/userSynthesisFilter';
 
 const SCHEMA_TAG = 'memory-schema';
 const SCHEMA_SET_TAG = 'schema_set:user-model-v1';
@@ -390,6 +391,8 @@ export async function runMemorySchemaConsolidationForUser(
             if (isPortrait(memory)) return false;
             if (memory.status === 'expired' || memory.status === 'superseded') return false;
             if (memory.subject === 'bot' || memory.subject === 'system') return false;
+            // Исключаем чужие/contact-источники, чтобы схема строилась только о владельце.
+            if (!isEligibleForUserSynthesis(memory)) return false;
             if (new Date(memory.timestamp).getTime() < cutoff) return false;
             if (!sourceMatchesDomain(memory, requestedDomain)) return false;
             return memory.content.trim().length >= 20;
