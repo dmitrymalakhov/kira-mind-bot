@@ -58,7 +58,8 @@ export type AiPresetName =
   | 'gpt-lean'
   | 'hybrid-openrouter-gpt'
   | 'hybrid-gemini-gpt'
-  | 'gemini-direct-balanced'
+  | 'gemini-full'
+  | 'glm-full'
   | 'glm-balanced';
 
 export interface AiModelRef {
@@ -70,6 +71,12 @@ export interface AiPresetConfig {
   name: AiPresetName;
   title: string;
   description: string;
+  characteristics?: {
+    quality: string;
+    cost: string;
+    stability: string;
+    gptDependency: string;
+  };
   models: Record<string, AiModelRef>;
   enabled?: boolean;
   unavailableReason?: string;
@@ -166,13 +173,68 @@ export interface AiUsageBreakdownRow {
 
 export interface AiUsageFailureRecord {
   createdAt: string;
+  traceId?: string | null;
+  attempt?: number | null;
+  stage?: 'primary' | 'retry' | 'fallback' | null;
   provider: string;
   model: string;
   taskKey: string;
   preset: string;
   operation: AiUsageOperation;
   fallbackUsed: boolean;
+  errorStatus?: number | null;
+  errorCode?: string | null;
+  errorType?: string | null;
+  errorCategory?: string | null;
+  providerRequestId?: string | null;
+  retryable?: boolean | null;
   errorMessage: string;
+}
+
+export interface AiUsageTraceAttempt {
+  id: string;
+  createdAt: string;
+  traceId: string | null;
+  taskKey: string;
+  preset: string;
+  provider: string;
+  model: string;
+  operation: AiUsageOperation;
+  success: boolean;
+  fallbackUsed: boolean;
+  attempt: number | null;
+  stage: 'primary' | 'retry' | 'fallback' | null;
+  errorStatus?: number | null;
+  errorCode?: string | null;
+  errorType?: string | null;
+  errorCategory?: string | null;
+  providerRequestId?: string | null;
+  retryable?: boolean | null;
+  errorMessage: string;
+  latencyMs?: number | null;
+}
+
+export interface AiUsageTraceChain {
+  traceKey: string;
+  traceId: string | null;
+  createdAt: string;
+  taskKey: string;
+  preset: string;
+  primaryProvider: string;
+  primaryModel: string;
+  primaryStage: 'success' | 'failed';
+  primaryError?: string;
+  primaryErrorStatus?: number | null;
+  primaryErrorCategory?: string | null;
+  retryCount: number;
+  retryStage: 'none' | 'success' | 'failed';
+  fallbackStage: 'none' | 'success' | 'failed';
+  fallbackProvider?: string;
+  fallbackModel?: string;
+  outcome: 'success' | 'recovered_fallback' | 'failed';
+  totalLatencyMs: number;
+  providerRequestIds: string[];
+  attempts: AiUsageTraceAttempt[];
 }
 
 export interface AiUsageSummaryResponse {
@@ -208,6 +270,7 @@ export interface AiUsageSummaryResponse {
     tasksByTokens: AiUsageBreakdownRow[];
     tasksByCalls: AiUsageBreakdownRow[];
   };
+  traceChains: AiUsageTraceChain[];
   recentFailures: AiUsageFailureRecord[];
 }
 

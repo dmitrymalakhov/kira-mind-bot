@@ -13,7 +13,7 @@ function createPreset(models) {
 
 function testCapabilityFallbackKeepsPresetAvailable() {
   const preset = createPreset({
-    webSearchReasoning: { provider: 'gemini', model: 'gemini-3-flash-preview' },
+    webSearchReasoning: { provider: 'openrouter', model: 'openrouter/auto' },
   });
 
   assert.deepStrictEqual(getPresetAvailability(preset, { OPENAI_API_KEY: 'openai-key' }), {
@@ -24,7 +24,7 @@ function testCapabilityFallbackKeepsPresetAvailable() {
 
 function testCapabilityFallbackStillRequiresFallbackKey() {
   const preset = createPreset({
-    webSearchReasoning: { provider: 'gemini', model: 'gemini-3-flash-preview' },
+    webSearchReasoning: { provider: 'openrouter', model: 'openrouter/auto' },
   });
 
   const availability = getPresetAvailability(preset, {});
@@ -34,13 +34,23 @@ function testCapabilityFallbackStillRequiresFallbackKey() {
 
 function testTransitionalTranscriptionFallback() {
   const preset = createPreset({
-    transcription: { provider: 'zai', model: 'glm-5.2' },
+    transcription: { provider: 'openrouter', model: 'openrouter/auto' },
   });
 
   assert.deepStrictEqual(getPresetAvailability(preset, { OPENAI_API_KEY: 'openai-key' }), {
     enabled: true,
     unavailableReason: undefined,
   });
+}
+
+function testModelLevelCapabilityOverrideMarksPresetUnavailable() {
+  const preset = createPreset({
+    transcription: { provider: 'zai', model: 'glm-5.2' },
+  });
+
+  const availability = getPresetAvailability(preset, { ZAI_API_KEY: 'zai-key' });
+  assert.strictEqual(availability.enabled, false);
+  assert.match(availability.unavailableReason || '', /OPENAI_API_KEY/);
 }
 
 function testGlmBalancedUsesMixedProviders() {
@@ -55,11 +65,50 @@ function testGlmBalancedUsesMixedProviders() {
   });
 }
 
+function testHybridGeminiGptRequiresGeminiAndOpenAi() {
+  const availability = getPresetAvailability(AI_PRESETS['hybrid-gemini-gpt'], {
+    OPENAI_API_KEY: 'openai-key',
+    GEMINI_API_KEY: 'gemini-key',
+  });
+
+  assert.deepStrictEqual(availability, {
+    enabled: true,
+    unavailableReason: undefined,
+  });
+}
+
+function testPureGeminiRequiresGeminiAndOpenAi() {
+  const availability = getPresetAvailability(AI_PRESETS['gemini-full'], {
+    GEMINI_API_KEY: 'gemini-key',
+  });
+
+  assert.deepStrictEqual(availability, {
+    enabled: true,
+    unavailableReason: undefined,
+  });
+}
+
+function testPureGlmRequiresZaiAndOpenAi() {
+  const availability = getPresetAvailability(AI_PRESETS['glm-full'], {
+    OPENAI_API_KEY: 'openai-key',
+    ZAI_API_KEY: 'zai-key',
+  });
+
+  assert.deepStrictEqual(availability, {
+    enabled: true,
+    unavailableReason: undefined,
+  });
+}
+
 function main() {
   testCapabilityFallbackKeepsPresetAvailable();
   testCapabilityFallbackStillRequiresFallbackKey();
   testTransitionalTranscriptionFallback();
+  testModelLevelCapabilityOverrideMarksPresetUnavailable();
   testGlmBalancedUsesMixedProviders();
+  testHybridGeminiGptRequiresGeminiAndOpenAi();
+  testPureGeminiRequiresGeminiAndOpenAi();
+  testPureGlmRequiresZaiAndOpenAi();
   console.log('AI preset availability tests passed');
 }
 
