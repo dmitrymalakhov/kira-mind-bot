@@ -1,6 +1,7 @@
 'use strict';
 
 const { providers: AI_PROVIDER_REGISTRY } = require('../ai/provider-registry.json');
+const PROVIDER_CAPABILITY_OVERRIDES = require('../ai/provider-capability-overrides.json');
 const FALLBACK_MODELS = require('../ai/fallback-models.json');
 
 function getProviderDescriptor(provider) {
@@ -19,6 +20,16 @@ function getDeclaredFallbackModel(taskKey) {
   return FALLBACK_MODELS[taskKey] || null;
 }
 
+function getProviderCapabilitiesForModel(provider, model) {
+  const descriptor = getProviderDescriptor(provider);
+  if (!descriptor) return null;
+  const overrides = PROVIDER_CAPABILITY_OVERRIDES[provider]?.[model] || {};
+  return {
+    ...descriptor.capabilities,
+    ...overrides,
+  };
+}
+
 function hasConfiguredValue(vars, key) {
   const value = vars[key] || process.env[key] || '';
   return typeof value === 'string' ? value.trim().length > 0 : Boolean(value);
@@ -33,7 +44,8 @@ function resolveTaskExecutionProvider(taskKey, modelRef) {
   }
 
   const capabilityKey = getTaskCapabilityKey(taskKey);
-  if (descriptor.capabilities?.[capabilityKey]) {
+  const modelCapabilities = getProviderCapabilitiesForModel(modelRef.provider, modelRef.model);
+  if (modelCapabilities?.[capabilityKey]) {
     return {
       provider: modelRef.provider,
     };
@@ -47,7 +59,8 @@ function resolveTaskExecutionProvider(taskKey, modelRef) {
   }
 
   const fallbackDescriptor = getProviderDescriptor(fallbackModelRef.provider);
-  if (fallbackDescriptor?.capabilities?.[capabilityKey]) {
+  const fallbackCapabilities = getProviderCapabilitiesForModel(fallbackModelRef.provider, fallbackModelRef.model);
+  if (fallbackDescriptor && fallbackCapabilities?.[capabilityKey]) {
     return {
       provider: fallbackModelRef.provider,
       fallbackUsed: true,

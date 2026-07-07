@@ -121,7 +121,146 @@ async function testSummaryAndFilters() {
     }
 
     if (sql.includes('success = false')) {
-      return { rows: [{ createdAt: '2026-06-27T09:10:00.000Z', provider: 'openai', model: 'gpt-5.4-mini', taskKey: 'conversation', preset: 'gpt-balanced', operation: 'chat', fallbackUsed: true, errorMessage: 'Rate limit' }] };
+      return { rows: [{ createdAt: '2026-06-27T09:10:00.000Z', traceId: 'trace-1', attempt: 1, stage: 'primary', provider: 'gemini', model: 'gemini-3-flash-preview', taskKey: 'conversation', preset: 'hybrid-gemini-gpt', operation: 'chat', fallbackUsed: false, errorStatus: 503, errorCode: 'service_unavailable', errorType: 'ServiceUnavailable', errorCategory: 'provider_unavailable', providerRequestId: 'gem-req-1', retryable: true, errorMessage: 'Rate limit' }] };
+    }
+
+    if (sql.includes('"traceId"')) {
+      return {
+        rows: [
+          {
+            id: 'row-1',
+            createdAt: '2026-06-27T09:10:00.000Z',
+            traceId: 'trace-1',
+            taskKey: 'conversation',
+            preset: 'hybrid-gemini-gpt',
+            provider: 'gemini',
+            model: 'gemini-3-flash-preview',
+            operation: 'chat',
+            success: false,
+            fallbackUsed: false,
+            attempt: 1,
+            stage: 'primary',
+            errorStatus: 503,
+            errorCode: 'service_unavailable',
+            errorType: 'ServiceUnavailable',
+            errorCategory: 'provider_unavailable',
+            providerRequestId: 'gem-req-1',
+            retryable: true,
+            errorMessage: 'ServiceUnavailable',
+            latencyMs: 120,
+          },
+          {
+            id: 'row-2',
+            createdAt: '2026-06-27T09:10:01.000Z',
+            traceId: 'trace-1',
+            taskKey: 'conversation',
+            preset: 'hybrid-gemini-gpt',
+            provider: 'gemini',
+            model: 'gemini-3-flash-preview',
+            operation: 'chat',
+            success: false,
+            fallbackUsed: false,
+            attempt: 2,
+            stage: 'retry',
+            errorStatus: 503,
+            errorCode: 'service_unavailable',
+            errorType: 'ServiceUnavailable',
+            errorCategory: 'provider_unavailable',
+            providerRequestId: 'gem-req-2',
+            retryable: true,
+            errorMessage: 'ServiceUnavailable',
+            latencyMs: 115,
+          },
+          {
+            id: 'row-3',
+            createdAt: '2026-06-27T09:10:02.000Z',
+            traceId: 'trace-1',
+            taskKey: 'conversation',
+            preset: 'hybrid-gemini-gpt',
+            provider: 'openai',
+            model: 'gpt-5.4-mini',
+            operation: 'chat',
+            success: true,
+            fallbackUsed: true,
+            attempt: 3,
+            stage: 'fallback',
+            errorStatus: null,
+            errorCode: null,
+            errorType: null,
+            errorCategory: null,
+            providerRequestId: 'gpt-req-1',
+            retryable: null,
+            errorMessage: '',
+            latencyMs: 95,
+          },
+          {
+            id: 'legacy-1',
+            createdAt: '2026-06-27T08:10:00.000Z',
+            traceId: null,
+            taskKey: 'memoryExtraction',
+            preset: 'gpt-balanced',
+            provider: 'openai',
+            model: 'gpt-5.4',
+            operation: 'chat',
+            success: false,
+            fallbackUsed: false,
+            attempt: null,
+            stage: null,
+            errorStatus: 500,
+            errorCode: null,
+            errorType: null,
+            errorCategory: 'provider_unavailable',
+            providerRequestId: null,
+            retryable: true,
+            errorMessage: 'legacy failure',
+            latencyMs: 50,
+          },
+          {
+            id: 'row-4',
+            createdAt: '2026-06-27T09:20:00.000Z',
+            traceId: 'trace-2',
+            taskKey: 'conversation',
+            preset: 'gemini-full',
+            provider: 'gemini',
+            model: 'gemini-3.5-flash',
+            operation: 'chat',
+            success: true,
+            fallbackUsed: false,
+            attempt: 1,
+            stage: 'primary',
+            errorStatus: null,
+            errorCode: null,
+            errorType: null,
+            errorCategory: null,
+            providerRequestId: 'gem-req-json-1',
+            retryable: null,
+            errorMessage: '',
+            latencyMs: 90,
+          },
+          {
+            id: 'row-5',
+            createdAt: '2026-06-27T09:20:01.000Z',
+            traceId: 'trace-2',
+            taskKey: 'conversation',
+            preset: 'gemini-full',
+            provider: 'gemini',
+            model: 'gemini-3.5-flash',
+            operation: 'chat',
+            success: false,
+            fallbackUsed: false,
+            attempt: 1,
+            stage: 'primary',
+            errorStatus: null,
+            errorCode: null,
+            errorType: 'Error',
+            errorCategory: 'invalid_response',
+            providerRequestId: null,
+            retryable: false,
+            errorMessage: 'AI response contained invalid JSON',
+            latencyMs: null,
+          },
+        ],
+      };
     }
 
     throw new Error(`Unexpected SQL: ${sql}`);
@@ -148,6 +287,21 @@ async function testSummaryAndFilters() {
   assert.strictEqual(summary.breakdowns.providers.length, 11);
   assert.strictEqual(summary.breakdowns.providers.at(-1).key, 'other');
   assert.strictEqual(summary.recentFailures.length, 1);
+  assert.strictEqual(summary.traceChains.length, 3);
+  const recoveredChain = summary.traceChains.find((item) => item.traceId === 'trace-1');
+  const invalidJsonChain = summary.traceChains.find((item) => item.traceId === 'trace-2');
+  const legacyChain = summary.traceChains.find((item) => item.traceId === null);
+  assert.ok(recoveredChain);
+  assert.ok(invalidJsonChain);
+  assert.ok(legacyChain);
+  assert.strictEqual(recoveredChain.outcome, 'recovered_fallback');
+  assert.strictEqual(recoveredChain.retryCount, 1);
+  assert.strictEqual(recoveredChain.primaryErrorStatus, 503);
+  assert.strictEqual(invalidJsonChain.outcome, 'failed');
+  assert.strictEqual(invalidJsonChain.primaryStage, 'failed');
+  assert.strictEqual(invalidJsonChain.primaryErrorCategory, 'invalid_response');
+  assert.strictEqual(invalidJsonChain.primaryError, 'AI response contained invalid JSON');
+  assert.deepStrictEqual(legacyChain.traceId, null);
   assert.strictEqual(summary.leaders.modelsByTokens[0].key, 'gpt-5.4-mini');
   assert.strictEqual(summary.leaders.modelsByCalls[0].key, 'gpt-5.4-lite');
   assert.strictEqual(summary.leaders.tasksByCalls[1].key, 'heartbeat');

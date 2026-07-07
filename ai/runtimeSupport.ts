@@ -1,5 +1,5 @@
 import { getFallbackModel } from './fallbackModels';
-import type { AiModelRef, AiTaskKey } from './modelPresets';
+import { isTrueFullAiPreset, parseAiPresetName, type AiModelRef, type AiTaskKey } from './modelPresets';
 
 export type FallbackPolicyMode = 'task-default';
 
@@ -9,6 +9,12 @@ export function getTaskFallbackModel(taskKey: AiTaskKey): AiModelRef {
 
 export function getTransitionalTaskFallbackModel(taskKey: AiTaskKey): AiModelRef {
     return getTaskFallbackModel(taskKey);
+}
+
+export function allowsCrossProviderFallback(presetName: string): boolean {
+    const parsedPresetName = parseAiPresetName(presetName);
+    if (!parsedPresetName) return true;
+    return !isTrueFullAiPreset(parsedPresetName);
 }
 
 const MAX_AI_ERROR_MESSAGE_LENGTH = 320;

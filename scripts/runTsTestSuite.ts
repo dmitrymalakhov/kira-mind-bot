@@ -5,6 +5,7 @@ const SUITES = {
     ai: [
         "testAiModelPresets.ts",
         "testAiRuntimeRouting.ts",
+        "testAiUsageLogging.ts",
     ],
     memory: [
         "testSessionStorage.ts",
@@ -29,6 +30,7 @@ const SUITES = {
     all: [
         "testAiModelPresets.ts",
         "testAiRuntimeRouting.ts",
+        "testAiUsageLogging.ts",
         "testSessionStorage.ts",
         "testVoiceReply.ts",
         "testRussianSpeechNumbers.ts",
