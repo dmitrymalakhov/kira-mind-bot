@@ -11,6 +11,7 @@
 - Для true-full preset-ов отключён скрытый cross-provider fallback на OpenAI при runtime-ошибках, а Gemini `webSearchReasoning` через Interactions API теперь передаёт `system_instruction`, `tools` и `generation_config`, чтобы preset не терял поисковые параметры.
 - JSON parse fallback теперь тоже уважает true-full policy без скрытого ухода в GPT/OpenAI, а `embedding` и `transcription` получили тот же single-retry flow и trace-логирование, что и остальные AI-вызовы.
 - Логические JSON-провалы теперь пишутся в `ai_usage_logs` как `invalid_response`, а admin analytics считает outcome по финальному attempt цепочки, так что user-visible failure больше не маскируется transport-success логом.
+- `kiraSelfMemory` и связанные self-evolution/self-study патчи стали устойчивыми к кривым LLM-спискам: строка вместо массива нормализуется мягко, plain-object игнорируется локально, а `timeline`/`lessons` больше не валят proactive/self-study циклы с `map is not a function`.
 - Проактивные подсказки из памяти теперь получают provenance evidence с источником/чатом, временем и открытыми линиями, но без технических `sourceMessageIds` в LLM-prompt, чтобы бот мог объяснять, откуда взял контекст, или отказаться от подсказки при неясном источнике.
 - Инструкция для proactive hints запрещает расплывчатое «помню, ты обмолвился» и просит формулировать по реальным полям evidence без выдуманных имён; форматтер покрыт отдельным TS regression test.
 

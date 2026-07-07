@@ -207,14 +207,23 @@ function normalizeTopic(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function normalizeStringList(values: string[] | undefined, limit: number): string[] {
-  return (values ?? [])
+function coerceListEntries(values: unknown): unknown[] {
+  if (values == null) return [];
+  if (Array.isArray(values)) return values;
+  if (typeof values === "string") {
+    return [values];
+  }
+  return [];
+}
+
+function normalizeStringList(values: unknown, limit: number): string[] {
+  return coerceListEntries(values)
     .map((value) => String(value).trim())
     .filter(Boolean)
     .slice(0, limit);
 }
 
-function mergeStringLists(next: string[] | undefined, current: string[], limit: number): string[] {
+function mergeStringLists(next: unknown, current: string[], limit: number): string[] {
   return Array.from(new Set([...normalizeStringList(next, limit), ...current]))
     .filter(Boolean)
     .slice(0, limit);
@@ -431,17 +440,19 @@ function normalizeChapter(input: Partial<KiraBiographyChapter> | undefined): Kir
   };
 }
 
-function mergeTimeline(current: KiraBiographyChapter[], patch?: KiraBiographyChapterPatch[]): KiraBiographyChapter[] {
-  if (!patch?.length) return current;
+function mergeTimeline(current: KiraBiographyChapter[], patch?: unknown): KiraBiographyChapter[] {
+  if (!Array.isArray(patch) || !patch.length) return current;
 
   const next = [...current];
   for (const raw of patch) {
-    const title = raw.title?.trim();
+    if (!raw || typeof raw !== "object") continue;
+    const chapterPatch = raw as KiraBiographyChapterPatch;
+    const title = chapterPatch.title?.trim();
     if (!title) continue;
     const id = chapterId(title);
     const idx = next.findIndex((chapter) => chapter.id === id || chapter.title.toLowerCase() === title.toLowerCase());
     if (idx === -1) {
-      const created = normalizeChapter({ ...raw, id, title });
+      const created = normalizeChapter({ ...chapterPatch, id, title });
       if (created) next.push(created);
       continue;
     }
@@ -449,11 +460,11 @@ function mergeTimeline(current: KiraBiographyChapter[], patch?: KiraBiographyCha
     const existing = next[idx];
     next[idx] = {
       ...existing,
-      period: raw.period?.trim() || existing.period,
-      place: raw.place?.trim() || existing.place,
-      summary: enrichText(existing.summary, raw.summary),
-      lessons: mergeStringLists(raw.lessons, existing.lessons, 6),
-      emotionalTone: raw.emotionalTone?.trim() || existing.emotionalTone,
+      period: chapterPatch.period?.trim() || existing.period,
+      place: chapterPatch.place?.trim() || existing.place,
+      summary: enrichText(existing.summary, chapterPatch.summary),
+      lessons: mergeStringLists(chapterPatch.lessons, existing.lessons, 6),
+      emotionalTone: chapterPatch.emotionalTone?.trim() || existing.emotionalTone,
     };
   }
 
@@ -466,16 +477,16 @@ function normalizeBiography(input?: Partial<KiraBiographyFoundation> | null): Ki
   const corpus = [
     raw.origin,
     raw.earlyEnvironment,
-    ...(raw.education ?? []),
-    ...(raw.workHistory ?? []),
-    ...(raw.stableFacts ?? []),
+    ...normalizeStringList(raw.education, 10),
+    ...normalizeStringList(raw.workHistory, 10),
+    ...normalizeStringList(raw.stableFacts, 12),
   ].join(" ");
   if (hasLegacySelfMemoryText(corpus)) {
     return defaults;
   }
 
-  const timeline = (raw.timeline ?? [])
-    .map(normalizeChapter)
+  const timeline = coerceListEntries(raw.timeline)
+    .map((chapter) => normalizeChapter(typeof chapter === "object" && chapter !== null ? chapter as Partial<KiraBiographyChapter> : undefined))
     .filter((chapter): chapter is KiraBiographyChapter => Boolean(chapter));
 
   return {
@@ -517,10 +528,14 @@ function normalizeInnerWorld(input: Partial<KiraInnerWorld> | undefined, persona
   };
 }
 
-function normalizeLifeArcs(input: KiraLifeArc[] | undefined, personality: KiraSelfPersonality): KiraLifeArc[] {
+function normalizeLifeArcs(input: unknown, personality: KiraSelfPersonality): KiraLifeArc[] {
   const defaults = getDefaultLifeArcs(personality);
-  const source = (input ?? [])
-    .filter((arc) => arc?.title?.trim())
+  const source = coerceListEntries(input)
+    .filter((arc): arc is Partial<KiraLifeArc> & { title: string } => {
+      if (typeof arc !== "object" || arc === null) return false;
+      const candidate = arc as { title?: unknown };
+      return typeof candidate.title === "string" && Boolean(candidate.title.trim());
+    })
     .map((arc) => ({
       id: arc.id || lifeArcId(arc.title),
       title: arc.title.trim(),
@@ -876,12 +891,13 @@ function applyEvolveKiraSelfStateMutation(
   const source = input.event?.source ?? "manual";
 
   if (input.event?.description.trim()) {
+    const eventTopics = normalizeStringList(input.event.topics, 8).map(normalizeTopic);
     data.events.push({
       id: `self_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
       date: now,
       description: input.event.description.trim(),
       type: input.event.type ?? "reflection",
-      topics: input.event.topics?.map(normalizeTopic).filter(Boolean),
+      topics: eventTopics,
       arc: input.event.arc?.trim() || undefined,
       source,
     });
@@ -891,6 +907,8 @@ function applyEvolveKiraSelfStateMutation(
   const thoughts = [...data.state.recentThoughts];
   const thought = input.thought?.trim() || input.event?.thought?.trim();
   if (thought) thoughts.unshift(thought);
+  const inputTopics = normalizeStringList(input.topics, 8).map(normalizeTopic);
+  const eventTopics = normalizeStringList(input.event?.topics, 8).map(normalizeTopic);
 
   const nextPersonality = applyPersonalityPatch(data.state.personality, input.personality, now);
   const nextBiography = applyBiographyPatch(data.state.biography, input.biography, now);
@@ -898,10 +916,10 @@ function applyEvolveKiraSelfStateMutation(
   const nextLifeArcs = upsertLifeArc(
     normalizeLifeArcs(data.state.lifeArcs, nextPersonality),
     input.lifeArc,
-    input.event?.arc || input.personality?.activeArcs?.[0],
+    input.event?.arc || normalizeStringList(input.personality?.activeArcs, 1)[0],
     now,
     source,
-    [...(input.topics ?? []), ...(input.event?.topics ?? [])]
+    [...inputTopics, ...eventTopics]
   );
 
   data.state = {
@@ -909,7 +927,7 @@ function applyEvolveKiraSelfStateMutation(
     mood: input.mood?.trim() || input.event?.mood?.trim() || data.state.mood,
     recentThoughts: thoughts.slice(0, 5),
     recentTopics: mergeStringLists(
-      [...(input.topics ?? []), ...(input.event?.topics ?? [])].map(normalizeTopic),
+      [...inputTopics, ...eventTopics],
       data.state.recentTopics,
       8
     ),
@@ -982,7 +1000,7 @@ export async function addKiraSelfStudyReport(input: {
     applyEvolveKiraSelfStateMutation(data, {
       mood: input.mood,
       thought: input.thought || (report.needs[0] ? `Мне стоит улучшить: ${report.needs[0]}` : undefined),
-      topics: Array.from(new Set(["self-study", ...(input.topics ?? []), ...report.capabilityFocus])),
+      topics: Array.from(new Set(["self-study", ...normalizeStringList(input.topics, 8), ...report.capabilityFocus])),
       personality: input.personality,
       biography: input.biography,
       innerWorld: input.innerWorld,
@@ -990,7 +1008,7 @@ export async function addKiraSelfStudyReport(input: {
       event: {
         description: `Самоизучение: ${report.summary}`,
         type: "thought",
-        topics: Array.from(new Set(["self-study", ...(input.topics ?? []), ...report.capabilityFocus])),
+        topics: Array.from(new Set(["self-study", ...normalizeStringList(input.topics, 8), ...report.capabilityFocus])),
         source: "self-study",
       },
     }, now);

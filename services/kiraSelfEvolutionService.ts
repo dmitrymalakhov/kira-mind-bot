@@ -86,8 +86,14 @@ function asEventType(value: string | undefined): KiraSelfEventType {
   return value && EVENT_TYPES.has(value as KiraSelfEventType) ? value as KiraSelfEventType : "reflection";
 }
 
-function compactStringList(values: string[] | undefined, limit: number): string[] {
-  return (values ?? [])
+function compactStringList(values: unknown, limit: number): string[] {
+  const source = Array.isArray(values)
+    ? values
+    : typeof values === "string"
+      ? [values]
+      : [];
+
+  return source
     .map((value) => String(value).trim())
     .filter(Boolean)
     .slice(0, limit);
@@ -122,8 +128,8 @@ function normalizePersonalityPatch(patch: Partial<KiraSelfPersonality> | undefin
   return Object.keys(normalized).length ? normalized : undefined;
 }
 
-function hasPatch(value: object | undefined): boolean {
-  return Boolean(value && Object.keys(value).length > 0);
+function hasPatch(value: unknown): boolean {
+  return typeof value === "object" && value !== null && Object.keys(value).length > 0;
 }
 
 export async function maybeEvolveKiraSelfFromConversation(input: ConversationEvolutionInput): Promise<boolean> {
