@@ -4,6 +4,7 @@ WORKDIR /workspace/admin-panel
 COPY admin-panel/package.json admin-panel/package-lock.json* ./
 RUN npm install
 COPY admin-panel ./
+COPY ai ../ai
 RUN npm run build
 
 # Stage 2: Production server
@@ -21,8 +22,7 @@ COPY admin-panel/aiPresetRegistry.js ./aiPresetRegistry.js
 RUN mkdir -p ./src /app/ai /app/utils
 COPY admin-panel/src/ai-model-presets.json ./src/ai-model-presets.json
 COPY admin-panel/src/timezones.json ./src/timezones.json
-COPY ai/provider-registry.json /app/ai/provider-registry.json
-COPY ai/fallback-models.json /app/ai/fallback-models.json
+COPY ai/*.json /app/ai/
 COPY utils/legacyPersonalitySanitizer.js /app/utils/legacyPersonalitySanitizer.js
 EXPOSE 3000
 CMD ["node", "server.js"]

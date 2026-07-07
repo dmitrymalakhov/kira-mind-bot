@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-07-07
+
+- Исправлена Docker-сборка `admin-panel`: в builder stage добавлено копирование `ai/`, чтобы TypeScript-билд находил модуль `ai/presetSummary`, импортируемый фронтендом (`../../../ai/presetSummary`).
+- В runtime-образ `admin-panel` теперь копируются все `ai/*.json` единым glob вместо точечного списка: ранее отсутствовал `provider-capability-overrides.json`, из-за чего контейнер падал на старте с `Cannot find module` в `presetAvailability.js`.
+
 ## 2026-07-06
 
 - Исправлена ошибочная атрибуция чужих событий к владельцу в фоновой рефлексии/study-chat: детерминированный фильтр в `deterministicQualityGate` понижает confidence ниже порога сохранения, если факт с `subject:user` описывает событие (ДР/встреча/игра/отпуск и т.п.) без first-person маркера владельца, но с contact/invite-маркером; промпты `buildUserFactsPrompt`/`buildContactFactsPrompt`/`buildCriticPrompt` усилены явным правилом атрибуции событий.
