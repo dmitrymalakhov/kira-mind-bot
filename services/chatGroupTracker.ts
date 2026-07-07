@@ -4,6 +4,7 @@ import { ChatGroupRepository } from './ChatGroupRepository';
 import { initTelegramClient, searchGroupByTitle } from './telegram';
 import { analyzeTrackedMessages, TrackedMessage } from '../agents/trackingAnalysisAgent';
 import { getProactiveChatId } from '../utils/allowedUserChatStore';
+import { esc, heading, blockquote, footer, RichBlock, sendStructured } from '../utils/richMessage';
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 минут
 
@@ -78,12 +79,13 @@ async function pollOnce(): Promise<void> {
                 const result = await analyzeTrackedMessages(chatName, group.name, incoming, recentContext);
                 if (!result?.isImportant) continue;
 
-                const text =
-                    `📡 *${group.name}* · ${chatName}\n\n` +
-                    `${result.notificationText}\n\n` +
-                    `_Причина: ${result.reason}_`;
+                const blocks: RichBlock[] = [
+                    heading(`📡 ${esc(group.name)} · ${esc(chatName)}`, 3),
+                    blockquote(esc(result.notificationText)),
+                    footer(`Причина: ${esc(result.reason)}`),
+                ];
 
-                await botRef!.api.sendMessage(ownerChatId, text, { parse_mode: 'Markdown' });
+                await sendStructured(botRef!.api as any, ownerChatId, blocks);
             } catch (e) {
                 console.error(`[chatGroupTracker] error processing chat "${chatName}":`, e);
             }

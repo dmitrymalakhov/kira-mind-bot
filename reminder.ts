@@ -10,6 +10,7 @@ import { ReminderRegistry } from "./stores/ReminderRegistry";
 import { buildDefaultTargetReminderMessage } from "./utils/reminderTargetNotification";
 import { createOrRefreshReminderMemoryForUserId } from "./services/ReminderMemorySync";
 import { config } from "./config";
+import { esc, blockquote, RichBlock, sendStructured, editStructured } from "./utils/richMessage";
 export { ReminderStatus, ReminderTargetChat, ReminderTargetNotificationStatus, RecurrenceRule };
 
 // Расширенный интерфейс для напоминания с поддержкой статусов
@@ -263,7 +264,8 @@ async function sendReminder(bot: Bot<BotContext>, reminder: Reminder): Promise<v
             messageText += `\n\n${outro}`;
         }
 
-        let userNotificationText = messageText;
+        // Префикс-строка перед телом напоминания: ⏰ «Напомнила…» / ⚠️ «Не удалось найти…»
+        let prefix: string | null = null;
         let targetLabel: string | null = null;
 
         // Адресату отправляем только после явного согласия владельца при создании напоминания.
@@ -279,11 +281,14 @@ async function sendReminder(bot: Bot<BotContext>, reminder: Reminder): Promise<v
                         await sendMessage(client, resolved.chatId, textToSend, false, null);
                     }
                     targetLabel = resolved.label;
-                    userNotificationText = `⏰ Напомнила тебе и оповестила «${resolved.label}»:\n\n${messageText}`;
+                    prefix = `⏰ Напомнила тебе и оповестила «${resolved.label}»:`;
                     devLog(`Reminder sent to target chat "${resolved.label}" (${resolved.chatId})`);
                 }
             } else {
-                userNotificationText = `⚠️ Не удалось найти чат для напоминания (${reminder.targetChat.type === "group" ? "группа: " + reminder.targetChat.groupName : "контакт: " + reminder.targetChat.contactQuery}). Напоминание здесь:\n\n${messageText}`;
+                const targetDesc = reminder.targetChat.type === "group"
+                    ? `группа: ${reminder.targetChat.groupName}`
+                    : `контакт: ${reminder.targetChat.contactQuery}`;
+                prefix = `⚠️ Не удалось найти чат для напоминания (${targetDesc}). Напоминание здесь:`;
             }
         }
 
@@ -298,17 +303,19 @@ async function sendReminder(bot: Bot<BotContext>, reminder: Reminder): Promise<v
             .text("✏️ Изменить", `reminder_edit_${reminder.id}`)
             .text("❌ Отменить", `reminder_cancel_${reminder.id}`);
 
-        const sentMessage = await bot.api.sendMessage(
+        const blocks: RichBlock[] = [];
+        if (prefix) blocks.push({ type: "paragraph", text: esc(prefix) });
+        blocks.push(blockquote(esc(messageText)));
+
+        const sentMessage = await sendStructured(
+            bot.api as any,
             reminder.chatId,
-            userNotificationText,
-            {
-                parse_mode: "Markdown",
-                ...(keyboard ? { reply_markup: keyboard } : {}),
-            }
+            blocks,
+            keyboard ? { replyMarkup: keyboard } : {},
         );
 
         // Сохраняем ID сообщения для последующих обновлений
-        reminder.messageId = sentMessage.message_id;
+        reminder.messageId = (sentMessage as { message_id?: number })?.message_id;
         reminder.status = ReminderStatus.Sent;
 
         // Сохраняем обновлённый статус в БД
@@ -432,18 +439,16 @@ export async function markReminderAsCompleted(bot: Bot<BotContext>, reminder: Re
         // Обновляем сообщение с напоминанием, если есть ID сообщения
         if (reminder.messageId) {
             try {
-                // Создаем текст сообщения с отметкой о выполнении
-                let updatedText = reminder.displayText || reminder.text;
-                if (!updatedText.includes("✅ Выполнено")) {
-                    updatedText = `✅ Выполнено: ${updatedText}`;
-                }
-
-                // Обновляем сообщение без клавиатуры
-                await bot.api.editMessageText(
+                const updatedText = reminder.displayText || reminder.text;
+                // Обновляем сообщение без клавиатуры: отметка «✅ Выполнено» + тело в blockquote.
+                await editStructured(
+                    bot.api as any,
                     reminder.chatId,
                     reminder.messageId,
-                    updatedText,
-                    { parse_mode: "Markdown" }
+                    [
+                        { type: "paragraph", text: "<b>✅ Выполнено</b>" },
+                        blockquote(esc(updatedText)),
+                    ],
                 );
 
                 // Пытаемся удалить клавиатуру, если не удалось включить отметку в текст
@@ -518,24 +523,22 @@ export async function postponeReminderUntil(
         // Обновляем сообщение с информацией об отложенном напоминании
         if (reminder.messageId) {
             try {
-                // Создаем текст сообщения с информацией об отложенном напоминании
-                let updatedText = reminder.displayText || reminder.text;
+                const updatedText = reminder.displayText || reminder.text;
                 const formattedTime = newDueDate.toLocaleString('ru-RU', {
                     timeZone: USER_TIMEZONE,
                     hour: 'numeric',
                     minute: 'numeric'
                 });
 
-                if (!updatedText.includes("⏰ Отложено")) {
-                    updatedText = `⏰ Отложено до ${formattedTime}: ${updatedText}`;
-                }
-
-                // Обновляем сообщение без клавиатуры
-                await bot.api.editMessageText(
+                // Обновляем сообщение без клавиатуры: «⏰ Отложено до …» + тело в blockquote.
+                await editStructured(
+                    bot.api as any,
                     reminder.chatId,
                     reminder.messageId,
-                    updatedText,
-                    { parse_mode: "Markdown" }
+                    [
+                        { type: "paragraph", text: `<b>⏰ Отложено до ${esc(formattedTime)}</b>` },
+                        blockquote(esc(updatedText)),
+                    ],
                 );
 
                 // Пытаемся удалить клавиатуру, если не удалось включить отметку в текст

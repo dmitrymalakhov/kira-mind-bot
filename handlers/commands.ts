@@ -5,7 +5,8 @@ import { getActiveReminders, buildReminderCard, buildChatPicker } from "../utils
 import { ReminderRegistry } from "../stores/ReminderRegistry";
 import { getMessagesSummary, getUnreadMessagesPreview, markAllMessagesAsRead, resetAllMessages } from "../agents/readMessagesAgent";
 import { EnhancedSessionData } from "../services/dialogueSummarizer";
-import { sendMessage } from "../utils";
+import { sendMessage, sendStructuredBlocks } from "../utils";
+import { esc, heading, table, list, paragraph, footer, RichBlock, renderFallbackHtml } from "../utils/richMessage";
 import { addToHistory } from "../utils/history";
 import { registerMemoryCommands } from "./memoryCommands";
 import { registerChatGroupCommands } from "./chatGroupCommands";
@@ -77,35 +78,44 @@ bot.command("contacts", async (ctx) => {
             return;
         }
 
-        // Формируем сообщение со списком контактов
-        let message = "📋 Список всех контактов:\n\n";
+        // Таблица контактов с экранированием всех пользовательских полей.
+        // При 1-2 контактах таблица избыточна — используем простой список.
+        const blocks: RichBlock[] = [heading("📋 Контакты", 3)];
 
-        contacts.forEach((contact, index) => {
-            message += `${index + 1}. ${contact.firstName} ${contact.lastName || ''}`;
+        if (contacts.length <= 2) {
+            const items = contacts.map((contact) => {
+                const name = `${esc(contact.firstName)} ${esc(contact.lastName || "")}`.trim();
+                const username = contact.username ? ` @${esc(contact.username)}` : "";
+                const phone = contact.phone ? ` · ${esc(contact.phone)}` : "";
+                const fav = contact.isFavorite ? " ⭐" : "";
+                const tags = contact.tags && contact.tags.length > 0
+                    ? ` [${contact.tags.map(esc).join(", ")}]`
+                    : "";
+                return `${name}${username}${phone}${fav}${tags}`;
+            });
+            blocks.push(list(items, true));
+        } else {
+            const rows = contacts.map((contact) => {
+                const name = `${esc(contact.firstName)} ${esc(contact.lastName || "")}`.trim();
+                const fav = contact.isFavorite ? " ⭐" : "";
+                const username = contact.username ? `@${esc(contact.username)}` : "";
+                const phone = contact.phone ? esc(contact.phone) : "";
+                const tags = contact.tags && contact.tags.length > 0
+                    ? contact.tags.map(esc).join(", ")
+                    : "";
+                return [`${name}${fav}`, username, phone, tags];
+            });
+            blocks.push(table({
+                headers: ["Имя", "Username", "Телефон", "Теги"],
+                rows,
+                bordered: true,
+                striped: true,
+            }));
+        }
 
-            if (contact.username) {
-                message += ` (@${contact.username})`;
-            }
+        blocks.push(footer(`Всего контактов: ${contacts.length}`));
 
-            if (contact.phone) {
-                message += ` - ${contact.phone}`;
-            }
-
-            if (contact.isFavorite) {
-                message += " ⭐";
-            }
-
-            if (contact.tags && contact.tags.length > 0) {
-                message += ` [${contact.tags.join(', ')}]`;
-            }
-
-            message += "\n";
-        });
-
-        message += `\nВсего контактов: ${contacts.length}`;
-
-        // Отправляем сообщение со списком контактов
-        await sendMessage(ctx, message);
+        await sendStructuredBlocks(ctx, ctx.chat!.id, blocks);
     } catch (error) {
         console.error("Ошибка при получении списка контактов:", error);
         await ctx.reply("Произошла ошибка при получении списка контактов. Пожалуйста, попробуйте позже.");
@@ -123,8 +133,8 @@ bot.command("reminders", async (ctx) => {
             await ctx.reply("В этом чате пока нет активных напоминаний.");
             return;
         }
-        const { text, keyboard } = buildReminderCard(active, 0);
-        await ctx.reply(text, { reply_markup: keyboard });
+        const { blocks, keyboard } = buildReminderCard(active, 0);
+        await sendStructuredBlocks(ctx, ctx.chat!.id, blocks, { replyMarkup: keyboard });
         return;
     }
 
@@ -142,15 +152,15 @@ bot.command("reminders", async (ctx) => {
     // Если есть только личные напоминания — карточки как обычно
     if (allChats.length === 1 && allChats[0].chatId === ctx.chat!.id) {
         const active = ReminderRegistry.getInstance().getActiveByChatId(ctx.chat!.id);
-        const { text, keyboard } = buildReminderCard(active, 0);
-        addToHistory(ctx, 'bot', text);
-        await ctx.reply(text, { reply_markup: keyboard });
+        const { blocks, keyboard } = buildReminderCard(active, 0);
+        addToHistory(ctx, 'bot', renderFallbackHtml(blocks));
+        await sendStructuredBlocks(ctx, ctx.chat!.id, blocks, { replyMarkup: keyboard });
         return;
     }
 
     // Несколько чатов — показываем пикер
-    const { text, keyboard } = buildChatPicker(allChats);
-    await ctx.reply(text, { reply_markup: keyboard });
+    const { blocks, keyboard } = buildChatPicker(allChats);
+    await sendStructuredBlocks(ctx, ctx.chat!.id, blocks, { replyMarkup: keyboard });
 });
 
 // Команда /clear - очистить историю сообщений
@@ -302,16 +312,24 @@ bot.command("chats", async (ctx) => {
             channel: '📢 Канал',
         };
 
-        let msg = `📋 Чаты, где меня видят (${chats.length}):\n\n`;
-        for (const chat of chats) {
-            const type = typeLabel[chat.chatType] ?? chat.chatType;
-            const usernameStr = chat.username ? ` @${chat.username}` : '';
+        const rows = chats.map((chat) => {
+            const type = typeLabel[chat.chatType] ?? esc(chat.chatType);
+            const username = chat.username ? `@${esc(chat.username)}` : "";
             const lastSeen = new Date(chat.lastSeenAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' });
-            msg += `${type}: *${chat.title}*${usernameStr}\n`;
-            msg += `  ID: \`${chat.chatId}\` · последний раз: ${lastSeen}\n\n`;
-        }
+            return [type, esc(chat.title), username, `<code>${esc(chat.chatId)}</code>`, esc(lastSeen)];
+        });
 
-        await ctx.reply(msg, { parse_mode: "Markdown" });
+        const blocks: RichBlock[] = [
+            heading(`📋 Чаты, где меня видят (${chats.length})`, 3),
+            table({
+                headers: ["Тип", "Название", "Username", "ID", "Последний раз"],
+                rows,
+                bordered: true,
+                striped: true,
+            }),
+        ];
+
+        await sendStructuredBlocks(ctx, ctx.chat!.id, blocks);
     } catch (error) {
         console.error("Ошибка при получении списка чатов:", error);
         await ctx.reply("Не удалось загрузить список чатов.");

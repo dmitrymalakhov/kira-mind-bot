@@ -4,21 +4,24 @@ import { ChatGroupRepository } from '../services/ChatGroupRepository';
 import { ChatGroupEntity } from '../entity/ChatGroupEntity';
 import { notifyChatGroupTrackerChange } from '../services/chatGroupTracker';
 import { config } from '../config';
+import { esc, heading, list, paragraph, footer, RichBlock, sendStructured, editStructuredCtx } from '../utils/richMessage';
 
 const ITEMS_PER_PAGE = 5;
 
-function buildMainMenu(groups: ChatGroupEntity[], page = 0): { text: string; keyboard: InlineKeyboard } {
+function buildMainMenu(groups: ChatGroupEntity[], page = 0): { blocks: RichBlock[]; keyboard: InlineKeyboard } {
     const total = groups.length;
     const start = page * ITEMS_PER_PAGE;
     const pageGroups = groups.slice(start, start + ITEMS_PER_PAGE);
 
-    let text = '📂 *Группы чатов*\n\n';
+    const blocks: RichBlock[] = [heading('📂 Группы чатов', 3)];
     if (total === 0) {
-        text += 'Группы ещё не созданы.';
+        blocks.push(paragraph('Группы ещё не созданы.'));
     } else {
         pageGroups.forEach((g, i) => {
-            const chats = g.chatNames.map(c => `• ${c}`).join('\n');
-            text += `*${start + i + 1}. ${g.name}*\n${chats}\n\n`;
+            blocks.push(heading(`${start + i + 1}. ${esc(g.name)}`, 4));
+            if (g.chatNames.length > 0) {
+                blocks.push(list(g.chatNames.map(c => esc(c))));
+            }
         });
     }
 
@@ -39,13 +42,24 @@ function buildMainMenu(groups: ChatGroupEntity[], page = 0): { text: string; key
 
     kb.text('➕ Новая группа', 'cg:new').row();
 
-    return { text, keyboard: kb };
+    return { blocks, keyboard: kb };
 }
 
-function buildGroupDetailMenu(group: ChatGroupEntity): { text: string; keyboard: InlineKeyboard } {
-    const chats = group.chatNames.map((c, i) => `${i + 1}. ${c}`).join('\n');
+function buildGroupDetailMenu(group: ChatGroupEntity): { blocks: RichBlock[]; keyboard: InlineKeyboard } {
     const trackingLabel = group.isTracking ? '🔕 Отслеживание: вкл' : '📡 Отслеживать';
-    const text = `✏️ *${group.name}*\n\nЧаты:\n${chats}${group.isTracking ? `\n\n📡 _Умное отслеживание активно — ${config.characterName} уведомит о важных сообщениях_` : ''}\n\nЧто сделать?`;
+    const blocks: RichBlock[] = [
+        heading(`✏️ ${esc(group.name)}`, 3),
+        paragraph('<b>Чаты:</b>'),
+    ];
+    if (group.chatNames.length > 0) {
+        blocks.push(list(group.chatNames.map((c, i) => `${i + 1}. ${esc(c)}`), true));
+    } else {
+        blocks.push(paragraph('В группе пока нет чатов.'));
+    }
+    if (group.isTracking) {
+        blocks.push(footer(`📡 Умное отслеживание активно — ${esc(config.characterName)} уведомит о важных сообщениях`));
+    }
+    blocks.push(paragraph('Что сделать?'));
 
     const kb = new InlineKeyboard()
         .text('➕ Добавить чат', `cg:addchat:${group.id}`).row()
@@ -55,7 +69,7 @@ function buildGroupDetailMenu(group: ChatGroupEntity): { text: string; keyboard:
         .text('🗑️ Удалить группу', `cg:del:${group.id}`).row()
         .text('◀️ Назад', 'cg:back').row();
 
-    return { text, keyboard: kb };
+    return { blocks, keyboard: kb };
 }
 
 export function registerChatGroupCommands(bot: Bot<BotContext>) {
@@ -67,8 +81,8 @@ export function registerChatGroupCommands(bot: Bot<BotContext>) {
         delete ctx.session.chatGroupState;
 
         const groups = await ChatGroupRepository.findAll(chatId);
-        const { text, keyboard } = buildMainMenu(groups);
-        await ctx.reply(text, { reply_markup: keyboard, parse_mode: 'Markdown' });
+        const { blocks, keyboard } = buildMainMenu(groups);
+        await sendStructured(ctx.api as any, chatId, blocks, { replyMarkup: keyboard });
     });
 
     // ── Callback: quick-save после inline-анализа нескольких чатов ───────────
@@ -92,8 +106,8 @@ export function registerChatGroupCommands(bot: Bot<BotContext>) {
         if (!chatId) return;
 
         const groups = await ChatGroupRepository.findAll(chatId);
-        const { text, keyboard } = buildMainMenu(groups, page);
-        await ctx.editMessageText(text, { reply_markup: keyboard, parse_mode: 'Markdown' });
+        const { blocks, keyboard } = buildMainMenu(groups, page);
+        await editStructuredCtx(ctx, blocks, { replyMarkup: keyboard });
     });
 
     // ── Callback: noop (заголовок пагинации) ──────────────────────────────────
@@ -107,15 +121,15 @@ export function registerChatGroupCommands(bot: Bot<BotContext>) {
         delete ctx.session.chatGroupState;
 
         const groups = await ChatGroupRepository.findAll(chatId);
-        const { text, keyboard } = buildMainMenu(groups);
-        await ctx.editMessageText(text, { reply_markup: keyboard, parse_mode: 'Markdown' });
+        const { blocks, keyboard } = buildMainMenu(groups);
+        await editStructuredCtx(ctx, blocks, { replyMarkup: keyboard });
     });
 
     // ── Callback: новая группа ────────────────────────────────────────────────
     bot.callbackQuery('cg:new', async (ctx) => {
         await ctx.answerCallbackQuery();
         ctx.session.chatGroupState = { step: 'awaiting_name' };
-        await ctx.reply('Введи название новой группы (например: *Рабочие чаты*)', { parse_mode: 'Markdown' });
+        await ctx.reply('Введи название новой группы (например: Рабочие чаты)');
     });
 
     // ── Callback: открыть детали группы для редактирования ────────────────────
@@ -129,8 +143,8 @@ export function registerChatGroupCommands(bot: Bot<BotContext>) {
         const group = groups.find(g => g.id === id);
         if (!group) { await ctx.answerCallbackQuery('Группа не найдена'); return; }
 
-        const { text, keyboard } = buildGroupDetailMenu(group);
-        await ctx.editMessageText(text, { reply_markup: keyboard, parse_mode: 'Markdown' });
+        const { blocks, keyboard } = buildGroupDetailMenu(group);
+        await editStructuredCtx(ctx, blocks, { replyMarkup: keyboard });
     });
 
     // ── Callback: удалить группу ──────────────────────────────────────────────
@@ -142,8 +156,8 @@ export function registerChatGroupCommands(bot: Bot<BotContext>) {
         const chatId = ctx.chat?.id;
         if (!chatId) return;
         const groups = await ChatGroupRepository.findAll(chatId);
-        const { text, keyboard } = buildMainMenu(groups);
-        await ctx.editMessageText(text, { reply_markup: keyboard, parse_mode: 'Markdown' });
+        const { blocks, keyboard } = buildMainMenu(groups);
+        await editStructuredCtx(ctx, blocks, { replyMarkup: keyboard });
     });
 
     // ── Callback: добавить чат в группу ───────────────────────────────────────
@@ -159,8 +173,7 @@ export function registerChatGroupCommands(bot: Bot<BotContext>) {
 
         ctx.session.chatGroupState = { step: 'awaiting_chats', editGroupId: id, editGroupName: group.name };
         await ctx.reply(
-            `Перечисли названия чатов, которые хочешь *добавить* в группу «${group.name}», через запятую или с новой строки:`,
-            { parse_mode: 'Markdown' }
+            `Перечисли названия чатов, которые хочешь добавить в группу «${group.name}», через запятую или с новой строки:`
         );
     });
 
@@ -182,11 +195,12 @@ export function registerChatGroupCommands(bot: Bot<BotContext>) {
 
         ctx.session.chatGroupState = { step: 'awaiting_remove_chat', editGroupId: id, editGroupName: group.name };
 
-        const list = group.chatNames.map((c, i) => `${i + 1}. ${c}`).join('\n');
-        await ctx.reply(
-            `Напиши номер или название чата, который хочешь убрать из «${group.name}»:\n\n${list}`,
-            { parse_mode: 'Markdown' }
-        );
+        const listItems = group.chatNames.map((c, i) => `${i + 1}. ${esc(c)}`);
+        const blocks: RichBlock[] = [
+            paragraph(`Напиши номер или название чата, который хочешь убрать из «${esc(group.name)}»:`),
+            list(listItems, true),
+        ];
+        await sendStructured(ctx.api as any, chatId, blocks);
     });
 
     // ── Callback: включить/выключить отслеживание ─────────────────────────────
@@ -203,14 +217,17 @@ export function registerChatGroupCommands(bot: Bot<BotContext>) {
         const group = groups.find(g => g.id === id);
         if (!group) return;
 
-        const statusText = isNowTracking
-            ? `✅ Умное отслеживание для группы «${group.name}» *включено*.\n\n${config.characterName} будет присылать уведомления о важных сообщениях в личный чат.`
-            : `🔕 Отслеживание для группы «${group.name}» *выключено*.`;
+        const statusBlocks: RichBlock[] = isNowTracking
+            ? [
+                paragraph(`✅ Умное отслеживание для группы «${esc(group.name)}» <b>включено</b>.`),
+                paragraph(`${esc(config.characterName)} будет присылать уведомления о важных сообщениях в личный чат.`),
+            ]
+            : [paragraph(`🔕 Отслеживание для группы «${esc(group.name)}» <b>выключено</b>.`)];
 
-        await ctx.reply(statusText, { parse_mode: 'Markdown' });
+        await sendStructured(ctx.api as any, chatId, statusBlocks);
 
-        const { text, keyboard } = buildGroupDetailMenu(group);
-        await ctx.editMessageText(text, { reply_markup: keyboard, parse_mode: 'Markdown' });
+        const { blocks, keyboard } = buildGroupDetailMenu(group);
+        await editStructuredCtx(ctx, blocks, { replyMarkup: keyboard });
     });
 
     // ── Callback: переименовать группу ────────────────────────────────────────
@@ -262,17 +279,17 @@ export function registerChatGroupCommands(bot: Bot<BotContext>) {
                 // Quick-save: имя группы получено, чаты уже известны
                 const saved = await ChatGroupRepository.save(chatId, text, state.pendingChatNames);
                 delete ctx.session.chatGroupState;
-                const list = saved.chatNames.map(c => `• ${c}`).join('\n');
-                await ctx.reply(
-                    `✅ Группа «${saved.name}» сохранена!\n\n${list}\n\nТеперь можешь писать: _«Проанализируй ${saved.name}»_.`,
-                    { parse_mode: 'Markdown' }
-                );
+                const blocks: RichBlock[] = [
+                    paragraph(`✅ Группа «${esc(saved.name)}» сохранена!`),
+                    list(saved.chatNames.map(c => esc(c))),
+                    footer(`Теперь можешь писать: «Проанализируй ${esc(saved.name)}».`),
+                ];
+                await sendStructured(ctx.api as any, chatId, blocks);
             } else {
                 // Новая группа — запрашиваем чаты
                 ctx.session.chatGroupState = { step: 'awaiting_chats', groupName: text };
                 await ctx.reply(
-                    `Отлично! Теперь перечисли названия Telegram-чатов для группы «${text}» — через запятую или с новой строки.\n\nНазвания должны совпадать с тем, как чаты называются в Telegram.`,
-                    { parse_mode: 'Markdown' }
+                    `Отлично! Теперь перечисли названия Telegram-чатов для группы «${text}» — через запятую или с новой строки. Названия должны совпадать с тем, как чаты называются в Telegram.`
                 );
             }
             return;
@@ -298,18 +315,22 @@ export function registerChatGroupCommands(bot: Bot<BotContext>) {
                     const merged = Array.from(new Set([...group.chatNames, ...parsed]));
                     await ChatGroupRepository.updateChatNames(group.id, merged);
                     delete ctx.session.chatGroupState;
-                    const list = merged.map(c => `• ${c}`).join('\n');
-                    await ctx.reply(`✅ Группа «${group.name}» обновлена:\n${list}`);
+                    const blocks: RichBlock[] = [
+                        paragraph(`✅ Группа «${esc(group.name)}» обновлена:`),
+                        list(merged.map(c => esc(c))),
+                    ];
+                    await sendStructured(ctx.api as any, chatId, blocks);
                 }
             } else if (state.groupName) {
                 // Создание новой группы
                 const saved = await ChatGroupRepository.save(chatId, state.groupName, parsed);
                 delete ctx.session.chatGroupState;
-                const list = parsed.map(c => `• ${c}`).join('\n');
-                await ctx.reply(
-                    `✅ Группа «${saved.name}» сохранена!\n\n${list}\n\nТеперь можешь писать: _«Проанализируй ${saved.name}»_.`,
-                    { parse_mode: 'Markdown' }
-                );
+                const blocks: RichBlock[] = [
+                    paragraph(`✅ Группа «${esc(saved.name)}» сохранена!`),
+                    list(parsed.map(c => esc(c))),
+                    footer(`Теперь можешь писать: «Проанализируй ${esc(saved.name)}».`),
+                ];
+                await sendStructured(ctx.api as any, chatId, blocks);
             }
             return;
         }
@@ -344,8 +365,12 @@ export function registerChatGroupCommands(bot: Bot<BotContext>) {
             if (updated.length === 0) {
                 await ctx.reply(`✅ Удалён чат «${toRemove}». В группе «${group.name}» больше нет чатов.`);
             } else {
-                const list = updated.map(c => `• ${c}`).join('\n');
-                await ctx.reply(`✅ Удалён чат «${toRemove}» из группы «${group.name}».\n\nОсталось:\n${list}`);
+                const blocks: RichBlock[] = [
+                    paragraph(`✅ Удалён чат «${esc(toRemove)}» из группы «${esc(group.name)}».`),
+                    paragraph('<b>Осталось:</b>'),
+                    list(updated.map(c => esc(c))),
+                ];
+                await sendStructured(ctx.api as any, chatId, blocks);
             }
             return;
         }

@@ -11,6 +11,8 @@ import { runMemorySchemaConsolidationForContext } from '../services/MemorySchema
 import { runMemorySleepCycleForUser } from '../services/MemorySleepCycleService';
 import { getPersonalChatMemoryIndexStatus, runPersonalChatMemoryIndexingCycle } from '../services/personalChatMemoryIndexer';
 import { getReflectionMemoryNoiseReasons } from '../utils/reflectionMemoryFilter';
+import { esc, heading, table, list, blockquote, paragraph, RichBlock } from '../utils/richMessage';
+import { sendStructuredBlocks } from '../utils';
 
 function isAdmin(ctx: BotContext): boolean {
     return ctx.from?.id === config.adminUserId;
@@ -291,30 +293,29 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
             items: candidates.map(({ id, domain, content }) => ({ id, domain, content })),
         });
 
-        const lines = candidates
-            .map((memory, index) => {
-                const reasons = memory.reasons.map(reflectionCleanupReasonLabel).join(', ');
-                return `${index + 1}. [${memory.domain}] (${reasons}) ${compactMemoryLine(memory.content)}`;
-            })
-            .join('\n');
+        const items = candidates.map((memory) => {
+            const reasons = memory.reasons.map(reflectionCleanupReasonLabel).map(esc).join(', ');
+            return `<b>[${esc(memory.domain)}]</b> (${reasons})<br>${esc(compactMemoryLine(memory.content))}`;
+        });
         const keyboard = new InlineKeyboard()
             .text(`✅ Удалить ${candidates.length}`, `mem_refclean:${token}`)
             .text('❌ Отмена', `mem_refclean_cancel:${token}`);
         const remaining = Math.max(0, totalCandidates - candidates.length);
 
-        await ctx.reply(
-            [
+        const blocks: RichBlock[] = [
+            paragraph(
                 remaining > 0
-                    ? `Нашла ${totalCandidates} кандидат(ов), показываю первые ${candidates.length}:`
-                    : `Нашла ${candidates.length} кандидат(ов) на удаление из reflection-памяти:`,
-                '',
-                lines,
-                '',
-                'Удалять только если список выглядит как технический шум.',
-                remaining > 0 ? `После удаления можно запустить /memory_reflection_cleanup ещё раз: останется примерно ${remaining}.` : undefined,
-            ].filter(Boolean).join('\n'),
-            { reply_markup: keyboard }
-        );
+                    ? `Нашла <b>${totalCandidates}</b> кандидат(ов), показываю первые ${candidates.length}:`
+                    : `Нашла <b>${candidates.length}</b> кандидат(ов) на удаление из reflection-памяти:`
+            ),
+            list(items, true),
+            paragraph('Удалять только если список выглядит как технический шум.'),
+        ];
+        if (remaining > 0) {
+            blocks.push({ type: "paragraph", text: `После удаления можно запустить /memory_reflection_cleanup ещё раз: останется примерно ${remaining}.` });
+        }
+
+        await sendStructuredBlocks(ctx, ctx.chat!.id, blocks, { replyMarkup: keyboard });
     });
 
     bot.command('memory_consolidate', async (ctx) => {
@@ -603,19 +604,28 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
             return;
         }
 
-        const lines: string[] = [`📜 История факта:\n\n🔹 Сейчас: "${found.content}"`];
+        const blocks: RichBlock[] = [
+            heading('📜 История факта', 3),
+            { type: "paragraph", text: '<b>🔹 Сейчас:</b>' },
+            blockquote(esc(found.content)),
+        ];
 
         if (found.previousVersions && found.previousVersions.length > 0) {
-            lines.push('\nПредыдущие версии:');
-            for (const v of found.previousVersions) {
+            const rows = found.previousVersions.map((v) => {
                 const date = new Date(v.timestamp).toLocaleDateString('ru-RU');
                 const conf = (v.confidence * 100).toFixed(0);
-                lines.push(`• [${date}, достоверность ${conf}%] "${v.content}"`);
-            }
+                return [esc(date), `${conf}%`, esc(v.content)];
+            });
+            blocks.push(table({
+                headers: ['Дата', 'Достоверность', 'Контент'],
+                rows,
+                bordered: true,
+                striped: true,
+            }));
         } else {
-            lines.push('\nИстория изменений пока пуста — факт не менялся.');
+            blocks.push({ type: "paragraph", text: 'История изменений пока пуста — факт не менялся.' });
         }
 
-        await ctx.reply(lines.join('\n'));
+        await sendStructuredBlocks(ctx, ctx.chat!.id, blocks);
     });
 }

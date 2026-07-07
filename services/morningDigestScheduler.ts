@@ -7,6 +7,7 @@ import { getProactiveChatId } from "../utils/allowedUserChatStore";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { getZonedDateKey, getZonedDateTimeParts } from "../utils/time";
+import { esc, paragraph, table, heading, RichBlock, sendStructured } from "../utils/richMessage";
 
 let timer: NodeJS.Timeout | undefined;
 let lastSentDate = "";
@@ -27,16 +28,37 @@ function getRemindersForToday(chatId: number) {
         .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
 }
 
-function formatDigestReminders(reminders: ReturnType<typeof getRemindersForToday>): string {
-    return reminders.map(r => {
-        const time = new Date(r.dueDate).toLocaleTimeString("ru-RU", {
-            timeZone: USER_TIMEZONE,
-            hour: "numeric",
-            minute: "numeric",
+function buildDigestRemindersBlocks(reminders: ReturnType<typeof getRemindersForToday>): RichBlock[] {
+    if (reminders.length === 0) return [];
+    // Для 1-2 напоминаний таблица избыточна — простой список читается легче.
+    if (reminders.length <= 2) {
+        const items = reminders.map(r => {
+            const time = formatReminderTime(r.dueDate);
+            const body = esc(r.displayText || r.text);
+            return `<b>${time}</b> — ${body}`;
         });
-        const body = r.displayText || r.text;
-        return `• ${time} — ${body}`;
-    }).join("\n");
+        return [
+            heading("📋 На сегодня", 3),
+            { type: "list", items, ordered: false },
+        ];
+    }
+    // 3+ напоминаний — компактная таблица «Время / Задача».
+    const rows = reminders.map(r => [
+        `<b>${esc(formatReminderTime(r.dueDate))}</b>`,
+        esc(r.displayText || r.text),
+    ]);
+    return [
+        heading("📋 На сегодня", 3),
+        table({ headers: ["Время", "Задача"], rows, bordered: true, striped: true }),
+    ];
+}
+
+function formatReminderTime(dueDate: string | Date): string {
+    return new Date(dueDate).toLocaleTimeString("ru-RU", {
+        timeZone: USER_TIMEZONE,
+        hour: "numeric",
+        minute: "numeric",
+    });
 }
 
 async function buildDigestGreeting(reminderCount: number): Promise<string> {
@@ -71,12 +93,10 @@ async function runDigest(bot: Bot<BotContext>): Promise<void> {
     const todayReminders = getRemindersForToday(chatId);
     const greeting = await buildDigestGreeting(todayReminders.length);
 
-    let text = greeting;
-    if (todayReminders.length > 0) {
-        text += `\n\n📋 На сегодня:\n${formatDigestReminders(todayReminders)}`;
-    }
+    const blocks: RichBlock[] = [paragraph(esc(greeting))];
+    blocks.push(...buildDigestRemindersBlocks(todayReminders));
 
-    await bot.api.sendMessage(chatId, text);
+    await sendStructured(bot.api as any, chatId, blocks);
     lastSentDate = dateKey;
     console.info("[morning-digest] sent");
 }
