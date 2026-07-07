@@ -2,6 +2,8 @@
 
 ## 2026-07-07
 
+- `make logs-no-db` снова работает на macOS: `server-deploy.sh` больше не зависит от `mapfile`, поэтому просмотр логов без `postgres` и `qdrant` совместим с системным Bash 3.2.
+- Из `docker-compose.server.yml` удалён устаревший атрибут `version`, чтобы Docker Compose не печатал лишнее предупреждение при server-операциях.
 - Исправлена Docker-сборка `admin-panel`: в builder stage добавлено копирование `ai/`, чтобы TypeScript-билд находил модуль `ai/presetSummary`, импортируемый фронтендом (`../../../ai/presetSummary`).
 - В runtime-образ `admin-panel` теперь копируются все `ai/*.json` единым glob вместо точечного списка: ранее отсутствовал `provider-capability-overrides.json`, из-за чего контейнер падал на старте с `Cannot find module` в `presetAvailability.js`.
 

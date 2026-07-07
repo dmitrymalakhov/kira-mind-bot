@@ -157,6 +157,7 @@ deploy_stack() {
 show_logs() {
     local args=(logs --tail 100)
     local services=()
+    local service_name=""
 
     if [ "$FOLLOW_LOGS" = true ]; then
         args+=(--follow)
@@ -170,15 +171,21 @@ show_logs() {
     fi
 
     if [ "$EXCLUDE_POSTGRES_LOGS" = true ] || [ "$EXCLUDE_QDRANT_LOGS" = true ]; then
-        mapfile -t services < <(compose config --services)
+        while IFS= read -r service_name; do
+            if [ -z "$service_name" ]; then
+                continue
+            fi
 
-        if [ "$EXCLUDE_POSTGRES_LOGS" = true ]; then
-            services=($(printf '%s\n' "${services[@]}" | grep -vx 'postgres' || true))
-        fi
+            if [ "$EXCLUDE_POSTGRES_LOGS" = true ] && [ "$service_name" = "postgres" ]; then
+                continue
+            fi
 
-        if [ "$EXCLUDE_QDRANT_LOGS" = true ]; then
-            services=($(printf '%s\n' "${services[@]}" | grep -vx 'qdrant' || true))
-        fi
+            if [ "$EXCLUDE_QDRANT_LOGS" = true ] && [ "$service_name" = "qdrant" ]; then
+                continue
+            fi
+
+            services+=("$service_name")
+        done < <(compose config --services)
 
         if [ "${#services[@]}" -eq 0 ]; then
             error "Не удалось сформировать список сервисов после исключения логов"

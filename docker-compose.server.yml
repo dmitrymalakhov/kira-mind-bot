@@ -1,4 +1,3 @@
-version: '3.8'
 # Ротация логов: макс. 10 МБ на файл, 3 файла (~30 МБ на сервис)
 x-logging: &default-logging
   driver: json-file
