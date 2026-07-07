@@ -3,6 +3,7 @@
 const AI_USAGE_OPERATIONS = new Set(['chat', 'response', 'embedding', 'transcription', 'unknown']);
 const TOP_BREAKDOWN_LIMIT = 10;
 const RECENT_FAILURE_LIMIT = 50;
+const TRACE_CHAIN_LIMIT = 100;
 const DEFAULT_DAYS = 7;
 const MAX_DAYS = 90;
 
@@ -281,6 +282,100 @@ function normalizeTimeseriesRows(rows) {
   }));
 }
 
+function normalizeTraceAttempt(row) {
+  return {
+    id: row.id,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : new Date(row.createdAt).toISOString(),
+    traceId: row.traceId || null,
+    taskKey: row.taskKey,
+    preset: row.preset,
+    provider: row.provider,
+    model: row.model,
+    operation: row.operation || 'unknown',
+    success: Boolean(row.success),
+    fallbackUsed: Boolean(row.fallbackUsed),
+    attempt: row.attempt == null ? null : toNumber(row.attempt),
+    stage: row.stage || null,
+    errorStatus: row.errorStatus == null ? null : toNumber(row.errorStatus),
+    errorCode: row.errorCode || null,
+    errorType: row.errorType || null,
+    errorCategory: row.errorCategory || null,
+    providerRequestId: row.providerRequestId || null,
+    retryable: row.retryable == null ? null : Boolean(row.retryable),
+    errorMessage: row.errorMessage || '',
+    latencyMs: row.latencyMs == null ? null : toNumber(row.latencyMs),
+  };
+}
+
+function buildTraceChains(rows) {
+  const grouped = new Map();
+
+  for (const row of rows) {
+    const attempt = normalizeTraceAttempt(row);
+    const traceKey = attempt.traceId || `legacy:${attempt.id}`;
+    if (!grouped.has(traceKey)) {
+      grouped.set(traceKey, []);
+    }
+    grouped.get(traceKey).push(attempt);
+  }
+
+  return [...grouped.entries()]
+    .map(([traceKey, attempts]) => {
+      attempts.sort((left, right) => {
+        const leftAttempt = left.attempt ?? Number.MAX_SAFE_INTEGER;
+        const rightAttempt = right.attempt ?? Number.MAX_SAFE_INTEGER;
+        if (leftAttempt !== rightAttempt) return leftAttempt - rightAttempt;
+        return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+      });
+
+      const primaryAttempts = attempts.filter((item) => item.stage === 'primary');
+      const primaryAttempt = primaryAttempts[0] || attempts[0];
+      const primaryResolution = primaryAttempts[primaryAttempts.length - 1] || primaryAttempt;
+      const retryAttempts = attempts.filter((item) => item.stage === 'retry');
+      const fallbackAttempts = attempts.filter((item) => item.stage === 'fallback' || item.fallbackUsed);
+      const fallbackAttempt = fallbackAttempts[fallbackAttempts.length - 1];
+      const finalAttempt = attempts[attempts.length - 1] || primaryAttempt;
+      const outcome = fallbackAttempt && finalAttempt?.success
+        ? 'recovered_fallback'
+        : finalAttempt?.success
+          ? 'success'
+          : 'failed';
+
+      const providerRequestIds = [...new Set(attempts
+        .map((item) => item.providerRequestId)
+        .filter(Boolean))];
+
+      return {
+        traceKey,
+        traceId: primaryAttempt.traceId,
+        createdAt: primaryAttempt.createdAt,
+        taskKey: primaryAttempt.taskKey,
+        preset: primaryAttempt.preset,
+        primaryProvider: primaryAttempt.provider,
+        primaryModel: primaryAttempt.model,
+        primaryStage: primaryResolution.success ? 'success' : 'failed',
+        primaryError: primaryResolution.errorMessage || undefined,
+        primaryErrorStatus: primaryResolution.errorStatus,
+        primaryErrorCategory: primaryResolution.errorCategory,
+        retryCount: retryAttempts.length,
+        retryStage: retryAttempts.length === 0
+          ? 'none'
+          : retryAttempts[retryAttempts.length - 1].success ? 'success' : 'failed',
+        fallbackStage: !fallbackAttempt
+          ? 'none'
+          : fallbackAttempt.success ? 'success' : 'failed',
+        fallbackProvider: fallbackAttempt?.provider,
+        fallbackModel: fallbackAttempt?.model,
+        outcome,
+        totalLatencyMs: attempts.reduce((sum, item) => sum + toNumber(item.latencyMs), 0),
+        providerRequestIds,
+        attempts,
+      };
+    })
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+    .slice(0, TRACE_CHAIN_LIMIT);
+}
+
 async function buildAiUsageSummary({ pool, query = {}, now = new Date() }) {
   const { whereSql, values, filters, bucket } = buildAiUsageFilters(query, now);
   const bucketExpr = bucket === 'hour'
@@ -299,6 +394,7 @@ async function buildAiUsageSummary({ pool, query = {}, now = new Date() }) {
     modelsByCallsRows,
     tasksByTokensRows,
     tasksByCallsRows,
+    traceAttemptsResult,
     recentFailuresResult,
   ] = await Promise.all([
     pool.query(
@@ -345,13 +441,50 @@ async function buildAiUsageSummary({ pool, query = {}, now = new Date() }) {
     queryLeaders(pool, whereSql, values, '"taskKey"', 'calls'),
     pool.query(
       `SELECT
+        id,
         "createdAt",
+        "traceId",
+        "taskKey",
+        preset,
+        provider,
+        model,
+        COALESCE(operation, 'unknown') AS operation,
+        success,
+        COALESCE("fallbackUsed", false) AS "fallbackUsed",
+        attempt,
+        stage,
+        "errorStatus",
+        "errorCode",
+        "errorType",
+        "errorCategory",
+        "providerRequestId",
+        retryable,
+        "errorMessage",
+        "latencyMs"
+      FROM ai_usage_logs
+      WHERE ${whereSql}
+      ORDER BY "createdAt" DESC
+      LIMIT ${TRACE_CHAIN_LIMIT * 6}`,
+      values,
+    ),
+    pool.query(
+      `SELECT
+        "createdAt",
+        "traceId",
+        attempt,
+        stage,
         provider,
         model,
         "taskKey",
         preset,
         COALESCE(operation, 'unknown') AS operation,
         COALESCE("fallbackUsed", false) AS "fallbackUsed",
+        "errorStatus",
+        "errorCode",
+        "errorType",
+        "errorCategory",
+        "providerRequestId",
+        retryable,
         "errorMessage"
       FROM ai_usage_logs
       WHERE ${whereSql} AND success = false
@@ -410,14 +543,24 @@ async function buildAiUsageSummary({ pool, query = {}, now = new Date() }) {
       tasksByTokens: tasksByTokensRows,
       tasksByCalls: tasksByCallsRows,
     },
+    traceChains: buildTraceChains(traceAttemptsResult.rows),
     recentFailures: recentFailuresResult.rows.map((row) => ({
       createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : new Date(row.createdAt).toISOString(),
+      traceId: row.traceId || null,
+      attempt: row.attempt == null ? null : toNumber(row.attempt),
+      stage: row.stage || null,
       provider: row.provider,
       model: row.model,
       taskKey: row.taskKey,
       preset: row.preset,
       operation: row.operation || 'unknown',
       fallbackUsed: Boolean(row.fallbackUsed),
+      errorStatus: row.errorStatus == null ? null : toNumber(row.errorStatus),
+      errorCode: row.errorCode || null,
+      errorType: row.errorType || null,
+      errorCategory: row.errorCategory || null,
+      providerRequestId: row.providerRequestId || null,
+      retryable: row.retryable == null ? null : Boolean(row.retryable),
       errorMessage: row.errorMessage || '',
     })),
   };

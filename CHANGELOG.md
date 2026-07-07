@@ -2,6 +2,12 @@
 
 ## 2026-07-06
 
+- AI preset-ы получили честные названия по реальному LLM-mapping, а матрица выбора очищена от почти дублирующих Gemini-вариантов; админка теперь показывает LLM/service composition, характеристики, diff по задачам и подтверждение перед сменой критичных маршрутов.
+- AI usage logging расширен связанной `traceId`-цепочкой для primary/retry/fallback, классификацией provider errors и отдельным отображением восстановленных Gemini 503 против пользовательских ошибок в админской аналитике.
+- `gemini-full` переведён на настоящий Gemini-only контур, включая `gemini-embedding-2` для embeddings и Gemini Files + Interactions API для транскрибации; `glm-full` переведён на `glm-asr-2512` для transcription и теперь честно оставляет OpenAI только на embeddings.
+- Для true-full preset-ов отключён скрытый cross-provider fallback на OpenAI при runtime-ошибках, а Gemini `webSearchReasoning` через Interactions API теперь передаёт `system_instruction`, `tools` и `generation_config`, чтобы preset не терял поисковые параметры.
+- JSON parse fallback теперь тоже уважает true-full policy без скрытого ухода в GPT/OpenAI, а `embedding` и `transcription` получили тот же single-retry flow и trace-логирование, что и остальные AI-вызовы.
+- Логические JSON-провалы теперь пишутся в `ai_usage_logs` как `invalid_response`, а admin analytics считает outcome по финальному attempt цепочки, так что user-visible failure больше не маскируется transport-success логом.
 - Проактивные подсказки из памяти теперь получают provenance evidence с источником/чатом, временем и открытыми линиями, но без технических `sourceMessageIds` в LLM-prompt, чтобы бот мог объяснять, откуда взял контекст, или отказаться от подсказки при неясном источнике.
 - Инструкция для proactive hints запрещает расплывчатое «помню, ты обмолвился» и просит формулировать по реальным полям evidence без выдуманных имён; форматтер покрыт отдельным TS regression test.
 

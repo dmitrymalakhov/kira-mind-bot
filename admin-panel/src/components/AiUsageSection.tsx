@@ -22,15 +22,18 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import type {
   AiUsageBreakdownRow,
+  AiUsageFailureRecord,
   AiUsageOperation,
   AiUsageQuery,
   AiUsageSummaryResponse,
   AiUsageTimeseriesPoint,
+  AiUsageTraceChain,
 } from '../types';
 import { fetchAiUsageSummary } from '../api';
 
 type PeriodPreset = '1' | '7' | '30' | 'custom';
 type SuccessFilter = 'all' | 'success' | 'failure';
+type QuickFilter = 'all' | 'gemini503' | 'provider-errors' | 'recovered-fallback' | 'user-visible-failures';
 
 interface FilterDraft {
   period: PeriodPreset;
@@ -60,6 +63,14 @@ const OPERATION_LABELS: Record<AiUsageOperation, string> = {
   unknown: 'Unknown',
 };
 
+const QUICK_FILTER_LABELS: Record<QuickFilter, string> = {
+  all: 'Все цепочки',
+  gemini503: 'Gemini 503',
+  'provider-errors': 'Provider errors',
+  'recovered-fallback': 'Recovered by fallback',
+  'user-visible-failures': 'User-visible failures',
+};
+
 function formatNumber(value: number) {
   return new Intl.NumberFormat('ru-RU').format(Math.round(value));
 }
@@ -87,6 +98,12 @@ function formatBucketLabel(point: AiUsageTimeseriesPoint, bucket: 'hour' | 'day'
   return new Date(point.bucketStart).toLocaleString('ru-RU', bucket === 'hour'
     ? { day: '2-digit', month: '2-digit', hour: '2-digit' }
     : { day: '2-digit', month: '2-digit' });
+}
+
+function formatStage(value: 'success' | 'failed' | 'none') {
+  if (value === 'success') return 'success';
+  if (value === 'failed') return 'failed';
+  return '—';
 }
 
 function buildQuery(filters: FilterDraft): AiUsageQuery {
@@ -119,6 +136,27 @@ function validateFilters(filters: FilterDraft): string | null {
   }
 
   return null;
+}
+
+function matchesGemini503(chain: AiUsageTraceChain) {
+  return chain.attempts.some((attempt) => attempt.provider === 'gemini' && attempt.errorStatus === 503);
+}
+
+function matchesFailureQuickFilter(row: AiUsageFailureRecord, quickFilter: QuickFilter) {
+  if (quickFilter === 'all') return true;
+  if (quickFilter === 'gemini503') return row.provider === 'gemini' && row.errorStatus === 503;
+  if (quickFilter === 'provider-errors') return Boolean(row.errorCategory) && row.errorCategory !== 'unknown';
+  return true;
+}
+
+function matchesTraceQuickFilter(row: AiUsageTraceChain, quickFilter: QuickFilter) {
+  if (quickFilter === 'all') return true;
+  if (quickFilter === 'gemini503') return matchesGemini503(row);
+  if (quickFilter === 'provider-errors') {
+    return row.attempts.some((attempt) => Boolean(attempt.errorCategory) && attempt.errorCategory !== 'unknown');
+  }
+  if (quickFilter === 'recovered-fallback') return row.outcome === 'recovered_fallback';
+  return row.outcome === 'failed';
 }
 
 function StatCard({ label, value, caption }: { label: string; value: string; caption?: string }) {
@@ -270,6 +308,7 @@ export function AiUsageSection() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>('all');
 
   const providerOptions = useMemo(() => {
     return (data?.breakdowns.providers ?? [])
@@ -306,6 +345,28 @@ export function AiUsageSection() {
     void load(applied);
   }, [applied]);
 
+  const summary = data;
+  const visibleTraceChains = (summary?.traceChains ?? []).filter((row) => matchesTraceQuickFilter(row, quickFilter));
+  const recoveredTraceIds = useMemo(() => {
+    return new Set(
+      (summary?.traceChains ?? [])
+        .filter((row) => row.outcome === 'recovered_fallback')
+        .map((row) => row.traceId)
+        .filter((traceId): traceId is string => Boolean(traceId))
+    );
+  }, [summary]);
+  const visibleRecentFailures = (summary?.recentFailures ?? []).filter((row) => {
+    if (quickFilter === 'recovered-fallback') {
+      return row.traceId ? recoveredTraceIds.has(row.traceId) : false;
+    }
+    if (quickFilter === 'user-visible-failures') {
+      return row.traceId
+        ? !recoveredTraceIds.has(row.traceId)
+        : matchesFailureQuickFilter(row, quickFilter);
+    }
+    return matchesFailureQuickFilter(row, quickFilter);
+  });
+
   if (loading && !data) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
@@ -313,8 +374,6 @@ export function AiUsageSection() {
       </Box>
     );
   }
-
-  const summary = data;
 
   return (
     <Stack spacing={2.5} sx={{ mt: 3 }}>
@@ -413,6 +472,19 @@ export function AiUsageSection() {
           </Button>
         </Box>
 
+        <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1.25 }}>
+          {(Object.keys(QUICK_FILTER_LABELS) as QuickFilter[]).map((filterKey) => (
+            <Chip
+              key={filterKey}
+              clickable
+              color={quickFilter === filterKey ? 'primary' : 'default'}
+              variant={quickFilter === filterKey ? 'filled' : 'outlined'}
+              label={QUICK_FILTER_LABELS[filterKey]}
+              onClick={() => setQuickFilter(filterKey)}
+            />
+          ))}
+        </Stack>
+
         {draft.period === 'custom' ? (
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(180px, 220px))' }, gap: 1.25, mt: 1.25 }}>
             <TextField
@@ -447,6 +519,13 @@ export function AiUsageSection() {
             <StatCard label="Latency" value={formatLatency(summary.totals.avgLatencyMs)} />
             <StatCard label="Error rate" value={formatPercent(summary.totals.errorRate)} />
             <StatCard label="Usage coverage" value={formatPercent(summary.coverage.usageCoverageRate)} caption={`${formatNumber(summary.coverage.callsWithoutUsage)} без usage`} />
+          </Box>
+
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', xl: 'repeat(4, 1fr)' }, gap: 1.25 }}>
+            <StatCard label="Цепочки" value={formatNumber(summary.traceChains.length)} caption={`видно: ${formatNumber(visibleTraceChains.length)}`} />
+            <StatCard label="Gemini 503" value={formatNumber(summary.traceChains.filter(matchesGemini503).length)} />
+            <StatCard label="Recovered fallback" value={formatNumber(summary.traceChains.filter((row) => row.outcome === 'recovered_fallback').length)} />
+            <StatCard label="User-visible failures" value={formatNumber(summary.traceChains.filter((row) => row.outcome === 'failed').length)} />
           </Box>
 
           <TimeseriesChart summary={summary} />
@@ -487,12 +566,81 @@ export function AiUsageSection() {
           </Box>
 
           <Paper variant="outlined" sx={{ p: 1.5, borderRadius: '20px', bgcolor: 'rgba(15, 23, 42, 0.56)', borderColor: 'rgba(148, 163, 184, 0.18)' }}>
-            <Typography variant="subtitle1" fontWeight={800} sx={{ mb: 1.25 }}>Последние ошибки</Typography>
-            {summary.recentFailures.length ? (
+            <Typography variant="subtitle1" fontWeight={800} sx={{ mb: 1.25 }}>Цепочки primary / retry / fallback</Typography>
+            {visibleTraceChains.length ? (
               <Table size="small">
                 <TableHead>
                   <TableRow>
                     <TableCell>Время</TableCell>
+                    <TableCell>Trace</TableCell>
+                    <TableCell>Задача</TableCell>
+                    <TableCell>Primary</TableCell>
+                    <TableCell>Ошибка</TableCell>
+                    <TableCell>Retry</TableCell>
+                    <TableCell>Fallback</TableCell>
+                    <TableCell>Итог</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {visibleTraceChains.map((row) => (
+                    <TableRow key={row.traceKey}>
+                      <TableCell>{formatDateTime(row.createdAt)}</TableCell>
+                      <TableCell>
+                        <Typography variant="body2">{row.traceId || 'legacy'}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {row.providerRequestIds[0] || 'request id —'}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2">{row.taskKey}</Typography>
+                        <Typography variant="caption" color="text.secondary">{row.preset}</Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2">{row.primaryProvider}</Typography>
+                        <Typography variant="caption" color="text.secondary">{row.primaryModel}</Typography>
+                      </TableCell>
+                      <TableCell sx={{ maxWidth: 260 }}>
+                        <Typography variant="body2">
+                          {row.primaryErrorStatus ? `${row.primaryErrorStatus} · ` : ''}{row.primaryErrorCategory || '—'}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'pre-wrap' }}>
+                          {row.primaryError || 'Без ошибки'}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2">{formatStage(row.retryStage)}</Typography>
+                        <Typography variant="caption" color="text.secondary">count {row.retryCount}</Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2">{formatStage(row.fallbackStage)}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {row.fallbackProvider ? `${row.fallbackProvider} · ${row.fallbackModel}` : '—'}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          size="small"
+                          color={row.outcome === 'failed' ? 'error' : row.outcome === 'recovered_fallback' ? 'warning' : 'success'}
+                          label={`${row.outcome} · ${formatLatency(row.totalLatencyMs)}`}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <Typography variant="body2" color="text.secondary">Под выбранный быстрый фильтр цепочек нет</Typography>
+            )}
+          </Paper>
+
+          <Paper variant="outlined" sx={{ p: 1.5, borderRadius: '20px', bgcolor: 'rgba(15, 23, 42, 0.56)', borderColor: 'rgba(148, 163, 184, 0.18)' }}>
+            <Typography variant="subtitle1" fontWeight={800} sx={{ mb: 1.25 }}>Последние ошибки</Typography>
+            {visibleRecentFailures.length ? (
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Время</TableCell>
+                    <TableCell>Trace / Stage</TableCell>
                     <TableCell>Provider / Model</TableCell>
                     <TableCell>Task</TableCell>
                     <TableCell>Operation</TableCell>
@@ -500,9 +648,15 @@ export function AiUsageSection() {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {summary.recentFailures.map((row) => (
-                    <TableRow key={`${row.createdAt}-${row.model}-${row.taskKey}`}>
+                  {visibleRecentFailures.map((row) => (
+                    <TableRow key={`${row.createdAt}-${row.model}-${row.taskKey}-${row.traceId || 'legacy'}`}>
                       <TableCell>{formatDateTime(row.createdAt)}</TableCell>
+                      <TableCell>
+                        <Typography variant="body2">{row.traceId || 'legacy'}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {(row.stage || 'legacy')} · attempt {row.attempt ?? '—'}
+                        </Typography>
+                      </TableCell>
                       <TableCell>
                         <Typography variant="body2">{row.provider}</Typography>
                         <Typography variant="caption" color="text.secondary">{row.model}</Typography>
@@ -522,13 +676,16 @@ export function AiUsageSection() {
                         <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
                           {row.errorMessage || 'Без текста ошибки'}
                         </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                          {row.errorStatus ? `status ${row.errorStatus} · ` : ''}{row.errorCategory || 'unknown'}{row.providerRequestId ? ` · request ${row.providerRequestId}` : ''}
+                        </Typography>
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             ) : (
-              <Typography variant="body2" color="text.secondary">Ошибок за выбранный период нет</Typography>
+              <Typography variant="body2" color="text.secondary">Ошибок под выбранный фильтр нет</Typography>
             )}
           </Paper>
         </>
