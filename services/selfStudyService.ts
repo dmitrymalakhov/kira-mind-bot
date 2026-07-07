@@ -46,8 +46,14 @@ export interface RunSelfStudyOptions {
   memoryContext?: string;
 }
 
-function compactList(values: string[] | undefined, limit: number): string[] {
-  return (values ?? [])
+function compactList(values: unknown, limit: number): string[] {
+  const source = Array.isArray(values)
+    ? values
+    : typeof values === "string"
+      ? [values]
+      : [];
+
+  return source
     .map((value) => String(value).trim())
     .filter(Boolean)
     .slice(0, limit);

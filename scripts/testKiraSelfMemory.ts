@@ -102,7 +102,7 @@ async function main(): Promise<void> {
             source: "manual",
         });
 
-        const state = await getKiraSelfMemoryState();
+        let state = await getKiraSelfMemoryState();
         const events = await getRecentKiraSelfEvents(10);
         const raw = await fs.readFile(memoryPath, "utf-8");
         JSON.parse(raw);
@@ -115,6 +115,64 @@ async function main(): Promise<void> {
         assert.ok(state.recentTopics.includes("parallel-two"));
         assert.ok(state.lifeArcs.some((arc) => arc.title === "ветка один"));
         assert.ok(state.lifeArcs.some((arc) => arc.title === "ветка два"));
+
+        const previousVoicePatterns = [...state.personality.voicePatterns];
+        const previousConversationImprints = [...state.personality.conversationImprints];
+        const previousActiveArcs = [...state.personality.activeArcs];
+        const previousStableFacts = [...state.biography.stableFacts];
+        const previousOpenPastQuestions = [...state.biography.openPastQuestions];
+        const previousTimelineTitles = state.biography.timeline.map((chapter) => chapter.title);
+        const previousRecentTopics = [...state.recentTopics];
+
+        await evolveKiraSelfState({
+            mood: "спокойное",
+            thought: "проверяю мягкую деградацию списков",
+            personality: {
+                voicePatterns: "спокойная прямота" as any,
+                conversationImprints: { broken: true } as any,
+                activeArcs: true as any,
+            },
+            biography: {
+                timeline: { broken: true } as any,
+                stableFacts: { broken: true } as any,
+                openPastQuestions: { broken: true } as any,
+            },
+            topics: 42 as any,
+            event: {
+                description: "Проверка, что нестроковые скаляры отбрасываются.",
+                topics: false as any,
+                arc: "ветка без мусора",
+                source: "conversation",
+            },
+        } as any);
+
+        state = await getKiraSelfMemoryState();
+        assert.ok(state.personality.voicePatterns.includes("спокойная прямота"));
+        assert.deepEqual(state.personality.conversationImprints, previousConversationImprints);
+        assert.deepEqual(state.personality.activeArcs, previousActiveArcs);
+        assert.deepEqual(state.biography.stableFacts, previousStableFacts);
+        assert.deepEqual(state.biography.openPastQuestions, previousOpenPastQuestions);
+        assert.deepEqual(state.biography.timeline.map((chapter) => chapter.title), previousTimelineTitles);
+        assert.deepEqual(state.recentTopics, previousRecentTopics);
+        assert.ok(!state.recentTopics.includes("42"));
+        assert.ok(!state.recentTopics.includes("false"));
+
+        await evolveKiraSelfState({
+            biography: {
+                timeline: [{
+                    title: "Новая осторожная глава",
+                    summary: "Небольшое уточнение биографии без падения.",
+                    lessons: "один точный урок" as any,
+                }],
+            },
+        } as any);
+
+        state = await getKiraSelfMemoryState();
+        const tolerantChapter = state.biography.timeline.find((chapter) => chapter.title === "Новая осторожная глава");
+        assert.ok(tolerantChapter);
+        assert.deepEqual(tolerantChapter?.lessons, ["один точный урок"]);
+        assert.ok(previousVoicePatterns.every((pattern) => state.personality.voicePatterns.includes(pattern)));
+
         assert.ok(events.some((event) => event.description.includes("архивные заметки")));
         assert.ok(events.some((event) => event.description.includes("цифровые архивы музея")));
         assert.ok(!events.some((event) => event.description.includes("сны данных")));
