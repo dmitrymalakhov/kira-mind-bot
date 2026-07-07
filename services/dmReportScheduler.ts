@@ -4,6 +4,7 @@ import { BotContext } from "../types";
 import { MessageStore, StoredMessage } from "../stores/MessageStore";
 import { getProactiveChatId } from "../utils/allowedUserChatStore";
 import { getActiveBotProfile } from "../utils/botIdentity";
+import { esc, heading, details, list, RichBlock, sendStructured } from "../utils/richMessage";
 
 const REPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -70,7 +71,7 @@ function cleanupReportedMessageIds(now: Date): void {
   }
 }
 
-function formatDmReport(messages: StoredMessage[], now: Date): string {
+function buildDmReportBlocks(messages: StoredMessage[], now: Date): RichBlock[] {
   const groupedBySender = new Map<string, StoredMessage[]>();
 
   messages.forEach((message) => {
@@ -88,27 +89,24 @@ function formatDmReport(messages: StoredMessage[], now: Date): string {
     return aDate - bDate;
   });
 
-  const lines: string[] = ["📬 Новые личные сообщения:", ""];
+  const blocks: RichBlock[] = [heading("📬 Новые личные сообщения", 3)];
 
-  sortedGroups.forEach((senderMessages, index) => {
+  sortedGroups.forEach((senderMessages) => {
     const sortedByDate = [...senderMessages].sort((a, b) => a.date.getTime() - b.date.getTime());
     const sender = sortedByDate[0];
-    const username = sender.senderUsername ? ` (@${sender.senderUsername})` : "";
+    const username = sender.senderUsername ? ` (@${esc(sender.senderUsername)})` : "";
+    const summary = `${esc(sender.senderName)}${username} · ${sortedByDate.length}`;
 
-    lines.push(`${sender.senderName}${username}:`);
-
-    sortedByDate.forEach((message) => {
-      const timeLabel = formatMessageTime(message.date, now);
-      const text = truncateMessageText(message.text || "[Без текста]");
-      lines.push(`• [${timeLabel}] ${text}`);
+    const items = sortedByDate.map((message) => {
+      const timeLabel = esc(formatMessageTime(message.date, now));
+      const text = esc(truncateMessageText(message.text || "[Без текста]"));
+      return `<b>${timeLabel}</b> — ${text}`;
     });
 
-    if (index < sortedGroups.length - 1) {
-      lines.push("");
-    }
+    blocks.push(details(summary, [list(items)]));
   });
 
-  return lines.join("\n");
+  return blocks;
 }
 
 async function runCycle(bot: Bot<BotContext>): Promise<void> {
@@ -138,9 +136,9 @@ async function runCycle(bot: Bot<BotContext>): Promise<void> {
     }
 
     const chatId = await getProactiveChatId();
-    const reportText = formatDmReport(newMessages, now);
+    const reportBlocks = buildDmReportBlocks(newMessages, now);
 
-    await bot.api.sendMessage(chatId, reportText);
+    await sendStructured(bot.api as any, chatId, reportBlocks);
 
     newMessages.forEach((message) => {
       reportedMessageIds.add(message.id);

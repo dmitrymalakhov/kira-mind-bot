@@ -2,6 +2,12 @@
 
 ## 2026-07-07
 
+- Структурные и системные сообщения бота переведены на rich formatting (Bot API 10.1 `sendRichMessage` / `editMessageText({rich_message}`) с автоматическим фолбэком на HTML): утренний дайджест, DM-report, Inbox Guardian, уведомления об важных сообщениях в группах, рефлексия, напоминания по итогам переговоров, `/chats`, `/contacts`, `/memory_history`, `/memory_reflection_cleanup`, карточки/список/пикер напоминаний и меню групп чатов теперь используют таблицы, заголовки, сворачиваемые секции и чек-листы.
+- Добавлен общий helper-слой `utils/richMessage.ts` (DSL блоков, экранирование пользовательских данных, рендер rich-HTML и fallback-HTML, `sendStructured`/`editStructured`/`editStructuredCtx` с фолбэком и кешем несовместимости); аварийный рубильник — `RICH_MESSAGES_ENABLED` (по умолчанию `true`).
+- Устранён класс багов с поломкой markdown на спецсимволах: имена контактов, тексты напоминаний, названия чатов и факты памяти теперь экранируются во всех структурных сообщениях.
+- `grammy` обновлена до `^1.44.0`, `@grammyjs/types` до `3.28.0` для доступа к типам `InputRichMessage` и методам Bot API 10.1.
+- Свободные ответы LLM в диалоге намеренно оставлены plain text — бот сохраняет «человеческий» стиль общения.
+- Smoke-тесты rich-форматирования добавлены в `test:ts:interaction` (`testRichMessage`): проверка рендера всех блоков, экранирования, эмуляции таблиц в fallback, разбиения длинных сообщений и фолбэка при ошибке API.
 - `make logs-no-db` снова работает на macOS: `server-deploy.sh` больше не зависит от `mapfile`, поэтому просмотр логов без `postgres` и `qdrant` совместим с системным Bash 3.2.
 - Из `docker-compose.server.yml` удалён устаревший атрибут `version`, чтобы Docker Compose не печатал лишнее предупреждение при server-операциях.
 - Исправлена Docker-сборка `admin-panel`: в builder stage добавлено копирование `ai/`, чтобы TypeScript-билд находил модуль `ai/presetSummary`, импортируемый фронтендом (`../../../ai/presetSummary`).

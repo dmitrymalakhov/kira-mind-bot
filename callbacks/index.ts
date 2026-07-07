@@ -21,6 +21,7 @@ import { scheduleNegotiationAgreementReminders } from "../agents/negotiationAgre
 import { initTelegramClient, sendMessage as sendTelegramMessage } from "../services/telegram";
 import { getMessagesSummary, handleChatAnalysisPeriodCallback, handleStudyChatPeriodCallback } from "../agents/readMessagesAgent";
 import { sendMessage } from "../utils";
+import { editStructured } from "../utils/richMessage";
 import type { StudyChatPeriod } from "../utils/studyChatFlow";
 import { handleContactMemoryCallback } from "../utils/contactMemory";
 import { handleContactMemoryLookupCallback } from "../utils/contactMemoryLookup";
@@ -495,20 +496,22 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         );
                     } else if (chats.length === 1) {
                         const active = ReminderRegistry.getInstance().getActiveByChatId(chats[0].chatId);
-                        const { text, keyboard } = buildReminderCard(active, 0, chats.length > 1);
-                        await ctx.api.editMessageText(
+                        const { blocks, keyboard } = buildReminderCard(active, 0, chats.length > 1);
+                        await editStructured(
+                            ctx.api as any,
                             ctx.callbackQuery.message.chat.id,
                             ctx.callbackQuery.message.message_id,
-                            text,
-                            { reply_markup: keyboard }
+                            blocks,
+                            { replyMarkup: keyboard }
                         );
                     } else {
-                        const { text, keyboard } = buildChatPicker(chats);
-                        await ctx.api.editMessageText(
+                        const { blocks, keyboard } = buildChatPicker(chats);
+                        await editStructured(
+                            ctx.api as any,
                             ctx.callbackQuery.message.chat.id,
                             ctx.callbackQuery.message.message_id,
-                            text,
-                            { reply_markup: keyboard }
+                            blocks,
+                            { replyMarkup: keyboard }
                         );
                     }
                 }
@@ -535,12 +538,13 @@ export function registerCallback(bot: Bot<BotContext>): void {
                             { reply_markup: showBack ? new InlineKeyboard().text('↩️ К чатам', 'reminder_chat_back') : new InlineKeyboard() }
                         );
                     } else {
-                        const { text, keyboard } = buildReminderCard(active, 0, showBack);
-                        await ctx.api.editMessageText(
+                        const { blocks, keyboard } = buildReminderCard(active, 0, showBack);
+                        await editStructured(
+                            ctx.api as any,
                             ctx.callbackQuery.message.chat.id,
                             ctx.callbackQuery.message.message_id,
-                            text,
-                            { reply_markup: keyboard }
+                            blocks,
+                            { replyMarkup: keyboard }
                         );
                     }
                 }
@@ -566,12 +570,13 @@ export function registerCallback(bot: Bot<BotContext>): void {
                             { reply_markup: new InlineKeyboard() }
                         );
                     } else {
-                        const { text, keyboard } = buildRemindersList(active, returnIndex);
-                        await ctx.api.editMessageText(
+                        const { blocks, keyboard } = buildRemindersList(active, returnIndex);
+                        await editStructured(
+                            ctx.api as any,
                             ctx.callbackQuery.message.chat.id,
                             ctx.callbackQuery.message.message_id,
-                            text,
-                            { reply_markup: keyboard }
+                            blocks,
+                            { replyMarkup: keyboard }
                         );
                     }
                 }
@@ -596,14 +601,15 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     return;
                 }
 
-                const { text, keyboard } = buildReminderCard(active, safeIdx, showBack);
+                const { blocks, keyboard } = buildReminderCard(active, safeIdx, showBack);
                 await ctx.answerCallbackQuery();
                 if (ctx.callbackQuery.message?.message_id) {
-                    await ctx.api.editMessageText(
+                    await editStructured(
+                        ctx.api as any,
                         ctx.callbackQuery.message.chat.id,
                         ctx.callbackQuery.message.message_id,
-                        text,
-                        { reply_markup: keyboard }
+                        blocks,
+                        { replyMarkup: keyboard }
                     );
                 }
                 return;
@@ -735,8 +741,8 @@ export function registerCallback(bot: Bot<BotContext>): void {
                             );
                         } else {
                             const nextIndex = getCardIndexAfterRemoval(activeBeforeCancel, remaining, reminderId);
-                            const { text, keyboard } = buildReminderCard(remaining, nextIndex, showBack);
-                            await ctx.api.editMessageText(cid, mid, text, { reply_markup: keyboard });
+                            const { blocks, keyboard } = buildReminderCard(remaining, nextIndex, showBack);
+                            await editStructured(ctx.api as any, cid, mid, blocks, { replyMarkup: keyboard });
                         }
                     } else {
                         // Кнопка нажата на самом уведомлении — заменяем его текстом об отмене
@@ -910,8 +916,8 @@ export function registerCallback(bot: Bot<BotContext>): void {
                             );
                         } else {
                             const nextIndex = getCardIndexAfterRemoval(activeBeforeComplete, remaining, reminderId);
-                            const { text, keyboard } = buildReminderCard(remaining, nextIndex, showBack);
-                            await ctx.api.editMessageText(cid, callbackMid, text, { reply_markup: keyboard });
+                            const { blocks, keyboard } = buildReminderCard(remaining, nextIndex, showBack);
+                            await editStructured(ctx.api as any, cid, callbackMid, blocks, { replyMarkup: keyboard });
                         }
                     }
                 } else if (action === "postpone") {
@@ -986,12 +992,13 @@ export function registerCallback(bot: Bot<BotContext>): void {
                             );
                         } else {
                             const idx = Math.max(0, active.findIndex(r => r.id === reminderId));
-                            const { text, keyboard } = buildReminderCard(active, idx, showBackOnBack);
-                            await ctx.api.editMessageText(
+                            const { blocks, keyboard } = buildReminderCard(active, idx, showBackOnBack);
+                            await editStructured(
+                                ctx.api as any,
                                 ctx.callbackQuery.message.chat.id,
                                 ctx.callbackQuery.message.message_id,
-                                text,
-                                { reply_markup: keyboard }
+                                blocks,
+                                { replyMarkup: keyboard }
                             );
                         }
                     }

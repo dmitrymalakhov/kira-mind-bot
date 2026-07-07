@@ -8,6 +8,7 @@ import { parseLLMJson } from "../utils";
 import { getProactiveChatId } from "../utils/allowedUserChatStore";
 import { getActiveBotProfile } from "../utils/botIdentity";
 import { getSetting, setSetting } from "./botSettingsService";
+import { esc, heading, paragraph, blockquote, footer, RichBlock, sendStructured, checklist } from "../utils/richMessage";
 
 const CHECK_INTERVAL_MS = 60_000;
 const MAX_THREADS_PER_RUN = 30;
@@ -291,31 +292,32 @@ async function analyzeThreads(threads: InboxThreadCandidate[]): Promise<InboxGua
     }
 }
 
-function formatGuardianReport(items: InboxGuardianItem[]): string {
+function buildGuardianReportBlocks(items: InboxGuardianItem[]): RichBlock[] {
     const urgencyLabel: Record<InboxGuardianItem["urgency"], string> = {
-        high: "срочно",
+        high: "🔴 срочно",
         normal: "обычно",
         low: "не срочно",
     };
 
-    const lines = [
-        "🛡️ Вечерний Inbox Guardian",
-        "",
-        `За день вижу ${items.length} незакрыт${items.length === 1 ? "ый хвост" : items.length < 5 ? "ых хвоста" : "ых хвостов"} по сообщениям:`,
-        "",
+    const tailsWord = items.length === 1 ? "незакрытый хвост" : items.length < 5 ? "незакрытых хвоста" : "незакрытых хвостов";
+
+    const blocks: RichBlock[] = [
+        heading("🛡️ Вечерний Inbox Guardian", 3),
+        paragraph(`За день вижу <b>${items.length}</b> ${tailsWord} по сообщениям:`),
     ];
 
-    items.forEach((item, index) => {
-        const username = item.senderUsername ? ` (@${item.senderUsername})` : "";
-        lines.push(`${index + 1}. ${item.senderName}${username} · ${formatLocalDateTime(item.lastIncomingAt)} · ${urgencyLabel[item.urgency]}`);
-        lines.push(`Что висит: ${item.whyOpen}`);
-        if (item.suggestedAction) {
-            lines.push(`Что сделать: ${item.suggestedAction}`);
-        }
-        if (index < items.length - 1) lines.push("");
+    const checkItems = items.map((item) => {
+        const username = item.senderUsername ? ` (@${esc(item.senderUsername)})` : "";
+        const header = `${esc(item.senderName)}${username} · ${esc(formatLocalDateTime(item.lastIncomingAt))} · ${urgencyLabel[item.urgency]}`;
+        const whyOpen = `Что висит: ${esc(item.whyOpen)}`;
+        const action = item.suggestedAction ? `\nЧто сделать: ${esc(item.suggestedAction)}` : "";
+        // checklist-пункт с чекбоксом: пользователь может мысленно отметить сделанное.
+        return { text: `<b>${header}</b>\n${blockquote(whyOpen + action)}` };
     });
+    blocks.push(checklist(checkItems));
+    blocks.push(footer("Отметь чекбоксы у того, что уже закрыл — визуально удобнее."));
 
-    return lines.join("\n");
+    return blocks;
 }
 
 async function runGuardian(bot: Bot<BotContext>): Promise<void> {
@@ -333,7 +335,8 @@ async function runGuardian(bot: Bot<BotContext>): Promise<void> {
 
         if (items.length > 0) {
             const chatId = await getProactiveChatId();
-            await bot.api.sendMessage(chatId, formatGuardianReport(items));
+            const blocks = buildGuardianReportBlocks(items);
+            await sendStructured(bot.api as any, chatId, blocks);
             console.info(`[inbox-guardian] sent ${items.length} unresolved item(s)`);
         } else {
             console.info("[inbox-guardian] no unresolved inbox items");

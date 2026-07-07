@@ -141,6 +141,8 @@ interface AssistantConfig {
   morningDigestEnabled: boolean;
   /** Час отправки утреннего дайджеста (0–23, по часовому поясу сервера) */
   morningDigestHour: number;
+  /** Structured/system messages use rich formatting (tables, headings, collapsible sections) via Bot API 10.1 with HTML fallback */
+  richMessagesEnabled: boolean;
 }
 
 export interface Config extends AssistantConfig {
@@ -282,6 +284,7 @@ function assistants(activeAssistant: string): AssistantConfig {
       groupReplyToBotEnabled: toBoolean(process.env.GROUP_REPLY_TO_BOT_ENABLED, false),
       morningDigestEnabled: toBoolean(process.env.MORNING_DIGEST_ENABLED, true),
       morningDigestHour: toNumber(process.env.MORNING_DIGEST_HOUR, 9),
+      richMessagesEnabled: toBoolean(process.env.RICH_MESSAGES_ENABLED, true),
     }
   }
 

@@ -20,6 +20,11 @@
   - правила идентичности контакта, tag-based matching и проверки subject-а не дублируются по модулям;
   - retrieval, proactive hints и memory-gap должны использовать одни и те же helper-ы contact-memory.
   - `contact_username` считается сильным identity key наравне с `contact_id`, но не заменяет backward-compatible теги `contact_name/contact_alias/contact_key`.
+- Форматирование Telegram-сообщений разделено на два слоя:
+  - структурные/системные сообщения (дайджесты, списки, карточки, сводные отчёты, напоминания, меню) идут через единый DSL в `utils/richMessage.ts` (`sendStructured`/`editStructured`/`editStructuredCtx`), который рендерит rich-HTML для Bot API 10.1 (`sendRichMessage` / `editMessageText({rich_message})`) с автоматическим фолбэком на `sendMessage({parse_mode:"HTML"})`;
+  - свободные ответы LLM в диалоге остаются plain text без parse_mode — бот намеренно сохраняет «человеческий» стиль, и форматирование туда не добавляется;
+  - экранирование пользовательских данных (имена, тексты напоминаний, названия чатов, факты памяти) обязательно через `esc()`/`escAttr()` перед вставкой в блоки;
+  - аварийный рубильник rich-форматирования — `RICH_MESSAGES_ENABLED` (по умолчанию `true`).
 
 ## Что куда документировать
 - `README.md`: пользовательские сценарии, настройка, эксплуатация и высокоуровневое описание возможностей. Не дублировать туда внутренние implementation details.

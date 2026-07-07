@@ -28,6 +28,7 @@ const SUITES = {
         "testGroupChatContext.ts",
         "testIncomingTelegramQueue.ts",
         "testChatPromptWatchers.ts",
+        "testRichMessage.ts",
     ],
     all: [
         "testAiModelPresets.ts",
