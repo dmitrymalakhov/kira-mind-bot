@@ -43,3 +43,6 @@
 - TypeScript smoke/regression tests в `scripts/test*.ts` запускаются через общие раннеры:
   - `npm run test:ts -- <file>` для одиночного теста;
   - `npm run test:ts:ai`, `test:ts:memory`, `test:ts:interaction`, `test:ts:all` для групповых прогонов.
+- Production stage в `admin-panel/Dockerfile` должен автоматически забирать корневые runtime-модули админки через `COPY admin-panel/*.js ./`, а не через ручной список файлов:
+  - если в корне `admin-panel/` появляется новый server-side `.js`-модуль, он должен попадать в runtime-образ без отдельной правки Dockerfile;
+  - для не-JS runtime-артефактов (`.json`, `src/*`, общие файлы из `ai/` и `utils/`) всё ещё нужно явно проверять копирование в production stage.

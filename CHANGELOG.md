@@ -3,6 +3,7 @@
 ## 2026-07-07
 
 - DM-отчёт о новых личных сообщениях больше не прячет диалоги в сворачиваемые секции: теперь это один плоский дайджест, где по каждому человеку сразу видны имя, мета и все новые сообщения в хронологическом порядке.
+- Исправлен старт `admin-panel` в Docker runtime-образе: в production stage теперь копируется `memoryEmbeddingProfileRegistry.js`, без которого контейнер падал с `Cannot find module './memoryEmbeddingProfileRegistry'` сразу после запуска.
 - Memory embeddings вынесены в отдельный стабильный profile `stable-1536` (`openai:text-embedding-3-small`, `1536`, `Cosine`), который больше не зависит от `AI_MODEL_PRESET`: переключение conversational preset не должно менять memory write/read path, смешивать разные embedding-модели в одной коллекции или ломать Qdrant по размерности.
 - Runtime и admin-panel теперь используют один и тот же memory embedding profile и валидируют совместимость существующих Qdrant-коллекций до записи; в админке добаван read-only статус memory profile и совместимости памяти с текущей схемой Qdrant.
 - Gemini embeddings для runtime memory-path теперь принудительно запрашиваются в размерности `1536` через `output_dimensionality`, чтобы `gemini-full` и будущие Gemini-based embedding presets оставались совместимы с текущими Qdrant-коллекциями и не падали на `expected dim: 1536, got 3072`.
