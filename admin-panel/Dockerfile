@@ -13,12 +13,8 @@ WORKDIR /app/admin-panel
 COPY admin-panel/package.json admin-panel/package-lock.json* ./
 RUN npm install --omit=dev
 COPY --from=builder /workspace/admin-panel/dist ./dist
-COPY admin-panel/server.js ./server.js
-COPY admin-panel/monitoring.js ./monitoring.js
-COPY admin-panel/aiUsageAnalytics.js ./aiUsageAnalytics.js
-COPY admin-panel/presetAvailability.js ./presetAvailability.js
+COPY admin-panel/*.js ./
 COPY admin-panel/runtime-health-metadata.json ./runtime-health-metadata.json
-COPY admin-panel/aiPresetRegistry.js ./aiPresetRegistry.js
 RUN mkdir -p ./src /app/ai /app/utils
 COPY admin-panel/src/ai-model-presets.json ./src/ai-model-presets.json
 COPY admin-panel/src/timezones.json ./src/timezones.json
