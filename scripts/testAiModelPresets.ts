@@ -2,6 +2,7 @@ import assert from 'assert';
 import { aiPresets, isTrueFullAiPreset, parseAiPresetName } from '../ai/modelPresets';
 import { getFallbackModel } from '../ai/fallbackModels';
 import { resolveModelForTask } from '../ai/modelResolver';
+import { resolveMemoryEmbeddingConfig } from '../ai/memoryEmbeddingResolver';
 import { buildPresetTitle, formatGenerativeUsageSummary, formatServiceSummary, getGenerativeProviderCounts } from '../ai/presetSummary';
 
 function withPreset<T>(preset: string, fn: () => T): T {
@@ -80,6 +81,36 @@ withPreset('gemini-full', () => {
     assert.deepStrictEqual(resolveModelForTask('transcription'), {
         provider: 'gemini',
         model: 'gemini-3.5-flash',
+    });
+});
+
+withPreset('gpt-balanced', () => {
+    assert.deepStrictEqual(resolveMemoryEmbeddingConfig(), {
+        profileName: 'stable-1536',
+        config: {
+            name: 'stable-1536',
+            title: 'Stable 1536',
+            description: 'Стабильный memory-profile, не зависящий от conversational AI preset.',
+            provider: 'openai',
+            model: 'text-embedding-3-small',
+            outputDimension: 1536,
+            distance: 'Cosine',
+        },
+    });
+});
+
+withPreset('gemini-full', () => {
+    assert.deepStrictEqual(resolveMemoryEmbeddingConfig(), {
+        profileName: 'stable-1536',
+        config: {
+            name: 'stable-1536',
+            title: 'Stable 1536',
+            description: 'Стабильный memory-profile, не зависящий от conversational AI preset.',
+            provider: 'openai',
+            model: 'text-embedding-3-small',
+            outputDimension: 1536,
+            distance: 'Cosine',
+        },
     });
 });
 

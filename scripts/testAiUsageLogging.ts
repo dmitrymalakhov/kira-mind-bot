@@ -235,7 +235,8 @@ async function main() {
       await createEmbeddingForTask('vectorize with gemini');
     });
     assert.strictEqual(loggedPayloads.at(-1)?.operation, 'embedding');
-    assert.strictEqual(loggedPayloads.at(-1)?.inputTokens, 7);
+    assert.strictEqual(loggedPayloads.at(-1)?.inputTokens, 6);
+    assert.strictEqual(loggedPayloads.at(-1)?.preset, 'memory:stable-1536');
     assert.strictEqual(loggedPayloads.at(-1)?.success, true);
 
     loggedPayloads.length = 0;
@@ -244,6 +245,7 @@ async function main() {
     });
     assert.strictEqual(loggedPayloads.at(-1)?.operation, 'embedding');
     assert.strictEqual(loggedPayloads.at(-1)?.inputTokens, 6);
+    assert.strictEqual(loggedPayloads.at(-1)?.preset, 'memory:stable-1536');
     assert.strictEqual(loggedPayloads.at(-1)?.success, true);
 
     const tempAudioPath = path.join(process.cwd(), '.tmp-test-ai-usage.ogg');
@@ -515,16 +517,17 @@ async function main() {
       },
     };
     loggedPayloads.length = 0;
-    await withPreset('glm-balanced', async () => {
-      await createEmbeddingForTask('retry embedding');
+    await assert.rejects(async () => {
+      await withPreset('glm-balanced', async () => {
+        await createEmbeddingForTask('retry embedding');
+      });
     });
-    assert.strictEqual(embeddingAttempts, 3);
+    assert.strictEqual(embeddingAttempts, 2);
     assert.deepStrictEqual(
       loggedPayloads.map((item) => ({ stage: item.stage, attempt: item.attempt, success: item.success })),
       [
         { stage: 'primary', attempt: 1, success: false },
         { stage: 'retry', attempt: 2, success: false },
-        { stage: 'fallback', attempt: 3, success: true },
       ],
     );
 

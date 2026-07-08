@@ -87,6 +87,48 @@ function ActivePresetStatus({ data }: { data: AiPresetResponse | null }) {
   );
 }
 
+function MemoryProfileStatus({ data }: { data: AiPresetResponse | null }) {
+  if (!data) return null;
+
+  const profile = data.memoryEmbeddingProfile;
+  const compatibilitySeverity = profile.compatibility.status === 'mismatch'
+    ? 'error'
+    : profile.compatibility.status === 'unavailable'
+      ? 'warning'
+    : profile.providerKeyConfigured
+      ? 'info'
+      : 'warning';
+
+  return (
+    <Alert
+      severity={compatibilitySeverity}
+      variant="outlined"
+      sx={{
+        alignItems: 'flex-start',
+        '& .MuiAlert-message': { width: '100%' },
+      }}
+    >
+      <Stack spacing={0.75}>
+        <Typography variant="body2">
+          Память использует отдельный profile: <b>{profile.title}</b> ({profile.provider}:{profile.model}, {profile.outputDimension}d, {profile.distance})
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          Переключение AI preset влияет на генерацию, но не меняет memory embeddings и не должно ломать Qdrant-коллекции.
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          {profile.activeSourceSummary}
+        </Typography>
+        <Typography variant="body2" color={profile.providerKeyConfigured ? 'text.secondary' : 'warning.main'}>
+          {profile.providerAvailabilitySummary}
+        </Typography>
+        <Typography variant="body2" color={profile.compatibility.status === 'mismatch' ? 'error.main' : 'text.secondary'}>
+          {profile.compatibility.summary}
+        </Typography>
+      </Stack>
+    </Alert>
+  );
+}
+
 function compareModels(left: AiModelRef, right: AiModelRef): boolean {
   return left.provider === right.provider && left.model === right.model;
 }
@@ -195,6 +237,7 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
           <Stack spacing={2}>
             <Box sx={{ p: 2, border: '1px solid', borderColor: 'primary.dark', borderRadius: 1.5, bgcolor: 'rgba(37, 99, 235, 0.08)' }}>
               <Stack spacing={1.5}>
+                <MemoryProfileStatus data={aiPresetData} />
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', sm: 'center' }}>
                   <TextField
                     select

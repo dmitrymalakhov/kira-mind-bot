@@ -622,17 +622,12 @@ async function main() {
             await createEmbeddingForTask('vectorize me with gemini');
         });
         assert.deepStrictEqual(lastCall(), {
-            provider: 'gemini',
-            method: 'embeddings.embedContent',
+            provider: 'openai',
+            method: 'embeddings.create',
             body: {
-                url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent',
-                method: 'POST',
-                body: {
-                    model: 'models/gemini-embedding-2',
-                    content: {
-                        parts: [{ text: 'vectorize me with gemini' }],
-                    },
-                },
+                model: 'text-embedding-3-small',
+                input: 'vectorize me with gemini',
+                dimensions: 1536,
             },
         });
 
@@ -646,6 +641,7 @@ async function main() {
             body: {
                 model: 'text-embedding-3-small',
                 input: 'vectorize me',
+                dimensions: 1536,
             },
         });
 

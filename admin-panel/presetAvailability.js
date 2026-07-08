@@ -3,6 +3,7 @@
 const { providers: AI_PROVIDER_REGISTRY } = require('../ai/provider-registry.json');
 const PROVIDER_CAPABILITY_OVERRIDES = require('../ai/provider-capability-overrides.json');
 const FALLBACK_MODELS = require('../ai/fallback-models.json');
+const { getMemoryEmbeddingProfile } = require('./memoryEmbeddingProfileRegistry');
 
 function getProviderDescriptor(provider) {
   return AI_PROVIDER_REGISTRY[provider] || null;
@@ -73,6 +74,10 @@ function resolveTaskExecutionProvider(taskKey, modelRef) {
 }
 
 function getPresetAvailability(preset, vars) {
+  return getPresetAvailabilityWithRequirements(preset, vars, []);
+}
+
+function getPresetAvailabilityWithRequirements(preset, vars, requiredProviders = []) {
   const missingProviders = new Set();
   const invalidTasks = [];
 
@@ -91,6 +96,17 @@ function getPresetAvailability(preset, vars) {
 
     if (!hasConfiguredValue(vars, descriptor.envKey)) {
       missingProviders.add(executionProvider.provider);
+    }
+  }
+
+  for (const provider of requiredProviders) {
+    const descriptor = getProviderDescriptor(provider);
+    if (!descriptor) {
+      invalidTasks.push(`memory: неизвестный provider ${provider}`);
+      continue;
+    }
+    if (!hasConfiguredValue(vars, descriptor.envKey)) {
+      missingProviders.add(provider);
     }
   }
 
@@ -116,9 +132,22 @@ function getPresetAvailability(preset, vars) {
   };
 }
 
+function getMemoryProfileRequiredProviders(memoryProfile) {
+  if (!memoryProfile?.provider) return [];
+  return [memoryProfile.provider];
+}
+
+function getPresetAvailabilityForMemoryProfile(preset, vars, memoryProfileName) {
+  const memoryProfile = getMemoryEmbeddingProfile(memoryProfileName);
+  const requiredProviders = getMemoryProfileRequiredProviders(memoryProfile);
+  return getPresetAvailabilityWithRequirements(preset, vars, requiredProviders);
+}
+
 module.exports = {
   getDeclaredFallbackModel,
   getPresetAvailability,
+  getPresetAvailabilityForMemoryProfile,
+  getMemoryProfileRequiredProviders,
   getProviderDescriptor,
   getTaskCapabilityKey,
   hasConfiguredValue,

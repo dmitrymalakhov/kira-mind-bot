@@ -8,6 +8,7 @@ const SUITES = {
         "testAiUsageLogging.ts",
     ],
     memory: [
+        "testQdrantMemoryProfileCompatibility.ts",
         "testSessionStorage.ts",
         "testReflectionMemoryFilter.ts",
         "testFactAttributionFilter.ts",
@@ -34,6 +35,7 @@ const SUITES = {
         "testAiModelPresets.ts",
         "testAiRuntimeRouting.ts",
         "testAiUsageLogging.ts",
+        "testQdrantMemoryProfileCompatibility.ts",
         "testSessionStorage.ts",
         "testVoiceReply.ts",
         "testRussianSpeechNumbers.ts",

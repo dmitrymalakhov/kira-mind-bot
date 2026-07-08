@@ -17,6 +17,28 @@
   - переключение preset-а подтверждено end-to-end через реальную runtime-настройку;
   - для `glm-balanced` есть отдельный набор regression/quality-check сценариев по ключевым task key.
 
+## Vector Memory / Embedding Consistency
+
+- Цель: убрать рассинхрон между active preset, embedding provider и схемой Qdrant, чтобы смена preset-а не ломала memory write-path.
+- Текущий статус: отдельный stable memory profile уже введён, runtime/admin-panel используют общий embedding-контур, а Qdrant получает preflight-проверку совместимости до записи.
+- Для текущего rollout уже задокументирован ручной recovery path для инсталляций, где старые memory-коллекции были записаны в несовместимой размерности (`3072d`).
+- Ближайший шаг:
+  - подготовить штатную миграцию на случай будущего перехода с `1536` на `3072`:
+    - `blue-green` для текущих single-vector коллекций;
+    - named-vectors path только если схема коллекций будет на это переведена.
+  - решить, нужен ли отдельный runtime override для memory profile в админке или пока достаточно скрытого системного default;
+  - обновить availability/health UX так, чтобы отсутствие API key для memory profile отображалось как отдельный operational риск, а не только как инфраструктурная деталь.
+  - убрать дублирование shared-логики между runtime и admin-panel:
+    - вынести provider/capability helper-ы для memory embeddings в один общий модуль;
+    - вынести Qdrant vector-config compatibility helper-ы в один общий модуль, чтобы admin-panel и runtime одинаково определяли `compatible/mismatch`.
+  - решить судьбу `warmMemoryEmbeddingProfileCache`:
+    - либо подключить прогрев profile cache на startup;
+    - либо удалить как неиспользуемый код.
+- Acceptance:
+  - есть отдельный документированный migration-path для смены канонической размерности памяти.
+  - future migration на другой memory profile не приводит к смешению разных embedding-моделей в одной коллекции.
+  - runtime и admin-panel используют один и тот же shared helper-слой для provider-support и Qdrant compatibility checks без расхождения логики.
+
 ## Admin Settings Registry
 
 - Цель: убрать остаточный special-case layout в админке и сделать единый источник правды для секций настроек.

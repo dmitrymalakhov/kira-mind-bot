@@ -2,6 +2,10 @@
 
 ## 2026-07-07
 
+- Memory embeddings вынесены в отдельный стабильный profile `stable-1536` (`openai:text-embedding-3-small`, `1536`, `Cosine`), который больше не зависит от `AI_MODEL_PRESET`: переключение conversational preset не должно менять memory write/read path, смешивать разные embedding-модели в одной коллекции или ломать Qdrant по размерности.
+- Runtime и admin-panel теперь используют один и тот же memory embedding profile и валидируют совместимость существующих Qdrant-коллекций до записи; в админке добаван read-only статус memory profile и совместимости памяти с текущей схемой Qdrant.
+- Gemini embeddings для runtime memory-path теперь принудительно запрашиваются в размерности `1536` через `output_dimensionality`, чтобы `gemini-full` и будущие Gemini-based embedding presets оставались совместимы с текущими Qdrant-коллекциями и не падали на `expected dim: 1536, got 3072`.
+- В README добавлена короткая пометка: если после обновления Qdrant-коллекция памяти окажется несовместимой по размерности, её нужно пересоздать или вручную мигрировать, а не пытаться чинить переключением `AI_MODEL_PRESET`.
 - Структурные и системные сообщения бота переведены на rich formatting (Bot API 10.1 `sendRichMessage` / `editMessageText({rich_message}`) с автоматическим фолбэком на HTML): утренний дайджест, DM-report, Inbox Guardian, уведомления об важных сообщениях в группах, рефлексия, напоминания по итогам переговоров, `/chats`, `/contacts`, `/memory_history`, `/memory_reflection_cleanup`, карточки/список/пикер напоминаний и меню групп чатов теперь используют таблицы, заголовки, сворачиваемые секции и чек-листы.
 - Добавлен общий helper-слой `utils/richMessage.ts` (DSL блоков, экранирование пользовательских данных, рендер rich-HTML и fallback-HTML, `sendStructured`/`editStructured`/`editStructuredCtx` с фолбэком и кешем несовместимости); аварийный рубильник — `RICH_MESSAGES_ENABLED` (по умолчанию `true`).
 - Устранён класс багов с поломкой markdown на спецсимволах: имена контактов, тексты напоминаний, названия чатов и факты памяти теперь экранируются во всех структурных сообщениях.
