@@ -135,6 +135,12 @@ function buildGeminiSearchTools(params: ResponseCreateParams): Array<Record<stri
     return hasWebSearchTool ? [{ type: 'google_search' }] : undefined;
 }
 
+function normalizeGeminiEmbeddingDimension(value: number | undefined): number | undefined {
+    if (!Number.isFinite(value)) return undefined;
+    const normalized = Math.round(Number(value));
+    return normalized > 0 ? normalized : undefined;
+}
+
 function inferAudioMimeType(filePath: string): string {
     switch (path.extname(filePath).toLowerCase()) {
         case '.wav':
@@ -347,6 +353,7 @@ export const geminiProviderAdapter: AiProviderAdapter = {
                 content: {
                     parts: [{ text: params.input }],
                 },
+                output_dimensionality: normalizeGeminiEmbeddingDimension(params.outputDimension),
             }),
         });
 

@@ -82,6 +82,38 @@ export interface AiPresetConfig {
   unavailableReason?: string;
 }
 
+export interface MemoryEmbeddingProfileCompatibilityMismatch {
+  collection: string;
+  actualSize: number;
+  actualDistance: string;
+}
+
+export interface MemoryEmbeddingProfileCompatibility {
+  status: 'compatible' | 'mismatch' | 'not_initialized' | 'unavailable';
+  summary: string;
+  checkedCollections: number;
+  mismatches: MemoryEmbeddingProfileCompatibilityMismatch[];
+}
+
+export interface MemoryEmbeddingProfileStatus {
+  name: string;
+  title: string;
+  description: string;
+  provider: AiProvider;
+  model: string;
+  outputDimension: number;
+  distance: string;
+  storedProfileName?: string | null;
+  envDefaultProfileName: string;
+  hasRuntimeOverride: boolean;
+  activeSourceSummary: string;
+  activeSourceTechnicalPath: string;
+  source: ConfigSourceInfo;
+  providerKeyConfigured: boolean;
+  providerAvailabilitySummary: string;
+  compatibility: MemoryEmbeddingProfileCompatibility;
+}
+
 export interface AiPresetResponse {
   configuredPresetName: AiPresetName;
   storedPresetName?: AiPresetName | null;
@@ -90,6 +122,7 @@ export interface AiPresetResponse {
   activeSourceSummary: string;
   activeSourceTechnicalPath: string;
   availablePresets: AiPresetConfig[];
+  memoryEmbeddingProfile: MemoryEmbeddingProfileStatus;
   source: ConfigSourceInfo;
 }
 

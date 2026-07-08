@@ -1,6 +1,9 @@
 const assert = require('assert');
 const { AI_PRESETS } = require('../admin-panel/aiPresetRegistry');
-const { getPresetAvailability } = require('../admin-panel/presetAvailability');
+const {
+  getPresetAvailability,
+  getPresetAvailabilityForMemoryProfile,
+} = require('../admin-panel/presetAvailability');
 
 function createPreset(models) {
   return {
@@ -54,10 +57,10 @@ function testModelLevelCapabilityOverrideMarksPresetUnavailable() {
 }
 
 function testGlmBalancedUsesMixedProviders() {
-  const availability = getPresetAvailability(AI_PRESETS['glm-balanced'], {
+  const availability = getPresetAvailabilityForMemoryProfile(AI_PRESETS['glm-balanced'], {
     OPENAI_API_KEY: 'openai-key',
     ZAI_API_KEY: 'zai-key',
-  });
+  }, 'stable-1536');
 
   assert.deepStrictEqual(availability, {
     enabled: true,
@@ -66,10 +69,10 @@ function testGlmBalancedUsesMixedProviders() {
 }
 
 function testHybridGeminiGptRequiresGeminiAndOpenAi() {
-  const availability = getPresetAvailability(AI_PRESETS['hybrid-gemini-gpt'], {
+  const availability = getPresetAvailabilityForMemoryProfile(AI_PRESETS['hybrid-gemini-gpt'], {
     OPENAI_API_KEY: 'openai-key',
     GEMINI_API_KEY: 'gemini-key',
-  });
+  }, 'stable-1536');
 
   assert.deepStrictEqual(availability, {
     enabled: true,
@@ -77,21 +80,30 @@ function testHybridGeminiGptRequiresGeminiAndOpenAi() {
   });
 }
 
-function testPureGeminiRequiresGeminiAndOpenAi() {
-  const availability = getPresetAvailability(AI_PRESETS['gemini-full'], {
+function testPureGeminiRequiresOpenAiForStableMemoryProfile() {
+  const availability = getPresetAvailabilityForMemoryProfile(AI_PRESETS['gemini-full'], {
     GEMINI_API_KEY: 'gemini-key',
-  });
+  }, 'stable-1536');
 
-  assert.deepStrictEqual(availability, {
-    enabled: true,
-    unavailableReason: undefined,
-  });
+  assert.strictEqual(availability.enabled, false);
+  assert.match(availability.unavailableReason || '', /OPENAI_API_KEY/);
 }
 
 function testPureGlmRequiresZaiAndOpenAi() {
-  const availability = getPresetAvailability(AI_PRESETS['glm-full'], {
+  const availability = getPresetAvailabilityForMemoryProfile(AI_PRESETS['glm-full'], {
     OPENAI_API_KEY: 'openai-key',
     ZAI_API_KEY: 'zai-key',
+  }, 'stable-1536');
+
+  assert.deepStrictEqual(availability, {
+    enabled: true,
+    unavailableReason: undefined,
+  });
+}
+
+function testBaseAvailabilityStillSupportsPresetOnlyChecks() {
+  const availability = getPresetAvailability(AI_PRESETS['gemini-full'], {
+    GEMINI_API_KEY: 'gemini-key',
   });
 
   assert.deepStrictEqual(availability, {
@@ -107,8 +119,9 @@ function main() {
   testModelLevelCapabilityOverrideMarksPresetUnavailable();
   testGlmBalancedUsesMixedProviders();
   testHybridGeminiGptRequiresGeminiAndOpenAi();
-  testPureGeminiRequiresGeminiAndOpenAi();
+  testPureGeminiRequiresOpenAiForStableMemoryProfile();
   testPureGlmRequiresZaiAndOpenAi();
+  testBaseAvailabilityStillSupportsPresetOnlyChecks();
   console.log('AI preset availability tests passed');
 }
 

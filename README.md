@@ -151,6 +151,12 @@ make deploy-clean
 Изучи себя и свои потребности
 ```
 
+#### Важно
+
+Память теперь использует стабильный embedding-profile `stable-1536` (`openai:text-embedding-3-small`, `1536`, `Cosine`).
+
+Если после обновления в логах появляется ошибка про несовместимость Qdrant-коллекции и `memory profile`, значит старая memory-коллекция была создана с другой размерностью. В этом случае нужно пересоздать такую коллекцию или вручную мигрировать её данные; простое переключение `AI_MODEL_PRESET` это не чинит.
+
 ### Напоминания и планирование
 
 - создаёт напоминания естественным языком;
@@ -402,6 +408,8 @@ make remote-deploy-admin SERVER_IP=<ip>
 - смотреть статус контейнеров;
 - перезапускать сервисы после изменения настроек.
 
+Важно: conversational `AI preset` и memory embeddings теперь разделены. Переключение preset меняет генеративный контур, но не меняет отдельный stable memory profile, через который бот пишет и читает память из Qdrant.
+
 Через `.env.production` пока удобнее настраивать часть фоновых режимов: консолидацию памяти, фоновое изучение личных переписок и утренний дайджест.
 
 ---
@@ -471,6 +479,7 @@ make remote-deploy-admin SERVER_IP=<ip>
 | Переменная | Зачем нужна |
 |------------|-------------|
 | `OPENAI_API_KEY` | LLM, embeddings, web search, Whisper, анализ изображений |
+| `MEMORY_EMBEDDING_PROFILE` | Необязательный runtime override для отдельного memory profile; по умолчанию используется `stable-1536` |
 | `KIRA_BOT_TOKEN` | Токен Telegram-бота |
 | `KIRA_ALLOWED_USER_ID` | Telegram User ID владельца |
 | `DB_PASSWORD` | Пароль PostgreSQL |

@@ -1,18 +1,27 @@
-import { resolveModelForTaskAsync } from './modelResolver';
-import type { AiModelRef } from './modelPresets';
+import { resolveMemoryEmbeddingConfigAsync } from './memoryEmbeddingResolver';
 import { getAiProviderAdapter } from './providers/registry';
 import { buildSafeAiErrorLog, classifyAiError, createAiExecutionTrace, type AiExecutionStage } from './errorDiagnostics';
-import { allowsCrossProviderFallback, getTransitionalTaskFallbackModel, errorToMessage } from './runtimeSupport';
+import { errorToMessage } from './runtimeSupport';
 import { logAiUsage } from '../services/aiUsageLogService';
+import type { AiModelRef } from './modelPresets';
+import type { MemoryEmbeddingProfileName } from './memoryEmbeddingProfiles';
 
 function recordAiUsage(payload: Parameters<typeof logAiUsage>[0]): void {
     void logAiUsage(payload);
 }
 
+function buildEmbeddingParams(input: string, outputDimension: number) {
+    return {
+        input,
+        outputDimension,
+    };
+}
+
 async function createEmbeddingWithModel(
     input: string,
-    preset: string,
+    profileName: MemoryEmbeddingProfileName,
     modelRef: AiModelRef,
+    outputDimension: number,
     traceId: string,
     attempt: number,
     stage: AiExecutionStage,
@@ -28,12 +37,12 @@ async function createEmbeddingWithModel(
     }
 
     try {
-        const result = await providerAdapter.createEmbedding(modelRef.model, { input });
+        const result = await providerAdapter.createEmbedding(modelRef.model, buildEmbeddingParams(input, outputDimension));
         recordAiUsage({
             taskKey,
             provider: modelRef.provider,
             model: modelRef.model,
-            preset,
+            preset: `memory:${profileName}`,
             operation: 'embedding',
             traceId,
             attempt,
@@ -52,7 +61,7 @@ async function createEmbeddingWithModel(
             taskKey,
             provider: modelRef.provider,
             model: modelRef.model,
-            preset,
+            preset: `memory:${profileName}`,
             operation: 'embedding',
             traceId,
             attempt,
@@ -81,41 +90,37 @@ async function createEmbeddingWithModel(
     }
 }
 
-export async function createEmbeddingForTask(input: string): Promise<number[]> {
-    const { presetName, modelRef } = await resolveModelForTaskAsync('embedding');
+export async function createMemoryEmbedding(input: string): Promise<number[]> {
+    const { profileName, config } = await resolveMemoryEmbeddingConfigAsync();
+    const modelRef: AiModelRef = {
+        provider: config.provider,
+        model: config.model,
+    };
     const trace = createAiExecutionTrace();
 
     try {
-        return await createEmbeddingWithModel(input, presetName, modelRef, trace.traceId, 1, 'primary');
+        return await createEmbeddingWithModel(input, profileName, modelRef, config.outputDimension, trace.traceId, 1, 'primary');
     } catch (error) {
         const diagnostics = classifyAiError(error);
 
         if (diagnostics.retryable) {
             try {
-                return await createEmbeddingWithModel(input, presetName, modelRef, trace.traceId, 2, 'retry');
+                return await createEmbeddingWithModel(input, profileName, modelRef, config.outputDimension, trace.traceId, 2, 'retry');
             } catch (retryError) {
-                if (!allowsCrossProviderFallback(presetName)) {
-                    throw retryError;
-                }
-                const fallbackModel = getTransitionalTaskFallbackModel('embedding');
-                console.warn('[AI embedding fallback]', {
+                console.warn('[AI memory embedding retry failed]', {
                     traceId: trace.traceId,
-                    fallbackModel,
+                    profileName,
+                    modelRef,
                     originalError: buildSafeAiErrorLog(retryError),
                 });
-                return createEmbeddingWithModel(input, presetName, fallbackModel, trace.traceId, 3, 'fallback', retryError);
+                throw retryError;
             }
         }
 
-        if (!allowsCrossProviderFallback(presetName)) {
-            throw error;
-        }
-        const fallbackModel = getTransitionalTaskFallbackModel('embedding');
-        console.warn('[AI embedding fallback]', {
-            traceId: trace.traceId,
-            fallbackModel,
-            originalError: buildSafeAiErrorLog(error),
-        });
-        return createEmbeddingWithModel(input, presetName, fallbackModel, trace.traceId, 2, 'fallback', error);
+        throw error;
     }
+}
+
+export async function createEmbeddingForTask(input: string): Promise<number[]> {
+    return createMemoryEmbedding(input);
 }

@@ -1,0 +1,14 @@
+{
+  "defaultProfile": "stable-1536",
+  "profiles": {
+    "stable-1536": {
+      "name": "stable-1536",
+      "title": "Stable 1536",
+      "description": "Стабильный memory-profile, не зависящий от conversational AI preset.",
+      "provider": "openai",
+      "model": "text-embedding-3-small",
+      "outputDimension": 1536,
+      "distance": "Cosine"
+    }
+  }
+}

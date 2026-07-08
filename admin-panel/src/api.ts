@@ -44,7 +44,10 @@ export async function saveConfig(data: Record<string, string | null>) {
 
 export async function fetchAiPreset(): Promise<AiPresetResponse> {
   const r = await fetch('/api/ai-preset');
-  if (!r.ok) throw new Error('Failed to load AI preset');
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body.error || 'Failed to load AI preset');
+  }
   return r.json();
 }
 

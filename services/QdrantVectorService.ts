@@ -4,7 +4,8 @@ import { IDomainVectorService } from './interfaces/IDomainVectorService';
 import { MemoryEntry, SearchOptions, SearchResult, MemoryStats, DomainConfig, SearchStrategy, DomainStats, DomainTrend, MemoryRelation, MemoryRelationType } from '../types';
 import { PREDEFINED_DOMAINS, DOMAIN_SEARCH_THRESHOLDS } from '../constants/domains';
 import { config } from '../config';
-import { createEmbeddingForTask } from '../ai/embedding';
+import { createMemoryEmbedding } from '../ai/embedding';
+import { resolveMemoryEmbeddingConfigAsync } from '../ai/memoryEmbeddingResolver';
 import { devLog } from '../utils';
 
 export class QdrantVectorService implements IDomainVectorService {
@@ -13,6 +14,7 @@ export class QdrantVectorService implements IDomainVectorService {
     private memoryPrefix: string;
     private configCollection: string;
     private defaultSearchThreshold: number;
+    private validatedCollections = new Map<string, string>();
 
     private collectionFor(domain: string) {
         return `${this.memoryPrefix}${domain}`;
@@ -367,30 +369,131 @@ export class QdrantVectorService implements IDomainVectorService {
         }
     }
 
-    private async createCollectionSafely(collectionName: string, vectorSize = 1536): Promise<'created' | 'exists' | 'failed'> {
-        if (await this.checkCollectionExists(collectionName)) {
+    private normalizeDistance(distance: string | undefined): string {
+        return String(distance || 'Cosine').toLowerCase();
+    }
+
+    private extractCollectionVectorConfig(details: any): { size: number; distance: string } | null {
+        const rawVectors = details?.config?.params?.vectors;
+        if (!rawVectors) return null;
+
+        if (typeof rawVectors.size === 'number') {
+            return {
+                size: rawVectors.size,
+                distance: String(rawVectors.distance || 'Cosine'),
+            };
+        }
+
+        const defaultVector = rawVectors[''] ?? rawVectors.default;
+        if (defaultVector && typeof defaultVector.size === 'number') {
+            return {
+                size: defaultVector.size,
+                distance: String(defaultVector.distance || 'Cosine'),
+            };
+        }
+
+        return null;
+    }
+
+    private async getCollectionVectorConfig(collectionName: string): Promise<{ size: number; distance: string } | null> {
+        try {
+            const details = await this.client.getCollection(collectionName);
+            return this.extractCollectionVectorConfig(details);
+        } catch {
+            return null;
+        }
+    }
+
+    private buildCollectionMismatchError(
+        collectionName: string,
+        actual: { size: number; distance: string } | null,
+        expected: { size: number; distance: string; provider: string; model: string; profileName: string },
+    ): Error {
+        return new Error(
+            `Qdrant collection ${collectionName} несовместима с memory profile ${expected.profileName}: ` +
+            `ожидалось size=${expected.size}, distance=${expected.distance}, provider=${expected.provider}, model=${expected.model}; ` +
+            `получено size=${actual?.size ?? 'unknown'}, distance=${actual?.distance ?? 'unknown'}. ` +
+            'Пересоздайте коллекцию или выполните миграцию памяти под новый профиль.'
+        );
+    }
+
+    private buildCollectionValidationKey(expected: {
+        size: number;
+        distance: string;
+        provider: string;
+        model: string;
+        profileName: string;
+    }): string {
+        return [
+            expected.profileName,
+            expected.provider,
+            expected.model,
+            String(expected.size),
+            this.normalizeDistance(expected.distance),
+        ].join(':');
+    }
+
+    private async ensureCollectionCompatibility(collectionName: string): Promise<'created' | 'exists'> {
+        const { profileName, config: embeddingConfig } = await resolveMemoryEmbeddingConfigAsync();
+        const expected = {
+            size: embeddingConfig.outputDimension,
+            distance: embeddingConfig.distance,
+            provider: embeddingConfig.provider,
+            model: embeddingConfig.model,
+            profileName,
+        };
+        const validationKey = this.buildCollectionValidationKey(expected);
+        if (this.validatedCollections.get(collectionName) === validationKey) {
             return 'exists';
         }
+
+        if (await this.checkCollectionExists(collectionName)) {
+            const actual = await this.getCollectionVectorConfig(collectionName);
+            if (
+                !actual ||
+                actual.size !== expected.size ||
+                this.normalizeDistance(actual.distance) !== this.normalizeDistance(expected.distance)
+            ) {
+                throw this.buildCollectionMismatchError(collectionName, actual, expected);
+            }
+            this.validatedCollections.set(collectionName, validationKey);
+            return 'exists';
+        }
+
         try {
             await this.client.createCollection(collectionName, {
-                vectors: { size: vectorSize, distance: 'Cosine' },
+                vectors: { size: expected.size, distance: expected.distance },
             });
+            this.validatedCollections.set(collectionName, validationKey);
             return 'created';
         } catch (e: any) {
             if (String(e.message || '').includes('already exists')) {
+                const actual = await this.getCollectionVectorConfig(collectionName);
+                if (
+                    !actual ||
+                    actual.size !== expected.size ||
+                    this.normalizeDistance(actual.distance) !== this.normalizeDistance(expected.distance)
+                ) {
+                    throw this.buildCollectionMismatchError(collectionName, actual, expected);
+                }
+                this.validatedCollections.set(collectionName, validationKey);
                 return 'exists';
             }
-            console.error(`❌ Ошибка создания коллекции ${collectionName}:`, e);
-            return 'failed';
+            throw e;
         }
     }
 
     private async createConfigCollection() {
-        const status = await this.createCollectionSafely(this.configCollection);
-        if (status === 'created') {
-            console.log(`✅ Создана коллекция конфигураций: ${this.configCollection}`);
-        } else if (status === 'exists') {
-            console.log(`✅ Коллекция конфигураций уже существует: ${this.configCollection}`);
+        try {
+            const status = await this.ensureCollectionCompatibility(this.configCollection);
+            if (status === 'created') {
+                console.log(`✅ Создана коллекция конфигураций: ${this.configCollection}`);
+            } else {
+                console.log(`✅ Коллекция конфигураций уже существует: ${this.configCollection}`);
+            }
+        } catch (error) {
+            console.error(`❌ Коллекция конфигураций несовместима: ${this.configCollection}`, error);
+            throw error;
         }
     }
 
@@ -406,25 +509,30 @@ export class QdrantVectorService implements IDomainVectorService {
 
         for (const domainKey of Object.values(PREDEFINED_DOMAINS)) {
             const collection = this.collectionFor(domainKey);
-            const status = await this.createCollectionSafely(collection);
-            if (status === 'created') {
-                console.log(`✅ Создан домен для ${config.characterName}: ${domainKey} (${collection})`);
-            } else if (status === 'exists') {
-                console.log(`✅ Домен для ${config.characterName} уже существует: ${domainKey} (${collection})`);
-            } else {
+            try {
+                const status = await this.ensureCollectionCompatibility(collection);
+                if (status === 'created') {
+                    console.log(`✅ Создан домен для ${config.characterName}: ${domainKey} (${collection})`);
+                } else {
+                    console.log(`✅ Домен для ${config.characterName} уже существует: ${domainKey} (${collection})`);
+                }
+            } catch (error) {
+                console.error(`❌ Домен для ${config.characterName} несовместим: ${domainKey} (${collection})`, error);
                 console.log(`❌ Не удалось создать домен для ${config.characterName}: ${domainKey}`);
+                throw error;
             }
         }
     }
 
     private async embed(text: string): Promise<number[]> {
-        return createEmbeddingForTask(text);
+        return createMemoryEmbedding(text);
     }
 
     async saveMemory(memory: Omit<MemoryEntry, 'id'>): Promise<string> {
-        const vector = await this.embed(memory.content);
         const id = uuidv4();
         const collection = this.collectionFor(memory.domain);
+        await this.ensureCollectionCompatibility(collection);
+        const vector = await this.embed(memory.content);
         const now = new Date();
         const lastAccessedAt = memory.lastAccessedAt instanceof Date ? memory.lastAccessedAt : now;
         const payload = this.buildPayload(id, memory, lastAccessedAt);
@@ -443,8 +551,9 @@ export class QdrantVectorService implements IDomainVectorService {
     }
 
     async updateMemory(memoryId: string, domain: string, memory: Omit<MemoryEntry, 'id'>): Promise<void> {
-        const vector = await this.embed(memory.content);
         const collection = this.collectionFor(domain);
+        await this.ensureCollectionCompatibility(collection);
+        const vector = await this.embed(memory.content);
         const now = new Date();
         const existingPayload = await this.fetchPayload(memoryId, domain);
         const payload = this.buildPayload(memoryId, memory, now, existingPayload);
@@ -505,9 +614,10 @@ export class QdrantVectorService implements IDomainVectorService {
     }
 
     async searchMemories(query: string, userId: string, options?: SearchOptions): Promise<SearchResult[]> {
-        const vector = await this.embed(query);
         const domain = options?.domain || 'general';
         const collection = this.collectionFor(domain);
+        await this.ensureCollectionCompatibility(collection);
+        const vector = await this.embed(query);
 
         console.log(`🔍 Поиск памяти для ${config.characterName}:`);
         console.log(`- Query: ${query.substring(0, 100)}...`);
