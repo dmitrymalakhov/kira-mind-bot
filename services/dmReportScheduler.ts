@@ -4,7 +4,7 @@ import { BotContext } from "../types";
 import { MessageStore, StoredMessage } from "../stores/MessageStore";
 import { getProactiveChatId } from "../utils/allowedUserChatStore";
 import { getActiveBotProfile } from "../utils/botIdentity";
-import { esc, heading, details, list, RichBlock, sendStructured } from "../utils/richMessage";
+import { divider, esc, heading, list, paragraph, RichBlock, sendStructured } from "../utils/richMessage";
 
 const REPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -71,6 +71,21 @@ function cleanupReportedMessageIds(now: Date): void {
   }
 }
 
+function formatMessageCount(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+
+  if (mod10 === 1 && mod100 !== 11) {
+    return `${count} сообщение`;
+  }
+
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return `${count} сообщения`;
+  }
+
+  return `${count} сообщений`;
+}
+
 function buildDmReportBlocks(messages: StoredMessage[], now: Date): RichBlock[] {
   const groupedBySender = new Map<string, StoredMessage[]>();
 
@@ -84,18 +99,25 @@ function buildDmReportBlocks(messages: StoredMessage[], now: Date): RichBlock[] 
   });
 
   const sortedGroups = Array.from(groupedBySender.values()).sort((a, b) => {
-    const aDate = Math.min(...a.map((m) => m.date.getTime()));
-    const bDate = Math.min(...b.map((m) => m.date.getTime()));
-    return aDate - bDate;
+    const aLatestDate = Math.max(...a.map((m) => m.date.getTime()));
+    const bLatestDate = Math.max(...b.map((m) => m.date.getTime()));
+    return bLatestDate - aLatestDate;
   });
 
   const blocks: RichBlock[] = [heading("📬 Новые личные сообщения", 3)];
 
-  sortedGroups.forEach((senderMessages) => {
+  sortedGroups.forEach((senderMessages, index) => {
     const sortedByDate = [...senderMessages].sort((a, b) => a.date.getTime() - b.date.getTime());
     const sender = sortedByDate[0];
-    const username = sender.senderUsername ? ` (@${esc(sender.senderUsername)})` : "";
-    const summary = `${esc(sender.senderName)}${username} · ${sortedByDate.length}`;
+    const latestMessage = sortedByDate[sortedByDate.length - 1];
+    const metaParts = [];
+
+    if (sender.senderUsername) {
+      metaParts.push(`@${esc(sender.senderUsername)}`);
+    }
+
+    metaParts.push(formatMessageCount(sortedByDate.length));
+    metaParts.push(`последнее ${esc(formatMessageTime(latestMessage.date, now))}`);
 
     const items = sortedByDate.map((message) => {
       const timeLabel = esc(formatMessageTime(message.date, now));
@@ -103,7 +125,13 @@ function buildDmReportBlocks(messages: StoredMessage[], now: Date): RichBlock[] 
       return `<b>${timeLabel}</b> — ${text}`;
     });
 
-    blocks.push(details(summary, [list(items)]));
+    blocks.push(paragraph(`<b>${esc(sender.senderName)}</b>`));
+    blocks.push(paragraph(metaParts.join(" · ")));
+    blocks.push(list(items));
+
+    if (index < sortedGroups.length - 1) {
+      blocks.push(divider());
+    }
   });
 
   return blocks;
