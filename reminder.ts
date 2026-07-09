@@ -13,6 +13,22 @@ import { config } from "./config";
 import { esc, blockquote, RichBlock, sendStructured, editStructured } from "./utils/richMessage";
 export { ReminderStatus, ReminderTargetChat, ReminderTargetNotificationStatus, RecurrenceRule };
 
+function isMessageNotModifiedError(error: unknown): boolean {
+    if (!error || typeof error !== "object") return false;
+
+    const candidate = error as {
+        error_code?: unknown;
+        description?: unknown;
+        message?: unknown;
+    };
+    const details = [candidate.description, candidate.message]
+        .filter((value): value is string => typeof value === "string")
+        .join(" ")
+        .toLowerCase();
+
+    return candidate.error_code === 400 && details.includes("message is not modified");
+}
+
 // Расширенный интерфейс для напоминания с поддержкой статусов
 export interface Reminder {
     id: string;
@@ -548,7 +564,9 @@ export async function postponeReminderUntil(
                     { reply_markup: new InlineKeyboard() }
                 );
             } catch (editError) {
-                console.error("Error updating postponed reminder message:", editError);
+                if (!isMessageNotModifiedError(editError)) {
+                    console.error("Error updating postponed reminder message:", editError);
+                }
                 // Ошибка обновления сообщения не должна прерывать процесс откладывания напоминания
             }
         }
