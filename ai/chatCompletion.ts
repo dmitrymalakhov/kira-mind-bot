@@ -10,8 +10,47 @@ import { buildSafeAiErrorLog, classifyAiError, createAiExecutionTrace, type AiEx
 import { parseLLMJson } from '../utils';
 import { allowsCrossProviderFallback, errorToMessage, getTaskFallbackModel } from './runtimeSupport';
 
+const GEMINI_RETRY_BASE_DELAY_MS = 1000;
+const GEMINI_RETRY_MAX_DELAY_MS = 5000;
+
 function recordAiUsage(payload: Parameters<typeof logAiUsage>[0]): void {
     void logAiUsage(payload);
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getGeminiRetryDelayMs(attempt: number): number {
+    const baseDelay = Number(process.env.AI_GEMINI_RETRY_BASE_DELAY_MS) || GEMINI_RETRY_BASE_DELAY_MS;
+    const maxDelay = Number(process.env.AI_GEMINI_RETRY_MAX_DELAY_MS) || GEMINI_RETRY_MAX_DELAY_MS;
+    const cappedBase = Math.max(1, baseDelay);
+    const cappedMax = Math.max(cappedBase, maxDelay);
+    const exponentialDelay = Math.min(cappedMax, cappedBase * Math.pow(2, Math.max(0, attempt - 1)));
+    const jitterMultiplier = 0.85 + Math.random() * 0.3;
+    return Math.max(1, Math.round(exponentialDelay * jitterMultiplier));
+}
+
+async function maybeDelayRetry(
+    presetName: string,
+    taskKey: AiTaskKey,
+    modelRef: AiModelRef,
+    attempt: number,
+    error: unknown,
+): Promise<void> {
+    if (presetName !== 'gemini-full' || modelRef.provider !== 'gemini') return;
+    const delayMs = getGeminiRetryDelayMs(attempt);
+    const diagnostics = classifyAiError(error);
+    console.warn('[AI retry scheduled]', {
+        taskKey,
+        provider: modelRef.provider,
+        model: modelRef.model,
+        attempt,
+        errorStatus: diagnostics.errorStatus,
+        errorCategory: diagnostics.errorCategory,
+        delayMs,
+    });
+    await sleep(delayMs);
 }
 
 function recordJsonResolutionFailure(
@@ -132,6 +171,7 @@ async function createChatCompletionForTaskWithTrace(
 
         if (diagnostics.retryable) {
             try {
+                await maybeDelayRetry(presetName, taskKey, modelRef, 2, error);
                 return await createChatCompletionWithModel(taskKey, params, presetName, modelRef, traceId, 2, 'retry');
             } catch (retryError) {
                 if (!allowsCrossProviderFallback(presetName)) {

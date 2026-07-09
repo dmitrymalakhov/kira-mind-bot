@@ -966,4 +966,5 @@ export function cleanupOldScheduledMessages(): void {
 }
 
 // Настраиваем периодическую очистку старых сообщений
-setInterval(cleanupOldScheduledMessages, 24 * 60 * 60 * 1000); // Каждые 24 часа
+const scheduledMessagesCleanupInterval = setInterval(cleanupOldScheduledMessages, 24 * 60 * 60 * 1000); // Каждые 24 часа
+scheduledMessagesCleanupInterval.unref();
