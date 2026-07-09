@@ -1,5 +1,7 @@
 import { Api, TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions";
+import { Raw } from "telegram/events";
+import { UpdateConnectionState } from "telegram/network";
 import { ContactsStore } from "../stores/ContactsStore";
 import { MessageTracker } from "../MessageTracker";
 import { devLog } from "../utils";
@@ -47,14 +49,13 @@ type TelegramHealthStatus = 'ok' | 'warn' | 'down' | 'disabled';
 
 interface TelegramClientDiagnosticState {
     connected?: boolean;
-    disconnected?: boolean;
     session?: {
         dcId?: number;
     };
-    _reconnecting?: boolean;
     _sender?: {
-        _reconnecting?: boolean;
-        _disconnected?: boolean;
+        // Рабочий флаг reconnect в GramJS 2.26.22 (меняется в connect()/reconnect()).
+        // Приватные поля `_reconnecting`/`_disconnected` — мёртвые (никогда не меняются после конструктора), их читать нельзя.
+        isReconnecting?: boolean;
         _connection?: {
             _ip?: string;
             _port?: number;
@@ -159,6 +160,18 @@ function logTelegramClientMessage(message: string, error?: unknown, silent: bool
     console.error(message);
 }
 
+/**
+ * Честная проверка transport-соединения клиента.
+ *
+ * Геттер `client.connected` в GramJS 2.26.22 возвращает `sender.isConnected()` → `_userConnected`
+ * (рабочий флаг, меняется при connect/disconnect). Комбинировать с `!client.disconnected` нельзя:
+ * `client.disconnected` опирается на `sender._disconnected`, которое инициализируется `true` и
+ * никогда не меняется — поэтому `connected && !disconnected` всегда `false`.
+ */
+function isTelegramClientConnected(client: TelegramClient | null): boolean {
+    return Boolean(client?.connected);
+}
+
 function buildTelegramClientDiagnostics(client: TelegramClient | null): {
     connected: boolean;
     reconnecting: boolean;
@@ -183,8 +196,8 @@ function buildTelegramClientDiagnostics(client: TelegramClient | null): {
         : null;
 
     return {
-        connected: Boolean(diagnosticClient.connected) && !Boolean(diagnosticClient.disconnected),
-        reconnecting: Boolean(diagnosticClient._reconnecting || sender?._reconnecting),
+        connected: isTelegramClientConnected(client),
+        reconnecting: Boolean(sender?.isReconnecting),
         dc: typeof dc === 'number' ? dc : null,
         endpoint,
     };
@@ -237,6 +250,28 @@ async function connectAndAuthorizeTelegramClient(
             }
         );
     });
+}
+
+/**
+ * Подписывается на события соединения GramJS и логирует изменения transport-состояния.
+ *
+ * GramJS эмитит `UpdateConnectionState` через внутренний updateCallback (connect/disconnect/reconnect).
+ * Раньше приложение вообще не логировало эти события, что затрудняло диагностику «вечного warn» в мониторинге.
+ * Здесь используется `console.*` напрямую, а не logTelegramClientMessage, т.к. последняя молчит при silent=true.
+ */
+function attachTelegramConnectionStateLogger(client: TelegramClient): void {
+    client.addEventHandler((update: unknown) => {
+        if (!(update instanceof UpdateConnectionState)) {
+            return;
+        }
+        if (update.state === UpdateConnectionState.connected) {
+            console.info("[Telegram user-client] Соединение восстановлено.");
+        } else if (update.state === UpdateConnectionState.disconnected) {
+            console.warn("[Telegram user-client] Соединение разорвано, ожидаем reconnect.");
+        } else if (update.state === UpdateConnectionState.broken) {
+            console.warn("[Telegram user-client] Transport-соединение broken.");
+        }
+    }, new Raw({ types: [UpdateConnectionState] }));
 }
 
 /**
@@ -298,6 +333,11 @@ export async function initTelegramClient(options: TelegramClientInitOptions = {}
             telegramClient = client;
             clearTelegramClientError();
             telegramClientLastReadyAt = new Date().toISOString();
+            // Подписываемся на события соединения только для свежесозданного клиента,
+            // чтобы не дублировать обработчики при повторных вызовах initTelegramClient.
+            if (shouldCleanupClient) {
+                attachTelegramConnectionStateLogger(client);
+            }
             return telegramClient;
         } catch (error) {
             rememberTelegramClientError(error);
@@ -834,7 +874,7 @@ export async function getTelegramUserClientHealth(): Promise<TelegramUserClientH
 
     try {
         if (telegramClient) {
-            const connected = Boolean(telegramClient.connected) && !telegramClient.disconnected;
+            const connected = isTelegramClientConnected(telegramClient);
             const authorized = await telegramClient.isUserAuthorized();
             const diagnostics = buildTelegramClientDiagnostics(telegramClient);
             const health = resolveTelegramHealthState(connected, authorized, diagnostics.reconnecting);
@@ -861,7 +901,7 @@ export async function getTelegramUserClientHealth(): Promise<TelegramUserClientH
             diagnosticClient,
             { timeoutMs: 5000 }
         );
-        const connected = Boolean(diagnosticClient.connected) && !diagnosticClient.disconnected;
+        const connected = isTelegramClientConnected(diagnosticClient);
         const diagnostics = buildTelegramClientDiagnostics(diagnosticClient);
         const health = resolveTelegramHealthState(connected, authorized, diagnostics.reconnecting);
 

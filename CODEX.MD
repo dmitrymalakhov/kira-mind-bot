@@ -11,6 +11,12 @@
   - bot runtime публикует узкие internal health endpoints;
   - admin backend агрегирует их вместе с infra/API checks;
   - бизнес-логика бота не должна содержать admin-oriented monitoring orchestration.
+- Мониторинг Telegram user-client (`services/telegram.ts`) должен читать только рабочие поля GramJS `telegram@^2.26.22`:
+  - `client.connected` (геттер → `sender.isConnected()` → `_userConnected`) для transport-состояния;
+  - `sender.isReconnecting` (без подчёркивания) для состояния reconnect;
+  - приватные поля `sender._disconnected` (всегда `true`), `client._reconnecting` и `sender._reconnecting` (всегда `false`) — мёртвые, их читать нельзя;
+  - комбинировать `client.connected && !client.disconnected` некорректно — `client.disconnected` опирается на мёртвый `_disconnected` и всегда `true`, поэтому результат всегда `false`;
+  - изменения transport-состояния логируются через подписку на `UpdateConnectionState` (`import { Raw } from "telegram/events"`, `import { UpdateConnectionState } from "telegram/network"`); значения: `connected=1`, `disconnected=-1`, `broken=0`.
 - AI usage analytics считает токены только по `usage`, который вернул провайдер:
   - исходящий HTTP-трафик не используется как источник правды для токенов;
   - runtime пишет только дешёвые event-log записи в `ai_usage_logs`;
