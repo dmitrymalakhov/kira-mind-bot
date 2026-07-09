@@ -37,6 +37,17 @@ export function buildHelpOverviewBlocks(
         const emoji = CATEGORY_EMOJI[category] ?? "•";
         return `${emoji} <b>${esc(category)}</b> — ${titles.map(esc).join(", ")}`;
     });
+    const examples = publicMode
+        ? [
+            "«Найди свежую информацию по этой теме»",
+            "«Что находится по этому адресу?»",
+            "«Что изображено на этом фото?»",
+        ]
+        : [
+            "«Что ты умеешь с напоминаниями?»",
+            "«Как попросить тебя изучить переписку?»",
+            "«Можешь записать меня через сайт?»",
+        ];
 
     const blocks: RichBlock[] = [
         heading("✨ Чем я могу помочь", 2),
@@ -46,11 +57,7 @@ export function buildHelpOverviewBlocks(
         heading("Главное", 3),
         list(capabilityItems),
         heading("Например, спроси", 3),
-        list([
-            "«Что ты умеешь с напоминаниями?»",
-            "«Как попросить тебя изучить переписку?»",
-            "«Можешь записать меня через сайт?»",
-        ]),
+        list(examples),
         footer("Нужна подробность? Напиши /help и тему — например: /help напоминания"),
     ];
 
@@ -61,6 +68,6 @@ export function buildHelpTopicBlocks(topic: string, answer: string): RichBlock[]
     return [
         heading(`❔ ${esc(topic)}`, 2),
         paragraph(esc(answer)),
-        footer("Можно уточнить вопрос обычным сообщением или выбрать другую тему через /help <тема>."),
+        footer(`Можно уточнить вопрос обычным сообщением или выбрать другую тему через ${esc("/help <тема>")}.`),
     ];
 }

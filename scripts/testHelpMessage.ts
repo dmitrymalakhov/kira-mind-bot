@@ -17,13 +17,17 @@ async function run(): Promise<void> {
     const publicOverview = renderFallbackHtml(buildHelpOverviewBlocks(capabilities, true));
     assert.match(publicOverview, /Личные данные и действия владельца я не раскрываю/);
     assert.doesNotMatch(publicOverview, /Напоминания/);
+    assert.doesNotMatch(publicOverview, /изучить переписку|записать меня через сайт/);
     assert.match(publicOverview, /Поиск в интернете/);
+    assert.match(publicOverview, /Найди свежую информацию/);
 
     const topicBlocks = buildHelpTopicBlocks("фото <script>", "Можно <точно>\nВот пример");
     const topic = renderFallbackHtml(topicBlocks);
     assert.match(topic, /фото &lt;script&gt;/);
     assert.match(topic, /Можно &lt;точно&gt;\nВот пример/);
     assert.doesNotMatch(topic, /<script>|<br\s*\/>/);
+    assert.match(topic, /\/help &lt;тема&gt;/);
+    assert.doesNotMatch(topic, /<тема>/);
 
     const calls: Array<{ text: string; other?: Record<string, unknown> }> = [];
     const previousRichSetting = process.env.RICH_MESSAGES_ENABLED;
@@ -46,6 +50,8 @@ async function run(): Promise<void> {
     assert.equal(calls[0].other?.parse_mode, "HTML");
     assert.match(calls[0].text, /Можно &lt;точно&gt;\nВот пример/);
     assert.doesNotMatch(calls[0].text, /<br\s*\/>/);
+    assert.match(calls[0].text, /\/help &lt;тема&gt;/);
+    assert.doesNotMatch(calls[0].text, /<тема>/);
 
     console.log("✓ /help использует каталог возможностей и безопасный HTML fallback");
 }
