@@ -1,10 +1,12 @@
 import { Bot } from "grammy";
 import { config } from "../config";
+import { USER_TIMEZONE } from "../constants";
 import { BotContext } from "../types";
 import { MessageStore, StoredMessage } from "../stores/MessageStore";
 import { getProactiveChatId } from "../utils/allowedUserChatStore";
 import { getActiveBotProfile } from "../utils/botIdentity";
-import { divider, esc, heading, list, paragraph, RichBlock, sendStructured } from "../utils/richMessage";
+import { getZonedDateTimeParts } from "../utils/time";
+import { esc, heading, paragraph, RichBlock, sendStructured } from "../utils/richMessage";
 
 const REPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -19,7 +21,7 @@ function inQuietHours(now: Date): boolean {
     return false;
   }
 
-  const hour = now.getHours();
+  const hour = getZonedDateTimeParts(now, USER_TIMEZONE).hour;
   const start = config.kiraLifeProactiveQuietHourStart;
   const end = config.kiraLifeProactiveQuietHourEnd;
 
@@ -51,12 +53,14 @@ function formatMessageTime(messageDate: Date, now: Date): string {
       month: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
+      timeZone: USER_TIMEZONE,
     });
   }
 
   return messageDate.toLocaleTimeString("ru-RU", {
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: USER_TIMEZONE,
   });
 }
 
@@ -119,19 +123,21 @@ function buildDmReportBlocks(messages: StoredMessage[], now: Date): RichBlock[] 
     metaParts.push(formatMessageCount(sortedByDate.length));
     metaParts.push(`последнее ${esc(formatMessageTime(latestMessage.date, now))}`);
 
-    const items = sortedByDate.map((message) => {
+    const lines = sortedByDate.map((message) => {
       const timeLabel = esc(formatMessageTime(message.date, now));
       const text = esc(truncateMessageText(message.text || "[Без текста]"));
-      return `<b>${timeLabel}</b> — ${text}`;
+      return `• <b>${timeLabel}</b> — ${text}`;
     });
 
-    blocks.push(paragraph(`<b>${esc(sender.senderName)}</b>`));
-    blocks.push(paragraph(metaParts.join(" · ")));
-    blocks.push(list(items));
+    const body = [
+      `<b>${esc(sender.senderName)}</b>`,
+      metaParts.join(" · "),
+      "",
+      ...lines,
+    ].join("<br/>");
 
-    if (index < sortedGroups.length - 1) {
-      blocks.push(divider());
-    }
+    blocks.push(paragraph(body));
+    if (index < sortedGroups.length - 1) blocks.push(paragraph("──────────"));
   });
 
   return blocks;
