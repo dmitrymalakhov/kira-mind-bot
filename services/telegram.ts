@@ -28,6 +28,7 @@ let telegramClientLastError: string | null = null;
 let telegramClientLastErrorAt: string | null = null;
 let telegramClientLastReadyAt: string | null = null;
 let telegramClientInitStartedAt: string | null = null;
+const TELEGRAM_RECONNECT_WAIT_TIMEOUT_MS = 5000;
 
 interface TelegramUserClientCredentials {
     apiId: number;
@@ -223,6 +224,18 @@ async function disconnectTelegramClientSafely(client: TelegramClient): Promise<v
     }
 }
 
+async function waitForTelegramClientReady(client: TelegramClient): Promise<boolean> {
+    const deadline = Date.now() + TELEGRAM_RECONNECT_WAIT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+        const diagnostics = buildTelegramClientDiagnostics(client);
+        if (diagnostics.connected && !diagnostics.reconnecting) return true;
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    }
+
+    const diagnostics = buildTelegramClientDiagnostics(client);
+    return diagnostics.connected && !diagnostics.reconnecting;
+}
+
 async function connectAndAuthorizeTelegramClient(
     client: TelegramClient,
     options: { timeoutMs?: number } = {}
@@ -259,12 +272,13 @@ async function connectAndAuthorizeTelegramClient(
  * Раньше приложение вообще не логировало эти события, что затрудняло диагностику «вечного warn» в мониторинге.
  * Здесь используется `console.*` напрямую, а не logTelegramClientMessage, т.к. последняя молчит при silent=true.
  *
- * Логируем только переходы между состояниями (edge-triggered): GramJS может эмитить
- * `UpdateConnectionState.connected` регулярно (внутренние ping-и, update-ы), и логирование
- * каждого эмита заспамливает лог одинаковыми строками «Соединение восстановлено».
+ * Успешное `connected`-событие само по себе не логируем: GramJS может эмитить его
+ * регулярно (внутренние ping-и, update-ы). Восстановление выводится только после
+ * предшествующего `disconnected/broken`, когда это действительно диагностически важно.
  */
 function attachTelegramConnectionStateLogger(client: TelegramClient): void {
     let lastState: number | null = null;
+    let transportProblemObserved = false;
     client.addEventHandler((update: unknown) => {
         if (!(update instanceof UpdateConnectionState)) {
             return;
@@ -274,10 +288,19 @@ function attachTelegramConnectionStateLogger(client: TelegramClient): void {
         }
         lastState = update.state;
         if (update.state === UpdateConnectionState.connected) {
-            console.info("[Telegram user-client] Соединение восстановлено.");
+            // Нормальный connected-сигнал GramJS не является событием для
+            // production-лога: он может приходить после служебных transport
+            // update-ов и повторяться при создании нового клиента. Сообщаем о
+            // восстановлении только если перед этим реально видели проблему.
+            if (transportProblemObserved) {
+                console.info("[Telegram user-client] Соединение восстановлено после сбоя transport.");
+                transportProblemObserved = false;
+            }
         } else if (update.state === UpdateConnectionState.disconnected) {
+            transportProblemObserved = true;
             console.warn("[Telegram user-client] Соединение разорвано, ожидаем reconnect.");
         } else if (update.state === UpdateConnectionState.broken) {
+            transportProblemObserved = true;
             console.warn("[Telegram user-client] Transport-соединение broken.");
         }
     }, new Raw({ types: [UpdateConnectionState] }));
@@ -297,6 +320,9 @@ export async function initTelegramClient(options: TelegramClientInitOptions = {}
         // собственный reconnect-loop. Пересоздание клиента здесь порождает
         // повторные обработчики и поток одинаковых `Соединение восстановлено`.
         if (diagnostics.reconnecting) {
+            if (!await waitForTelegramClientReady(telegramClient)) {
+                return undefined;
+            }
             if (preloadContacts) {
                 await preloadContactsList({ client: telegramClient, silent });
             }

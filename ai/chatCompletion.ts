@@ -61,9 +61,9 @@ async function maybeDelayRetry(
     const delayMs = getGeminiRetryDelayMs(attempt);
     const diagnostics = classifyAiError(error);
     // Первый retry (попытка 2) — штатная ситуация: Gemini может кратковременно
-    // вернуть 503/429/timeout, и короткий backoff её переваривает. Логируем его
-    // как debug, чтобы не засорять лог потоком одинаковых warn при временной
-    // перегрузке провайдера. Начиная с попытки 3 — warn: затяжная проблема.
+    // вернуть 503/429/timeout, и короткий backoff её переваривает. Не пишем его
+    // в лог: Docker всё равно показывает console.debug. Начиная с попытки 3
+    // оставляем warn как индикатор затяжной проблемы провайдера.
     const payload = {
         taskKey,
         provider: modelRef.provider,

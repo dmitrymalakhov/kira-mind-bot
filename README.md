@@ -490,6 +490,7 @@ make remote-deploy-admin SERVER_IP=<ip>
 |------------|--------------|
 | `OPENROUTER_API_KEY` | OpenRouter как дополнительный AI provider для preset-ов |
 | `GEMINI_API_KEY` | Gemini как дополнительный AI provider для preset-ов |
+| `AI_GEMINI_MAX_CONCURRENT` | Максимум одновременных Gemini chat-запросов; по умолчанию `2`, чтобы не перегружать capacity провайдера |
 | `ZAI_API_KEY` | Z.ai / GLM как дополнительный AI provider для preset-ов |
 | `GOOGLE_MAPS_API_KEY` | Карты, адреса, маршруты, места рядом |
 | `IDEOGRAM_API_KEY` | Генерацию изображений |
