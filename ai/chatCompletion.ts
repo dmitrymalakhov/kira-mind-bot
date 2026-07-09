@@ -60,7 +60,11 @@ async function maybeDelayRetry(
     if (presetName !== 'gemini-full' || modelRef.provider !== 'gemini') return;
     const delayMs = getGeminiRetryDelayMs(attempt);
     const diagnostics = classifyAiError(error);
-    console.warn('[AI retry scheduled]', {
+    // Первый retry (попытка 2) — штатная ситуация: Gemini может кратковременно
+    // вернуть 503/429/timeout, и короткий backoff её переваривает. Не пишем его
+    // в лог: Docker всё равно показывает console.debug. Начиная с попытки 3
+    // оставляем warn как индикатор затяжной проблемы провайдера.
+    const payload = {
         taskKey,
         provider: modelRef.provider,
         model: modelRef.model,
@@ -68,7 +72,11 @@ async function maybeDelayRetry(
         errorStatus: diagnostics.errorStatus,
         errorCategory: diagnostics.errorCategory,
         delayMs,
-    });
+    };
+    // `console.debug` также попадает в docker logs, поэтому первый штатный
+    // retry не должен создавать отдельную запись на каждый временный 503.
+    // Если ошибка пережила retry, попытка 3 уже остаётся видимой как warn.
+    if (attempt >= 3) console.warn('[AI retry scheduled]', payload);
     await sleep(delayMs);
 }
 
