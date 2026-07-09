@@ -33,6 +33,7 @@ async function main() {
   const originalLogAiUsage = aiUsageLogService.logAiUsage;
   const originalConsoleWarn = console.warn;
   const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
   const originalGeminiRetryBaseDelay = process.env.AI_GEMINI_RETRY_BASE_DELAY_MS;
   const originalGeminiRetryMaxDelay = process.env.AI_GEMINI_RETRY_MAX_DELAY_MS;
 
@@ -438,13 +439,20 @@ async function main() {
     };
 
     loggedPayloads.length = 0;
+    const scheduledRetryDelays: number[] = [];
+    globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      scheduledRetryDelays.push(Number(timeout ?? 0));
+      return originalSetTimeout(handler, 0, ...args);
+    }) as typeof globalThis.setTimeout;
     await withPreset('hybrid-gemini-gpt', async () => {
       await createChatCompletionForTask('conversation', {
         messages: [{ role: 'user', content: 'need retry flow' }],
       });
     });
+    globalThis.setTimeout = originalSetTimeout;
 
     assert.strictEqual(geminiAttempts, 2);
+    assert.strictEqual(scheduledRetryDelays.length, 0);
     assert.strictEqual(loggedPayloads.length, 3);
     assert.ok(loggedPayloads.every((item) => item.traceId === loggedPayloads[0].traceId));
     assert.deepStrictEqual(
@@ -481,6 +489,11 @@ async function main() {
     };
 
     loggedPayloads.length = 0;
+    scheduledRetryDelays.length = 0;
+    globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      scheduledRetryDelays.push(Number(timeout ?? 0));
+      return originalSetTimeout(handler, 0, ...args);
+    }) as typeof globalThis.setTimeout;
     await assert.rejects(async () => {
       await withPreset('gemini-full', async () => {
         await createChatCompletionForTask('conversation', {
@@ -488,9 +501,12 @@ async function main() {
         });
       });
     });
+    globalThis.setTimeout = originalSetTimeout;
 
     assert.strictEqual(geminiFullAttempts, 2);
     assert.strictEqual(geminiFullOpenAiCalls, 0);
+    assert.strictEqual(scheduledRetryDelays.length, 1);
+    assert.ok(scheduledRetryDelays[0] >= 1);
     assert.deepStrictEqual(
       loggedPayloads.map((item) => ({
         stage: item.stage,
@@ -645,6 +661,7 @@ async function main() {
     } else {
       process.env.AI_GEMINI_RETRY_MAX_DELAY_MS = originalGeminiRetryMaxDelay;
     }
+    globalThis.setTimeout = originalSetTimeout;
     globalThis.fetch = originalFetch;
   }
 }

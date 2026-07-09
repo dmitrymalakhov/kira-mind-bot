@@ -32,12 +32,13 @@ function getGeminiRetryDelayMs(attempt: number): number {
 }
 
 async function maybeDelayRetry(
+    presetName: string,
     taskKey: AiTaskKey,
     modelRef: AiModelRef,
     attempt: number,
     error: unknown,
 ): Promise<void> {
-    if (modelRef.provider !== 'gemini') return;
+    if (presetName !== 'gemini-full' || modelRef.provider !== 'gemini') return;
     const delayMs = getGeminiRetryDelayMs(attempt);
     const diagnostics = classifyAiError(error);
     console.warn('[AI retry scheduled]', {
@@ -170,7 +171,7 @@ async function createChatCompletionForTaskWithTrace(
 
         if (diagnostics.retryable) {
             try {
-                await maybeDelayRetry(taskKey, modelRef, 2, error);
+                await maybeDelayRetry(presetName, taskKey, modelRef, 2, error);
                 return await createChatCompletionWithModel(taskKey, params, presetName, modelRef, traceId, 2, 'retry');
             } catch (retryError) {
                 if (!allowsCrossProviderFallback(presetName)) {
