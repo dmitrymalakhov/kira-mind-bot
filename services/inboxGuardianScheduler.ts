@@ -8,7 +8,7 @@ import { parseLLMJson } from "../utils";
 import { getProactiveChatId } from "../utils/allowedUserChatStore";
 import { getActiveBotProfile } from "../utils/botIdentity";
 import { getSetting, setSetting } from "./botSettingsService";
-import { esc, heading, paragraph, blockquote, footer, RichBlock, sendStructured, checklist } from "../utils/richMessage";
+import { esc, heading, paragraph, footer, RichBlock, sendStructured, checklist } from "../utils/richMessage";
 
 const CHECK_INTERVAL_MS = 60_000;
 const MAX_THREADS_PER_RUN = 30;
@@ -309,10 +309,10 @@ function buildGuardianReportBlocks(items: InboxGuardianItem[]): RichBlock[] {
     const checkItems = items.map((item) => {
         const username = item.senderUsername ? ` (@${esc(item.senderUsername)})` : "";
         const header = `${esc(item.senderName)}${username} · ${esc(formatLocalDateTime(item.lastIncomingAt))} · ${urgencyLabel[item.urgency]}`;
-        const whyOpen = `Что висит: ${esc(item.whyOpen)}`;
-        const action = item.suggestedAction ? `\nЧто сделать: ${esc(item.suggestedAction)}` : "";
+        const whyOpen = `<i>Что висит:</i> ${esc(item.whyOpen)}`;
+        const action = item.suggestedAction ? `\n<i>Что сделать:</i> ${esc(item.suggestedAction)}` : "";
         // checklist-пункт с чекбоксом: пользователь может мысленно отметить сделанное.
-        return { text: `<b>${header}</b>\n${blockquote(whyOpen + action)}` };
+        return { text: `<b>${header}</b>\n${whyOpen}${action}` };
     });
     blocks.push(checklist(checkItems));
     blocks.push(footer("Отметь чекбоксы у того, что уже закрыл — визуально удобнее."));

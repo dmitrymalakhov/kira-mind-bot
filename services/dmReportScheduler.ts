@@ -108,7 +108,7 @@ function buildDmReportBlocks(messages: StoredMessage[], now: Date): RichBlock[] 
     return bLatestDate - aLatestDate;
   });
 
-  const blocks: RichBlock[] = [heading("📬 Новые личные сообщения", 3)];
+  const blocks: RichBlock[] = [heading("📬 Личные сообщения", 3)];
 
   sortedGroups.forEach((senderMessages, index) => {
     const sortedByDate = [...senderMessages].sort((a, b) => a.date.getTime() - b.date.getTime());
@@ -130,9 +130,7 @@ function buildDmReportBlocks(messages: StoredMessage[], now: Date): RichBlock[] 
     });
 
     const body = [
-      `<b>${esc(sender.senderName)}</b>`,
-      metaParts.join(" · "),
-      "",
+      `<b>${esc(sender.senderName)}</b> · ${metaParts.join(" · ")}`,
       ...lines,
     ].join("<br/>");
 
