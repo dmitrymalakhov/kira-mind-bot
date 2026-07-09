@@ -13,7 +13,7 @@ import { registerChatGroupCommands } from "./chatGroupCommands";
 import { registerChatPromptWatchCommands } from "./chatPromptWatchCommands";
 import { registerHealthCommands } from "./healthCommands";
 import { USER_TIMEZONE } from "../constants";
-import { answerCapabilitiesQuestion } from "../capabilities";
+import { answerCapabilitiesQuestion, BOT_CAPABILITIES } from "../capabilities";
 import { getAllChats, isChatPublicMode, setChatPublicMode } from "../services/chatRegistry";
 import { isReflectionModeEnabled, setReflectionModeEnabled, getReflectionStats } from "../services/reflectionModeService";
 import { factAnalysisManager } from "../utils/factAnalysisTimer";
@@ -27,6 +27,7 @@ import {
     setGroupReplyToBotEnabled,
 } from "../services/groupChatFeatureSettings";
 import { isStatusCommandArg, parseBooleanCommandArg } from "../utils/booleanCommandArg";
+import { buildHelpOverviewBlocks, buildHelpTopicBlocks } from "../utils/helpMessage";
 
 
 function parseCommandArgument(text: string | undefined, command: string): string {
@@ -415,15 +416,18 @@ bot.command("group_reply_to_bot", async (ctx) => {
 bot.command("help", async (ctx) => {
     const rawText = ctx.message?.text || "";
     const topic = rawText.replace(/^\/help(?:@\w+)?/i, "").trim();
-    const question = topic
-        ? `Пользователь просит помощь по теме: ${topic}`
-        : "Кратко расскажи, чем ты умеешь помогать и как тебя просить.";
+    const publicMode = ctx.chat?.type !== "private" && !ctx.session?.isAllowedUser;
+
+    if (!topic) {
+        await sendStructuredBlocks(ctx, ctx.chat!.id, buildHelpOverviewBlocks(BOT_CAPABILITIES, publicMode));
+        return;
+    }
 
     await ctx.api.sendChatAction(ctx.chat.id, "typing").catch(() => {});
-    const response = await answerCapabilitiesQuestion(question, {
-        publicMode: ctx.chat?.type !== "private" && !ctx.session?.isAllowedUser,
+    const response = await answerCapabilitiesQuestion(`Пользователь просит помощь по теме: ${topic}`, {
+        publicMode,
     });
-    await ctx.reply(response);
+    await sendStructuredBlocks(ctx, ctx.chat!.id, buildHelpTopicBlocks(topic, response));
 });
 
 // Команда /self_study — самоизучение возможностей, ограничений и потребностей
