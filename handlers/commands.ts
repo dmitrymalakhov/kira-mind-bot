@@ -27,6 +27,7 @@ import {
     setGroupReplyToBotEnabled,
 } from "../services/groupChatFeatureSettings";
 import { isStatusCommandArg, parseBooleanCommandArg } from "../utils/booleanCommandArg";
+import { buildHelpOverviewBlocks, buildHelpTopicBlocks } from "../utils/helpMessage";
 
 
 function parseCommandArgument(text: string | undefined, command: string): string {
@@ -415,15 +416,18 @@ bot.command("group_reply_to_bot", async (ctx) => {
 bot.command("help", async (ctx) => {
     const rawText = ctx.message?.text || "";
     const topic = rawText.replace(/^\/help(?:@\w+)?/i, "").trim();
-    const question = topic
-        ? `Пользователь просит помощь по теме: ${topic}`
-        : "Кратко расскажи, чем ты умеешь помогать и как тебя просить.";
+    const publicMode = ctx.chat?.type !== "private" && !ctx.session?.isAllowedUser;
+
+    if (!topic) {
+        await sendStructuredBlocks(ctx, ctx.chat!.id, buildHelpOverviewBlocks(publicMode));
+        return;
+    }
 
     await ctx.api.sendChatAction(ctx.chat.id, "typing").catch(() => {});
-    const response = await answerCapabilitiesQuestion(question, {
-        publicMode: ctx.chat?.type !== "private" && !ctx.session?.isAllowedUser,
+    const response = await answerCapabilitiesQuestion(`Пользователь просит помощь по теме: ${topic}`, {
+        publicMode,
     });
-    await ctx.reply(response);
+    await sendStructuredBlocks(ctx, ctx.chat!.id, buildHelpTopicBlocks(topic, response));
 });
 
 // Команда /self_study — самоизучение возможностей, ограничений и потребностей
