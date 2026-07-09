@@ -4,6 +4,7 @@ import { devLog, processMarkdownLinks } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { createResponseForTask } from "../ai/responseCompletion";
 import { formatDateInTimeZone } from "../utils/time";
+import { buildSafeAiErrorLog } from "../ai/errorDiagnostics";
 
 interface WebSearchResult {
     success: boolean;
@@ -11,13 +12,19 @@ interface WebSearchResult {
     error?: string;
 }
 
+export interface WebSearchProcessingResult extends ProcessingResult {
+    webSearchSucceeded: boolean;
+}
+
+const WEB_SEARCH_UNAVAILABLE_MESSAGE = "Поиск сейчас временно недоступен. Попробуйте ещё раз чуть позже.";
+
 export async function webSearchAgent(
     message: string,
     isForwarded: boolean = false,
     forwardFrom: string = "",
     messageHistory: MessageHistory[] = [],
     memoryContext: string = ""
-): Promise<ProcessingResult> {
+): Promise<WebSearchProcessingResult> {
     try {
         let historyContext = "";
         if (messageHistory.length > 0) {
@@ -33,30 +40,28 @@ export async function webSearchAgent(
         if (searchResponse.success && searchResponse.results) {
             devLog("Web search successful. Returning results.");
             return {
-                responseText: searchResponse.results
+                responseText: searchResponse.results,
+                webSearchSucceeded: true,
             };
         } else {
-            console.error("Web search failed:", searchResponse.error);
-
-            const errorMessage = `Не удалось получить результаты поиска${searchResponse.error ? `: ${searchResponse.error}` : ""}. Попробуйте сформулировать запрос иначе.`;
-
             return {
-                responseText: errorMessage
+                responseText: WEB_SEARCH_UNAVAILABLE_MESSAGE,
+                webSearchSucceeded: false,
             };
         }
     } catch (error) {
-        console.error("Error in webSearchAgent:", error);
+        console.error("Unexpected webSearchAgent failure:", buildSafeAiErrorLog(error));
 
         const errorMessage = "Произошла ошибка при поиске информации. Попробуйте позже.";
         return {
-            responseText: errorMessage
+            responseText: errorMessage,
+            webSearchSucceeded: false,
         };
     }
 }
 
 /**
- * Альтернативная реализация веб-поиска с использованием API OpenAI
- * Реализует поиск через модель gpt-4o с доступом к интернету
+ * Выполняет provider-aware веб-поиск через task routing активного AI preset-а.
  * @param query Поисковый запрос
  * @returns Результаты поиска или информация об ошибке
  */
@@ -120,10 +125,10 @@ async function performWebSearch(query: string): Promise<WebSearchResult> {
             };
         }
     } catch (error: any) {
-        console.error("Error during web search with OpenAI:", error);
+        console.error("Web search providers failed:", buildSafeAiErrorLog(error));
         return {
             success: false,
-            error: `Произошла ошибка при выполнении поиска${error && error.message ? `: ${error.message}` : ""}.`,
+            error: "provider_unavailable",
         };
     }
 }

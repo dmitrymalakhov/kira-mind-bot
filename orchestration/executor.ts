@@ -2,6 +2,7 @@ import type { BotContext } from '../types';
 import type { MessageHistory } from '../types';
 import type { ProcessingResult, MessageClassification } from '../orchestrator';
 import type { Plan, PlanStep } from './types';
+import { canContinueAfterWebSearchFailure } from './webSearchFailurePolicy';
 import { fetchAgentMemoryContext, buildMemoryContextBlock } from '../utils/agentMemoryContext';
 import { conversationAgent } from '../agents/conversationAgent';
 import { reminderAgent } from '../agents/reminderAgent';
@@ -465,10 +466,28 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
                 const webRes = await safeStep('webSearch', () => webSearchAgent(
                     message, isForwarded, forwardFrom, messageHistory, enrichedContextFromMemory || ''
                 ));
-                if (webRes === null) {
-                    // Поиск недоступен — продолжаем план без результатов поиска
+                if (webRes === null || !webRes.webSearchSucceeded) {
+                    // Безопасно продолжаем только к conversation: action-шаги
+                    // могут зависеть от отсутствующих данных поиска.
                     console.warn('[ORCH] webSearch failed, continuing without search context');
                     enrichedContextFromMemory += '\n[Поиск временно недоступен]\n';
+                    if (!nextStep) {
+                        if (webRes) {
+                            webRes.botReaction = classification.details?.botReaction;
+                            return webRes;
+                        }
+                        return {
+                            responseText: 'Поиск сейчас временно недоступен. Попробуй ещё раз чуть позже.',
+                            botReaction: classification.details?.botReaction,
+                        };
+                    }
+                    if (!canContinueAfterWebSearchFailure(nextStep)) {
+                        console.warn('[ORCH] dependent step blocked after webSearch failure:', nextStep.agentId);
+                        return {
+                            responseText: 'Поиск временно недоступен, поэтому я не стала выполнять зависящее от него действие. Попробуй ещё раз чуть позже.',
+                            botReaction: classification.details?.botReaction,
+                        };
+                    }
                     break;
                 }
                 const passToNext = nextStep && (step.params?.asContext === true || hasMoreSteps(i));

@@ -21,6 +21,11 @@
   - исходящий HTTP-трафик не используется как источник правды для токенов;
   - runtime пишет только дешёвые event-log записи в `ai_usage_logs`;
   - все агрегации, breakdown и time-series считаются только в admin backend по запросу UI.
+- True-full AI preset-ы сохраняют провайдера при аварийной деградации:
+  - после исчерпанного управляемого runtime retry тяжёлая Gemini-модель может перейти на lite-модель из `ai/degraded-models.json`;
+  - provider SDK не должен выполнять скрытые retry поверх runtime retry-flow;
+  - Gemini SDK, прямые HTTP-вызовы и ожидание semaphore slot используют ограниченные timeout-ы, а file operations имеют отдельный увеличенный timeout;
+  - фактическое переключение модели обязательно логируется отдельным событием `[AI DEGRADED]` с безопасной диагностикой причины.
 - Reminder-flows, которые продолжаются следующим сообщением пользователя после callback-кнопки, считаются context-critical и должны переживать отдельные Telegram updates через session storage.
 - Contact-aware memory logic должна быть централизована:
   - правила идентичности контакта, tag-based matching и проверки subject-а не дублируются по модулям;

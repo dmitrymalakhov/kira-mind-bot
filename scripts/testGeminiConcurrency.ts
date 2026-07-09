@@ -120,6 +120,47 @@ async function main(): Promise<void> {
         else process.env.AI_GEMINI_MAX_QUEUE = originalMaxQueue;
     }
 
+    const previousQueueTimeout = process.env.AI_GEMINI_QUEUE_TIMEOUT_MS;
+    process.env.AI_GEMINI_MAX_CONCURRENT = '1';
+    process.env.AI_GEMINI_MAX_QUEUE = '2';
+    process.env.AI_GEMINI_QUEUE_TIMEOUT_MS = '20';
+    let releaseTimedBlocker: (() => void) | undefined;
+    let timeoutTestCalls = 0;
+    client.chat.completions.create = async () => {
+        timeoutTestCalls += 1;
+        if (timeoutTestCalls === 1) {
+            await new Promise<void>((resolve) => {
+                releaseTimedBlocker = resolve;
+            });
+        }
+        return { id: 'queue-timeout-test', object: 'chat.completion', choices: [] };
+    };
+    try {
+        const blocker = geminiProviderAdapter.createChatCompletion('gemini-3.5-flash', { messages: [] });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        await assert.rejects(
+            geminiProviderAdapter.createChatCompletion('gemini-3.5-flash', { messages: [] }),
+            (error: unknown) => {
+                const typedError = error as { code?: string; status?: number };
+                return typedError.code === 'AI_GEMINI_QUEUE_TIMEOUT' && typedError.status === 503;
+            },
+        );
+
+        const afterTimeout = geminiProviderAdapter.createChatCompletion('gemini-3.5-flash', { messages: [] });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        releaseTimedBlocker?.();
+        await Promise.all([blocker, afterTimeout]);
+        assert.strictEqual(timeoutTestCalls, 2, 'Просроченный waiter должен удаляться и освобождать место в очереди');
+    } finally {
+        client.chat.completions.create = originalCreate;
+        if (originalMaxConcurrent === undefined) delete process.env.AI_GEMINI_MAX_CONCURRENT;
+        else process.env.AI_GEMINI_MAX_CONCURRENT = originalMaxConcurrent;
+        if (originalMaxQueue === undefined) delete process.env.AI_GEMINI_MAX_QUEUE;
+        else process.env.AI_GEMINI_MAX_QUEUE = originalMaxQueue;
+        if (previousQueueTimeout === undefined) delete process.env.AI_GEMINI_QUEUE_TIMEOUT_MS;
+        else process.env.AI_GEMINI_QUEUE_TIMEOUT_MS = previousQueueTimeout;
+    }
+
     console.log('gemini concurrency checks passed');
 }
 

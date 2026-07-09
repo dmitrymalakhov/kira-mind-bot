@@ -533,7 +533,7 @@ async function main() {
     });
     globalThis.setTimeout = originalSetTimeout;
 
-    assert.strictEqual(geminiFullAttempts, 2);
+    assert.strictEqual(geminiFullAttempts, 3);
     assert.strictEqual(geminiFullOpenAiCalls, 0);
     assert.strictEqual(scheduledRetryDelays.length, 1);
     assert.ok(scheduledRetryDelays[0] >= 1);
@@ -548,6 +548,7 @@ async function main() {
       [
         { stage: 'primary', attempt: 1, success: false, errorStatus: 503, fallbackUsed: false },
         { stage: 'retry', attempt: 2, success: false, errorStatus: 503, fallbackUsed: false },
+        { stage: 'fallback', attempt: 3, success: false, errorStatus: 503, fallbackUsed: true },
       ],
     );
 
