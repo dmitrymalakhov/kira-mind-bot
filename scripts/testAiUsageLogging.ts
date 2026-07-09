@@ -31,6 +31,7 @@ async function main() {
 
   const loggedPayloads: Array<Record<string, unknown>> = [];
   const originalLogAiUsage = aiUsageLogService.logAiUsage;
+  const originalConsoleInfo = console.info;
   const originalConsoleWarn = console.warn;
   const originalFetch = globalThis.fetch;
   const originalSetTimeout = globalThis.setTimeout;
@@ -67,6 +68,7 @@ async function main() {
     aiUsageLogService.logAiUsage = async (payload) => {
       loggedPayloads.push(payload as unknown as Record<string, unknown>);
     };
+    console.info = () => undefined;
     console.warn = () => undefined;
     process.env.AI_GEMINI_RETRY_BASE_DELAY_MS = '1';
     process.env.AI_GEMINI_RETRY_MAX_DELAY_MS = '2';
@@ -470,6 +472,34 @@ async function main() {
       ],
     );
 
+    let switchedPresetAfterFailure = false;
+    geminiMutableClient.chat.completions.create = async () => {
+      if (!switchedPresetAfterFailure) {
+        switchedPresetAfterFailure = true;
+        process.env.AI_MODEL_PRESET = 'gpt-balanced';
+        throw Object.assign(new Error('Gemini 503 before preset switch'), { status: 503 });
+      }
+      throw new Error('Gemini must not receive a stale retry');
+    };
+    loggedPayloads.length = 0;
+    await withPreset('gemini-full', async () => {
+      await createChatCompletionForTask('conversation', {
+        messages: [{ role: 'user', content: 'retry on the current preset' }],
+      });
+    });
+    assert.deepStrictEqual(
+      loggedPayloads.map((item) => ({
+        provider: item.provider,
+        stage: item.stage,
+        attempt: item.attempt,
+        success: item.success,
+      })),
+      [
+        { provider: 'gemini', stage: 'primary', attempt: 1, success: false },
+        { provider: 'openai', stage: 'retry', attempt: 2, success: true },
+      ],
+    );
+
     let geminiFullAttempts = 0;
     let geminiFullOpenAiCalls = 0;
     geminiMutableClient.chat.completions.create = async () => {
@@ -627,6 +657,7 @@ async function main() {
     );
   } finally {
     aiUsageLogService.logAiUsage = originalLogAiUsage;
+    console.info = originalConsoleInfo;
     console.warn = originalConsoleWarn;
     openaiMutableClient.chat.completions.create = originalOpenAiChatCreate;
     geminiMutableClient.chat.completions.create = originalGeminiChatCreate;

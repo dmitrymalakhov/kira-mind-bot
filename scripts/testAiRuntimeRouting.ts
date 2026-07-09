@@ -310,6 +310,28 @@ async function main() {
         };
 
         calls.length = 0;
+        let switchedPresetAfterGeminiFailure = false;
+        geminiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => {
+            calls.push({ provider: 'gemini', method: 'chat.completions.create', body });
+            if (!switchedPresetAfterGeminiFailure) {
+                switchedPresetAfterGeminiFailure = true;
+                process.env.AI_MODEL_PRESET = 'gpt-balanced';
+                throw Object.assign(new Error('Gemini temporarily unavailable'), { status: 503 });
+            }
+            return chatResult(String(body.model));
+        };
+        await withPreset('gemini-full', async () => {
+            await createChatCompletionForTask('conversation', {
+                messages: [{ role: 'user', content: 'переключи preset без повторного Gemini' }],
+            } satisfies ChatParamsWithoutModel);
+        });
+        assert.deepStrictEqual(
+            calls.map((call) => `${call.provider}:${call.method}`),
+            ['gemini:chat.completions.create', 'openai:chat.completions.create'],
+            'После смены preset retry не должен повторно обращаться к Gemini',
+        );
+
+        calls.length = 0;
         await withPreset('gpt-balanced', async () => {
             await createChatCompletionForTask('conversation', {
                 messages: [{ role: 'user', content: 'hello' }],

@@ -2,6 +2,8 @@
 
 ## 2026-07-09
 
+- AI retry-flow упрощён: параллельные проверки смены preset-а объединяют DB-refresh, а JSON fallback и usage analytics используют фактический маршрут и номер попытки после переключения провайдера.
+- Исправлен stale retry при переключении AI preset без перезапуска: запрос, начавшийся в `gemini-full`, больше не повторяет Gemini после выключения этого профиля и продолжает общий retry/fallback-flow уже по актуальному маршруту.
 - `gemini-full` стал мягче к временным перегрузкам Gemini API: chat-runtime теперь делает короткий provider-aware retry delay с jitter перед повтором retryable ошибок (`429/5xx/timeout/network`), не включая GPT fallback для true-full preset-ов.
 - Фоновый `studyChatFlow` больше не создаёт прежний burst в `gemini-full`: для Gemini-only режима введена отдельная пониженная chunk-concurrency (`AI_STUDY_CHAT_GEMINI_CHUNK_CONCURRENCY`, по умолчанию `1`), тогда как остальные preset-ы сохраняют старое поведение.
 - При частичном падении chunk-ов `studyChatFlow` теперь пишет один компактный `degraded mode` лог с числом успешных/упавших чанков вместо менее информативного шума.
