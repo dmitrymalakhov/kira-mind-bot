@@ -13,7 +13,7 @@ import { registerChatGroupCommands } from "./chatGroupCommands";
 import { registerChatPromptWatchCommands } from "./chatPromptWatchCommands";
 import { registerHealthCommands } from "./healthCommands";
 import { USER_TIMEZONE } from "../constants";
-import { answerCapabilitiesQuestion } from "../capabilities";
+import { answerCapabilitiesQuestion, BOT_CAPABILITIES } from "../capabilities";
 import { getAllChats, isChatPublicMode, setChatPublicMode } from "../services/chatRegistry";
 import { isReflectionModeEnabled, setReflectionModeEnabled, getReflectionStats } from "../services/reflectionModeService";
 import { factAnalysisManager } from "../utils/factAnalysisTimer";
@@ -419,7 +419,7 @@ bot.command("help", async (ctx) => {
     const publicMode = ctx.chat?.type !== "private" && !ctx.session?.isAllowedUser;
 
     if (!topic) {
-        await sendStructuredBlocks(ctx, ctx.chat!.id, buildHelpOverviewBlocks(publicMode));
+        await sendStructuredBlocks(ctx, ctx.chat!.id, buildHelpOverviewBlocks(BOT_CAPABILITIES, publicMode));
         return;
     }
 
