@@ -4,6 +4,7 @@ import path from "node:path";
 const SUITES = {
     ai: [
         "testAiModelPresets.ts",
+        "testAiRuntimeConfigService.ts",
         "testAiRuntimeRouting.ts",
         "testAiUsageLogging.ts",
     ],
@@ -34,6 +35,7 @@ const SUITES = {
     ],
     all: [
         "testAiModelPresets.ts",
+        "testAiRuntimeConfigService.ts",
         "testAiRuntimeRouting.ts",
         "testAiUsageLogging.ts",
         "testQdrantMemoryProfileCompatibility.ts",

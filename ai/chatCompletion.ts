@@ -1,5 +1,5 @@
-import { resolveModelForTaskAsync } from './modelResolver';
-import type { AiModelRef, AiTaskKey } from './modelPresets';
+import { resolveModelForTaskAsync, resolveModelForTaskFreshAsync } from './modelResolver';
+import type { AiModelRef, AiPresetName, AiTaskKey } from './modelPresets';
 import { logAiUsage } from '../services/aiUsageLogService';
 import { getAiProviderAdapter } from './providers/registry';
 import type {
@@ -12,6 +12,7 @@ import { allowsCrossProviderFallback, errorToMessage, getTaskFallbackModel } fro
 
 const GEMINI_RETRY_BASE_DELAY_MS = 1000;
 const GEMINI_RETRY_MAX_DELAY_MS = 5000;
+const MAX_PRESET_REFRESHES_PER_REQUEST = 3;
 
 function recordAiUsage(payload: Parameters<typeof logAiUsage>[0]): void {
     void logAiUsage(payload);
@@ -29,6 +30,24 @@ function getGeminiRetryDelayMs(attempt: number): number {
     const exponentialDelay = Math.min(cappedMax, cappedBase * Math.pow(2, Math.max(0, attempt - 1)));
     const jitterMultiplier = 0.85 + Math.random() * 0.3;
     return Math.max(1, Math.round(exponentialDelay * jitterMultiplier));
+}
+
+interface AiTaskRoute {
+    presetName: AiPresetName;
+    modelRef: AiModelRef;
+}
+
+interface AiExecutionResult {
+    response: ChatCompletion;
+    route: AiTaskRoute;
+    attempt: number;
+    stage: AiExecutionStage;
+}
+
+function isSameRoute(left: AiTaskRoute, right: AiTaskRoute): boolean {
+    return left.presetName === right.presetName
+        && left.modelRef.provider === right.modelRef.provider
+        && left.modelRef.model === right.modelRef.model;
 }
 
 async function maybeDelayRetry(
@@ -161,30 +180,74 @@ async function createChatCompletionForTaskWithTrace(
     taskKey: AiTaskKey,
     params: ChatCompletionParamsWithoutModel,
     traceId: string,
-): Promise<ChatCompletion> {
-    const { presetName, modelRef } = await resolveModelForTaskAsync(taskKey);
+): Promise<AiExecutionResult> {
+    let route: AiTaskRoute = await resolveModelForTaskAsync(taskKey);
+    let attempt = 1;
+    let stage: AiExecutionStage = 'primary';
+    let retryUsed = false;
+    let presetRefreshCount = 0;
 
-    try {
-        return await createChatCompletionWithModel(taskKey, params, presetName, modelRef, traceId, 1, 'primary');
-    } catch (error) {
-        const diagnostics = classifyAiError(error);
+    const switchToCurrentRoute = async (): Promise<boolean> => {
+        const currentRoute: AiTaskRoute = await resolveModelForTaskFreshAsync(taskKey);
+        if (isSameRoute(route, currentRoute)) return false;
+        if (presetRefreshCount >= MAX_PRESET_REFRESHES_PER_REQUEST) {
+            throw new Error(`AI preset changed too many times during request: ${taskKey}`);
+        }
 
-        if (diagnostics.retryable) {
-            try {
-                await maybeDelayRetry(presetName, taskKey, modelRef, 2, error);
-                return await createChatCompletionWithModel(taskKey, params, presetName, modelRef, traceId, 2, 'retry');
-            } catch (retryError) {
-                if (!allowsCrossProviderFallback(presetName)) {
-                    throw retryError;
-                }
-                return createFallbackChatCompletion(taskKey, params, retryError, presetName, traceId, 3);
+        console.info('[AI retry switched to current preset]', {
+            taskKey,
+            traceId,
+            previousPreset: route.presetName,
+            previousModel: route.modelRef,
+            currentPreset: currentRoute.presetName,
+            currentModel: currentRoute.modelRef,
+        });
+
+        route = currentRoute;
+        presetRefreshCount += 1;
+        retryUsed = true;
+        attempt += 1;
+        stage = 'retry';
+        return true;
+    };
+
+    while (true) {
+        try {
+            const response = await createChatCompletionWithModel(
+                taskKey,
+                params,
+                route.presetName,
+                route.modelRef,
+                traceId,
+                attempt,
+                stage,
+            );
+            return { response, route, attempt, stage };
+        } catch (error) {
+            const diagnostics = classifyAiError(error);
+
+            if (!diagnostics.retryable) {
+                if (!allowsCrossProviderFallback(route.presetName)) throw error;
+                return createFallbackExecution(taskKey, params, error, route, traceId, attempt + 1);
             }
-        }
 
-        if (!allowsCrossProviderFallback(presetName)) {
-            throw error;
+            // Фоновая задача могла начаться до смены preset-а из админки.
+            if (await switchToCurrentRoute()) continue;
+
+            if (retryUsed) {
+                if (!allowsCrossProviderFallback(route.presetName)) throw error;
+                return createFallbackExecution(taskKey, params, error, route, traceId, attempt + 1);
+            }
+
+            await maybeDelayRetry(route.presetName, taskKey, route.modelRef, attempt + 1, error);
+
+            // Preset мог измениться во время backoff-задержки.
+            if (await switchToCurrentRoute()) continue;
+
+            retryUsed = true;
+            attempt += 1;
+            stage = 'retry';
         }
-        return createFallbackChatCompletion(taskKey, params, error, presetName, traceId, 2);
     }
 }
 
@@ -193,7 +256,33 @@ export async function createChatCompletionForTask(
     params: ChatCompletionParamsWithoutModel,
 ): Promise<ChatCompletion> {
     const trace = createAiExecutionTrace();
-    return createChatCompletionForTaskWithTrace(taskKey, params, trace.traceId);
+    const execution = await createChatCompletionForTaskWithTrace(taskKey, params, trace.traceId);
+    return execution.response;
+}
+
+async function createFallbackExecution(
+    taskKey: AiTaskKey,
+    params: ChatCompletionParamsWithoutModel,
+    originalError: unknown,
+    route: AiTaskRoute,
+    traceId: string,
+    attempt: number,
+): Promise<AiExecutionResult> {
+    const fallbackModel = getTaskFallbackModel(taskKey);
+    const response = await createFallbackChatCompletion(
+        taskKey,
+        params,
+        originalError,
+        route.presetName,
+        traceId,
+        attempt,
+    );
+    return {
+        response,
+        route: { presetName: route.presetName, modelRef: fallbackModel },
+        attempt,
+        stage: 'fallback',
+    };
 }
 
 export async function createFallbackChatCompletion(
@@ -221,15 +310,23 @@ export async function createJsonChatCompletionForTask<T>(
     params: ChatCompletionParamsWithoutModel,
 ): Promise<T | null> {
     const trace = createAiExecutionTrace();
-    const { presetName, modelRef } = await resolveModelForTaskAsync(taskKey);
-    const response = await createChatCompletionForTaskWithTrace(taskKey, params, trace.traceId);
-    const content = response.choices[0]?.message?.content || '';
+    const execution = await createChatCompletionForTaskWithTrace(taskKey, params, trace.traceId);
+    const content = execution.response.choices[0]?.message?.content || '';
     const parsed = parseLLMJson<T>(content);
     if (parsed) return parsed;
 
     const invalidJsonError = new Error('AI response contained invalid JSON');
-    if (!allowsCrossProviderFallback(presetName)) {
-        recordJsonResolutionFailure(taskKey, presetName, modelRef, trace.traceId, 1, 'primary', invalidJsonError, false);
+    if (!allowsCrossProviderFallback(execution.route.presetName)) {
+        recordJsonResolutionFailure(
+            taskKey,
+            execution.route.presetName,
+            execution.route.modelRef,
+            trace.traceId,
+            execution.attempt,
+            execution.stage,
+            invalidJsonError,
+            false,
+        );
         return null;
     }
 
@@ -240,7 +337,7 @@ export async function createJsonChatCompletionForTask<T>(
             invalidJsonError,
             'json-parse-fallback',
             trace.traceId,
-            2,
+            execution.attempt + 1,
         );
         const fallbackParsed = parseLLMJson<T>(fallbackResponse.choices[0]?.message?.content || '');
         if (fallbackParsed) {
@@ -248,7 +345,16 @@ export async function createJsonChatCompletionForTask<T>(
         }
 
         const fallbackModel = getTaskFallbackModel(taskKey);
-        recordJsonResolutionFailure(taskKey, presetName, fallbackModel, trace.traceId, 2, 'fallback', invalidJsonError, true);
+        recordJsonResolutionFailure(
+            taskKey,
+            execution.route.presetName,
+            fallbackModel,
+            trace.traceId,
+            execution.attempt + 1,
+            'fallback',
+            invalidJsonError,
+            true,
+        );
         return null;
     } catch (error) {
         console.warn('[AI JSON fallback failed]', { taskKey, error });
