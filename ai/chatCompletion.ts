@@ -60,7 +60,11 @@ async function maybeDelayRetry(
     if (presetName !== 'gemini-full' || modelRef.provider !== 'gemini') return;
     const delayMs = getGeminiRetryDelayMs(attempt);
     const diagnostics = classifyAiError(error);
-    console.warn('[AI retry scheduled]', {
+    // Первый retry (попытка 2) — штатная ситуация: Gemini может кратковременно
+    // вернуть 503/429/timeout, и короткий backoff её переваривает. Логируем его
+    // как debug, чтобы не засорять лог потоком одинаковых warn при временной
+    // перегрузке провайдера. Начиная с попытки 3 — warn: затяжная проблема.
+    const payload = {
         taskKey,
         provider: modelRef.provider,
         model: modelRef.model,
@@ -68,7 +72,12 @@ async function maybeDelayRetry(
         errorStatus: diagnostics.errorStatus,
         errorCategory: diagnostics.errorCategory,
         delayMs,
-    });
+    };
+    if (attempt >= 3) {
+        console.warn('[AI retry scheduled]', payload);
+    } else {
+        console.debug('[AI retry scheduled]', payload);
+    }
     await sleep(delayMs);
 }
 
