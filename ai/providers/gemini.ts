@@ -51,9 +51,40 @@ const GEMINI_CAPABILITIES: AiProviderCapabilities = {
     allowedChatParams: GEMINI_CHAT_COMPLETION_ALLOWED_PARAMS,
 };
 
+const DEFAULT_GEMINI_REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_GEMINI_FILE_TIMEOUT_MS = 300_000;
+const DEFAULT_GEMINI_QUEUE_TIMEOUT_MS = 5_000;
+
+function getGeminiRequestTimeoutMs(): number {
+    const configured = Number(process.env.AI_GEMINI_REQUEST_TIMEOUT_MS);
+    return Number.isFinite(configured) && configured >= 1_000
+        ? Math.floor(configured)
+        : DEFAULT_GEMINI_REQUEST_TIMEOUT_MS;
+}
+
+function getGeminiFileTimeoutMs(): number {
+    const configured = Number(process.env.AI_GEMINI_FILE_TIMEOUT_MS);
+    return Number.isFinite(configured) && configured >= 1_000
+        ? Math.floor(configured)
+        : DEFAULT_GEMINI_FILE_TIMEOUT_MS;
+}
+
+function getGeminiQueueTimeoutMs(): number {
+    const configured = Number(process.env.AI_GEMINI_QUEUE_TIMEOUT_MS);
+    return Number.isFinite(configured) && configured >= 10
+        ? Math.floor(configured)
+        : DEFAULT_GEMINI_QUEUE_TIMEOUT_MS;
+}
+
+function getGeminiAbortSignal(timeoutMs = getGeminiRequestTimeoutMs()): AbortSignal {
+    return AbortSignal.timeout(timeoutMs);
+}
+
 const geminiClient = new OpenAI({
     apiKey: process.env.GEMINI_API_KEY || 'missing-gemini-api-key',
     baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+    maxRetries: 0,
+    timeout: getGeminiRequestTimeoutMs(),
 });
 
 const DEFAULT_GEMINI_MAX_CONCURRENT = 2;
@@ -61,6 +92,7 @@ const DEFAULT_GEMINI_MAX_QUEUE = 100;
 let activeGeminiRequests = 0;
 const queuedGeminiRequests: Array<{
     resolve: () => void;
+    timeoutId: ReturnType<typeof setTimeout>;
 }> = [];
 
 function getGeminiMaxConcurrent(): number {
@@ -85,21 +117,45 @@ async function acquireGeminiRequestSlot(): Promise<() => void> {
         activeGeminiRequests += 1;
     } else {
         if (queuedGeminiRequests.length >= getGeminiMaxQueue()) {
-            const error = new Error('Gemini request queue is full') as Error & { code?: string };
+            const error = new Error('Gemini request queue is full') as Error & { code?: string; status?: number };
             error.code = 'AI_GEMINI_QUEUE_FULL';
+            error.status = 503;
             throw error;
         }
-        await new Promise<void>((resolve) => queuedGeminiRequests.push({ resolve }));
-        activeGeminiRequests += 1;
+        await new Promise<void>((resolve, reject) => {
+            const waiter = {
+                resolve: () => {
+                    clearTimeout(waiter.timeoutId);
+                    resolve();
+                },
+                timeoutId: undefined as unknown as ReturnType<typeof setTimeout>,
+            };
+            waiter.timeoutId = setTimeout(() => {
+                const waiterIndex = queuedGeminiRequests.indexOf(waiter);
+                if (waiterIndex < 0) return;
+                queuedGeminiRequests.splice(waiterIndex, 1);
+                const error = new Error('Gemini request queue timed out') as Error & { code?: string; status?: number };
+                error.code = 'AI_GEMINI_QUEUE_TIMEOUT';
+                error.status = 503;
+                reject(error);
+            }, getGeminiQueueTimeoutMs());
+            queuedGeminiRequests.push(waiter);
+        });
     }
 
     let released = false;
     return () => {
         if (released) return;
         released = true;
-        activeGeminiRequests = Math.max(0, activeGeminiRequests - 1);
         const next = queuedGeminiRequests.shift();
-        if (next) next.resolve();
+        if (next) {
+            // Передаём уже занятый slot напрямую следующему waiter-у. Если
+            // сначала уменьшить active, новый запрос может вклиниться до
+            // пробуждения waiter-а и временно превысить concurrency limit.
+            next.resolve();
+            return;
+        }
+        activeGeminiRequests = Math.max(0, activeGeminiRequests - 1);
     };
 }
 
@@ -237,6 +293,7 @@ async function uploadGeminiFile(filePath: string, mimeType: string): Promise<{ n
                 display_name: path.basename(filePath),
             },
         }),
+        signal: getGeminiAbortSignal(getGeminiFileTimeoutMs()),
     }));
 
     if (!startResponse.ok) {
@@ -262,6 +319,7 @@ async function uploadGeminiFile(filePath: string, mimeType: string): Promise<{ n
             'X-Goog-Upload-Command': 'upload, finalize',
         },
         body: new Uint8Array(bytes),
+        signal: getGeminiAbortSignal(getGeminiFileTimeoutMs()),
     }));
 
     if (!finalizeResponse.ok) {
@@ -307,6 +365,7 @@ async function deleteGeminiFile(fileName: string | undefined): Promise<void> {
         headers: {
             'x-goog-api-key': getGeminiApiKey(),
         },
+        signal: getGeminiAbortSignal(getGeminiFileTimeoutMs()),
     }));
 
     if (!response.ok && response.status !== 404) {
@@ -369,6 +428,7 @@ export const geminiProviderAdapter: AiProviderAdapter = {
                     ...(tools ? { tools } : {}),
                     ...(Object.keys(generationConfig).length > 0 ? { generation_config: generationConfig } : {}),
                 }),
+                signal: getGeminiAbortSignal(),
             });
 
             if (!response.ok) {
@@ -413,6 +473,7 @@ export const geminiProviderAdapter: AiProviderAdapter = {
                 },
                 output_dimensionality: normalizeGeminiEmbeddingDimension(params.outputDimension),
             }),
+            signal: getGeminiAbortSignal(),
         }));
 
         if (!response.ok) {
@@ -470,6 +531,7 @@ export const geminiProviderAdapter: AiProviderAdapter = {
                         },
                     ],
                 }),
+                signal: getGeminiAbortSignal(),
             }));
 
                 if (!response.ok) {

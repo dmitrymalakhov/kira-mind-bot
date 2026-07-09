@@ -7,7 +7,7 @@ import type {
 } from './providers/types';
 import { logAiUsage } from '../services/aiUsageLogService';
 import { buildSafeAiErrorLog, classifyAiError, createAiExecutionTrace, type AiExecutionStage } from './errorDiagnostics';
-import { allowsCrossProviderFallback, errorToMessage, getTaskFallbackModel } from './runtimeSupport';
+import { allowsCrossProviderFallback, errorToMessage, getSameProviderDegradedModel, getTaskFallbackModel } from './runtimeSupport';
 
 function recordAiUsage(payload: Parameters<typeof logAiUsage>[0]): void {
     void logAiUsage(payload);
@@ -120,8 +120,28 @@ export async function createResponseForTask(
             try {
                 return await createResponseWithModel(taskKey, params, presetName, modelRef, trace.traceId, 2, 'retry');
             } catch (retryError) {
+                const retryDiagnostics = classifyAiError(retryError);
                 if (!allowsCrossProviderFallback(presetName)) {
-                    throw retryError;
+                    const degradedModel = getSameProviderDegradedModel(presetName, modelRef, retryDiagnostics.retryable);
+                    if (!degradedModel) throw retryError;
+                    console.error('[AI DEGRADED] Gemini primary model unavailable, switching to lighter model', {
+                        taskKey,
+                        traceId: trace.traceId,
+                        failedAttempt: 2,
+                        previousModel: modelRef,
+                        degradedModel,
+                        reason: buildSafeAiErrorLog(retryError),
+                    });
+                    return createResponseWithModel(
+                        taskKey,
+                        params,
+                        presetName,
+                        degradedModel,
+                        trace.traceId,
+                        3,
+                        'fallback',
+                        retryError,
+                    );
                 }
                 const fallbackModel = getTaskFallbackModel(taskKey);
                 console.warn('[AI responses fallback]', {

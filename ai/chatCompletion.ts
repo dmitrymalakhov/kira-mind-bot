@@ -8,7 +8,7 @@ import type {
 } from './providers/types';
 import { buildSafeAiErrorLog, classifyAiError, createAiExecutionTrace, type AiExecutionStage } from './errorDiagnostics';
 import { parseLLMJson } from '../utils';
-import { allowsCrossProviderFallback, errorToMessage, getTaskFallbackModel } from './runtimeSupport';
+import { allowsCrossProviderFallback, errorToMessage, getSameProviderDegradedModel, getTaskFallbackModel } from './runtimeSupport';
 
 const GEMINI_RETRY_BASE_DELAY_MS = 1000;
 const GEMINI_RETRY_MAX_DELAY_MS = 5000;
@@ -243,7 +243,15 @@ async function createChatCompletionForTaskWithTrace(
             if (await switchToCurrentRoute()) continue;
 
             if (retryUsed) {
-                if (!allowsCrossProviderFallback(route.presetName)) throw error;
+                if (!allowsCrossProviderFallback(route.presetName)) {
+                    const degradedModel = getSameProviderDegradedModel(
+                        route.presetName,
+                        route.modelRef,
+                        diagnostics.retryable,
+                    );
+                    if (!degradedModel) throw error;
+                    return createDegradedExecution(taskKey, params, error, route, degradedModel, traceId, attempt + 1);
+                }
                 return createFallbackExecution(taskKey, params, error, route, traceId, attempt + 1);
             }
 
@@ -266,6 +274,41 @@ export async function createChatCompletionForTask(
     const trace = createAiExecutionTrace();
     const execution = await createChatCompletionForTaskWithTrace(taskKey, params, trace.traceId);
     return execution.response;
+}
+
+async function createDegradedExecution(
+    taskKey: AiTaskKey,
+    params: ChatCompletionParamsWithoutModel,
+    originalError: unknown,
+    route: AiTaskRoute,
+    degradedModel: AiModelRef,
+    traceId: string,
+    attempt: number,
+): Promise<AiExecutionResult> {
+    console.error('[AI DEGRADED] Gemini primary model unavailable, switching to lighter model', {
+        taskKey,
+        traceId,
+        failedAttempt: attempt - 1,
+        previousModel: route.modelRef,
+        degradedModel,
+        reason: buildSafeAiErrorLog(originalError),
+    });
+    const response = await createChatCompletionWithModel(
+        taskKey,
+        params,
+        route.presetName,
+        degradedModel,
+        traceId,
+        attempt,
+        'fallback',
+        originalError,
+    );
+    return {
+        response,
+        route: { presetName: route.presetName, modelRef: degradedModel },
+        attempt,
+        stage: 'fallback',
+    };
 }
 
 async function createFallbackExecution(

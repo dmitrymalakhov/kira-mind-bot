@@ -1,6 +1,7 @@
 import type { Plan, PlanStep, PlanningInput } from './types';
 import { devLog, parseLLMJson } from '../utils';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
+import { buildSafeAiErrorLog } from '../ai/errorDiagnostics';
 import { llmCache, LLM_CACHE_TTL } from '../utils/llmCache';
 import { isTodayImportanceRequest } from '../utils/todayImportanceIntent';
 
@@ -187,7 +188,7 @@ ${AVAILABLE_STEPS}
         llmCache.set(cacheKey, plan, LLM_CACHE_TTL.PLAN);
         return plan;
     } catch (e) {
-        console.error('Planner error:', e);
+        console.error('Planner failed, using deterministic fallback:', buildSafeAiErrorLog(e));
         return fallbackPlan(intent, message);
     }
 }

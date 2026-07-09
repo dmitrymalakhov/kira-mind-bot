@@ -8,6 +8,7 @@ process.env.KIRA_BOT_TOKEN = process.env.KIRA_BOT_TOKEN || 'test-token';
 process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'test-openai-key';
 process.env.GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'test-gemini-key';
 process.env.ZAI_API_KEY = process.env.ZAI_API_KEY || 'test-zai-key';
+process.env.AI_GEMINI_REQUEST_TIMEOUT_MS = '12345';
 
 interface RecordedCall {
     provider: string;
@@ -21,6 +22,8 @@ type ChatParamsWithoutModel = Omit<OpenAI.Chat.Completions.ChatCompletionCreateP
 type ResponseParamsWithoutModel = Omit<OpenAI.Responses.ResponseCreateParamsNonStreaming, 'model'>;
 
 interface MutableAiClient {
+    maxRetries?: number;
+    timeout?: number;
     chat: {
         completions: {
             create: (body: Record<string, unknown>) => Promise<unknown>;
@@ -108,6 +111,9 @@ async function main() {
     const geminiMutableClient = geminiClient as unknown as MutableAiClient;
     const zaiMutableClient = zaiClient as unknown as MutableAiClient;
 
+    assert.strictEqual(geminiMutableClient.maxRetries, 0, 'Gemini SDK retries must be disabled');
+    assert.strictEqual(geminiMutableClient.timeout, 12345, 'Gemini SDK must use the configured request timeout');
+
     const originalOpenAiChatCreate = openaiMutableClient.chat.completions.create;
     const originalGeminiChatCreate = geminiMutableClient.chat.completions.create;
     const originalZaiChatCreate = zaiMutableClient.chat.completions.create;
@@ -185,6 +191,7 @@ async function main() {
             const url = String(input);
             const parsedBody = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
             if (url === 'https://generativelanguage.googleapis.com/v1beta/interactions') {
+                assert.ok(init?.signal instanceof AbortSignal, 'Gemini Interactions request must have an abort signal');
                 calls.push({
                     provider: 'gemini',
                     method: 'interactions.create',
@@ -772,21 +779,43 @@ async function main() {
                 body: body as Record<string, unknown>,
             };
             recordCall(recordedCall);
+            if (body.model === 'gemini-3.1-flash-lite') {
+                return chatResult(String(body.model));
+            }
             const error = new Error('Gemini temporary failure') as Error & { status?: number };
             error.status = 503;
             throw error;
         };
-        await assert.rejects(async () => {
-            await withPreset('gemini-full', async () => {
-                await createChatCompletionForTask('conversation', {
-                    messages: [{ role: 'user', content: 'hello' }],
-                } satisfies ChatParamsWithoutModel);
-            });
+        await withPreset('gemini-full', async () => {
+            await createChatCompletionForTask('conversation', {
+                messages: [{ role: 'user', content: 'hello' }],
+            } satisfies ChatParamsWithoutModel);
         });
         assert.deepStrictEqual(
             calls.map((call) => `${call.provider}:${call.method}`),
-            ['gemini:chat.completions.create', 'gemini:chat.completions.create'],
+            [
+                'gemini:chat.completions.create',
+                'gemini:chat.completions.create',
+                'gemini:chat.completions.create',
+            ],
         );
+        assert.strictEqual((calls[2] as RecordedCall).body.model, 'gemini-3.1-flash-lite');
+
+        calls.length = 0;
+        await withPreset('gemini-full', async () => {
+            await createChatCompletionForTask('browserPlanning', {
+                messages: [{ role: 'user', content: 'plan resiliently' }],
+            } satisfies ChatParamsWithoutModel);
+        });
+        assert.deepStrictEqual(
+            calls.map((call) => `${call.provider}:${call.method}`),
+            [
+                'gemini:chat.completions.create',
+                'gemini:chat.completions.create',
+                'gemini:chat.completions.create',
+            ],
+        );
+        assert.strictEqual((calls[2] as RecordedCall).body.model, 'gemini-3.1-flash-lite');
         geminiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => {
             const recordedCall: RecordedCall = {
                 provider: 'gemini',
@@ -811,6 +840,18 @@ async function main() {
                         body: parsedBody,
                     },
                 });
+                if (parsedBody?.model === 'gemini-3.1-flash-lite') {
+                    return {
+                        ok: true,
+                        status: 200,
+                        statusText: 'OK',
+                        headers: new Headers({ 'x-goog-request-id': 'gemini-interaction-lite' }),
+                        json: async () => ({
+                            id: 'interaction-lite',
+                            output_text: 'degraded search result',
+                        }),
+                    } as Response;
+                }
                 return {
                     ok: false,
                     status: 503,
@@ -822,18 +863,21 @@ async function main() {
 
             throw new Error(`Unexpected fetch URL in test: ${url}`);
         };
-        await assert.rejects(async () => {
-            await withPreset('gemini-full', async () => {
-                await createResponseForTask('webSearchReasoning', {
-                    input: 'find current docs',
-                    tools: [{ type: 'web_search_preview' }],
-                } satisfies ResponseParamsWithoutModel);
-            });
+        await withPreset('gemini-full', async () => {
+            await createResponseForTask('webSearchReasoning', {
+                input: 'find current docs',
+                tools: [{ type: 'web_search_preview' }],
+            } satisfies ResponseParamsWithoutModel);
         });
         assert.deepStrictEqual(
             calls.map((call) => `${call.provider}:${call.method}`),
-            ['gemini:interactions.create', 'gemini:interactions.create'],
+            [
+                'gemini:interactions.create',
+                'gemini:interactions.create',
+                'gemini:interactions.create',
+            ],
         );
+        assert.strictEqual((calls[2]?.body.body as Record<string, unknown>)?.model, 'gemini-3.1-flash-lite');
 
         calls.length = 0;
         geminiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => {

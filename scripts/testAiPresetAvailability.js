@@ -4,6 +4,7 @@ const {
   getPresetAvailability,
   getPresetAvailabilityForMemoryProfile,
 } = require('../admin-panel/presetAvailability');
+const DEGRADED_MODELS = require('../ai/degraded-models.json');
 
 function createPreset(models) {
   return {
@@ -112,6 +113,36 @@ function testBaseAvailabilityStillSupportsPresetOnlyChecks() {
   });
 }
 
+function testGeminiDegradedRouteUsesSameConfiguredProvider() {
+  const preset = {
+    ...createPreset({
+      conversation: { provider: 'gemini', model: 'gemini-3.5-flash' },
+      webSearchReasoning: { provider: 'gemini', model: 'gemini-3.5-flash' },
+    }),
+    name: 'gemini-full',
+  };
+
+  assert.deepStrictEqual(getPresetAvailability(preset, { GEMINI_API_KEY: 'gemini-key' }), {
+    enabled: true,
+    unavailableReason: undefined,
+  });
+}
+
+function testCrossProviderDegradedRouteIsRejected() {
+  const originalRoute = DEGRADED_MODELS['gemini-full'];
+  DEGRADED_MODELS['gemini-full'] = { provider: 'openai', model: 'gpt-5.4-mini' };
+  try {
+    const availability = getPresetAvailability(AI_PRESETS['gemini-full'], {
+      GEMINI_API_KEY: 'gemini-key',
+      OPENAI_API_KEY: 'openai-key',
+    });
+    assert.strictEqual(availability.enabled, false);
+    assert.match(availability.unavailableReason || '', /должен использовать provider gemini/);
+  } finally {
+    DEGRADED_MODELS['gemini-full'] = originalRoute;
+  }
+}
+
 function main() {
   testCapabilityFallbackKeepsPresetAvailable();
   testCapabilityFallbackStillRequiresFallbackKey();
@@ -122,6 +153,8 @@ function main() {
   testPureGeminiRequiresOpenAiForStableMemoryProfile();
   testPureGlmRequiresZaiAndOpenAi();
   testBaseAvailabilityStillSupportsPresetOnlyChecks();
+  testGeminiDegradedRouteUsesSameConfiguredProvider();
+  testCrossProviderDegradedRouteIsRejected();
   console.log('AI preset availability tests passed');
 }
 
