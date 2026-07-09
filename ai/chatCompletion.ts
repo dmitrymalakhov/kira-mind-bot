@@ -73,11 +73,10 @@ async function maybeDelayRetry(
         errorCategory: diagnostics.errorCategory,
         delayMs,
     };
-    if (attempt >= 3) {
-        console.warn('[AI retry scheduled]', payload);
-    } else {
-        console.debug('[AI retry scheduled]', payload);
-    }
+    // `console.debug` также попадает в docker logs, поэтому первый штатный
+    // retry не должен создавать отдельную запись на каждый временный 503.
+    // Если ошибка пережила retry, попытка 3 уже остаётся видимой как warn.
+    if (attempt >= 3) console.warn('[AI retry scheduled]', payload);
     await sleep(delayMs);
 }
 

@@ -292,6 +292,16 @@ export async function initTelegramClient(options: TelegramClientInitOptions = {}
 
     if (telegramClient) {
         const diagnostics = buildTelegramClientDiagnostics(telegramClient);
+        // Не заменяем клиент, пока GramJS сам выполняет reconnect. В этот момент
+        // `connected` может быть false, но transport ещё жив и должен завершить
+        // собственный reconnect-loop. Пересоздание клиента здесь порождает
+        // повторные обработчики и поток одинаковых `Соединение восстановлено`.
+        if (diagnostics.reconnecting) {
+            if (preloadContacts) {
+                await preloadContactsList({ client: telegramClient, silent });
+            }
+            return telegramClient;
+        }
         if (diagnostics.connected && !diagnostics.reconnecting) {
             const authorized = await telegramClient.isUserAuthorized().catch(() => false);
             if (authorized) {
