@@ -258,12 +258,21 @@ async function connectAndAuthorizeTelegramClient(
  * GramJS эмитит `UpdateConnectionState` через внутренний updateCallback (connect/disconnect/reconnect).
  * Раньше приложение вообще не логировало эти события, что затрудняло диагностику «вечного warn» в мониторинге.
  * Здесь используется `console.*` напрямую, а не logTelegramClientMessage, т.к. последняя молчит при silent=true.
+ *
+ * Логируем только переходы между состояниями (edge-triggered): GramJS может эмитить
+ * `UpdateConnectionState.connected` регулярно (внутренние ping-и, update-ы), и логирование
+ * каждого эмита заспамливает лог одинаковыми строками «Соединение восстановлено».
  */
 function attachTelegramConnectionStateLogger(client: TelegramClient): void {
+    let lastState: number | null = null;
     client.addEventHandler((update: unknown) => {
         if (!(update instanceof UpdateConnectionState)) {
             return;
         }
+        if (lastState === update.state) {
+            return;
+        }
+        lastState = update.state;
         if (update.state === UpdateConnectionState.connected) {
             console.info("[Telegram user-client] Соединение восстановлено.");
         } else if (update.state === UpdateConnectionState.disconnected) {
