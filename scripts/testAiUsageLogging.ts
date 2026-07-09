@@ -33,6 +33,8 @@ async function main() {
   const originalLogAiUsage = aiUsageLogService.logAiUsage;
   const originalConsoleWarn = console.warn;
   const originalFetch = globalThis.fetch;
+  const originalGeminiRetryBaseDelay = process.env.AI_GEMINI_RETRY_BASE_DELAY_MS;
+  const originalGeminiRetryMaxDelay = process.env.AI_GEMINI_RETRY_MAX_DELAY_MS;
 
   const openaiMutableClient = openaiClient as unknown as {
     chat: { completions: { create: (body: Record<string, unknown>) => Promise<unknown> } };
@@ -65,6 +67,8 @@ async function main() {
       loggedPayloads.push(payload as unknown as Record<string, unknown>);
     };
     console.warn = () => undefined;
+    process.env.AI_GEMINI_RETRY_BASE_DELAY_MS = '1';
+    process.env.AI_GEMINI_RETRY_MAX_DELAY_MS = '2';
 
     openaiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => ({
       id: `chat-${body.model}`,
@@ -458,6 +462,49 @@ async function main() {
       ],
     );
 
+    let geminiFullAttempts = 0;
+    let geminiFullOpenAiCalls = 0;
+    geminiMutableClient.chat.completions.create = async () => {
+      geminiFullAttempts += 1;
+      throw Object.assign(new Error('Gemini full 503'), { status: 503, request_id: `gem-full-${geminiFullAttempts}` });
+    };
+    openaiMutableClient.chat.completions.create = async () => {
+      geminiFullOpenAiCalls += 1;
+      return {
+        id: 'unexpected-openai-call',
+        object: 'chat.completion',
+        created: 0,
+        model: 'gpt-5.4-mini',
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'unexpected fallback' } }],
+        usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+      };
+    };
+
+    loggedPayloads.length = 0;
+    await assert.rejects(async () => {
+      await withPreset('gemini-full', async () => {
+        await createChatCompletionForTask('conversation', {
+          messages: [{ role: 'user', content: 'gemini full retry only' }],
+        });
+      });
+    });
+
+    assert.strictEqual(geminiFullAttempts, 2);
+    assert.strictEqual(geminiFullOpenAiCalls, 0);
+    assert.deepStrictEqual(
+      loggedPayloads.map((item) => ({
+        stage: item.stage,
+        attempt: item.attempt,
+        success: item.success,
+        errorStatus: item.errorStatus,
+        fallbackUsed: item.fallbackUsed,
+      })),
+      [
+        { stage: 'primary', attempt: 1, success: false, errorStatus: 503, fallbackUsed: false },
+        { stage: 'retry', attempt: 2, success: false, errorStatus: 503, fallbackUsed: false },
+      ],
+    );
+
     for (const status of [400, 401, 403]) {
       let protectedAttempts = 0;
       geminiMutableClient.chat.completions.create = async () => {
@@ -587,6 +634,16 @@ async function main() {
       zaiMutableClient.audio = originalZaiAudio;
     } else {
       delete zaiMutableClient.audio;
+    }
+    if (originalGeminiRetryBaseDelay === undefined) {
+      delete process.env.AI_GEMINI_RETRY_BASE_DELAY_MS;
+    } else {
+      process.env.AI_GEMINI_RETRY_BASE_DELAY_MS = originalGeminiRetryBaseDelay;
+    }
+    if (originalGeminiRetryMaxDelay === undefined) {
+      delete process.env.AI_GEMINI_RETRY_MAX_DELAY_MS;
+    } else {
+      process.env.AI_GEMINI_RETRY_MAX_DELAY_MS = originalGeminiRetryMaxDelay;
     }
     globalThis.fetch = originalFetch;
   }

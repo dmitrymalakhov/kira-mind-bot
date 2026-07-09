@@ -1,6 +1,7 @@
 import { Api } from 'telegram';
 import { initTelegramClient } from '../services/telegram';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
+import { getActivePresetNameAsync } from '../ai/modelResolver';
 import { config } from '../config';
 import { parseLLMJson } from '../utils';
 import type { MemoryStatus } from '../types';
@@ -485,12 +486,17 @@ function parseFacts(text: string, subject: 'user' | 'contact'): ExtractedFactAbo
         .filter((fact) => fact.content.length >= 8);
 }
 
+interface ChunkExtractionResult {
+    facts: ExtractedFactAboutUser[];
+    partialFailure: boolean;
+}
+
 async function extractRawFactsFromChunk(
     chunk: string,
     contactName: string,
     periodLabel: string,
     options: FactExtractionOptions = {}
-): Promise<ExtractedFactAboutUser[]> {
+): Promise<ChunkExtractionResult> {
     // Два параллельных запроса — каждый про одного человека
     const [userResp, contactResp] = await Promise.allSettled([
         createChatCompletionForTask('memoryExtraction', {
@@ -531,7 +537,10 @@ async function extractRawFactsFromChunk(
         ? parseFacts(contactResp.value.choices[0]?.message?.content?.trim() || '', 'contact')
         : [];
 
-    return [...userFacts, ...contactFacts];
+    return {
+        facts: [...userFacts, ...contactFacts],
+        partialFailure: userResp.status === 'rejected' || contactResp.status === 'rejected',
+    };
 }
 
 // ─── Синтез: консолидация каждой группы отдельно ─────────────────────────────
@@ -633,13 +642,20 @@ async function synthesizeGroup(
 
 async function synthesizeFacts(
     rawFacts: ExtractedFactAboutUser[],
-    contactName: string
+    contactName: string,
+    options: { sequential?: boolean } = {}
 ): Promise<ExtractedFactAboutUser[]> {
     if (rawFacts.length === 0) return [];
 
     const ownerName = config.ownerName || 'пользователь';
     const userFacts = rawFacts.filter(f => f.subject === 'user');
     const contactFacts = rawFacts.filter(f => f.subject === 'contact');
+
+    if (options.sequential) {
+        const synthUser = await synthesizeGroup(userFacts, 'user', ownerName);
+        const synthContact = await synthesizeGroup(contactFacts, 'contact', contactName);
+        return [...synthUser, ...synthContact];
+    }
 
     // Оба синтеза параллельно, каждый про одного человека
     const [synthUser, synthContact] = await Promise.all([
@@ -947,7 +963,29 @@ function withTemporalDefaults(
 // ─── Публичная функция ─────────────────────────────────────────────────────────
 
 // Максимум параллельных LLM-вызовов для чанков (каждый чанк = 2 вызова)
-const CHUNK_CONCURRENCY = 4;
+const DEFAULT_CHUNK_CONCURRENCY = 4;
+const GEMINI_FULL_CHUNK_CONCURRENCY = 1;
+
+interface StudyChatExecutionMode {
+    presetName: string;
+    chunkConcurrency: number;
+    sequentialSynthesis: boolean;
+}
+
+async function resolveStudyChatExecutionMode(): Promise<StudyChatExecutionMode> {
+    const configuredGeminiConcurrency = Number(process.env.AI_STUDY_CHAT_GEMINI_CHUNK_CONCURRENCY);
+    const geminiConcurrency = Number.isFinite(configuredGeminiConcurrency) && configuredGeminiConcurrency > 0
+        ? Math.floor(configuredGeminiConcurrency)
+        : GEMINI_FULL_CHUNK_CONCURRENCY;
+
+    const presetName = await getActivePresetNameAsync();
+    const isGeminiFull = presetName === 'gemini-full';
+    return {
+        presetName,
+        chunkConcurrency: isGeminiFull ? geminiConcurrency : DEFAULT_CHUNK_CONCURRENCY,
+        sequentialSynthesis: isGeminiFull,
+    };
+}
 
 /**
  * Извлекает из текста переписки факты о пользователе (о "Я").
@@ -977,6 +1015,8 @@ export async function extractFactsAboutUserFromConversation(
     };
 
     const chunks = splitIntoChunks(conversationText);
+    const executionMode = await resolveStudyChatExecutionMode();
+    const { chunkConcurrency, sequentialSynthesis } = executionMode;
     console.log(`[studyChatFlow] Анализ переписки: ${chunks.length} чанк(ов), ${conversationText.length} символов`);
     await emitProgress({
         stage: 'chunks_ready',
@@ -989,17 +1029,17 @@ export async function extractFactsAboutUserFromConversation(
         ? `${startDate.toLocaleDateString('ru-RU')} — ${endDate.toLocaleDateString('ru-RU')}`
         : 'неизвестный период';
 
-    // Извлечение чанков батчами — не более CHUNK_CONCURRENCY параллельных пар запросов
-    const chunkResults: PromiseSettledResult<ExtractedFactAboutUser[]>[] = [];
+    // Извлечение чанков батчами — не более chunkConcurrency параллельных пар запросов
+    const chunkResults: PromiseSettledResult<ChunkExtractionResult>[] = [];
     let rawFactsCountSoFar = 0;
-    for (let i = 0; i < chunks.length; i += CHUNK_CONCURRENCY) {
-        const batch = chunks.slice(i, i + CHUNK_CONCURRENCY);
+    for (let i = 0; i < chunks.length; i += chunkConcurrency) {
+        const batch = chunks.slice(i, i + chunkConcurrency);
         const batchResults = await Promise.allSettled(
             batch.map(chunk => extractRawFactsFromChunk(chunk, contactName, periodLabel, options))
         );
         chunkResults.push(...batchResults);
         for (const result of batchResults) {
-            if (result.status === 'fulfilled') rawFactsCountSoFar += result.value.length;
+            if (result.status === 'fulfilled') rawFactsCountSoFar += result.value.facts.length;
         }
         await emitProgress({
             stage: 'batch_done',
@@ -1011,14 +1051,31 @@ export async function extractFactsAboutUserFromConversation(
 
     const rawFacts: ExtractedFactAboutUser[] = [];
     let firstChunkError: string | undefined;
+    let partiallyFailedChunks = 0;
     for (const result of chunkResults) {
         if (result.status === 'fulfilled') {
-            rawFacts.push(...result.value);
+            rawFacts.push(...result.value.facts);
+            if (result.value.partialFailure) {
+                partiallyFailedChunks += 1;
+            }
         } else {
             const reason = result.reason?.message || String(result.reason);
             if (!firstChunkError) firstChunkError = reason;
             console.error('[studyChatFlow] Ошибка чанка:', reason);
         }
+    }
+
+    const rejectedChunks = chunkResults.filter((result) => result.status === 'rejected').length;
+    const degradedChunks = rejectedChunks + partiallyFailedChunks;
+    if (degradedChunks > 0 && rawFacts.length > 0) {
+        console.warn('[studyChatFlow] degraded mode', {
+            presetName: executionMode.presetName,
+            chunkConcurrency,
+            chunksTotal: chunks.length,
+            failedChunks: rejectedChunks,
+            partiallyFailedChunks,
+            successfulChunks: chunkResults.length - rejectedChunks,
+        });
     }
 
     // Все чанки упали — пробрасываем ошибку, чтобы пользователь увидел причину
@@ -1031,7 +1088,7 @@ export async function extractFactsAboutUserFromConversation(
 
     // Синтез: консолидация + умная дедупликация
     await emitProgress({ stage: 'synthesis_start', rawFactsCount: rawFacts.length });
-    const finalFacts = await synthesizeFacts(rawFacts, contactName);
+    const finalFacts = await synthesizeFacts(rawFacts, contactName, { sequential: sequentialSynthesis });
     console.log(`[studyChatFlow] Финальных фактов после синтеза: ${finalFacts.length}`);
     await emitProgress({ stage: 'synthesis_done', factsCount: finalFacts.length });
 
