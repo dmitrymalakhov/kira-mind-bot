@@ -224,8 +224,11 @@ async function disconnectTelegramClientSafely(client: TelegramClient): Promise<v
     }
 }
 
-async function waitForTelegramClientReady(client: TelegramClient): Promise<boolean> {
-    const deadline = Date.now() + TELEGRAM_RECONNECT_WAIT_TIMEOUT_MS;
+async function waitForTelegramClientReady(
+    client: TelegramClient,
+    timeoutMs = TELEGRAM_RECONNECT_WAIT_TIMEOUT_MS,
+): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
         const diagnostics = buildTelegramClientDiagnostics(client);
         if (diagnostics.connected && !diagnostics.reconnecting) return true;
@@ -314,15 +317,39 @@ export async function initTelegramClient(options: TelegramClientInitOptions = {}
     const { preloadContacts = true, silent = false } = options;
 
     if (telegramClient) {
-        const diagnostics = buildTelegramClientDiagnostics(telegramClient);
+        let diagnostics = buildTelegramClientDiagnostics(telegramClient);
         // Не заменяем клиент, пока GramJS сам выполняет reconnect. В этот момент
         // `connected` может быть false, но transport ещё жив и должен завершить
         // собственный reconnect-loop. Пересоздание клиента здесь порождает
         // повторные обработчики и поток одинаковых `Соединение восстановлено`.
-        if (diagnostics.reconnecting) {
-            if (!await waitForTelegramClientReady(telegramClient)) {
-                return undefined;
+        if (!diagnostics.connected) {
+            if (diagnostics.reconnecting) {
+                if (!await waitForTelegramClientReady(telegramClient)) return undefined;
+                if (preloadContacts) {
+                    await preloadContactsList({ client: telegramClient, silent });
+                }
+                return telegramClient;
             }
+            // Между connected=false и установкой isReconnecting GramJS есть
+            // короткое окно. Ждём его, чтобы не вызвать connect() поверх
+            // reconnect-loop, который только что стартовал.
+            if (await waitForTelegramClientReady(telegramClient, 500)) {
+                if (preloadContacts) {
+                    await preloadContactsList({ client: telegramClient, silent });
+                }
+                return telegramClient;
+            }
+            diagnostics = buildTelegramClientDiagnostics(telegramClient);
+            if (diagnostics.reconnecting) {
+                if (!await waitForTelegramClientReady(telegramClient)) return undefined;
+                if (preloadContacts) {
+                    await preloadContactsList({ client: telegramClient, silent });
+                }
+                return telegramClient;
+            }
+        }
+        if (diagnostics.reconnecting) {
+            if (!await waitForTelegramClientReady(telegramClient)) return undefined;
             if (preloadContacts) {
                 await preloadContactsList({ client: telegramClient, silent });
             }

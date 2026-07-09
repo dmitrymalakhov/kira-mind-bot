@@ -57,8 +57,11 @@ const geminiClient = new OpenAI({
 });
 
 const DEFAULT_GEMINI_MAX_CONCURRENT = 2;
+const DEFAULT_GEMINI_MAX_QUEUE = 100;
 let activeGeminiRequests = 0;
-const queuedGeminiChatRequests: Array<() => void> = [];
+const queuedGeminiRequests: Array<{
+    resolve: () => void;
+}> = [];
 
 function getGeminiMaxConcurrent(): number {
     const configured = Number(process.env.AI_GEMINI_MAX_CONCURRENT);
@@ -67,14 +70,26 @@ function getGeminiMaxConcurrent(): number {
         : DEFAULT_GEMINI_MAX_CONCURRENT;
 }
 
+function getGeminiMaxQueue(): number {
+    const configured = Number(process.env.AI_GEMINI_MAX_QUEUE);
+    return Number.isFinite(configured) && configured >= 0
+        ? Math.floor(configured)
+        : DEFAULT_GEMINI_MAX_QUEUE;
+}
+
 async function acquireGeminiRequestSlot(): Promise<() => void> {
     const maxConcurrent = getGeminiMaxConcurrent();
     // Не пропускаем новые запросы перед уже ожидающими в очереди: иначе при
     // постоянном потоке вызовов старые задачи могли голодать.
-    if (activeGeminiRequests < maxConcurrent && queuedGeminiChatRequests.length === 0) {
+    if (activeGeminiRequests < maxConcurrent && queuedGeminiRequests.length === 0) {
         activeGeminiRequests += 1;
     } else {
-        await new Promise<void>((resolve) => queuedGeminiChatRequests.push(resolve));
+        if (queuedGeminiRequests.length >= getGeminiMaxQueue()) {
+            const error = new Error('Gemini request queue is full') as Error & { code?: string };
+            error.code = 'AI_GEMINI_QUEUE_FULL';
+            throw error;
+        }
+        await new Promise<void>((resolve) => queuedGeminiRequests.push({ resolve }));
         activeGeminiRequests += 1;
     }
 
@@ -83,8 +98,8 @@ async function acquireGeminiRequestSlot(): Promise<() => void> {
         if (released) return;
         released = true;
         activeGeminiRequests = Math.max(0, activeGeminiRequests - 1);
-        const next = queuedGeminiChatRequests.shift();
-        if (next) next();
+        const next = queuedGeminiRequests.shift();
+        if (next) next.resolve();
     };
 }
 
