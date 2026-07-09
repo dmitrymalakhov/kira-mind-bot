@@ -175,19 +175,22 @@ export function details(summary: string, blocks: RichBlock[], opts: { open?: boo
  * Поддерживает полный набор: таблицы, заголовки h1-h6, <details>, <pre>, <blockquote>.
  */
 export function renderRichHtml(blocks: RichBlock[]): string {
-    return blocks.map(renderRichBlock).join("\n");
+    return blocks
+        .map(renderRichBlock)
+        .filter(Boolean)
+        .join("<br/>");
 }
 
 function renderRichBlock(block: RichBlock): string {
     switch (block.type) {
         case "paragraph":
-            return block.text ? `<p>${block.text}</p>` : "";
+            return block.text;
         case "heading":
-            return `<h${block.level}>${block.text}</h${block.level}>`;
+            return `<b>${block.text}</b>`;
         case "divider":
-            return "<hr/>";
+            return "──────────";
         case "footer":
-            return `<footer>${block.text}</footer>`;
+            return `<i>${block.text}</i>`;
         case "code":
             return block.language
                 ? `<pre><code class="language-${escAttr(block.language)}">${esc(block.text)}</code></pre>`
@@ -197,15 +200,14 @@ function renderRichBlock(block: RichBlock): string {
             return `<blockquote>${block.text}${credit}</blockquote>`;
         }
         case "list": {
-            const tag = block.ordered ? "ol" : "ul";
-            const items = block.items.map((i) => `<li>${i}</li>`).join("");
-            return `<${tag}>${items}</${tag}>`;
+            return block.items
+                .map((item, i) => (block.ordered ? `${i + 1}. ${item}` : `• ${item}`))
+                .join("<br/>");
         }
         case "checklist": {
-            const items = block.items
-                .map((i) => `<li><input type="checkbox"${i.checked ? " checked" : ""}>${i.text}</li>`)
-                .join("");
-            return `<ul>${items}</ul>`;
+            return block.items
+                .map((i) => `${i.checked ? "[x]" : "[ ]"} ${i.text}`)
+                .join("<br/>");
         }
         case "table": {
             const attrs = [block.bordered !== false ? "bordered" : "", block.striped ? "striped" : ""]
@@ -222,9 +224,8 @@ function renderRichBlock(block: RichBlock): string {
             return `<table${attrStr}>${caption}${headerRow}${bodyRows}</table>`;
         }
         case "details": {
-            const openAttr = block.open ? " open" : "";
             const body = renderRichHtml(block.blocks);
-            return `<details${openAttr}><summary>${block.summary}</summary>\n${body}\n</details>`;
+            return body ? `<b>${block.summary}</b><br/>${body}` : `<b>${block.summary}</b>`;
         }
         default:
             return "";
