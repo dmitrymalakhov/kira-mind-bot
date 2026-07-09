@@ -966,7 +966,7 @@ async function analyzeBatch(
             const factBlocks: RichBlock[] = [list(factItems), ...moreBlock];
 
             const blocks: RichBlock[] = [
-                heading(`🧠 Рефлексия: ${savedCount} факт(ов) из «${esc(buf.chatTitle)}»${esc(emotionNote)}`, 3),
+                heading(`🧠 ${savedCount} факт(ов) · «${esc(buf.chatTitle)}»${esc(emotionNote)}`, 3),
             ];
             // При 4+ фактах сворачиваем список, чтобы не захламлять чат.
             if (update.savedFacts.length > 3) {
