@@ -7,6 +7,7 @@ const SUITES = {
         "testAiRuntimeConfigService.ts",
         "testAiRuntimeRouting.ts",
         "testAiUsageLogging.ts",
+        "testGeminiConcurrency.ts",
     ],
     memory: [
         "testQdrantMemoryProfileCompatibility.ts",
@@ -39,6 +40,7 @@ const SUITES = {
         "testAiRuntimeConfigService.ts",
         "testAiRuntimeRouting.ts",
         "testAiUsageLogging.ts",
+        "testGeminiConcurrency.ts",
         "testQdrantMemoryProfileCompatibility.ts",
         "testSessionStorage.ts",
         "testVoiceReply.ts",
