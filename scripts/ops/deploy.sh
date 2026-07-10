@@ -8,14 +8,14 @@ show_help() {
     echo "Options:"
     echo "  --kira-mind-bot              Deploy the Kira-Mind bot"
     echo "  --admin-panel                Deploy the admin panel"
-    echo "  --server-ip <ip>             Target server IP address"
+    echo "  --server-ip <ip>             Target server IP address (обязательный)"
     echo "  --remote-dir <path>          Отдельный каталог инстанса на сервере"
     exit 1
 }
 
 DEPLOY_KIRA_MIND_BOT=false
 DEPLOY_ADMIN_PANEL=false
-SERVER_IP="165.232.120.123"
+SERVER_IP=""
 REMOTE_DIR=""
 
 while [[ $# -gt 0 ]]; do
@@ -29,6 +29,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ "$DEPLOY_KIRA_MIND_BOT" = false ] && [ "$DEPLOY_ADMIN_PANEL" = false ]; then
+    show_help
+fi
+
+if [ -z "$SERVER_IP" ]; then
+    echo "❌ Не указан --server-ip: целевой адрес VPS обязателен." >&2
     show_help
 fi
 

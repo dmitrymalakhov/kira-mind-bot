@@ -30,6 +30,7 @@ docker_ps() {
     storage-ok:*service=postgres*) echo "postgres-id" ;;
     storage-ok:*service=qdrant*) echo "qdrant-id" ;;
     storage-bad:*service=postgres*) echo "postgres-id" ;;
+    storage-bad:*service=qdrant*) echo "qdrant-id" ;;
   esac
 }
 
@@ -45,7 +46,13 @@ docker_inspect() {
         echo "volume|kira-second-bot_postgres_data"
       fi
       ;;
-    qdrant-id) echo "volume|kira-second-bot_qdrant_storage" ;;
+    qdrant-id)
+      if [ "$FAKE_MODE" = "storage-bad" ]; then
+        echo "volume|foreign_qdrant_storage"
+      else
+        echo "volume|kira-second-bot_qdrant_storage"
+      fi
+      ;;
   esac
 }
 
@@ -150,5 +157,25 @@ if validate_storage_mount \
   echo "storage mismatch must stop deploy" >&2
   exit 1
 fi
+
+# Занятый чужим проектом порт при существующем state-файле обязан блокировать deploy.
+cat > "$ADMIN_STATE_FILE" <<'EOF'
+ADMIN_PORT=7875
+ADMIN_USERNAME=instance-admin
+ADMIN_PASSWORD=instance-password
+EOF
+FAKE_MODE="port-collision"
+ADMIN_PORT="7875"
+if ensure_admin_state 2>/dev/null; then
+  echo "busy admin port with existing state must stop deploy" >&2
+  exit 1
+fi
+
+# Невалидное имя инстанса должно схлопываться в безопасный default.
+KIRA_INSTANCE_NAME="!!!"
+[ "$(resolve_instance_name)" = "kira-mind-bot" ]
+KIRA_INSTANCE_NAME="---"
+[ "$(resolve_instance_name)" = "kira-mind-bot" ]
+KIRA_INSTANCE_NAME="kira-second-bot"
 
 echo "server-common admin state migration checks passed"
