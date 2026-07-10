@@ -52,6 +52,28 @@ function assertInstance(config, name, adminPort) {
   assert.strictEqual(config.services['admin-panel'].ports[0].published, String(adminPort));
 }
 
+function assertNoDestructiveVolumeCleanup() {
+  const files = [
+    path.join(repoRoot, 'Makefile'),
+    path.join(repoRoot, 'scripts', 'ops', 'server-common.sh'),
+    path.join(repoRoot, 'scripts', 'ops', 'server-deploy.sh'),
+    path.join(repoRoot, 'scripts', 'ops', 'server-install.sh'),
+  ];
+  const forbidden = [
+    /volume\s+prune/,
+    /docker\s+volume\s+rm/,
+    /\bdown\b[^\n]*(?:\s-v\b|--volumes\b)/,
+    /system\s+prune[^\n]*--volumes/,
+  ];
+
+  for (const file of files) {
+    const content = fs.readFileSync(file, 'utf8');
+    for (const pattern of forbidden) {
+      assert.doesNotMatch(content, pattern, `${path.relative(repoRoot, file)} contains destructive volume cleanup`);
+    }
+  }
+}
+
 try {
   fs.copyFileSync(sourceCompose, composeFile);
   fs.writeFileSync(path.join(tempDir, '.env.production'), '', 'utf8');
@@ -65,6 +87,7 @@ try {
   assert.notStrictEqual(primary.volumes.postgres_data.name, secondary.volumes.postgres_data.name);
   assert.notStrictEqual(primary.volumes.qdrant_storage.name, secondary.volumes.qdrant_storage.name);
   assert.notStrictEqual(primary.networks.default.name, secondary.networks.default.name);
+  assertNoDestructiveVolumeCleanup();
 
   console.log('multi-instance compose isolation checks passed');
 } finally {

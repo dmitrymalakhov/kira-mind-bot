@@ -15,6 +15,8 @@
   - при миграции старой установки существующие `ADMIN_*` сначала читаются из compose `.env`, а затем сохраняются в локальном `.kira-admin-state`; state-файл конкретного инстанса имеет приоритет.
   - безопасный default для серверного workflow выводится из имени каталога; перед Compose-командой запрещено продолжать, если тот же project name уже принадлежит другому working directory.
   - при первом запуске admin-порт выбирается из свободных `7000–8999`; занятый порт старого собственного контейнера допустим при redeploy, порт чужого project — нет.
+  - перед Compose-командами mount существующих `postgres` и `qdrant` обязан совпадать с `${KIRA_INSTANCE_NAME}_postgres_data` и `${KIRA_INSTANCE_NAME}_qdrant_storage`; несовпадение блокирует deploy до запуска контейнеров.
+  - server workflow не должен использовать `volume prune`, `docker volume rm`, `compose down -v` или `system prune --volumes`.
 - Live health/monitoring для внешних систем должен жить отдельным диагностическим слоем:
   - bot runtime публикует узкие internal health endpoints;
   - admin backend агрегирует их вместе с infra/API checks;

@@ -56,4 +56,17 @@ DEFAULT_KIRA_INSTANCE_NAME="Kira Second Bot"
 unset KIRA_INSTANCE_NAME
 [ "$(resolve_instance_name)" = "kira-second-bot" ]
 
+validate_storage_mount \
+  "postgres" \
+  "volume|kira-second-bot_postgres_data" \
+  "kira-second-bot_postgres_data"
+
+if validate_storage_mount \
+  "qdrant" \
+  "volume|kira-mind-bot_qdrant_storage" \
+  "kira-second-bot_qdrant_storage" 2>/dev/null; then
+  echo "storage mismatch must stop deploy" >&2
+  exit 1
+fi
+
 echo "server-common admin state migration checks passed"

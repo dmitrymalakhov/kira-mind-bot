@@ -125,6 +125,7 @@ ADMIN_PASSWORD=${ADMIN_PASSWORD}
 EOF
 
     ensure_instance_not_owned_by_other_directory
+    verify_existing_storage_bindings
 }
 
 ensure_instance_not_owned_by_other_directory() {
@@ -145,6 +146,49 @@ ensure_instance_not_owned_by_other_directory() {
             return 1
         fi
     done < <("${DOCKER_CMD[@]}" ps -aq --filter "label=com.docker.compose.project=$KIRA_INSTANCE_NAME")
+}
+
+validate_storage_mount() {
+    local service="$1"
+    local actual_mount="$2"
+    local expected_volume="$3"
+
+    if [ "$actual_mount" != "volume|$expected_volume" ]; then
+        echo "Ошибка: сервис '$service' использует storage '$actual_mount', ожидался volume '$expected_volume'." >&2
+        echo "Deploy остановлен до запуска Compose, чтобы не подключить пустую или чужую базу." >&2
+        return 1
+    fi
+}
+
+verify_storage_service_binding() {
+    local service="$1"
+    local destination="$2"
+    local expected_volume="$3"
+    local container_id=""
+    local actual_mount=""
+
+    while IFS= read -r container_id; do
+        [ -n "$container_id" ] || continue
+        actual_mount="$("${DOCKER_CMD[@]}" inspect "$container_id" \
+            --format "{{range .Mounts}}{{if eq .Destination \"$destination\"}}{{.Type}}|{{.Name}}{{end}}{{end}}" \
+            2>/dev/null || true)"
+        validate_storage_mount "$service" "$actual_mount" "$expected_volume"
+    done < <("${DOCKER_CMD[@]}" ps -aq \
+        --filter "label=com.docker.compose.project=$KIRA_INSTANCE_NAME" \
+        --filter "label=com.docker.compose.service=$service")
+}
+
+verify_existing_storage_bindings() {
+    [ "${#DOCKER_CMD[@]}" -gt 0 ] || return 0
+
+    verify_storage_service_binding \
+        "postgres" \
+        "/var/lib/postgresql/data" \
+        "${KIRA_INSTANCE_NAME}_postgres_data"
+    verify_storage_service_binding \
+        "qdrant" \
+        "/qdrant/storage" \
+        "${KIRA_INSTANCE_NAME}_qdrant_storage"
 }
 
 admin_port_is_available_for_instance() {
