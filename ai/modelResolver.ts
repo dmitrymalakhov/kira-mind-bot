@@ -1,4 +1,4 @@
-import { getActiveAiPresetName, getEnvAiPresetName } from '../services/aiRuntimeConfigService';
+import { getActiveAiPresetName, getEnvAiPresetName, refreshActiveAiPresetName } from '../services/aiRuntimeConfigService';
 import {
     aiPresets,
     type AiModelRef,
@@ -23,6 +23,14 @@ export async function getActivePresetNameAsync(): Promise<AiPresetName> {
 
 export async function resolveModelForTaskAsync(taskKey: AiTaskKey): Promise<{ presetName: AiPresetName; modelRef: AiModelRef }> {
     const presetName = await getActivePresetNameAsync();
+    return {
+        presetName,
+        modelRef: aiPresets[presetName].models[taskKey],
+    };
+}
+
+export async function resolveModelForTaskFreshAsync(taskKey: AiTaskKey): Promise<{ presetName: AiPresetName; modelRef: AiModelRef }> {
+    const presetName = await refreshActiveAiPresetName();
     return {
         presetName,
         modelRef: aiPresets[presetName].models[taskKey],

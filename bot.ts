@@ -212,7 +212,7 @@ function setupBot(bot: Bot<BotContext>, config: any) {
       const groupChatContextEnabled = await isGroupChatContextEnabled();
       const senderUsername = ctx.from?.username?.toLowerCase();
       const isOwnBotMessage = Boolean(ctx.from?.is_bot && senderUsername && senderUsername === botUsername);
-      if (groupChatContextEnabled && text && ctx.from && !isOwnBotMessage) {
+      if (text && ctx.from && !isOwnBotMessage) {
         const groupMessage = {
           senderName: ctx.from.first_name || ctx.from.username || 'Участник',
           text,
@@ -221,10 +221,13 @@ function setupBot(bot: Bot<BotContext>, config: any) {
           senderId: ctx.from.id,
           isBot: ctx.from.is_bot,
         };
-        pushGroupChatMessage(ctx.chat!.id, groupMessage);
-        GroupChatMessageRepository.save(ctx.chat!.id, groupMessage).catch((error) => {
-          console.error('[group-context] persist message failed:', error);
-        });
+        if (groupChatContextEnabled) {
+          pushGroupChatMessage(ctx.chat!.id, groupMessage);
+          GroupChatMessageRepository.save(ctx.chat!.id, groupMessage).catch((error) => {
+            console.error('[group-context] persist message failed:', error);
+          });
+        }
+
       }
 
       const isMentioned = isBotMentioned(ctx, text, botUsername);

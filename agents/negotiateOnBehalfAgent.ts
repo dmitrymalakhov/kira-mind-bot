@@ -12,6 +12,10 @@ import { devLog, notifyUser } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { config } from "../config";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
+import {
+    buildContactCommunicationContext,
+    refineMessageForRecipient,
+} from "../utils/contactCommunicationContext";
 
 /**
  * Анализирует запрос на переговоры: контакт, задача, первое сообщение.
@@ -102,8 +106,17 @@ export async function negotiateOnBehalfAgent(
         }
 
         const contactName = `${contact.firstName} ${contact.lastName || ""}`.trim() || contactSearch;
-        const firstMessageText = parsed.firstMessageText || "Здравствуйте! Нужно уточнить один вопрос.";
+        const baseFirstMessageText = parsed.firstMessageText || "Здравствуйте! Нужно уточнить один вопрос.";
         const taskDescription = parsed.taskDescription || "переговоры по запросу пользователя";
+        const communicationContext = await buildContactCommunicationContext(ctx, contactName, contact, message);
+        const firstMessageText = await refineMessageForRecipient({
+            ctx,
+            recipientName: contactName,
+            draftText: baseFirstMessageText,
+            userRequest: message,
+            taskContext: `${taskDescription}\n\n${enrichedContextFromMemory}`,
+            communicationContext,
+        });
 
         const originalChatId = ctx.chat?.id;
         if (originalChatId == null) {
@@ -115,6 +128,7 @@ export async function negotiateOnBehalfAgent(
             contactName,
             taskDescription,
             firstMessageText,
+            contactCommunicationContext: communicationContext.promptBlock || undefined,
         });
 
         const previewText =

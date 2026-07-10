@@ -9,6 +9,7 @@ const PRESET_CACHE_TTL_MS = 5000;
 let cachedPresetName: AiPresetName | null = null;
 let lastRefreshAt = 0;
 let cachedFromDb = false;
+let activePresetRefreshPromise: Promise<AiPresetName> | null = null;
 
 function setCachedPresetName(preset: AiPresetName, fromDb = false): AiPresetName {
     cachedPresetName = preset;
@@ -64,6 +65,34 @@ export async function getActiveAiPresetName(): Promise<AiPresetName> {
             return setCachedPresetName(cachedPresetName, cachedFromDb);
         }
         return setCachedPresetName(fallback);
+    }
+}
+
+/**
+ * Читает preset напрямую из БД и обновляет runtime-кеш.
+ * Используется только на error-path, когда retry не должен продолжать
+ * маршрут, который пользователь уже сменил в админке. Ошибка чтения
+ * намеренно пробрасывается: при неизвестном preset нельзя безопасно
+ * повторять запрос по потенциально устаревшему маршруту.
+ */
+export async function refreshActiveAiPresetName(): Promise<AiPresetName> {
+    const fallback = getEnvAiPresetName();
+
+    if (!AppDataSource.isInitialized) return setCachedPresetName(fallback);
+    if (activePresetRefreshPromise) return activePresetRefreshPromise;
+
+    const refreshPromise = loadPresetFromDb(fallback).catch((error) => {
+        console.warn('[AI preset] Не удалось принудительно обновить runtime preset из БД:', error);
+        throw error;
+    });
+    activePresetRefreshPromise = refreshPromise;
+
+    try {
+        return await refreshPromise;
+    } finally {
+        if (activePresetRefreshPromise === refreshPromise) {
+            activePresetRefreshPromise = null;
+        }
     }
 }
 

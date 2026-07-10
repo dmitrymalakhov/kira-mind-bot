@@ -1,5 +1,6 @@
 import { getFallbackModel } from './fallbackModels';
-import type { AiModelRef, AiTaskKey } from './modelPresets';
+import { getDegradedModel } from './degradedModels';
+import { isTrueFullAiPreset, parseAiPresetName, type AiModelRef, type AiTaskKey } from './modelPresets';
 
 export type FallbackPolicyMode = 'task-default';
 
@@ -9,6 +10,30 @@ export function getTaskFallbackModel(taskKey: AiTaskKey): AiModelRef {
 
 export function getTransitionalTaskFallbackModel(taskKey: AiTaskKey): AiModelRef {
     return getTaskFallbackModel(taskKey);
+}
+
+export function allowsCrossProviderFallback(presetName: string): boolean {
+    const parsedPresetName = parseAiPresetName(presetName);
+    if (!parsedPresetName) return true;
+    return !isTrueFullAiPreset(parsedPresetName);
+}
+
+/**
+ * True-full preset остаётся provider-pure и при деградации: после исчерпанного
+ * retry тяжёлая Gemini-модель может перейти на более доступную Gemini Flash
+ * Lite. Повторять тот же lite-маршрут ещё раз бессмысленно.
+ */
+export function getSameProviderDegradedModel(
+    presetName: string,
+    currentModel: AiModelRef,
+    retryable: boolean,
+): AiModelRef | null {
+    const parsedPresetName = parseAiPresetName(presetName);
+    if (!retryable || !parsedPresetName || !isTrueFullAiPreset(parsedPresetName)) return null;
+    const degradedModel = getDegradedModel(parsedPresetName);
+    if (!degradedModel || degradedModel.provider !== currentModel.provider) return null;
+    if (currentModel.model === degradedModel.model) return null;
+    return degradedModel;
 }
 
 const MAX_AI_ERROR_MESSAGE_LENGTH = 320;

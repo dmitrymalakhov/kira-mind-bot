@@ -15,9 +15,14 @@ import { devLog, notifyUser } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { config } from "../config";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
-import { getContactPortrait } from "../services/PsychologicalPortraitService";
 import { getTelegramVoiceReadinessIssue, withTelegramVoiceFile } from "../services/elevenLabsTts";
 import { normalizeNumbersForVoiceMessage } from "../utils/russianSpeechNumbers";
+import {
+    buildContactCommunicationContext,
+    refineMessageForRecipient,
+} from "../utils/contactCommunicationContext";
+import { formatPromptDateTime } from "../utils/time";
+import { USER_TIMEZONE } from "../constants";
 
 export type MessageDeliveryMode = "text" | "voice";
 
@@ -164,7 +169,7 @@ async function analyzeAndGenerateMessage(
             : '';
 
         const prompt = `
-        Текущая дата и время: ${currentDate.toLocaleString('ru-RU')}
+        Текущая дата и время: ${formatPromptDateTime(currentDate)}
 
         Запрос пользователя: "${message}"
         ${historyContext}
@@ -434,20 +439,7 @@ export async function sendMessagesAgent(
 
         await notifyUser(ctx, '✍️ Составляю сообщение…');
 
-        // Предварительно пробуем найти портрет контакта по имени из запроса
-        // (быстрая эвристика: ищем первое совпадение в тексте)
-        let contactPortrait = '';
-        try {
-            // Извлекаем имя контакта через простую LLM-классификацию аналогично другим агентам
-            // Для скорости — ищем портрет по наиболее вероятному имени из enrichedContextFromMemory
-            const nameHint = enrichedContextFromMemory.match(/под «[^»]+» имеется в виду: ([^\s(]+(?:\s+[^\s(]+)?)/)?.[1];
-            if (nameHint) {
-                const portrait = await getContactPortrait(ctx, nameHint);
-                if (portrait) contactPortrait = portrait;
-            }
-        } catch { /* ignore */ }
-
-        const result = await analyzeAndGenerateMessage(message, contactsStore, messageHistory, enrichedContextFromMemory, contactPortrait);
+        const result = await analyzeAndGenerateMessage(message, contactsStore, messageHistory, enrichedContextFromMemory, '');
 
         devLog("sendMessagesAgent", "Анализ запроса:", result);
 
@@ -455,8 +447,8 @@ export async function sendMessagesAgent(
         const deliveryMode: MessageDeliveryMode = wantsOutboundVoiceMessage(message) || result.deliveryMode === "voice"
             ? "voice"
             : "text";
-        const messageText = prepareTextForDelivery(result.messageText || "", deliveryMode);
-        if (!messageText.trim()) {
+        const baseMessageText = result.messageText || "";
+        if (!baseMessageText.trim()) {
             return {
                 responseText: result.errorMessage || "Не удалось составить текст сообщения. Сформулируй, пожалуйста, что именно нужно передать адресату."
             };
@@ -474,6 +466,8 @@ export async function sendMessagesAgent(
                     responseText: `Группу или чат с названием «${result.groupName}» не удалось найти. Проверь название или убедись, что этот чат есть в списке диалогов.`
                 };
             }
+
+            const messageText = prepareTextForDelivery(baseMessageText, deliveryMode);
 
             if (deliveryMode === "voice") {
                 if (result.scheduledTime && result.scheduledTime > new Date()) {
@@ -537,6 +531,18 @@ export async function sendMessagesAgent(
             };
         }
 
+        const contactName = `${contact.firstName} ${contact.lastName || ''}`.trim() || contactSearchQuery;
+        const communicationContext = await buildContactCommunicationContext(ctx, contactName, contact, message);
+        const refinedMessageText = await refineMessageForRecipient({
+            ctx,
+            recipientName: contactName,
+            draftText: baseMessageText,
+            userRequest: message,
+            taskContext: enrichedContextFromMemory,
+            communicationContext,
+        });
+        const messageText = prepareTextForDelivery(refinedMessageText, deliveryMode);
+
         if (deliveryMode === "voice") {
             if (result.scheduledTime && result.scheduledTime > new Date()) {
                 return {
@@ -557,6 +563,7 @@ export async function sendMessagesAgent(
 
         if (scheduledTime) {
             scheduledTimeDisplay = scheduledTime.toLocaleString('ru-RU', {
+                timeZone: USER_TIMEZONE,
                 day: 'numeric',
                 month: 'long',
                 hour: 'numeric',

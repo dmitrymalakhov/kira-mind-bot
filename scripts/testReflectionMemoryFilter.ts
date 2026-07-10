@@ -1,15 +1,18 @@
 import assert from "node:assert/strict";
-import { isReflectionMemoryNoiseCandidate } from "../utils/reflectionMemoryFilter";
+import {
+    getReflectionMemoryNoiseReasons,
+    isReflectionMemoryNoiseCandidate,
+} from "../utils/reflectionMemoryFilter";
 
-assert.equal(
-    isReflectionMemoryNoiseCandidate({
+const chatGptRecognition = {
         content: "10 июня 2026 года Дмитрий использует ChatGPT для распознавания материалов и готов донастроить процесс.",
         tags: ["source:reflection", "temporal_scope:current_state"],
         importance: 0.7,
         confidence: 0.8,
-    }),
-    true
-);
+};
+
+assert.equal(isReflectionMemoryNoiseCandidate(chatGptRecognition), true);
+assert.deepEqual(getReflectionMemoryNoiseReasons(chatGptRecognition), ["technical_process", "one_off_activity"]);
 
 assert.equal(
     isReflectionMemoryNoiseCandidate({
@@ -39,6 +42,36 @@ assert.equal(
         confidence: 0.8,
     }),
     true
+);
+
+assert.deepEqual(
+    getReflectionMemoryNoiseReasons({
+        content: "Владислав Баранюк находится в Туле.",
+        tags: ["source:reflection"],
+        importance: 0.8,
+        confidence: 0.8,
+    }),
+    ["temporary_state"]
+);
+
+assert.deepEqual(
+    getReflectionMemoryNoiseReasons({
+        content: "Владислав пока в Туле.",
+        tags: ["source:reflection"],
+        importance: 0.9,
+        confidence: 0.8,
+    }),
+    ["temporary_state"]
+);
+
+assert.equal(
+    isReflectionMemoryNoiseCandidate({
+        content: "Владислав сейчас в больнице.",
+        tags: ["source:reflection"],
+        importance: 0.9,
+        confidence: 0.8,
+    }),
+    false
 );
 
 assert.equal(

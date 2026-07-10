@@ -10,7 +10,9 @@ import { runMemoryConsolidationForContext } from '../services/MemoryConsolidatio
 import { runMemorySchemaConsolidationForContext } from '../services/MemorySchemaConsolidationService';
 import { runMemorySleepCycleForUser } from '../services/MemorySleepCycleService';
 import { getPersonalChatMemoryIndexStatus, runPersonalChatMemoryIndexingCycle } from '../services/personalChatMemoryIndexer';
-import { isReflectionMemoryNoiseCandidate } from '../utils/reflectionMemoryFilter';
+import { getReflectionMemoryNoiseReasons } from '../utils/reflectionMemoryFilter';
+import { esc, heading, table, list, blockquote, paragraph, RichBlock } from '../utils/richMessage';
+import { sendStructuredBlocks } from '../utils';
 
 function isAdmin(ctx: BotContext): boolean {
     return ctx.from?.id === config.adminUserId;
@@ -43,8 +45,9 @@ interface PendingReflectionCleanup {
 }
 
 const pendingReflectionCleanups = new Map<string, PendingReflectionCleanup>();
-const REFLECTION_CLEANUP_LIMIT = 20;
+const REFLECTION_CLEANUP_LIMIT = 12;
 const REFLECTION_CLEANUP_TTL_MS = 10 * 60 * 1000;
+const REFLECTION_CLEANUP_LINE_MAX = 160;
 
 function cleanupExpiredReflectionCleanups(): void {
     const now = Date.now();
@@ -61,7 +64,22 @@ function newReflectionCleanupToken(): string {
 
 function compactMemoryLine(content: string): string {
     const clean = content.replace(/\s+/g, ' ').trim();
-    return clean.length <= 220 ? clean : `${clean.slice(0, 217)}...`;
+    return clean.length <= REFLECTION_CLEANUP_LINE_MAX
+        ? clean
+        : `${clean.slice(0, REFLECTION_CLEANUP_LINE_MAX - 3)}...`;
+}
+
+function reflectionCleanupReasonLabel(reason: string): string {
+    switch (reason) {
+        case 'technical_process':
+            return 'технический процесс';
+        case 'one_off_activity':
+            return 'одноразовое действие';
+        case 'temporary_state':
+            return 'временное состояние';
+        default:
+            return reason;
+    }
 }
 
 function isBareContactQuery(query: string): boolean {
@@ -243,16 +261,27 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
 
         cleanupExpiredReflectionCleanups();
         const reflectionMemories = await svc.getMemoriesByTag(String(userId), 'source:reflection');
-        const candidates = reflectionMemories
-            .filter(isReflectionMemoryNoiseCandidate)
-            .slice(0, REFLECTION_CLEANUP_LIMIT)
+        const noiseMatches = reflectionMemories
             .map(memory => ({
-                id: memory.id,
-                domain: memory.domain,
-                content: memory.content,
+                memory,
+                reasons: getReflectionMemoryNoiseReasons(memory),
+            }))
+            .filter(candidate => candidate.reasons.length > 0)
+            .sort((a, b) => {
+                if (b.reasons.length !== a.reasons.length) return b.reasons.length - a.reasons.length;
+                return b.memory.timestamp.getTime() - a.memory.timestamp.getTime();
+            });
+        const totalCandidates = noiseMatches.length;
+        const candidates = noiseMatches
+            .slice(0, REFLECTION_CLEANUP_LIMIT)
+            .map(candidate => ({
+                id: candidate.memory.id,
+                domain: candidate.memory.domain,
+                content: candidate.memory.content,
+                reasons: candidate.reasons,
             }));
 
-        if (candidates.length === 0) {
+        if (totalCandidates === 0) {
             await ctx.reply('Явного мусора из фоновой рефлексии не нашла.');
             return;
         }
@@ -261,26 +290,32 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
         pendingReflectionCleanups.set(token, {
             userId,
             createdAt: Date.now(),
-            items: candidates,
+            items: candidates.map(({ id, domain, content }) => ({ id, domain, content })),
         });
 
-        const lines = candidates
-            .map((memory, index) => `${index + 1}. [${memory.domain}] ${compactMemoryLine(memory.content)}`)
-            .join('\n');
+        const items = candidates.map((memory) => {
+            const reasons = memory.reasons.map(reflectionCleanupReasonLabel).map(esc).join(', ');
+            return `<b>[${esc(memory.domain)}]</b> (${reasons})<br>${esc(compactMemoryLine(memory.content))}`;
+        });
         const keyboard = new InlineKeyboard()
             .text(`✅ Удалить ${candidates.length}`, `mem_refclean:${token}`)
             .text('❌ Отмена', `mem_refclean_cancel:${token}`);
+        const remaining = Math.max(0, totalCandidates - candidates.length);
 
-        await ctx.reply(
-            [
-                `Нашла ${candidates.length} кандидат(ов) на удаление из reflection-памяти:`,
-                '',
-                lines,
-                '',
-                'Удалять только если список выглядит как технический шум.',
-            ].join('\n'),
-            { reply_markup: keyboard }
-        );
+        const blocks: RichBlock[] = [
+            paragraph(
+                remaining > 0
+                    ? `Нашла <b>${totalCandidates}</b> кандидат(ов), показываю первые ${candidates.length}:`
+                    : `Нашла <b>${candidates.length}</b> кандидат(ов) на удаление из reflection-памяти:`
+            ),
+            list(items, true),
+            paragraph('Удалять только если список выглядит как технический шум.'),
+        ];
+        if (remaining > 0) {
+            blocks.push({ type: "paragraph", text: `После удаления можно запустить /memory_reflection_cleanup ещё раз: останется примерно ${remaining}.` });
+        }
+
+        await sendStructuredBlocks(ctx, ctx.chat!.id, blocks, { replyMarkup: keyboard });
     });
 
     bot.command('memory_consolidate', async (ctx) => {
@@ -569,19 +604,28 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
             return;
         }
 
-        const lines: string[] = [`📜 История факта:\n\n🔹 Сейчас: "${found.content}"`];
+        const blocks: RichBlock[] = [
+            heading('📜 История факта', 3),
+            { type: "paragraph", text: '<b>🔹 Сейчас:</b>' },
+            blockquote(esc(found.content)),
+        ];
 
         if (found.previousVersions && found.previousVersions.length > 0) {
-            lines.push('\nПредыдущие версии:');
-            for (const v of found.previousVersions) {
+            const rows = found.previousVersions.map((v) => {
                 const date = new Date(v.timestamp).toLocaleDateString('ru-RU');
                 const conf = (v.confidence * 100).toFixed(0);
-                lines.push(`• [${date}, достоверность ${conf}%] "${v.content}"`);
-            }
+                return [esc(date), `${conf}%`, esc(v.content)];
+            });
+            blocks.push(table({
+                headers: ['Дата', 'Достоверность', 'Контент'],
+                rows,
+                bordered: true,
+                striped: true,
+            }));
         } else {
-            lines.push('\nИстория изменений пока пуста — факт не менялся.');
+            blocks.push({ type: "paragraph", text: 'История изменений пока пуста — факт не менялся.' });
         }
 
-        await ctx.reply(lines.join('\n'));
+        await sendStructuredBlocks(ctx, ctx.chat!.id, blocks);
     });
 }

@@ -4,9 +4,14 @@ import { devLog } from '../utils';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { getVectorService } from '../services/VectorServiceFactory';
 import { llmCache, LLM_CACHE_TTL } from './llmCache';
-import { Contact } from '../stores/ContactsStore';
-import { contactDisplayName, contactIdentityTags, normalizeContactLookupValue, resolveContactIdentity } from './contactMemory';
-import { isTodayImportanceRequest } from './todayImportance';
+import {
+    contactIdentityTags,
+    ContactIdentityScope,
+    isMemoryEntryAllowedForContactScope,
+    normalizeContactLookupValue,
+    resolveContactIdentityScope,
+} from './contactMemory';
+import { isTodayImportanceRequest } from './todayImportanceIntent';
 
 const ANSWER_RESULTS_PER_QUERY = 5;
 const CONTEXT_RESULTS_PER_QUERY = 2;
@@ -151,13 +156,7 @@ interface RecentMessage {
     content: string;
 }
 
-interface ContactRetrievalScope {
-    status: 'resolved' | 'ambiguous';
-    queryName: string;
-    displayName?: string;
-    contact?: Contact;
-    candidateNames?: string[];
-}
+type ContactRetrievalScope = ContactIdentityScope;
 
 function isMemoryInventoryRequest(message: string): boolean {
     return /^(?:что\s+(?:ты\s+)?(?:знаешь|помнишь|помнила)\s+обо?\s+мне|расскажи\s+что\s+(?:ты\s+)?(?:знаешь|помнишь)(?:\s+обо?\s+мне)?|покажи\s+(?:мою\s+)?память|что\s+ты\s+обо\s+мне(?:\s+знаешь)?|что\s+помнишь\s+обо?\s+мне)\??$/i
@@ -183,94 +182,12 @@ function extractDeterministicQueries(message: string): string[] {
         .filter(q => q.length > 1);
 }
 
-function extractContactReferenceForRetrieval(message: string): string | null {
-    const username = message.match(/@[a-zA-Z0-9_]{3,32}/)?.[0];
-    if (username) return username;
-
-    const patterns = [
-        /(?:о|об|про|для|к|ко|с|со|у|от|по)\s+([А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+){0,2})/u,
-        /(?:написать|позвонить|подарить|купить|встретиться)\s+([А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+)/u,
-    ];
-
-    for (const pattern of patterns) {
-        const match = message.match(pattern);
-        if (match?.[1]) return match[1].trim();
-    }
-
-    return null;
-}
-
 function resolveContactRetrievalScope(message: string): ContactRetrievalScope | null {
-    const contactName = extractContactReferenceForRetrieval(message);
-    if (!contactName) return null;
-
-    const resolution = resolveContactIdentity(contactName);
-    if (resolution.status === 'resolved') {
-        return {
-            status: 'resolved',
-            queryName: contactName,
-            displayName: resolution.displayName,
-            contact: resolution.contact,
-        };
-    }
-
-    if (resolution.status === 'ambiguous') {
-        return {
-            status: 'ambiguous',
-            queryName: contactName,
-            candidateNames: resolution.candidates.map(contactDisplayName),
-        };
-    }
-
-    return null;
-}
-
-function contactIdFromTags(tags: string[] | undefined): string | null {
-    const tag = (tags ?? []).find(t => String(t).startsWith('contact_id:'));
-    return tag ? String(tag).replace('contact_id:', '').trim() : null;
-}
-
-function contactNamesFromTags(tags: string[] | undefined): Set<string> {
-    const names = new Set<string>();
-    for (const tag of tags ?? []) {
-        const value = String(tag);
-        if (value.startsWith('contact:') || value.startsWith('contact_name:') || value.startsWith('contact_alias:')) {
-            names.add(normalizeContactLookupValue(value.replace(/^contact(_name|_alias)?:/, '')));
-        }
-    }
-    return names;
-}
-
-function hasContactTags(tags: string[] | undefined): boolean {
-    return (tags ?? []).some(tag => String(tag).startsWith('contact'));
+    return resolveContactIdentityScope(message);
 }
 
 function isCandidateAllowedByContactScope(candidate: SearchResultLike, scope: ContactRetrievalScope | null): boolean {
-    if (!scope || !hasContactTags(candidate.tags)) return true;
-
-    const names = contactNamesFromTags(candidate.tags);
-
-    if (scope.status === 'ambiguous') {
-        return false;
-    }
-
-    const candidateContactId = contactIdFromTags(candidate.tags);
-    if (candidateContactId) {
-        return scope.contact ? candidateContactId === String(scope.contact.id) : false;
-    }
-
-    const allowedNames = new Set(
-        contactIdentityTags(scope.queryName, scope.contact)
-            .filter(tag => tag.startsWith('contact:') || tag.startsWith('contact_name:') || tag.startsWith('contact_alias:'))
-            .map(tag => normalizeContactLookupValue(tag.replace(/^contact(_name|_alias)?:/, '')))
-    );
-    if (scope.displayName) allowedNames.add(normalizeContactLookupValue(scope.displayName));
-
-    for (const name of names) {
-        if (allowedNames.has(name)) return true;
-    }
-
-    return false;
+    return isMemoryEntryAllowedForContactScope(candidate, scope);
 }
 
 function mergeQueries(primary: string[], generated: string[], limit: number): string[] {

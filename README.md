@@ -137,6 +137,7 @@ make deploy-clean
 - запоминает факты по просьбе и автоматически извлекает важное из разговоров;
 - хранит факты по доменам: `work`, `health`, `family`, `finance`, `education`, `hobbies`, `travel`, `social`, `home`, `personal`, `entertainment`, `contacts`, `general`;
 - показывает сводку того, что знает о владельце;
+- в проактивных подсказках старается объяснять, из какой переписки или контекста взята информация, и не подставлять догадки вместо неизвестного источника;
 - умеет забывать факты, показывать историю изменений и отчёты о качестве памяти;
 - фоново консолидирует знания, строит инсайты и запускает самоизучение.
 
@@ -149,6 +150,12 @@ make deploy-clean
 Покажи историю факта про работу
 Изучи себя и свои потребности
 ```
+
+#### Важно
+
+Память теперь использует стабильный embedding-profile `stable-1536` (`openai:text-embedding-3-small`, `1536`, `Cosine`).
+
+Если после обновления в логах появляется ошибка про несовместимость Qdrant-коллекции и `memory profile`, значит старая memory-коллекция была создана с другой размерностью. В этом случае нужно пересоздать такую коллекцию или вручную мигрировать её данные; простое переключение `AI_MODEL_PRESET` это не чинит.
 
 ### Напоминания и планирование
 
@@ -401,6 +408,8 @@ make remote-deploy-admin SERVER_IP=<ip>
 - смотреть статус контейнеров;
 - перезапускать сервисы после изменения настроек.
 
+Важно: conversational `AI preset` и memory embeddings теперь разделены. Переключение preset меняет генеративный контур, но не меняет отдельный stable memory profile, через который бот пишет и читает память из Qdrant.
+
 Через `.env.production` пока удобнее настраивать часть фоновых режимов: консолидацию памяти, фоновое изучение личных переписок и утренний дайджест.
 
 ---
@@ -470,6 +479,7 @@ make remote-deploy-admin SERVER_IP=<ip>
 | Переменная | Зачем нужна |
 |------------|-------------|
 | `OPENAI_API_KEY` | LLM, embeddings, web search, Whisper, анализ изображений |
+| `MEMORY_EMBEDDING_PROFILE` | Необязательный runtime override для отдельного memory profile; по умолчанию используется `stable-1536` |
 | `KIRA_BOT_TOKEN` | Токен Telegram-бота |
 | `KIRA_ALLOWED_USER_ID` | Telegram User ID владельца |
 | `KIRA_INSTANCE_NAME` | Имя Docker Compose-инстанса; нужно для нескольких копий на одном VPS |
@@ -481,6 +491,8 @@ make remote-deploy-admin SERVER_IP=<ip>
 |------------|--------------|
 | `OPENROUTER_API_KEY` | OpenRouter как дополнительный AI provider для preset-ов |
 | `GEMINI_API_KEY` | Gemini как дополнительный AI provider для preset-ов |
+| `AI_GEMINI_MAX_CONCURRENT` | Максимум одновременных Gemini API-запросов; по умолчанию `2`, чтобы не перегружать capacity провайдера |
+| `AI_GEMINI_MAX_QUEUE` | Максимум ожидающих Gemini API-запросов; по умолчанию `100`, после чего включается контролируемая деградация |
 | `ZAI_API_KEY` | Z.ai / GLM как дополнительный AI provider для preset-ов |
 | `GOOGLE_MAPS_API_KEY` | Карты, адреса, маршруты, места рядом |
 | `IDEOGRAM_API_KEY` | Генерацию изображений |
@@ -555,6 +567,8 @@ Qdrant доступен внутри Docker-сети по `http://qdrant:6333` �
 | `REMINDER_EXPIRY_TIME_MS` | Сколько хранить выполненные напоминания |
 | `KIRA_PROACTIVE_ENABLED` | Может ли бот писать первым |
 | `KIRA_PROACTIVE_INTERVAL_MS` | Интервал проактивных сообщений |
+| `KIRA_INNER_DEVELOPMENT_ENABLED` | Автономное внутреннее развитие без отправки сообщений |
+| `KIRA_INNER_DEVELOPMENT_INTERVAL_MS` | Интервал автономного развития self-memory |
 | `DM_REPORT_ENABLED` | Периодические отчёты о входящих |
 | `MEMORY_INSIGHT_ENABLED` | Проактивные инсайты из памяти |
 | `MEMORY_CONSOLIDATION_ENABLED` | Фоновая консолидация памяти |

@@ -1,9 +1,12 @@
 import { Bot } from "grammy";
 import { config } from "../config";
+import { USER_TIMEZONE } from "../constants";
 import { BotContext } from "../types";
 import { MessageStore, StoredMessage } from "../stores/MessageStore";
 import { getProactiveChatId } from "../utils/allowedUserChatStore";
 import { getActiveBotProfile } from "../utils/botIdentity";
+import { getZonedDateTimeParts } from "../utils/time";
+import { esc, heading, paragraph, RichBlock, sendStructured } from "../utils/richMessage";
 
 const REPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -18,7 +21,7 @@ function inQuietHours(now: Date): boolean {
     return false;
   }
 
-  const hour = now.getHours();
+  const hour = getZonedDateTimeParts(now, USER_TIMEZONE).hour;
   const start = config.kiraLifeProactiveQuietHourStart;
   const end = config.kiraLifeProactiveQuietHourEnd;
 
@@ -50,12 +53,14 @@ function formatMessageTime(messageDate: Date, now: Date): string {
       month: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
+      timeZone: USER_TIMEZONE,
     });
   }
 
   return messageDate.toLocaleTimeString("ru-RU", {
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: USER_TIMEZONE,
   });
 }
 
@@ -70,7 +75,22 @@ function cleanupReportedMessageIds(now: Date): void {
   }
 }
 
-function formatDmReport(messages: StoredMessage[], now: Date): string {
+function formatMessageCount(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+
+  if (mod10 === 1 && mod100 !== 11) {
+    return `${count} сообщение`;
+  }
+
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return `${count} сообщения`;
+  }
+
+  return `${count} сообщений`;
+}
+
+function buildDmReportBlocks(messages: StoredMessage[], now: Date): RichBlock[] {
   const groupedBySender = new Map<string, StoredMessage[]>();
 
   messages.forEach((message) => {
@@ -83,32 +103,42 @@ function formatDmReport(messages: StoredMessage[], now: Date): string {
   });
 
   const sortedGroups = Array.from(groupedBySender.values()).sort((a, b) => {
-    const aDate = Math.min(...a.map((m) => m.date.getTime()));
-    const bDate = Math.min(...b.map((m) => m.date.getTime()));
-    return aDate - bDate;
+    const aLatestDate = Math.max(...a.map((m) => m.date.getTime()));
+    const bLatestDate = Math.max(...b.map((m) => m.date.getTime()));
+    return bLatestDate - aLatestDate;
   });
 
-  const lines: string[] = ["📬 Новые личные сообщения:", ""];
+  const blocks: RichBlock[] = [heading("📬 Личные сообщения", 3)];
 
   sortedGroups.forEach((senderMessages, index) => {
     const sortedByDate = [...senderMessages].sort((a, b) => a.date.getTime() - b.date.getTime());
     const sender = sortedByDate[0];
-    const username = sender.senderUsername ? ` (@${sender.senderUsername})` : "";
+    const latestMessage = sortedByDate[sortedByDate.length - 1];
+    const metaParts = [];
 
-    lines.push(`${sender.senderName}${username}:`);
+    if (sender.senderUsername) {
+      metaParts.push(`@${esc(sender.senderUsername)}`);
+    }
 
-    sortedByDate.forEach((message) => {
-      const timeLabel = formatMessageTime(message.date, now);
-      const text = truncateMessageText(message.text || "[Без текста]");
-      lines.push(`• [${timeLabel}] ${text}`);
+    metaParts.push(formatMessageCount(sortedByDate.length));
+    metaParts.push(`последнее ${esc(formatMessageTime(latestMessage.date, now))}`);
+
+    const lines = sortedByDate.map((message) => {
+      const timeLabel = esc(formatMessageTime(message.date, now));
+      const text = esc(truncateMessageText(message.text || "[Без текста]"));
+      return `• <b>${timeLabel}</b> — ${text}`;
     });
 
-    if (index < sortedGroups.length - 1) {
-      lines.push("");
-    }
+    const body = [
+      `<b>${esc(sender.senderName)}</b> · ${metaParts.join(" · ")}`,
+      ...lines,
+    ].join("<br/>");
+
+    blocks.push(paragraph(body));
+    if (index < sortedGroups.length - 1) blocks.push(paragraph("──────────"));
   });
 
-  return lines.join("\n");
+  return blocks;
 }
 
 async function runCycle(bot: Bot<BotContext>): Promise<void> {
@@ -138,9 +168,9 @@ async function runCycle(bot: Bot<BotContext>): Promise<void> {
     }
 
     const chatId = await getProactiveChatId();
-    const reportText = formatDmReport(newMessages, now);
+    const reportBlocks = buildDmReportBlocks(newMessages, now);
 
-    await bot.api.sendMessage(chatId, reportText);
+    await sendStructured(bot.api as any, chatId, reportBlocks);
 
     newMessages.forEach((message) => {
       reportedMessageIds.add(message.id);

@@ -1,5 +1,12 @@
 import { MAX_MESSAGE_LENGTH } from "./constants";
 import { BotContext } from "./types";
+import {
+    sendStructured,
+    editStructured,
+    RichBlock,
+    SendStructuredOptions,
+    EditStructuredOptions,
+} from "./utils/richMessage";
 
 export const devLog = (...args: any[]) => {
     if (process.env.NODE_ENV === "development") {
@@ -344,3 +351,51 @@ function splitMessage(text: string): string[] {
         `Часть ${index + 1}/${parts.length}\n\n${part}`
     );
 }
+
+// ── Structured (rich) messaging helpers ─────────────────────
+//
+// Тонкая прослойка над utils/richMessage.ts: принимает grammy-контекст/бот и
+// передает его Api в sendStructured / editStructured. Используется для
+// системных и структурных сообщений (дайджесты, списки, карточки). Свободные
+// ответы LLM этими функциями НЕ отправляются — там нужен «человеческий» plain.
+//
+// api здесь намеренно any: grammy-типизация Api строже узкого интерфейса
+// ApiLike в richMessage (контравариантность параметров), поэтому точный
+// структурный тип здесь лишь создал бы лишние приведения у вызывающего кода.
+
+interface CtxLike {
+    api: any;
+    chat?: { id: number | string };
+}
+
+/**
+ * Отправляет структурное сообщение (rich с фолбэком на HTML) из блоков DSL.
+ *
+ * @param ctxOrBot grammy ctx или объект с .api (подходит и для планировщиков с bot.api)
+ * @param blocks массив блоков DSL из utils/richMessage
+ * @param opts опции (reply_markup, reply_to_message_id, disable_notification, extra)
+ */
+export async function sendStructuredBlocks(
+    ctxOrBot: CtxLike,
+    chatId: number | string,
+    blocks: RichBlock[],
+    opts: SendStructuredOptions = {},
+): Promise<unknown> {
+    return sendStructured(ctxOrBot.api, chatId, blocks, opts);
+}
+
+/**
+ * Редактирует существующее сообщение в rich-режиме с фолбэком на HTML.
+ */
+export async function editStructuredBlocks(
+    ctxOrBot: CtxLike,
+    chatId: number | string,
+    messageId: number,
+    blocks: RichBlock[],
+    opts: EditStructuredOptions = {},
+): Promise<unknown> {
+    return editStructured(ctxOrBot.api, chatId, messageId, blocks, opts);
+}
+
+export type { RichBlock, SendStructuredOptions, EditStructuredOptions };
+

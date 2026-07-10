@@ -1,4 +1,3 @@
-version: '3.8'
 name: ${KIRA_INSTANCE_NAME:-kira-mind-bot}
 
 # Ротация логов: макс. 10 МБ на файл, 3 файла (~30 МБ на сервис)
@@ -41,6 +40,7 @@ services:
       dockerfile: Dockerfile.server
       args:
         NODE_ENV: ${NODE_ENV:-production}
+    container_name: ${KIRA_INSTANCE_NAME:-kira-mind-bot}
     <<: *default-restart
     env_file:
       - ./.env.production
@@ -76,6 +76,7 @@ services:
       - BOT_ENV_FILE=/app/env/bot.env
       - PERSONALITY_FILE=/app/personality/personality.json
       - KIRA_RUNTIME_HEALTH_URL=http://kira-mind-bot:3100
+      - KIRA_BOT_CONTAINER_NAME=${KIRA_INSTANCE_NAME:-kira-mind-bot}
     logging: *default-logging
 
 volumes:

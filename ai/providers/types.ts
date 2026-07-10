@@ -16,6 +16,7 @@ export type ResponseCreateParams = Omit<OpenAI.Responses.ResponseCreateParamsNon
 export type ResponseResult = OpenAI.Responses.Response;
 export type EmbeddingCreateParams = {
     input: string | string[];
+    outputDimension?: number;
 };
 export type EmbeddingResult = {
     embedding: number[];

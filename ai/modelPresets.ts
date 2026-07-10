@@ -54,7 +54,8 @@ export type AiPresetName =
     | 'gpt-lean'
     | 'hybrid-openrouter-gpt'
     | 'hybrid-gemini-gpt'
-    | 'gemini-direct-balanced'
+    | 'gemini-full'
+    | 'glm-full'
     | 'glm-balanced';
 
 /**
@@ -67,6 +68,12 @@ export interface AiPresetConfig {
     name: AiPresetName;
     title: string;
     description: string;
+    characteristics?: {
+        quality: string;
+        cost: string;
+        stability: string;
+        gptDependency: string;
+    };
     models: Record<AiTaskKey, AiModelRef>;
 }
 
@@ -81,6 +88,8 @@ interface AiPresetRegistry {
 const registry = modelPresetRegistry as AiPresetRegistry;
 const LEGACY_AI_PRESET_ALIASES: Readonly<Record<string, AiPresetName>> = {
     'hybrid-deepseek-gpt': 'hybrid-openrouter-gpt',
+    'hybrid-gemini-extended': 'hybrid-gemini-gpt',
+    'gemini-direct-balanced': 'hybrid-gemini-gpt',
 };
 
 /**
@@ -95,6 +104,11 @@ export const AI_PRESET_NAMES = registry.presetNames;
  */
 export const aiPresets = registry.presets;
 
+const TRUE_FULL_AI_PRESETS = new Set<AiPresetName>([
+    'gemini-full',
+    'glm-full',
+]);
+
 /** Готовый shortcut к preset-у `gpt-max`. */
 export const gptMaxPreset = aiPresets['gpt-max'];
 /** Готовый shortcut к preset-у `gpt-balanced`. */
@@ -105,8 +119,10 @@ export const gptLeanPreset = aiPresets['gpt-lean'];
 export const hybridOpenRouterGptPreset = aiPresets['hybrid-openrouter-gpt'];
 /** Готовый shortcut к hybrid preset-у `gemini + openai fallback`. */
 export const hybridGeminiGptPreset = aiPresets['hybrid-gemini-gpt'];
-/** Готовый shortcut к direct preset-у `gemini only`. */
-export const geminiDirectBalancedPreset = aiPresets['gemini-direct-balanced'];
+/** Готовый shortcut к pure Gemini preset-у. */
+export const geminiFullPreset = aiPresets['gemini-full'];
+/** Готовый shortcut к pure GLM preset-у. */
+export const glmFullPreset = aiPresets['glm-full'];
 /** Готовый shortcut к direct preset-у `zai + openai fallback for missing capabilities`. */
 export const glmBalancedPreset = aiPresets['glm-balanced'];
 
@@ -120,4 +136,8 @@ export function parseAiPresetName(raw: string | undefined | null): AiPresetName 
     if (!raw) return null;
     const normalized = LEGACY_AI_PRESET_ALIASES[raw] ?? raw;
     return AI_PRESET_NAMES.includes(normalized as AiPresetName) ? normalized as AiPresetName : null;
+}
+
+export function isTrueFullAiPreset(presetName: AiPresetName): boolean {
+    return TRUE_FULL_AI_PRESETS.has(presetName);
 }

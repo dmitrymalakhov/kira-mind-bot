@@ -14,7 +14,7 @@ COPY package*.json ./
 RUN npm install --include=dev
 
 COPY . .
-RUN ./node_modules/.bin/tsc -p tsconfig.server.json
+RUN npm run build:server
 
 ENV NODE_ENV=${NODE_ENV}
 

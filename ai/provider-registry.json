@@ -58,7 +58,7 @@
       },
       "capabilities": {
         "supportsChatCompletions": true,
-        "supportsResponsesApi": false,
+        "supportsResponsesApi": true,
         "supportsEmbedding": false,
         "supportsTranscription": false,
         "supportsVision": true,
@@ -81,7 +81,7 @@
       },
       "capabilities": {
         "supportsChatCompletions": true,
-        "supportsResponsesApi": false,
+        "supportsResponsesApi": true,
         "supportsEmbedding": false,
         "supportsTranscription": false,
         "supportsVision": false,

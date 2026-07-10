@@ -40,6 +40,7 @@ services:
       context: ./kira-mind-bot
       args:
         NODE_ENV: ${NODE_ENV:-production}
+    container_name: ${KIRA_INSTANCE_NAME:-kira-mind-bot}
     <<: *default-restart
     env_file:
       - ./kira-mind-bot/.env.production
@@ -73,6 +74,7 @@ services:
       - BOT_ENV_FILE=/app/env/bot.env
       - PERSONALITY_FILE=/app/personality/personality.json
       - KIRA_RUNTIME_HEALTH_URL=http://kira-mind-bot:3100
+      - KIRA_BOT_CONTAINER_NAME=${KIRA_INSTANCE_NAME:-kira-mind-bot}
     logging: *default-logging
 
 volumes:

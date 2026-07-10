@@ -5,6 +5,7 @@ import { ProcessingResult } from "../orchestrator";
 import { devLog } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
+import { formatPromptDateTime } from "../utils/time";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -117,14 +118,7 @@ export async function imageGenerationAgent(
 
         // Текущая дата и время для контекста
         const currentDate = new Date();
-        const formattedDateTime = currentDate.toLocaleString('ru-RU', {
-            day: 'numeric',
-            month: 'long',
-            year: 'numeric',
-            hour: 'numeric',
-            minute: 'numeric',
-            weekday: 'long'
-        });
+        const formattedDateTime = formatPromptDateTime(currentDate);
 
         // Используем OpenAI для улучшения и уточнения промпта для генерации изображения
 

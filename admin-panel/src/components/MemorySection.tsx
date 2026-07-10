@@ -39,8 +39,9 @@ import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SaveIcon from '@mui/icons-material/Save';
 import SearchIcon from '@mui/icons-material/Search';
-import { createMemory, deleteMemory, fetchMemories, updateMemory } from '../api';
+import { createMemory, deleteMemory, fetchAiPreset, fetchMemories, updateMemory } from '../api';
 import type {
+  AiPresetResponse,
   MemoryFormPayload,
   MemoryFocus,
   MemoryKind,
@@ -778,6 +779,7 @@ export function MemorySection({ onToast }: { onToast?: ToastFn }) {
   const [dialogMode, setDialogMode] = useState<'create' | 'edit'>('create');
   const [editing, setEditing] = useState<MemoryRecord | null>(null);
   const [form, setForm] = useState<MemoryFormPayload>(EMPTY_FORM);
+  const [memoryProfileStatus, setMemoryProfileStatus] = useState<AiPresetResponse['memoryEmbeddingProfile'] | null>(null);
 
   const page = Math.floor((query.offset ?? 0) / (query.limit ?? draft.limit));
   const rowsPerPage = query.limit ?? draft.limit;
@@ -806,6 +808,12 @@ export function MemorySection({ onToast }: { onToast?: ToastFn }) {
       setKinds(data.kinds.length ? data.kinds : DEFAULT_KINDS);
       setStatuses(data.statuses.length ? data.statuses : DEFAULT_STATUSES);
       setFocuses(data.focuses.length ? data.focuses : DEFAULT_FOCUSES);
+      try {
+        const presetData = await fetchAiPreset();
+        setMemoryProfileStatus(presetData.memoryEmbeddingProfile);
+      } catch {
+        setMemoryProfileStatus(null);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось загрузить память');
     } finally {
@@ -917,6 +925,35 @@ export function MemorySection({ onToast }: { onToast?: ToastFn }) {
           </Button>
         </Box>
       </Box>
+
+      {memoryProfileStatus && (
+        <Alert
+          severity={
+            memoryProfileStatus.compatibility.status === 'mismatch'
+              ? 'error'
+              : memoryProfileStatus.compatibility.status === 'unavailable'
+                ? 'warning'
+                : memoryProfileStatus.providerKeyConfigured
+                  ? 'info'
+                  : 'warning'
+          }
+          variant="outlined"
+          sx={{ mb: 2 }}
+        >
+          <Typography variant="body2" sx={{ mb: 0.5 }}>
+            Память использует отдельный profile: <b>{memoryProfileStatus.title}</b> ({memoryProfileStatus.provider}:{memoryProfileStatus.model}, {memoryProfileStatus.outputDimension}d)
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+            {memoryProfileStatus.activeSourceSummary}
+          </Typography>
+          <Typography variant="body2" color={memoryProfileStatus.providerKeyConfigured ? 'text.secondary' : 'warning.main'} sx={{ mb: 0.5 }}>
+            {memoryProfileStatus.providerAvailabilitySummary}
+          </Typography>
+          <Typography variant="body2" color={memoryProfileStatus.compatibility.status === 'mismatch' ? 'error.main' : 'text.secondary'}>
+            {memoryProfileStatus.compatibility.summary}
+          </Typography>
+        </Alert>
+      )}
 
       <Paper variant="outlined" sx={{ p: 2, mb: 2, bgcolor: 'background.paper', borderRadius: 1 }}>
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr 1fr 1fr' }, gap: 1.5 }}>

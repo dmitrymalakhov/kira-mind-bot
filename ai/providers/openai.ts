@@ -75,10 +75,15 @@ export const openaiProviderAdapter: AiProviderAdapter = {
             throw new Error(`Provider ${this.provider} does not support embeddings`);
         }
 
-        const result = await this.client.embeddings.create({
+        const body: Record<string, unknown> = {
             model,
             input: params.input,
-        });
+        };
+        if (typeof params.outputDimension === 'number' && Number.isFinite(params.outputDimension)) {
+            body.dimensions = Math.round(params.outputDimension);
+        }
+
+        const result = await this.client.embeddings.create(body as any);
 
         return {
             embedding: result.data[0]?.embedding ?? [],

@@ -154,7 +154,13 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
           {regularFields.length > 0 && (
             <Grid container spacing={2} sx={{ mb: toggleFields.length > 0 ? 0 : undefined }}>
               {regularFields.map((field) => (
-                <Grid item key={field.key} xs={12} sm={field.type === 'textarea' ? 12 : 6}>
+                <Grid
+                  item
+                  key={field.key}
+                  xs={12}
+                  sm={field.sm ?? (field.type === 'textarea' ? 12 : 6)}
+                  md={field.md ?? (field.type === 'textarea' ? 12 : 6)}
+                >
                   <FieldInput
                     field={field}
                     value={localValues[field.key] ?? ''}

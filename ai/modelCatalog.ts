@@ -64,7 +64,7 @@ export const AI_MODEL_CATALOG: Readonly<Record<string, AiModelCatalogEntry>> = {
     'gemini:gemini-3.1-flash-lite': {
         provider: 'gemini',
         model: 'gemini-3.1-flash-lite',
-        modalities: ['text'],
+        modalities: ['text', 'vision'],
         preferredApi: 'chat.completions',
     },
     'openrouter:openrouter/auto': {

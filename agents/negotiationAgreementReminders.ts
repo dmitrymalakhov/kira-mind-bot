@@ -10,6 +10,7 @@ import { ReminderRegistry } from "../stores/ReminderRegistry";
 import { ReminderRepository } from "../services/ReminderRepository";
 import type { BotContext } from "../types";
 import { createOrRefreshReminderMemory } from "../services/ReminderMemorySync";
+import { esc, heading, list, RichBlock, sendStructured } from "../utils/richMessage";
 
 const MAX_REMINDERS = 5;
 
@@ -151,15 +152,17 @@ ${historyText}
                 hour: "numeric",
                 minute: "numeric",
             });
-            saved.push(`• ${displayTime} — ${r.reminderText.trim()}`);
+            saved.push(`<b>${esc(displayTime)}</b> — ${esc(r.reminderText.trim())}`);
             devLog(`Negotiation agreement reminder scheduled id=${id} due=${due.toISOString()}`);
         }
 
         if (saved.length > 0 && ctx.chat?.id) {
-            await bot.api.sendMessage(
-                ctx.chat.id,
-                `📌 По итогам переговоров с ${session.contactName} создала напоминания:\n\n${saved.join("\n")}`
-            );
+            const blocks: RichBlock[] = [
+                heading(`📌 По итогам переговоров с ${esc(session.contactName)}`, 3),
+                { type: "paragraph", text: "Создала напоминания:" },
+                list(saved, true),
+            ];
+            await sendStructured(bot.api as any, ctx.chat.id, blocks);
         }
     } catch (e) {
         console.error("scheduleNegotiationAgreementReminders:", e);

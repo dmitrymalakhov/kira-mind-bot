@@ -6,12 +6,22 @@ export interface AiUsageLogPayload {
     provider: string;
     model: string;
     preset: string;
+    operation: string;
+    traceId?: string;
+    attempt?: number;
+    stage?: 'primary' | 'retry' | 'fallback';
     inputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;
     success: boolean;
     fallbackUsed?: boolean;
     errorMessage?: string;
+    errorStatus?: number;
+    errorCode?: string;
+    errorType?: string;
+    errorCategory?: string;
+    providerRequestId?: string;
+    retryable?: boolean;
     latencyMs?: number;
 }
 

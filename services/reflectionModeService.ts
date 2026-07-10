@@ -36,6 +36,7 @@ import { getSetting, setSetting } from './botSettingsService';
 import { devLog, parseLLMJson } from '../utils';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { getProactiveChatId } from '../utils/allowedUserChatStore';
+import { esc, heading, list, details, RichBlock, sendStructured } from '../utils/richMessage';
 import { MessageStore } from '../stores/MessageStore';
 import { getVectorService } from './VectorServiceFactory';
 import { runMemorySchemaConsolidationForUser } from './MemorySchemaConsolidationService';
@@ -950,11 +951,6 @@ async function analyzeBatch(
         // ── Шаг 6: Уведомление владельца ─────────────────────────────────────
         const proactiveChatId = await getProactiveChatId();
         if (proactiveChatId && savedCount > 0) {
-            const factLines = update.savedFacts
-                .slice(0, 5)
-                .map(f => `• ${f.content}`)
-                .join('\n');
-            const more = update.savedFacts.length > 5 ? `\n…и ещё ${update.savedFacts.length - 5}` : '';
             const emotionSuffix: Record<string, string> = {
                 stress: ' ⚠️ (стресс)',
                 conflict: ' ⚠️ (конфликт)',
@@ -963,10 +959,23 @@ async function analyzeBatch(
                 joy: ' 🎉 (радость)',
             };
             const emotionNote = emotion !== 'neutral' ? (emotionSuffix[emotion] ?? '') : '';
-            await bot.api.sendMessage(
-                proactiveChatId,
-                `🧠 Рефлексия: нашла ${savedCount} факт(ов) в переписке с «${buf.chatTitle}»${emotionNote}\n${factLines}${more}`
-            );
+            const factItems = update.savedFacts.slice(0, 5).map(f => esc(f.content));
+            const more = update.savedFacts.length > 5 ? `…и ещё ${update.savedFacts.length - 5}` : '';
+            const moreBlock = more ? [({ type: "footer", text: more } as RichBlock)] : [];
+
+            const factBlocks: RichBlock[] = [list(factItems), ...moreBlock];
+
+            const blocks: RichBlock[] = [
+                heading(`🧠 ${savedCount} факт(ов) · «${esc(buf.chatTitle)}»${esc(emotionNote)}`, 3),
+            ];
+            // При 4+ фактах сворачиваем список, чтобы не захламлять чат.
+            if (update.savedFacts.length > 3) {
+                blocks.push(details('Сохранённые факты', factBlocks));
+            } else {
+                blocks.push(...factBlocks);
+            }
+
+            await sendStructured(bot.api as any, proactiveChatId, blocks);
         }
     } catch (e) {
         console.error(`[reflection] Error analyzing batch from "${buf.chatTitle}":`, e);

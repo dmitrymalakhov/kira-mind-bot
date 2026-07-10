@@ -1,5 +1,7 @@
 import type {
   ConfigResponse,
+  AiUsageQuery,
+  AiUsageSummaryResponse,
   HealthExportFormat,
   HealthLogQuery,
   HealthLogsResponse,
@@ -42,7 +44,10 @@ export async function saveConfig(data: Record<string, string | null>) {
 
 export async function fetchAiPreset(): Promise<AiPresetResponse> {
   const r = await fetch('/api/ai-preset');
-  if (!r.ok) throw new Error('Failed to load AI preset');
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body.error || 'Failed to load AI preset');
+  }
   return r.json();
 }
 
@@ -51,6 +56,17 @@ export async function fetchMonitoringHealth(): Promise<MonitoringHealthResponse>
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
     throw new Error(body.error || 'Failed to load monitoring health');
+  }
+  return r.json();
+}
+
+export async function fetchAiUsageSummary(query: AiUsageQuery = {}): Promise<AiUsageSummaryResponse> {
+  const params = toSearchParams(query);
+  const url = params.toString() ? `/api/ai-usage/summary?${params}` : '/api/ai-usage/summary';
+  const r = await fetch(url);
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body.error || 'Failed to load AI usage summary');
   }
   return r.json();
 }
