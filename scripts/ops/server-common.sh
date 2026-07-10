@@ -10,6 +10,7 @@ ADMIN_PORT_FALLBACK="${ADMIN_PORT_FALLBACK:-8080}"
 DEFAULT_KIRA_INSTANCE_NAME="${DEFAULT_KIRA_INSTANCE_NAME:-${PWD##*/}}"
 COMPOSE_CMD=()
 DOCKER_CMD=()
+DEPLOY_LOCK_FILE="${DEPLOY_LOCK_FILE:-/tmp/kira-mind-bot-deploy.lock}"
 
 sanitize_instance_name() {
     local raw="${1:-kira-mind-bot}"
@@ -51,28 +52,61 @@ compose() {
     "${COMPOSE_CMD[@]}" "$@"
 }
 
+docker_ps() {
+    "${DOCKER_CMD[@]}" ps "$@"
+}
+
+docker_inspect() {
+    "${DOCKER_CMD[@]}" inspect "$@"
+}
+
+acquire_deploy_lock() {
+    command -v flock >/dev/null 2>&1 || return 0
+    exec 9>"$DEPLOY_LOCK_FILE"
+    if ! flock -n 9; then
+        echo "Ошибка: другой install/deploy уже выполняется на этом хосте." >&2
+        return 1
+    fi
+}
+
 ensure_server_repo_root() {
     [ -f "$SERVER_COMPOSE_FILE" ] || return 1
     [ -f "package.json" ] || return 1
     [ -d "admin-panel" ] || return 1
 }
 
+load_key_value_file() {
+    local file="$1"
+    local line=""
+    local key=""
+    local value=""
+
+    [ -f "$file" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        case "$line" in
+            ''|'#'*) continue ;;
+        esac
+        key="${line%%=*}"
+        [ "$key" != "$line" ] || continue
+        [[ "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || continue
+        value="${line#*=}"
+        if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+            value="${value:1:${#value}-2}"
+        elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+            value="${value:1:${#value}-2}"
+        fi
+        printf -v "$key" '%s' "$value"
+        export "$key"
+    done < "$file"
+}
+
 load_env_if_present() {
-    if [ -f "$ENV_FILE" ]; then
-        set -a
-        # shellcheck disable=SC1090
-        source "$ENV_FILE"
-        set +a
-    fi
+    load_key_value_file "$ENV_FILE"
 }
 
 load_admin_state_if_present() {
-    if [ -f "$ADMIN_STATE_FILE" ]; then
-        set -a
-        # shellcheck disable=SC1090
-        source "$ADMIN_STATE_FILE"
-        set +a
-    fi
+    load_key_value_file "$ADMIN_STATE_FILE"
 }
 
 load_compose_env_if_present() {
@@ -97,7 +131,10 @@ load_compose_env_if_present() {
 }
 
 generate_admin_password() {
-    cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 20 2>/dev/null || openssl rand -hex 10
+    local password=""
+    password="$(openssl rand -hex 10 2>/dev/null || true)"
+    [ -n "$password" ] || return 1
+    printf '%s' "$password"
 }
 
 save_admin_state() {
@@ -106,6 +143,7 @@ ADMIN_PORT=${ADMIN_PORT}
 ADMIN_USERNAME=${ADMIN_USERNAME}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 EOF
+    chmod 600 "$ADMIN_STATE_FILE"
 }
 
 write_compose_env() {
@@ -123,6 +161,7 @@ ADMIN_PORT=${ADMIN_PORT}
 ADMIN_USERNAME=${ADMIN_USERNAME}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 EOF
+    chmod 600 "$COMPOSE_ENV_FILE"
 
     ensure_instance_not_owned_by_other_directory
     verify_existing_storage_bindings
@@ -138,14 +177,14 @@ ensure_instance_not_owned_by_other_directory() {
 
     while IFS= read -r container_id; do
         [ -n "$container_id" ] || continue
-        owner_dir="$("${DOCKER_CMD[@]}" inspect "$container_id" \
+        owner_dir="$(docker_inspect "$container_id" \
             --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null || true)"
         if [ -n "$owner_dir" ] && [ "$owner_dir" != "$current_dir" ]; then
             echo "Ошибка: Docker Compose project '$KIRA_INSTANCE_NAME' уже принадлежит каталогу '$owner_dir'." >&2
             echo "Задайте уникальный KIRA_INSTANCE_NAME для каталога '$current_dir'." >&2
             return 1
         fi
-    done < <("${DOCKER_CMD[@]}" ps -aq --filter "label=com.docker.compose.project=$KIRA_INSTANCE_NAME")
+    done < <(docker_ps -aq --filter "label=com.docker.compose.project=$KIRA_INSTANCE_NAME")
 }
 
 validate_storage_mount() {
@@ -169,11 +208,11 @@ verify_storage_service_binding() {
 
     while IFS= read -r container_id; do
         [ -n "$container_id" ] || continue
-        actual_mount="$("${DOCKER_CMD[@]}" inspect "$container_id" \
+        actual_mount="$(docker_inspect "$container_id" \
             --format "{{range .Mounts}}{{if eq .Destination \"$destination\"}}{{.Type}}|{{.Name}}{{end}}{{end}}" \
             2>/dev/null || true)"
-        validate_storage_mount "$service" "$actual_mount" "$expected_volume"
-    done < <("${DOCKER_CMD[@]}" ps -aq \
+        validate_storage_mount "$service" "$actual_mount" "$expected_volume" || return 1
+    done < <(docker_ps -aq \
         --filter "label=com.docker.compose.project=$KIRA_INSTANCE_NAME" \
         --filter "label=com.docker.compose.service=$service")
 }
@@ -184,11 +223,11 @@ verify_existing_storage_bindings() {
     verify_storage_service_binding \
         "postgres" \
         "/var/lib/postgresql/data" \
-        "${KIRA_INSTANCE_NAME}_postgres_data"
+        "${KIRA_INSTANCE_NAME}_postgres_data" || return 1
     verify_storage_service_binding \
         "qdrant" \
         "/qdrant/storage" \
-        "${KIRA_INSTANCE_NAME}_qdrant_storage"
+        "${KIRA_INSTANCE_NAME}_qdrant_storage" || return 1
 }
 
 admin_port_is_available_for_instance() {
@@ -196,20 +235,51 @@ admin_port_is_available_for_instance() {
     local instance_name=""
     local container_id=""
     local owner_project=""
+    local docker_owner_found=false
     instance_name="$(resolve_instance_name)"
 
     [ "${#DOCKER_CMD[@]}" -gt 0 ] || return 0
 
     while IFS= read -r container_id; do
         [ -n "$container_id" ] || continue
-        owner_project="$("${DOCKER_CMD[@]}" inspect "$container_id" \
+        docker_owner_found=true
+        owner_project="$(docker_inspect "$container_id" \
             --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)"
         if [ "$owner_project" != "$instance_name" ]; then
             return 1
         fi
-    done < <("${DOCKER_CMD[@]}" ps -aq --filter "publish=$port")
+    done < <(docker_ps -q --filter "publish=$port")
+
+    if [ "$docker_owner_found" = true ]; then
+        return 0
+    fi
+
+    if host_port_has_listener "$port"; then
+        return 1
+    fi
 
     return 0
+}
+
+host_port_has_listener() {
+    local port="$1"
+
+    if command -v ss >/dev/null 2>&1; then
+        ss -H -ltn "sport = :$port" 2>/dev/null | grep -q .
+        return
+    fi
+
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | grep -q .
+        return
+    fi
+
+    if command -v netstat >/dev/null 2>&1; then
+        netstat -an 2>/dev/null | grep -E "[.:]$port[[:space:]].*LISTEN" | grep -q .
+        return
+    fi
+
+    return 1
 }
 
 find_available_admin_port() {
@@ -251,6 +321,11 @@ ensure_admin_state() {
         ADMIN_PASSWORD="$(generate_admin_password)"
     fi
 
+    [ -n "$ADMIN_PASSWORD" ] || {
+        echo "Ошибка: не удалось сгенерировать пароль админки." >&2
+        return 1
+    }
+
     save_admin_state
 }
 
@@ -259,9 +334,8 @@ collect_app_services() {
 }
 
 safe_docker_cleanup() {
-    "${DOCKER_CMD[@]}" image prune -af
-    "${DOCKER_CMD[@]}" builder prune -af
-    "${DOCKER_CMD[@]}" container prune -f
+    # Глобальные prune-команды запрещены: на хосте могут жить другие инстансы.
+    compose rm -f 2>/dev/null || true
 }
 
 service_is_running() {

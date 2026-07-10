@@ -379,6 +379,14 @@ make remote-install SERVER_IP=<ip>
 make remote-deploy-all SERVER_IP=<ip>
 ```
 
+Для отдельного удалённого инстанса задайте уникальный `KIRA_INSTANCE_NAME` в его локальном `.env.production`. По умолчанию основной `kira-mind-bot` сохраняет исторический каталог `/root/source`, а дополнительные инстансы разворачиваются в `/opt/docker/<KIRA_INSTANCE_NAME>`. Каталог можно указать явно:
+
+```bash
+make remote-deploy-all SERVER_IP=<ip> REMOTE_DIR=/opt/docker/kira-wife
+```
+
+Remote-deploy использует те же проверки project ownership, storage volumes и свободного admin-порта, что и прямой запуск на VPS.
+
 Если нужно деплоить только часть стека:
 
 ```bash
@@ -392,7 +400,7 @@ make remote-deploy-admin SERVER_IP=<ip>
 
 После деплоя панель доступна по адресу, который печатает установщик или redeploy-скрипт. На VPS это будет IP хоста, а при локальном запуске на macOS fallback-адресом будет `http://localhost:PORT`.
 
-Порт, логин и пароль сохраняются в `~/.kira-admin-state`.
+Порт, логин и пароль сохраняются в локальном `.kira-admin-state` конкретного инстанса. Файл имеет права `600` и исключён из Git.
 
 Что можно делать в панели:
 
@@ -538,6 +546,8 @@ make remote-deploy-admin SERVER_IP=<ip>
 Из-за разных сетей DNS-имя `postgres` во втором боте указывает только на PostgreSQL второго Compose project, а `qdrant` — только на его Qdrant. Физические данные лежат в volumes с именем инстанса, поэтому SQL-данные, память Qdrant и коллекции одного бота не доступны другому через штатную конфигурацию.
 
 Перед каждой серверной Compose-операцией preflight сверяет volumes уже существующих контейнеров с ожидаемыми именами инстанса. При несовпадении deploy останавливается до запуска контейнеров, чтобы бот не стартовал на пустой или чужой базе. Операционные команды не используют `volume prune`, `docker volume rm` или `compose down -v`.
+
+Install/deploy одного инстанса не выполняет глобальные `container/image/builder prune`: такие команды могли бы удалить остановленные контейнеры или кеши соседнего стека. Параллельные запуски install/deploy на одном Linux-хосте сериализуются lock-файлом, чтобы два инстанса не выбрали один admin-порт одновременно.
 
 Для существующей установки в `/opt/docker/kira-mind-bot` ничего дополнительно задавать не нужно: имя папки даёт прежний project name `kira-mind-bot`, используются текущие volumes `kira-mind-bot_postgres_data` и `kira-mind-bot_qdrant_storage`, а текущие настройки админки переносятся из `.env` в локальный `.kira-admin-state`.
 

@@ -15,13 +15,54 @@ export DEFAULT_KIRA_INSTANCE_NAME="kira-mind-bot"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/ops/server-common.sh"
 
-admin_port_is_available_for_instance() {
-  [ "$1" != "7875" ]
-}
-
 find_available_admin_port() {
   printf '%s' "7999"
 }
+
+FAKE_MODE="port-collision"
+DOCKER_CMD=(fake-docker)
+
+docker_ps() {
+  case "$FAKE_MODE:$*" in
+    port-collision:*publish=7875*) echo "foreign-admin" ;;
+    owner-conflict:*project=kira-second-bot*) echo "foreign-bot" ;;
+    owner-ok:*project=kira-second-bot*) echo "own-bot" ;;
+    storage-ok:*service=postgres*) echo "postgres-id" ;;
+    storage-ok:*service=qdrant*) echo "qdrant-id" ;;
+    storage-bad:*service=postgres*) echo "postgres-id" ;;
+  esac
+}
+
+docker_inspect() {
+  case "$1" in
+    foreign-admin) echo "foreign-project" ;;
+    foreign-bot) echo "/opt/docker/foreign" ;;
+    own-bot) pwd -P ;;
+    postgres-id)
+      if [ "$FAKE_MODE" = "storage-bad" ]; then
+        echo "volume|foreign_postgres_data"
+      else
+        echo "volume|kira-second-bot_postgres_data"
+      fi
+      ;;
+    qdrant-id) echo "volume|kira-second-bot_qdrant_storage" ;;
+  esac
+}
+
+host_port_has_listener() {
+  [ "${FAKE_HOST_PORT_BUSY:-false}" = true ]
+}
+
+ENV_FILE="$TEST_DIR/.env.production"
+cat > "$ENV_FILE" <<EOF
+SAFE_VALUE="value with spaces"
+LITERAL_VALUE=\$(touch "$TEST_DIR/must-not-exist")
+INVALID-KEY=ignored
+EOF
+load_env_if_present
+[ "$SAFE_VALUE" = "value with spaces" ]
+[ "$LITERAL_VALUE" = "\$(touch \"$TEST_DIR/must-not-exist\")" ]
+[ ! -e "$TEST_DIR/must-not-exist" ]
 
 cat > "$COMPOSE_ENV_FILE" <<'EOF'
 ADMIN_PORT=7875
@@ -38,6 +79,19 @@ ensure_admin_state
 grep -q '^ADMIN_PORT=7999$' "$ADMIN_STATE_FILE"
 grep -q '^ADMIN_USERNAME=legacy-admin$' "$ADMIN_STATE_FILE"
 grep -q '^ADMIN_PASSWORD=legacy-password$' "$ADMIN_STATE_FILE"
+STATE_MODE="$(stat -c '%a' "$ADMIN_STATE_FILE" 2>/dev/null || stat -f '%Lp' "$ADMIN_STATE_FILE")"
+[ "$STATE_MODE" = "600" ]
+
+KIRA_INSTANCE_NAME="kira-mind-bot"
+DB_PASSWORD="db-password"
+ADMIN_PORT="7999"
+ADMIN_USERNAME="legacy-admin"
+ADMIN_PASSWORD="legacy-password"
+DOCKER_CMD=()
+write_compose_env
+COMPOSE_ENV_MODE="$(stat -c '%a' "$COMPOSE_ENV_FILE" 2>/dev/null || stat -f '%Lp' "$COMPOSE_ENV_FILE")"
+[ "$COMPOSE_ENV_MODE" = "600" ]
+DOCKER_CMD=(fake-docker)
 
 cat > "$ADMIN_STATE_FILE" <<'EOF'
 ADMIN_PORT=7876
@@ -55,6 +109,34 @@ ensure_admin_state
 DEFAULT_KIRA_INSTANCE_NAME="Kira Second Bot"
 unset KIRA_INSTANCE_NAME
 [ "$(resolve_instance_name)" = "kira-second-bot" ]
+KIRA_INSTANCE_NAME="kira-second-bot"
+
+FAKE_MODE="owner-conflict"
+if ensure_instance_not_owned_by_other_directory 2>/dev/null; then
+  echo "foreign project owner must stop deploy" >&2
+  exit 1
+fi
+
+FAKE_MODE="owner-ok"
+ensure_instance_not_owned_by_other_directory
+
+FAKE_MODE="storage-ok"
+verify_existing_storage_bindings
+
+FAKE_MODE="storage-bad"
+if verify_existing_storage_bindings 2>/dev/null; then
+  echo "foreign storage volume must stop deploy" >&2
+  exit 1
+fi
+
+FAKE_MODE="port-free"
+FAKE_HOST_PORT_BUSY=true
+if admin_port_is_available_for_instance "8123"; then
+  echo "host listener must reserve admin port" >&2
+  exit 1
+fi
+FAKE_HOST_PORT_BUSY=false
+admin_port_is_available_for_instance "8123"
 
 validate_storage_mount \
   "postgres" \

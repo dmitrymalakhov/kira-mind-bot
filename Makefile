@@ -13,6 +13,7 @@ define SERVER_COMPOSE_PREP
 source ./scripts/ops/server-common.sh && \
 ensure_server_repo_root && \
 resolve_compose_cmd && \
+acquire_deploy_lock && \
 load_env_if_present && \
 ensure_admin_state && \
 write_compose_env
@@ -83,13 +84,13 @@ remote-install:
 	./scripts/ops/install.sh --server-ip "$(SERVER_IP)"
 
 remote-deploy-bot:
-	./scripts/ops/deploy.sh --kira-mind-bot --server-ip "$(SERVER_IP)"
+	./scripts/ops/deploy.sh --kira-mind-bot --server-ip "$(SERVER_IP)" $(if $(REMOTE_DIR),--remote-dir "$(REMOTE_DIR)")
 
 remote-deploy-admin:
-	./scripts/ops/deploy.sh --admin-panel --server-ip "$(SERVER_IP)"
+	./scripts/ops/deploy.sh --admin-panel --server-ip "$(SERVER_IP)" $(if $(REMOTE_DIR),--remote-dir "$(REMOTE_DIR)")
 
 remote-deploy-all:
-	./scripts/ops/deploy.sh --kira-mind-bot --admin-panel --server-ip "$(SERVER_IP)"
+	./scripts/ops/deploy.sh --kira-mind-bot --admin-panel --server-ip "$(SERVER_IP)" $(if $(REMOTE_DIR),--remote-dir "$(REMOTE_DIR)")
 
 deploy:
 	./scripts/ops/server-deploy.sh deploy

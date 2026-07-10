@@ -3,24 +3,27 @@
 # Требования на локальной машине: Node.js, npm, ssh, scp.
 
 show_help() {
-    echo "Usage: $0 [--kira-mind-bot] [--admin-panel] [--server-ip <ip>]"
+    echo "Usage: $0 [--kira-mind-bot] [--admin-panel] [--server-ip <ip>] [--remote-dir <path>]"
     echo
     echo "Options:"
     echo "  --kira-mind-bot              Deploy the Kira-Mind bot"
     echo "  --admin-panel                Deploy the admin panel"
     echo "  --server-ip <ip>             Target server IP address"
+    echo "  --remote-dir <path>          Отдельный каталог инстанса на сервере"
     exit 1
 }
 
 DEPLOY_KIRA_MIND_BOT=false
 DEPLOY_ADMIN_PANEL=false
 SERVER_IP="165.232.120.123"
+REMOTE_DIR=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --kira-mind-bot)    DEPLOY_KIRA_MIND_BOT=true; shift ;;
         --admin-panel)      DEPLOY_ADMIN_PANEL=true; shift ;;
         --server-ip)        SERVER_IP="$2"; shift 2 ;;
+        --remote-dir)       REMOTE_DIR="$2"; shift 2 ;;
         *)                  show_help ;;
     esac
 done
@@ -34,11 +37,29 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 DEPLOY_STARTED_AT=$(date '+%Y-%m-%d %H:%M:%S')
 
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/server-common.sh"
+KIRA_INSTANCE_NAME="$(grep -E '^KIRA_INSTANCE_NAME=' .env.production 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+KIRA_INSTANCE_NAME="$(sanitize_instance_name "${KIRA_INSTANCE_NAME:-kira-mind-bot}")"
+if [ -z "$REMOTE_DIR" ]; then
+    if [ "$KIRA_INSTANCE_NAME" = "kira-mind-bot" ]; then
+        REMOTE_DIR="/root/source"
+    else
+        REMOTE_DIR="/opt/docker/$KIRA_INSTANCE_NAME"
+    fi
+fi
+if [[ ! "$REMOTE_DIR" =~ ^/[a-zA-Z0-9._/-]+$ ]]; then
+    echo "❌ Недопустимый remote-каталог: $REMOTE_DIR" >&2
+    exit 1
+fi
+
 echo ""
 echo "=============================================="
 echo "  🚀 ДЕПЛОЙ — ${DEPLOY_STARTED_AT}"
 echo "=============================================="
 echo "📍 Сервер: ${SERVER_IP}"
+echo "📁 Каталог: ${REMOTE_DIR}"
+echo "🔖 Инстанс: ${KIRA_INSTANCE_NAME}"
 echo "📦 Проекты:"
 [ "$DEPLOY_KIRA_MIND_BOT" = true ]    && echo "  • kira-mind-bot"
 [ "$DEPLOY_ADMIN_PANEL" = true ]      && echo "  • admin-panel"
@@ -71,9 +92,14 @@ echo ""
 echo "📁 --- Подготовка архива ---"
 cp docker-compose.yml _deploy/
 cp personality.json.template _deploy/
+mkdir -p _deploy/scripts/ops
+cp scripts/ops/server-common.sh _deploy/scripts/ops/
 
 if [ "$DEPLOY_ADMIN_PANEL" = true ] && [ -d "admin-panel" ]; then
     rsync -a --exclude='node_modules' --exclude='dist' admin-panel/ _deploy/admin-panel/
+    rsync -a ai/ _deploy/ai/
+    mkdir -p _deploy/utils
+    cp utils/legacyPersonalitySanitizer.js _deploy/utils/
     echo "✅ Скопирована admin-panel"
 
     if [ -f ".env.production" ]; then
@@ -83,11 +109,6 @@ if [ "$DEPLOY_ADMIN_PANEL" = true ] && [ -d "admin-panel" ]; then
     else
         echo "⚠️  .env.production не найден"
     fi
-fi
-
-# .env для docker-compose (DB_* переменные из .env.production)
-if [ -f ".env.production" ]; then
-    grep -E '^(DB_|NODE_ENV)' .env.production > _deploy/.env && echo "✅ Создан .env для docker-compose"
 fi
 
 echo "Содержимое _deploy: $(ls _deploy)"
@@ -101,7 +122,8 @@ echo "📏 Размер архива: ${ARCHIVE_SIZE}"
 echo ""
 
 echo "⬆️  --- Загрузка на сервер ${SERVER_IP} ---"
-scp deployment-source.tar root@${SERVER_IP}:/root/source
+ssh root@"${SERVER_IP}" "mkdir -p '$REMOTE_DIR'"
+scp deployment-source.tar root@${SERVER_IP}:"$REMOTE_DIR/deployment-source.tar"
 echo "✅ Загрузка завершена."
 echo ""
 
@@ -114,48 +136,21 @@ ssh root@${SERVER_IP} << EOF
     status="\$?"
     if [ "\$status" -ne 0 ]; then
       echo ""
-      echo "🧹 Сборка прервана — очищаю Docker build cache, чтобы сервер не остался без места..."
-      docker builder prune -af 2>/dev/null || true
-      docker image prune -f 2>/dev/null || true
+      echo "⚠️  Сборка прервана; глобальная Docker-очистка не выполняется, чтобы не затронуть соседние инстансы."
       df -h / | tail -1 || true
     fi
   }
   trap cleanup_failed_build EXIT
 
-  cd /root/source
+  cd "$REMOTE_DIR"
 
   echo ""
   echo "🖥️  === [Сервер] \$(date -u '+%Y-%m-%d %H:%M:%S UTC') ==="
   echo ""
 
-  echo "💾 Диск и Docker до очистки:"
+  echo "💾 Диск и Docker:"
   df -h / | tail -1
   docker system df 2>/dev/null || true
-  echo ""
-
-  echo "🛑 Остановка деплоируемых сервисов..."
-  stop_and_remove() {
-    local name="\$1"
-    docker-compose -f docker-compose.yml stop "\$name" 2>/dev/null && echo "  stop \$name: ok" || true
-    docker-compose -f docker-compose.yml rm -f "\$name" 2>/dev/null && echo "  rm \$name: ok" || true
-  }
-  if [ "$DEPLOY_KIRA_MIND_BOT" = true ];    then stop_and_remove kira-mind-bot; fi
-  if [ "$DEPLOY_ADMIN_PANEL" = true ];      then stop_and_remove admin-panel; fi
-  echo ""
-
-  echo "🗑️  Очистка Docker..."
-  docker container prune -f 2>/dev/null || true
-  FREE_MB=\$(df -Pm / | awk 'NR==2 {print \$4}')
-  if [ "\${FREE_MB:-0}" -lt 2048 ]; then
-    echo "  Свободно \${FREE_MB:-0} MB — выполняю полную очистку image/build cache."
-    docker image prune -af 2>/dev/null || true
-    docker builder prune -af 2>/dev/null || true
-  else
-    echo "  Свободно \${FREE_MB:-0} MB — сохраняю свежий build cache."
-    docker image prune -f 2>/dev/null || true
-    docker builder prune -f --filter until=168h 2>/dev/null || true
-  fi
-  df -h / | tail -1
   echo ""
 
   echo "📂 Распаковка архива..."
@@ -164,49 +159,29 @@ ssh root@${SERVER_IP} << EOF
   ls -la
   echo ""
 
-    if [ -f "/root/source/kira-mind-bot/.env.production" ]; then
-      set -a; source /root/source/kira-mind-bot/.env.production; set +a
-    fi
-    KIRA_INSTANCE_NAME="\${KIRA_INSTANCE_NAME:-kira-mind-bot}"
-    echo "KIRA_INSTANCE_NAME=\$KIRA_INSTANCE_NAME" > .env
+  export SERVER_COMPOSE_FILE="docker-compose.yml"
+  export ENV_FILE="kira-mind-bot/.env.production"
+  export COMPOSE_ENV_FILE=".env"
+  export ADMIN_STATE_FILE=".kira-admin-state"
+  export DEFAULT_KIRA_INSTANCE_NAME="$KIRA_INSTANCE_NAME"
+  source ./scripts/ops/server-common.sh
+  resolve_compose_cmd || { echo "❌ Docker Compose недоступен"; exit 1; }
+  acquire_deploy_lock || { echo "❌ Другой deploy уже выполняется"; exit 1; }
+  load_env_if_present
+  ensure_admin_state
+  write_compose_env
 
     # personality.json — создаём из шаблона только при первом деплое, никогда не перезаписываем
-  if [ ! -f "/root/source/personality.json" ]; then
-    if [ -f "/root/source/personality.json.template" ]; then
-      cp /root/source/personality.json.template /root/source/personality.json
+  if [ ! -f "$REMOTE_DIR/personality.json" ]; then
+    if [ -f "$REMOTE_DIR/personality.json.template" ]; then
+      cp "$REMOTE_DIR/personality.json.template" "$REMOTE_DIR/personality.json"
       echo "✅ Создан personality.json из шаблона"
     else
-      echo '{"KiraMindBot":{}}' > /root/source/personality.json
+      echo '{"KiraMindBot":{}}' > "$REMOTE_DIR/personality.json"
       echo "✅ Создан пустой personality.json"
     fi
   else
     echo "✅ personality.json уже существует — настройки сохранены"
-  fi
-
-  if [ "$DEPLOY_ADMIN_PANEL" = true ]; then
-    # Учётные данные admin-panel
-    ADMIN_STATE_FILE="/root/source/.kira-admin-state"
-    if [ -f "\$ADMIN_STATE_FILE" ]; then
-      set -a; source "\$ADMIN_STATE_FILE"; set +a
-    fi
-    if [ -z "\$ADMIN_PORT" ]; then
-      ADMIN_PORT=\$(( (RANDOM % 2000) + 7000 ))
-      echo "ADMIN_PORT=\$ADMIN_PORT" >> "\$ADMIN_STATE_FILE"
-      echo "🔒 Сгенерирован порт admin-panel: \$ADMIN_PORT"
-    fi
-    if [ -z "\$ADMIN_PASSWORD" ]; then
-      ADMIN_PASSWORD=\$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 20 2>/dev/null || openssl rand -hex 10)
-      echo "ADMIN_PASSWORD=\$ADMIN_PASSWORD" >> "\$ADMIN_STATE_FILE"
-      echo "🔒 Сгенерирован пароль admin-panel"
-    fi
-    if [ -z "\$ADMIN_USERNAME" ]; then
-      ADMIN_USERNAME="admin"
-      echo "ADMIN_USERNAME=\$ADMIN_USERNAME" >> "\$ADMIN_STATE_FILE"
-    fi
-    echo "ADMIN_PORT=\$ADMIN_PORT"         >> .env
-    echo "ADMIN_USERNAME=\$ADMIN_USERNAME" >> .env
-    echo "ADMIN_PASSWORD=\$ADMIN_PASSWORD" >> .env
-    echo ""
   fi
 
   export NODE_ENV=production
@@ -215,9 +190,8 @@ ssh root@${SERVER_IP} << EOF
   deploy_service() {
     local name="\$1"
     echo "🚀 Деплой: \$name"
-    docker-compose -f docker-compose.yml stop "\$name" 2>/dev/null || true
-    docker-compose -f docker-compose.yml build "\$name"
-    docker-compose -f docker-compose.yml up "\$name" -d
+    compose build "\$name"
+    compose up "\$name" -d
     echo "✅ \$name запущен."
     DEPLOYED_SERVICES="\$DEPLOYED_SERVICES \$name"
   }
@@ -226,28 +200,18 @@ ssh root@${SERVER_IP} << EOF
   if [ "$DEPLOY_ADMIN_PANEL" = true ];      then deploy_service admin-panel; fi
 
   echo ""
-  echo "🧹 Очистка Docker cache после сборки..."
-  docker image prune -f 2>/dev/null || true
-  FREE_MB=\$(df -Pm / | awk 'NR==2 {print \$4}')
-  if [ "\${FREE_MB:-0}" -lt 1536 ]; then
-    echo "  Свободно \${FREE_MB:-0} MB — очищаю build cache."
-    docker builder prune -af 2>/dev/null || true
-  else
-    echo "  Свободно \${FREE_MB:-0} MB — оставляю свежий build cache для следующего деплоя."
-    docker builder prune -f --filter until=168h 2>/dev/null || true
-  fi
-  docker image prune -f 2>/dev/null || true
+  echo "🧹 Глобальная Docker-очистка пропущена: соседние инстансы не затрагиваются."
   docker system df 2>/dev/null || true
 
   echo ""
   echo "✔️  === Проверка сервисов ==="
   for svc in \$DEPLOYED_SERVICES; do
     [ -z "\$svc" ] && continue
-    if docker-compose -f docker-compose.yml ps "\$svc" 2>/dev/null | grep -q "Up"; then
+    if compose ps --status running "\$svc" 2>/dev/null | grep -q "\$svc"; then
       echo "  ✅ \$svc — запущен"
     else
       echo "  ❌ \$svc не запущен"
-      docker-compose -f docker-compose.yml logs --tail 20 "\$svc" 2>/dev/null || true
+      compose logs --tail 20 "\$svc" 2>/dev/null || true
       exit 1
     fi
   done

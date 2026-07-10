@@ -1887,7 +1887,7 @@ function getContainerStatus(name) {
   return new Promise((resolve) => {
     const chunks = [];
     const req = http.request(
-      { socketPath: '/var/run/docker.sock', path: `/containers/${name}/json`, method: 'GET' },
+      { socketPath: '/var/run/docker.sock', path: `/containers/${encodeURIComponent(name)}/json`, method: 'GET' },
       (res) => {
         res.on('data', (d) => chunks.push(d));
         res.on('end', () => {

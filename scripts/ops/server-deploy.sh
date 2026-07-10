@@ -58,6 +58,7 @@ source "$SCRIPT_DIR/server-common.sh"
 
 ensure_server_repo_root || error "Не найден серверный compose-сценарий в корне репозитория"
 resolve_compose_cmd || error "Docker Compose недоступен для текущего пользователя"
+acquire_deploy_lock || error "Не удалось получить deploy lock"
 
 DEPLOY_CLEAN=false
 TARGET_SERVICE=""

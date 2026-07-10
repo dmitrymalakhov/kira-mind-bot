@@ -58,8 +58,12 @@ function assertNoDestructiveVolumeCleanup() {
     path.join(repoRoot, 'scripts', 'ops', 'server-common.sh'),
     path.join(repoRoot, 'scripts', 'ops', 'server-deploy.sh'),
     path.join(repoRoot, 'scripts', 'ops', 'server-install.sh'),
+    path.join(repoRoot, 'scripts', 'ops', 'deploy.sh'),
   ];
   const forbidden = [
+    /container\s+prune/,
+    /image\s+prune/,
+    /builder\s+prune/,
     /volume\s+prune/,
     /docker\s+volume\s+rm/,
     /\bdown\b[^\n]*(?:\s-v\b|--volumes\b)/,
@@ -67,6 +71,7 @@ function assertNoDestructiveVolumeCleanup() {
   ];
 
   for (const file of files) {
+    assert.ok(fs.existsSync(file), `${path.relative(repoRoot, file)} must exist`);
     const content = fs.readFileSync(file, 'utf8');
     for (const pattern of forbidden) {
       assert.doesNotMatch(content, pattern, `${path.relative(repoRoot, file)} contains destructive volume cleanup`);
@@ -74,22 +79,48 @@ function assertNoDestructiveVolumeCleanup() {
   }
 }
 
+function assertOperationalSecurity() {
+  const gitignore = fs.readFileSync(path.join(repoRoot, '.gitignore'), 'utf8');
+  const deployScript = fs.readFileSync(path.join(repoRoot, 'scripts', 'ops', 'deploy.sh'), 'utf8');
+  const adminServer = fs.readFileSync(path.join(repoRoot, 'admin-panel', 'server.js'), 'utf8');
+  const installScripts = [
+    fs.readFileSync(path.join(repoRoot, 'scripts', 'ops', 'install.sh'), 'utf8'),
+    fs.readFileSync(path.join(repoRoot, 'scripts', 'ops', 'server-install.sh'), 'utf8'),
+  ];
+
+  assert.match(gitignore, /^\.kira-admin-state$/m);
+  assert.match(deployScript, /source \.\/scripts\/ops\/server-common\.sh/);
+  assert.match(deployScript, /--remote-dir/);
+  assert.match(deployScript, /rsync -a ai\/ _deploy\/ai\//);
+  assert.match(deployScript, /legacyPersonalitySanitizer\.js/);
+  assert.match(adminServer, /\/containers\/\$\{encodeURIComponent\(name\)\}\/json/);
+  for (const script of installScripts) {
+    assert.doesNotMatch(script, /\beval\s/);
+  }
+}
+
 try {
-  fs.copyFileSync(sourceCompose, composeFile);
-  fs.writeFileSync(path.join(tempDir, '.env.production'), '', 'utf8');
-  fs.writeFileSync(path.join(tempDir, 'personality.json'), '{}', 'utf8');
-
-  const primary = render('kira-mind-bot', 7875);
-  const secondary = render('kira-wife', 7876);
-
-  assertInstance(primary, 'kira-mind-bot', 7875);
-  assertInstance(secondary, 'kira-wife', 7876);
-  assert.notStrictEqual(primary.volumes.postgres_data.name, secondary.volumes.postgres_data.name);
-  assert.notStrictEqual(primary.volumes.qdrant_storage.name, secondary.volumes.qdrant_storage.name);
-  assert.notStrictEqual(primary.networks.default.name, secondary.networks.default.name);
   assertNoDestructiveVolumeCleanup();
+  assertOperationalSecurity();
 
-  console.log('multi-instance compose isolation checks passed');
+  const dockerAvailable = spawnSync('docker', ['compose', 'version'], { encoding: 'utf8' }).status === 0;
+  if (!dockerAvailable) {
+    console.log('multi-instance compose rendering skipped: Docker Compose unavailable');
+  } else {
+    fs.copyFileSync(sourceCompose, composeFile);
+    fs.writeFileSync(path.join(tempDir, '.env.production'), '', 'utf8');
+    fs.writeFileSync(path.join(tempDir, 'personality.json'), '{}', 'utf8');
+
+    const primary = render('kira-mind-bot', 7875);
+    const secondary = render('kira-wife', 7876);
+
+    assertInstance(primary, 'kira-mind-bot', 7875);
+    assertInstance(secondary, 'kira-wife', 7876);
+    assert.notStrictEqual(primary.volumes.postgres_data.name, secondary.volumes.postgres_data.name);
+    assert.notStrictEqual(primary.volumes.qdrant_storage.name, secondary.volumes.qdrant_storage.name);
+    assert.notStrictEqual(primary.networks.default.name, secondary.networks.default.name);
+    console.log('multi-instance compose isolation checks passed');
+  }
 } finally {
   cleanup();
 }

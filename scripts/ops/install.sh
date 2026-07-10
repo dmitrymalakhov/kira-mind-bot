@@ -111,20 +111,21 @@ prompt_required() {
         read -r -p "  $LABEL [*]: " VAL
         [ -z "$VAL" ] && echo -e "  ${RED}Обязательное поле!${NC}"
     done
-    eval "$VAR=\"$VAL\""
+    printf -v "$VAR" '%s' "$VAL"
 }
 
 prompt_optional() {
     local VAR="$1" LABEL="$2" HINT="$3"
     [ -n "$HINT" ] && echo -e "  ${YELLOW}→ $HINT${NC}"
     read -r -p "  $LABEL (опционально): " VAL
-    eval "$VAR=\"$VAL\""
+    printf -v "$VAR" '%s' "$VAL"
 }
 
 prompt_default() {
     local VAR="$1" LABEL="$2" DEFAULT="$3"
     read -r -p "  $LABEL [$DEFAULT]: " VAL
-    eval "$VAR=\"${VAL:-$DEFAULT}\""
+    VAL="${VAL:-$DEFAULT}"
+    printf -v "$VAR" '%s' "$VAL"
 }
 
 sanitize_instance_name() {

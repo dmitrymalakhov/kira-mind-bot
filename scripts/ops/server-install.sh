@@ -58,7 +58,7 @@ prompt_required_default() {
         fi
         [ -z "$VAL" ] && echo -e "  ${RED}Обязательное поле!${NC}"
     done
-    eval "$VAR=\"\$VAL\""
+    printf -v "$VAR" '%s' "$VAL"
 }
 
 prompt_optional_default() {
@@ -71,30 +71,15 @@ prompt_optional_default() {
     else
         read -r -p "  $LABEL (опционально): " VAL
     fi
-    eval "$VAR=\"\$VAL\""
+    printf -v "$VAR" '%s' "$VAL"
 }
 
 prompt_default() {
     local VAR="$1" LABEL="$2" DEFAULT="$3"
     local VAL=""
     read -r -p "  $LABEL [$DEFAULT]: " VAL
-    eval "$VAR=\"${VAL:-$DEFAULT}\""
-}
-
-sanitize_instance_name() {
-    local raw="${1:-$DEFAULT_KIRA_INSTANCE_NAME}"
-    local sanitized
-
-    sanitized="$(printf '%s' "$raw" \
-        | tr '[:upper:]' '[:lower:]' \
-        | tr -cs 'a-z0-9_-' '-' \
-        | sed -E 's/^-+//; s/-+$//; s/-{2,}/-/g')"
-
-    if [[ ! "$sanitized" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
-        sanitized="$DEFAULT_KIRA_INSTANCE_NAME"
-    fi
-
-    printf '%s' "$sanitized"
+    VAL="${VAL:-$DEFAULT}"
+    printf -v "$VAR" '%s' "$VAL"
 }
 
 prompt_instance_name() {
@@ -349,6 +334,7 @@ echo -e "${BOLD}  Установка Kira Mind Bot прямо на VPS${NC}\n"
 
 ensure_repo_root
 ensure_docker
+acquire_deploy_lock || error "Не удалось получить deploy lock"
 
 if [ "$SKIP_CONFIG" = true ]; then
     validate_existing_config
