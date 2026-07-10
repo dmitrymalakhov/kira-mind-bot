@@ -55,6 +55,27 @@ load_admin_state_if_present() {
     fi
 }
 
+load_compose_env_if_present() {
+    [ -f "$COMPOSE_ENV_FILE" ] || return 0
+
+    local line=""
+    local key=""
+    local value=""
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ADMIN_PORT=*|ADMIN_USERNAME=*|ADMIN_PASSWORD=*)
+                key="${line%%=*}"
+                value="${line#*=}"
+                case "$key" in
+                    ADMIN_PORT) ADMIN_PORT="$value" ;;
+                    ADMIN_USERNAME) ADMIN_USERNAME="$value" ;;
+                    ADMIN_PASSWORD) ADMIN_PASSWORD="$value" ;;
+                esac
+                ;;
+        esac
+    done < "$COMPOSE_ENV_FILE"
+}
+
 generate_admin_password() {
     cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 20 2>/dev/null || openssl rand -hex 10
 }
@@ -85,6 +106,9 @@ EOF
 }
 
 ensure_admin_state() {
+    # Старые установки хранили ADMIN_* только в compose .env. Сначала
+    # импортируем их, чтобы первый redeploy не сменил порт и credentials.
+    load_compose_env_if_present
     load_admin_state_if_present
 
     if [ -z "${ADMIN_PORT:-}" ]; then

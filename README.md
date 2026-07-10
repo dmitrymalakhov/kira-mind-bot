@@ -551,6 +551,8 @@ ADMIN_PORT=8081
 Qdrant доступен внутри Docker-сети по `http://qdrant:6333` и по умолчанию не публикуется на host-порты, чтобы разные инстансы не конфликтовали за `6333/6334`.
 Для каждой копии используйте отдельные `KIRA_BOT_TOKEN`, `KIRA_ALLOWED_USER_ID`, `.env.production` и `personality.json`.
 
+При первом redeploy существующей установки скрипт переносит текущие `ADMIN_PORT`, `ADMIN_USERNAME` и `ADMIN_PASSWORD` из compose-файла `.env` в локальный `.kira-admin-state`. Это сохраняет адрес и credentials админки, одновременно изолируя их от других инстансов.
+
 ### Telegram User Client
 
 | Переменная | Описание |
