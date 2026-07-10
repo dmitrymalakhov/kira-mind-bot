@@ -9,7 +9,7 @@ import type {
 import { buildSafeAiErrorLog, classifyAiError, createAiExecutionTrace, type AiExecutionStage } from './errorDiagnostics';
 import { parseLLMJson } from '../utils';
 import { allowsCrossProviderFallback, errorToMessage, getSameProviderDegradedModel, getTaskFallbackModel } from './runtimeSupport';
-import { logDegradedStart, logDegradedSuccess } from './degradedLogging';
+import { logDegradedFailure, logDegradedStart, logDegradedSuccess } from './degradedLogging';
 
 const GEMINI_RETRY_BASE_DELAY_MS = 1000;
 const GEMINI_RETRY_MAX_DELAY_MS = 5000;
@@ -295,16 +295,21 @@ async function createDegradedExecution(
     };
     logDegradedStart(logContext, originalError);
     const startedAt = Date.now();
-    const response = await createChatCompletionWithModel(
-        taskKey,
-        params,
-        route.presetName,
-        degradedModel,
-        traceId,
-        attempt,
-        'fallback',
-        originalError,
-    );
+    let response: ChatCompletion;
+    try {
+        response = await createChatCompletionWithModel(
+            taskKey,
+            params,
+            route.presetName,
+            degradedModel,
+            traceId,
+            attempt,
+            'fallback',
+        );
+    } catch (error) {
+        logDegradedFailure(logContext, error, Date.now() - startedAt);
+        throw error;
+    }
     logDegradedSuccess(logContext, Date.now() - startedAt);
     return {
         response,

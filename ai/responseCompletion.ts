@@ -8,7 +8,7 @@ import type {
 import { logAiUsage } from '../services/aiUsageLogService';
 import { buildSafeAiErrorLog, classifyAiError, createAiExecutionTrace, type AiExecutionStage } from './errorDiagnostics';
 import { allowsCrossProviderFallback, errorToMessage, getSameProviderDegradedModel, getTaskFallbackModel } from './runtimeSupport';
-import { logDegradedStart, logDegradedSuccess } from './degradedLogging';
+import { logDegradedFailure, logDegradedStart, logDegradedSuccess } from './degradedLogging';
 
 function recordAiUsage(payload: Parameters<typeof logAiUsage>[0]): void {
     void logAiUsage(payload);
@@ -134,16 +134,21 @@ export async function createResponseForTask(
                     };
                     logDegradedStart(logContext, retryError);
                     const startedAt = Date.now();
-                    const result = await createResponseWithModel(
-                        taskKey,
-                        params,
-                        presetName,
-                        degradedModel,
-                        trace.traceId,
-                        3,
-                        'fallback',
-                        retryError,
-                    );
+                    let result: ResponseResult;
+                    try {
+                        result = await createResponseWithModel(
+                            taskKey,
+                            params,
+                            presetName,
+                            degradedModel,
+                            trace.traceId,
+                            3,
+                            'fallback',
+                        );
+                    } catch (error) {
+                        logDegradedFailure(logContext, error, Date.now() - startedAt);
+                        throw error;
+                    }
                     logDegradedSuccess(logContext, Date.now() - startedAt);
                     return result;
                 }
