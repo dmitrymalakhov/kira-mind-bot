@@ -185,7 +185,8 @@ prompt_default OWNER_NAME "Как тебя зовут (для бота)" "Пол
 
 # DB
 echo -e "\n${BOLD}База данных${NC}"
-DB_PASSWORD=$(cat /dev/urandom | LC_ALL=C tr -dc 'a-zA-Z0-9' | head -c 24)
+DB_PASSWORD="$(openssl rand -hex 16 2>/dev/null || true)"
+[ -n "$DB_PASSWORD" ] || { echo "❌ Не удалось сгенерировать пароль БД: openssl недоступен" >&2; exit 1; }
 echo -e "  ${GREEN}Пароль БД сгенерирован автоматически${NC}"
 
 # Опциональные

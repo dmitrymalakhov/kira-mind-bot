@@ -264,7 +264,8 @@ collect_config() {
     if [ -n "${DB_PASSWORD:-}" ]; then
         info "Использую существующий пароль БД из $ENV_FILE"
     else
-        DB_PASSWORD=$(cat /dev/urandom | LC_ALL=C tr -dc 'a-zA-Z0-9' | head -c 24)
+        DB_PASSWORD="$(openssl rand -hex 16 2>/dev/null || true)"
+        [ -n "$DB_PASSWORD" ] || error "Не удалось сгенерировать пароль БД: openssl недоступен"
         info "Пароль БД сгенерирован автоматически"
     fi
 
