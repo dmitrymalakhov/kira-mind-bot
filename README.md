@@ -535,6 +535,8 @@ make remote-deploy-admin SERVER_IP=<ip>
 
 Каждый инстанс должен находиться в отдельной папке и иметь отдельные `.env.production`, `personality.json`, Telegram bot token, PostgreSQL, Qdrant и админку. PostgreSQL и Qdrant наружу не публикуются: одинаковые внутренние адреса `postgres:5432` и `qdrant:6333` относятся к разным изолированным Docker-сетям.
 
+Из-за разных сетей DNS-имя `postgres` во втором боте указывает только на PostgreSQL второго Compose project, а `qdrant` — только на его Qdrant. Физические данные лежат в volumes с именем инстанса, поэтому SQL-данные, память Qdrant и коллекции одного бота не доступны другому через штатную конфигурацию.
+
 Для существующей установки в `/opt/docker/kira-mind-bot` ничего дополнительно задавать не нужно: имя папки даёт прежний project name `kira-mind-bot`, используются текущие volumes `kira-mind-bot_postgres_data` и `kira-mind-bot_qdrant_storage`, а текущие настройки админки переносятся из `.env` в локальный `.kira-admin-state`.
 
 Для второго бота создайте соседнюю папку и выполните установку из неё:
