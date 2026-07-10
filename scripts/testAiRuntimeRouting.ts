@@ -808,13 +808,15 @@ async function main() {
             ],
         );
         assert.strictEqual((calls[2] as RecordedCall).body.model, 'gemini-3.1-flash-lite');
-        assert.ok(degradedConsoleLogs[0]?.startsWith('[AI DEGRADED] '));
-        assert.ok(degradedConsoleLogs[0]?.includes('"event":"start"'));
-        assert.ok(degradedConsoleLogs[0]?.includes('"from":"gemini:gemini-3.5-flash"'));
-        assert.ok(degradedConsoleLogs[0]?.includes('"to":"gemini:gemini-3.1-flash-lite"'));
-        assert.ok(degradedConsoleLogs[1]?.startsWith('[AI DEGRADED] '));
-        assert.ok(degradedConsoleLogs[1]?.includes('"event":"success"'));
-        assert.ok(degradedConsoleLogs[1]?.includes('"activeModel":"gemini:gemini-3.1-flash-lite"'));
+        assert.ok(degradedConsoleLogs[0]?.startsWith('[AI DEGRADED] SWITCH | task=conversation'));
+        assert.ok(degradedConsoleLogs[0]?.includes('gemini:gemini-3.5-flash → gemini:gemini-3.1-flash-lite'));
+        assert.ok(degradedConsoleLogs[0]?.includes('failedAttempt=2'));
+        assert.ok(degradedConsoleLogs[0]?.includes('reason=HTTP 503, provider_unavailable, Error, retryable'));
+        assert.ok(degradedConsoleLogs[0]?.includes('traceId='));
+        assert.ok(degradedConsoleLogs[1]?.startsWith('[AI DEGRADED] ACTIVE | task=conversation'));
+        assert.ok(degradedConsoleLogs[1]?.includes('model=gemini:gemini-3.1-flash-lite'));
+        assert.ok(degradedConsoleLogs[1]?.includes('attempt=3'));
+        assert.ok(degradedConsoleLogs[1]?.includes('latency='));
 
         calls.length = 0;
         await withPreset('gemini-full', async () => {
@@ -831,6 +833,30 @@ async function main() {
             ],
         );
         assert.strictEqual((calls[2] as RecordedCall).body.model, 'gemini-3.1-flash-lite');
+
+        calls.length = 0;
+        degradedConsoleLogs.length = 0;
+        geminiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => {
+            recordCall({
+                provider: 'gemini',
+                method: 'chat.completions.create',
+                body: body as Record<string, unknown>,
+            });
+            const error = new Error('Gemini unavailable including lite') as Error & { status?: number };
+            error.status = body.model === 'gemini-3.1-flash-lite' ? 500 : 503;
+            throw error;
+        };
+        await assert.rejects(() => withPreset('gemini-full', async () => {
+            await createChatCompletionForTask('conversation', {
+                messages: [{ role: 'user', content: 'test failed degradation' }],
+            } satisfies ChatParamsWithoutModel);
+        }));
+        assert.strictEqual(calls.length, 3);
+        assert.ok(degradedConsoleLogs[0]?.startsWith('[AI DEGRADED] SWITCH | task=conversation'));
+        assert.ok(degradedConsoleLogs[1]?.startsWith('[AI DEGRADED] FAILED | task=conversation'));
+        assert.ok(degradedConsoleLogs[1]?.includes('model=gemini:gemini-3.1-flash-lite'));
+        assert.ok(degradedConsoleLogs[1]?.includes('reason=HTTP 500, provider_unavailable, Error, retryable'));
+        assert.ok(!degradedConsoleLogs.some((line) => line.includes('[AI DEGRADED] ACTIVE')));
         geminiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => {
             const recordedCall: RecordedCall = {
                 provider: 'gemini',
@@ -894,11 +920,10 @@ async function main() {
             ],
         );
         assert.strictEqual((calls[2]?.body.body as Record<string, unknown>)?.model, 'gemini-3.1-flash-lite');
-        assert.ok(degradedConsoleLogs[0]?.startsWith('[AI DEGRADED] '));
-        assert.ok(degradedConsoleLogs[0]?.includes('"event":"start"'));
-        assert.ok(degradedConsoleLogs[1]?.startsWith('[AI DEGRADED] '));
-        assert.ok(degradedConsoleLogs[1]?.includes('"event":"success"'));
-        assert.ok(degradedConsoleLogs[1]?.includes('"activeModel":"gemini:gemini-3.1-flash-lite"'));
+        assert.ok(degradedConsoleLogs[0]?.startsWith('[AI DEGRADED] SWITCH | task=webSearchReasoning'));
+        assert.ok(degradedConsoleLogs[0]?.includes('gemini:gemini-3.5-flash → gemini:gemini-3.1-flash-lite'));
+        assert.ok(degradedConsoleLogs[1]?.startsWith('[AI DEGRADED] ACTIVE | task=webSearchReasoning'));
+        assert.ok(degradedConsoleLogs[1]?.includes('model=gemini:gemini-3.1-flash-lite'));
 
         calls.length = 0;
         geminiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => {
