@@ -145,6 +145,14 @@ fi
 FAKE_HOST_PORT_BUSY=false
 admin_port_is_available_for_instance "8123"
 
+# Даже остановленный чужой контейнер с опубликованным портом должен блокировать
+# выбор этого порта: после его запуска возникнет конфликт bind.
+FAKE_MODE="port-collision"
+if admin_port_is_available_for_instance "7875"; then
+  echo "stopped foreign container must reserve admin port" >&2
+  exit 1
+fi
+
 validate_storage_mount \
   "postgres" \
   "volume|kira-second-bot_postgres_data" \

@@ -11,7 +11,7 @@
 Нужно: VPS с Ubuntu/Debian, `git` и доступом к Docker или `sudo/root` для его установки.
 
 ```bash
-git clone <repo>
+git clone https://github.com/okurilo/kira-mind-bot.git
 cd kira-mind-bot
 make install-server
 ```
@@ -40,18 +40,6 @@ make install-server
 4. собирает и поднимает PostgreSQL, Qdrant, бота и admin panel;
 5. печатает URL, логин и пароль панели управления.
 
-Есть два пути запуска:
-
-1. На самой VPS: заходишь на сервер, запускаешь `make install-server`, дальше живёшь через `make deploy`, `make logs`, `make logs-follow`, `make logs-no-db`, `make pause`.
-   Это основной и самый прямой путь, если у тебя есть shell-доступ к серверу.
-2. С локальной машины на удалённый VPS: запускаешь `make remote-install SERVER_IP=<ip>` у себя локально, а установка и деплой идут по SSH.
-   Этот путь нужен, если удобнее управлять сервером с ноутбука и не работать внутри shell на VPS.
-
-Если `make` нет:
-
-1. На самой VPS используй `./scripts/ops/server-install.sh`, `./scripts/ops/server-deploy.sh deploy`, `./scripts/ops/server-deploy.sh logs`, `./scripts/ops/server-deploy.sh logs -f`, `./scripts/ops/server-deploy.sh logs --no-postgres`, `./scripts/ops/server-deploy.sh logs --no-postgres --no-qdrant`.
-2. С локальной машины используй `./scripts/ops/install.sh --server-ip <ip>` и `./scripts/ops/deploy.sh --kira-mind-bot --admin-panel --server-ip <ip>`.
-
 Если проект уже поднят и нужно просто обновить код:
 
 ```bash
@@ -65,22 +53,6 @@ make deploy
 git pull origin main
 make deploy-clean
 ```
-
-### Маршрут по задачам
-
-| Хочу | Что делать |
-|------|------------|
-| Поднять прямо на VPS | `make install-server` |
-| Поставить с локальной машины на удалённый VPS | `make remote-install SERVER_IP=<ip>` |
-| Сделать то же самое без `make` | `./scripts/ops/...` напрямую |
-| Обновить после `git pull` | `make deploy` |
-| Посмотреть статус и последние логи | `make status`, `make logs` |
-| Смотреть live-логи в реальном времени | `make logs-follow` |
-| Смотреть логи только приложений | `make logs-no-db` |
-| Временно остановить приложение | `make pause` |
-| Настроить Telegram User Client | раздел `Установка на VPS` -> `Получить Telegram Session String` |
-| Включить публичный режим в группе | раздел `Установка на VPS` -> `Включить публичный режим в группе` |
-| Локально разрабатывать | раздел `Локальная разработка` |
 
 ---
 
@@ -106,22 +78,6 @@ make deploy-clean
 | `make restart` | Перезапустить app-сервисы |
 | `make stop` | Остановить весь стек |
 | `make help` | Показать все доступные цели |
-
-Какой путь использовать:
-
-- первый запуск на VPS: `make install-server`
-- обычное обновление: `make deploy`
-- временно притушить приложение: `make pause`
-- посмотреть последние логи: `make logs`
-- посмотреть логи только приложений: `make logs-no-db`
-- смотреть live-логи: `make logs-follow`
-
-Два пути установки и деплоя:
-
-1. Прямо на VPS через `scripts/ops/server-install.sh` и `scripts/ops/server-deploy.sh`.
-   Подходит, если у тебя есть shell-доступ к серверу и ты хочешь выполнять все операционные команды на месте.
-2. С локальной машины через `scripts/ops/install.sh` и `scripts/ops/deploy.sh`.
-   Подходит, если удобнее деплоить по SSH с локального компьютера, не заходя в shell сервера для каждого шага.
 
 `make` нужен только как shortcut на хосте. Docker-контейнерам он не нужен.
 `make logs -f` не подойдёт, потому что `-f` обрабатывает сам `make`; для follow-режима используй `make logs-follow`.
@@ -265,9 +221,11 @@ make deploy-clean
 
 ---
 
-## Установка на VPS
+## Установка и деплой
 
-### 1. Подготовить сервер
+### Сценарий 1. Прямой запуск на VPS
+
+#### 1. Подготовить сервер
 
 Подойдёт Ubuntu 20.04+ или Debian 11+. Минимально: 1 CPU, 2 GB RAM, 20 GB диска.
 
@@ -279,7 +237,7 @@ make deploy-clean
 
 Важно: если Telegram или другие внешние сервисы доступны только через VPN, VPN должен быть настроен на уровне самого VPS или сетевого маршрута Docker-хоста. Приложение proxy самостоятельно не настраивает.
 
-### 2. Подготовить ключи
+#### 2. Подготовить ключи
 
 Обязательно:
 
@@ -297,14 +255,14 @@ make deploy-clean
 | Ideogram API key | генерация изображений |
 | Telegram API ID + Hash | чтение переписок и отправка от имени пользователя |
 
-### 3. Клонировать репозиторий
+#### 3. Клонировать репозиторий
 
 ```bash
-git clone <repo>
+git clone https://github.com/okurilo/kira-mind-bot.git
 cd kira-mind-bot
 ```
 
-### 4. Запустить установщик
+#### 4. Запустить установщик
 
 ```bash
 make install-server
@@ -322,7 +280,7 @@ make install-server
 ╚══════════════════════════════════════════╝
 ```
 
-### 5. Настроить личность
+#### 5. Настроить личность
 
 В панели управления откройте раздел “Личность” и заполните:
 
@@ -332,13 +290,9 @@ make install-server
 4. варианты настроения;
 5. сохраните изменения и перезапустите бота.
 
-Если на сервере не хотите случайно перетереть локальный `personality.json` при `git pull`, можно пометить его как локально изменённый:
+`personality.json` создаётся установщиком, исключён из Git и не должен перетираться при `git pull`.
 
-```bash
-git update-index --assume-unchanged personality.json
-```
-
-### 6. Получить Telegram Session String
+#### 6. Получить Telegram Session String
 
 Нужно только для функций Telegram User Client.
 
@@ -348,7 +302,7 @@ git update-index --assume-unchanged personality.json
 
 Скрипт авторизует пользовательскую Telegram-сессию через Docker и выведет `TELEGRAM_SESSION_STRING`. После этого вставьте его в панель управления или `.env.production`.
 
-### 7. Включить публичный режим в группе
+#### 7. Включить публичный режим в группе
 
 1. Добавьте бота в группу.
 2. В BotFather отключите privacy mode, если бот должен видеть сообщения в группе.
@@ -357,7 +311,7 @@ git update-index --assume-unchanged personality.json
 5. Выберите домены памяти, которые можно использовать в этой группе.
 6. Добавьте запрещённые темы, если нужно.
 
-### 2. Установка с локальной машины на удалённый VPS
+### Сценарий 2. Установка с локальной машины на удалённый VPS
 
 Этот путь нужен, если вы хотите запускать установку не на самом сервере, а со своей локальной машины по SSH.
 
@@ -372,6 +326,13 @@ make remote-install SERVER_IP=<ip>
 - `ssh` и `scp`;
 - доступ по ключу к `root@<ip>` или готовность настроить его во время установки;
 - локальные `bash`, `git` и доступ к репозиторию.
+
+Если `make` не установлен, используй скрипты напрямую:
+
+```bash
+./scripts/ops/install.sh --server-ip <ip>
+./scripts/ops/deploy.sh --kira-mind-bot --admin-panel --server-ip <ip>
+```
 
 Обычный деплой после этого:
 
@@ -413,7 +374,8 @@ make remote-deploy-admin SERVER_IP=<ip>
 - настраивать расписание проактивных сообщений и дайджестов;
 - редактировать личность бота;
 - управлять чатами, доменами памяти и запрещёнными темами;
-- смотреть статус контейнеров;
+- смотреть live-статус контейнеров, PostgreSQL, Qdrant, Telegram и AI-провайдеров;
+- анализировать AI usage: вызовы, токены, модели, задачи, задержки и последние ошибки;
 - перезапускать сервисы после изменения настроек.
 
 Важно: conversational `AI preset` и memory embeddings теперь разделены. Переключение preset меняет генеративный контур, но не меняет отдельный stable memory profile, через который бот пишет и читает память из Qdrant.
@@ -447,6 +409,13 @@ make remote-deploy-admin SERVER_IP=<ip>
 | `/contacts` | Список контактов |
 | `/chats` | Список чатов, где присутствует бот |
 | `/chatgroups` | Группы чатов для анализа и отслеживания |
+| `/watch` | Меню prompt-наблюдений за Telegram-чатами |
+| `/watch_add` | Добавить наблюдение через пошаговый мастер |
+| `/watch_list` | Список настроенных наблюдений |
+| `/watch_pause <id>` | Поставить наблюдение на паузу |
+| `/watch_resume <id>` | Возобновить наблюдение |
+| `/watch_remove <id>` | Удалить наблюдение |
+| `/watch_help` | Справка по prompt-наблюдениям |
 | `/public_mode` | Включить или выключить публичный режим в текущей группе |
 | `/group_context [on\|off]` | Включить или выключить сбор последних сообщений группы в LLM-контекст |
 | `/group_reply_to_bot [on\|off]` | Включить или выключить реакцию на reply к сообщению бота без `@упоминания` |
@@ -482,16 +451,16 @@ make remote-deploy-admin SERVER_IP=<ip>
 
 Основной путь настройки: веб-панель. Для ручного редактирования используйте `.env.production` на сервере.
 
-Для минимального запуска достаточно:
+При ручной настройке минимально необходимы:
 
 | Переменная | Зачем нужна |
 |------------|-------------|
 | `OPENAI_API_KEY` | LLM, embeddings, web search, Whisper, анализ изображений |
-| `MEMORY_EMBEDDING_PROFILE` | Необязательный runtime override для отдельного memory profile; по умолчанию используется `stable-1536` |
 | `KIRA_BOT_TOKEN` | Токен Telegram-бота |
 | `KIRA_ALLOWED_USER_ID` | Telegram User ID владельца |
-| `KIRA_INSTANCE_NAME` | Имя Docker Compose-инстанса; нужно для нескольких копий на одном VPS |
 | `DB_PASSWORD` | Пароль PostgreSQL |
+
+Установщик запрашивает API-ключи и Telegram credentials, генерирует `DB_PASSWORD`, предлагает `KIRA_INSTANCE_NAME` по имени каталога и сохраняет конфигурацию в `.env.production`. Для единственного стандартного инстанса задавать `KIRA_INSTANCE_NAME` вручную не обязательно.
 
 ### Дополнительные функции
 
@@ -501,6 +470,7 @@ make remote-deploy-admin SERVER_IP=<ip>
 | `GEMINI_API_KEY` | Gemini как дополнительный AI provider для preset-ов |
 | `AI_GEMINI_MAX_CONCURRENT` | Максимум одновременных Gemini API-запросов; по умолчанию `2`, чтобы не перегружать capacity провайдера |
 | `AI_GEMINI_MAX_QUEUE` | Максимум ожидающих Gemini API-запросов; по умолчанию `100`, после чего включается контролируемая деградация |
+| `MEMORY_EMBEDDING_PROFILE` | Runtime override профиля памяти; обычно оставляйте системный `stable-1536` |
 | `ZAI_API_KEY` | Z.ai / GLM как дополнительный AI provider для preset-ов |
 | `GOOGLE_MAPS_API_KEY` | Карты, адреса, маршруты, места рядом |
 | `IDEOGRAM_API_KEY` | Генерацию изображений |
@@ -607,6 +577,7 @@ KIRA_INSTANCE_NAME=kira-wife
 | `MEMORY_CONSOLIDATION_ENABLED` | Фоновая консолидация памяти |
 | `PERSONAL_CHAT_MEMORY_ENABLED` | Фоновое изучение личных переписок |
 | `MORNING_DIGEST_ENABLED` | Утренний дайджест напоминаний |
+| `RICH_MESSAGES_ENABLED` | Аварийное отключение rich-форматирования системных сообщений; по умолчанию `true` |
 
 ### Групповые чаты
 
@@ -618,6 +589,34 @@ KIRA_INSTANCE_NAME=kira-wife
 | `GROUP_REPLY_TO_BOT_ENABLED` | Реагировать на reply к сообщению бота без явного `@упоминания` |
 
 Этими двумя runtime-настройками удобнее управлять через панель или команды `/group_context` и `/group_reply_to_bot`; они применяются без рестарта.
+
+---
+
+## Эксплуатация и сохранность данных
+
+### Безопасность панели управления
+
+Admin panel хранит секреты и управляет контейнерами своего инстанса через Docker socket. Не оставляйте её HTTP-порт открытым всему интернету.
+
+Для постоянной эксплуатации:
+
+- ограничьте доступ к `ADMIN_PORT` через firewall, VPN или приватную сеть;
+- если панель доступна по доменному имени, поставьте перед ней HTTPS reverse proxy;
+- используйте уникальный длинный пароль и не публикуйте `.env.production` и `.kira-admin-state`;
+- после изменения сетевых правил проверьте, что панель доступна только из доверенной сети, а Telegram-бот продолжает обращаться к внешним API.
+
+### Резервное копирование и восстановление
+
+Резервная копия инстанса должна включать:
+
+- `.env.production`, `.kira-admin-state` и `personality.json`;
+- логический дамп PostgreSQL, созданный штатным `pg_dump`;
+- snapshot коллекций Qdrant, созданный через snapshot API Qdrant;
+- имя инстанса и версию кода или git commit, на которых сделана копия.
+
+Перед согласованной копией приостановите app-сервисы через `make pause`, чтобы бот не продолжал менять данные во время снимка. PostgreSQL и Qdrant при этом остаются запущены, поэтому их штатные dump/snapshot-механизмы доступны. Храните копии вне VPS и отдельно от рабочих Docker volumes.
+
+Восстановление сначала проверяйте на отдельном тестовом инстансе и отдельном admin-порту. Верните конфигурационные файлы с правами `600`, восстановите PostgreSQL и Qdrant их штатными средствами, затем запустите preflight через обычный `make deploy`. Не используйте для восстановления `docker volume prune`, `docker volume rm`, `compose down -v` или глобальную очистку Docker: эти команды могут удалить данные других инстансов.
 
 ---
 

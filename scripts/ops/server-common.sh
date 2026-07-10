@@ -248,7 +248,9 @@ admin_port_is_available_for_instance() {
         if [ "$owner_project" != "$instance_name" ]; then
             return 1
         fi
-    done < <(docker_ps -q --filter "publish=$port")
+    # Проверяем и остановленные контейнеры: они не слушают порт сейчас,
+    # но могут занять его при следующем запуске чужого Compose-проекта.
+    done < <(docker_ps -aq --filter "publish=$port")
 
     if [ "$docker_owner_found" = true ]; then
         return 0
