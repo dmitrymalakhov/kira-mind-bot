@@ -541,7 +541,7 @@ make remote-deploy-admin SERVER_IP=<ip>
 
 ```bash
 cd /opt/docker
-git clone <repository-url> kira-wife
+git clone https://github.com/okurilo/kira-mind-bot.git kira-wife
 cd kira-wife
 make install-server
 ```
