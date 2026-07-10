@@ -9,6 +9,7 @@ import type {
 import { buildSafeAiErrorLog, classifyAiError, createAiExecutionTrace, type AiExecutionStage } from './errorDiagnostics';
 import { parseLLMJson } from '../utils';
 import { allowsCrossProviderFallback, errorToMessage, getSameProviderDegradedModel, getTaskFallbackModel } from './runtimeSupport';
+import { logDegradedStart, logDegradedSuccess } from './degradedLogging';
 
 const GEMINI_RETRY_BASE_DELAY_MS = 1000;
 const GEMINI_RETRY_MAX_DELAY_MS = 5000;
@@ -285,14 +286,15 @@ async function createDegradedExecution(
     traceId: string,
     attempt: number,
 ): Promise<AiExecutionResult> {
-    console.error('[AI DEGRADED] Gemini primary model unavailable, switching to lighter model', {
+    const logContext = {
         taskKey,
         traceId,
-        failedAttempt: attempt - 1,
         previousModel: route.modelRef,
         degradedModel,
-        reason: buildSafeAiErrorLog(originalError),
-    });
+        attempt,
+    };
+    logDegradedStart(logContext, originalError);
+    const startedAt = Date.now();
     const response = await createChatCompletionWithModel(
         taskKey,
         params,
@@ -303,6 +305,7 @@ async function createDegradedExecution(
         'fallback',
         originalError,
     );
+    logDegradedSuccess(logContext, Date.now() - startedAt);
     return {
         response,
         route: { presetName: route.presetName, modelRef: degradedModel },

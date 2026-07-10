@@ -129,12 +129,19 @@ async function main() {
     const originalOpenAiAudio = openaiMutableClient.audio;
     const originalConsoleInfo = console.info;
     const originalConsoleWarn = console.warn;
+    const originalConsoleError = console.error;
     const originalFetch = globalThis.fetch;
+    const degradedConsoleLogs: string[] = [];
     let lastTranscriptionStream: { destroyed?: boolean } | null = null;
 
     try {
-        console.info = () => undefined;
+        console.info = (...args: unknown[]) => {
+            if (String(args[0]).startsWith('[AI DEGRADED] ')) degradedConsoleLogs.push(String(args[0]));
+        };
         console.warn = () => undefined;
+        console.error = (...args: unknown[]) => {
+            if (String(args[0]).startsWith('[AI DEGRADED] ')) degradedConsoleLogs.push(String(args[0]));
+        };
 
         openaiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => {
             calls.push({ provider: 'openai', method: 'chat.completions.create', body });
@@ -380,6 +387,7 @@ async function main() {
         });
 
         calls.length = 0;
+        degradedConsoleLogs.length = 0;
         geminiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => {
             calls.push({ provider: 'gemini', method: 'chat.completions.create', body });
             throw new Error('Gemini returned 400');
@@ -800,6 +808,13 @@ async function main() {
             ],
         );
         assert.strictEqual((calls[2] as RecordedCall).body.model, 'gemini-3.1-flash-lite');
+        assert.ok(degradedConsoleLogs[0]?.startsWith('[AI DEGRADED] '));
+        assert.ok(degradedConsoleLogs[0]?.includes('"event":"start"'));
+        assert.ok(degradedConsoleLogs[0]?.includes('"from":"gemini:gemini-3.5-flash"'));
+        assert.ok(degradedConsoleLogs[0]?.includes('"to":"gemini:gemini-3.1-flash-lite"'));
+        assert.ok(degradedConsoleLogs[1]?.startsWith('[AI DEGRADED] '));
+        assert.ok(degradedConsoleLogs[1]?.includes('"event":"success"'));
+        assert.ok(degradedConsoleLogs[1]?.includes('"activeModel":"gemini:gemini-3.1-flash-lite"'));
 
         calls.length = 0;
         await withPreset('gemini-full', async () => {
@@ -827,6 +842,7 @@ async function main() {
         };
 
         calls.length = 0;
+        degradedConsoleLogs.length = 0;
         globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
             const url = String(input);
             const parsedBody = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
@@ -878,6 +894,11 @@ async function main() {
             ],
         );
         assert.strictEqual((calls[2]?.body.body as Record<string, unknown>)?.model, 'gemini-3.1-flash-lite');
+        assert.ok(degradedConsoleLogs[0]?.startsWith('[AI DEGRADED] '));
+        assert.ok(degradedConsoleLogs[0]?.includes('"event":"start"'));
+        assert.ok(degradedConsoleLogs[1]?.startsWith('[AI DEGRADED] '));
+        assert.ok(degradedConsoleLogs[1]?.includes('"event":"success"'));
+        assert.ok(degradedConsoleLogs[1]?.includes('"activeModel":"gemini:gemini-3.1-flash-lite"'));
 
         calls.length = 0;
         geminiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => {
@@ -933,6 +954,7 @@ async function main() {
         globalThis.fetch = originalFetch;
         console.info = originalConsoleInfo;
         console.warn = originalConsoleWarn;
+        console.error = originalConsoleError;
     }
 }
 
