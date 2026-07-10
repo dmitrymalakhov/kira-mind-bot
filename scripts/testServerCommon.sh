@@ -15,6 +15,14 @@ export DEFAULT_KIRA_INSTANCE_NAME="kira-mind-bot"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/ops/server-common.sh"
 
+admin_port_is_available_for_instance() {
+  [ "$1" != "7875" ]
+}
+
+find_available_admin_port() {
+  printf '%s' "7999"
+}
+
 cat > "$COMPOSE_ENV_FILE" <<'EOF'
 ADMIN_PORT=7875
 ADMIN_USERNAME=legacy-admin
@@ -24,10 +32,10 @@ EOF
 unset ADMIN_PORT ADMIN_USERNAME ADMIN_PASSWORD
 ensure_admin_state
 
-[ "$ADMIN_PORT" = "7875" ]
 [ "$ADMIN_USERNAME" = "legacy-admin" ]
 [ "$ADMIN_PASSWORD" = "legacy-password" ]
-grep -q '^ADMIN_PORT=7875$' "$ADMIN_STATE_FILE"
+[ "$ADMIN_PORT" = "7999" ]
+grep -q '^ADMIN_PORT=7999$' "$ADMIN_STATE_FILE"
 grep -q '^ADMIN_USERNAME=legacy-admin$' "$ADMIN_STATE_FILE"
 grep -q '^ADMIN_PASSWORD=legacy-password$' "$ADMIN_STATE_FILE"
 
@@ -43,5 +51,9 @@ ensure_admin_state
 [ "$ADMIN_PORT" = "7876" ]
 [ "$ADMIN_USERNAME" = "instance-admin" ]
 [ "$ADMIN_PASSWORD" = "instance-password" ]
+
+DEFAULT_KIRA_INSTANCE_NAME="Kira Second Bot"
+unset KIRA_INSTANCE_NAME
+[ "$(resolve_instance_name)" = "kira-second-bot" ]
 
 echo "server-common admin state migration checks passed"

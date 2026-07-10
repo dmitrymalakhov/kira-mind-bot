@@ -7,9 +7,29 @@ PERSONALITY_FILE="${PERSONALITY_FILE:-personality.json}"
 ADMIN_STATE_FILE="${ADMIN_STATE_FILE:-.kira-admin-state}"
 DEFAULT_ADMIN_USERNAME="${DEFAULT_ADMIN_USERNAME:-admin}"
 ADMIN_PORT_FALLBACK="${ADMIN_PORT_FALLBACK:-8080}"
-DEFAULT_KIRA_INSTANCE_NAME="${DEFAULT_KIRA_INSTANCE_NAME:-kira-mind-bot}"
+DEFAULT_KIRA_INSTANCE_NAME="${DEFAULT_KIRA_INSTANCE_NAME:-${PWD##*/}}"
 COMPOSE_CMD=()
 DOCKER_CMD=()
+
+sanitize_instance_name() {
+    local raw="${1:-kira-mind-bot}"
+    local sanitized=""
+
+    sanitized="$(printf '%s' "$raw" \
+        | tr '[:upper:]' '[:lower:]' \
+        | tr -cs 'a-z0-9_-' '-' \
+        | sed -E 's/^-+//; s/-+$//; s/-{2,}/-/g')"
+
+    if [[ ! "$sanitized" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+        sanitized="kira-mind-bot"
+    fi
+
+    printf '%s' "$sanitized"
+}
+
+resolve_instance_name() {
+    sanitize_instance_name "${KIRA_INSTANCE_NAME:-$DEFAULT_KIRA_INSTANCE_NAME}"
+}
 
 resolve_compose_cmd() {
     if docker compose version >/dev/null 2>&1; then
@@ -89,7 +109,7 @@ EOF
 }
 
 write_compose_env() {
-    KIRA_INSTANCE_NAME="${KIRA_INSTANCE_NAME:-$DEFAULT_KIRA_INSTANCE_NAME}"
+    KIRA_INSTANCE_NAME="$(resolve_instance_name)"
 
     cat > "$COMPOSE_ENV_FILE" << EOF
 KIRA_INSTANCE_NAME=${KIRA_INSTANCE_NAME}
@@ -103,6 +123,64 @@ ADMIN_PORT=${ADMIN_PORT}
 ADMIN_USERNAME=${ADMIN_USERNAME}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 EOF
+
+    ensure_instance_not_owned_by_other_directory
+}
+
+ensure_instance_not_owned_by_other_directory() {
+    [ "${#DOCKER_CMD[@]}" -gt 0 ] || return 0
+
+    local current_dir=""
+    local container_id=""
+    local owner_dir=""
+    current_dir="$(pwd -P)"
+
+    while IFS= read -r container_id; do
+        [ -n "$container_id" ] || continue
+        owner_dir="$("${DOCKER_CMD[@]}" inspect "$container_id" \
+            --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null || true)"
+        if [ -n "$owner_dir" ] && [ "$owner_dir" != "$current_dir" ]; then
+            echo "Ошибка: Docker Compose project '$KIRA_INSTANCE_NAME' уже принадлежит каталогу '$owner_dir'." >&2
+            echo "Задайте уникальный KIRA_INSTANCE_NAME для каталога '$current_dir'." >&2
+            return 1
+        fi
+    done < <("${DOCKER_CMD[@]}" ps -aq --filter "label=com.docker.compose.project=$KIRA_INSTANCE_NAME")
+}
+
+admin_port_is_available_for_instance() {
+    local port="$1"
+    local instance_name=""
+    local container_id=""
+    local owner_project=""
+    instance_name="$(resolve_instance_name)"
+
+    [ "${#DOCKER_CMD[@]}" -gt 0 ] || return 0
+
+    while IFS= read -r container_id; do
+        [ -n "$container_id" ] || continue
+        owner_project="$("${DOCKER_CMD[@]}" inspect "$container_id" \
+            --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)"
+        if [ "$owner_project" != "$instance_name" ]; then
+            return 1
+        fi
+    done < <("${DOCKER_CMD[@]}" ps -aq --filter "publish=$port")
+
+    return 0
+}
+
+find_available_admin_port() {
+    local candidate=""
+    local attempt=0
+    while [ "$attempt" -lt 200 ]; do
+        candidate=$(( (RANDOM % 2000) + 7000 ))
+        if admin_port_is_available_for_instance "$candidate"; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+    done
+
+    return 1
 }
 
 ensure_admin_state() {
@@ -112,7 +190,13 @@ ensure_admin_state() {
     load_admin_state_if_present
 
     if [ -z "${ADMIN_PORT:-}" ]; then
-        ADMIN_PORT=$(( (RANDOM % 2000) + 7000 ))
+        ADMIN_PORT="$(find_available_admin_port)"
+    elif ! admin_port_is_available_for_instance "$ADMIN_PORT"; then
+        if [ -f "$ADMIN_STATE_FILE" ]; then
+            echo "Ошибка: ADMIN_PORT=$ADMIN_PORT уже занят другим Docker Compose project." >&2
+            return 1
+        fi
+        ADMIN_PORT="$(find_available_admin_port)"
     fi
 
     if [ -z "${ADMIN_USERNAME:-}" ]; then
