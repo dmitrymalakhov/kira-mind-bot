@@ -6,6 +6,7 @@ const { hasLegacyDigitalBiography } = require("./utils/legacyPersonalitySanitize
 // ── Загрузка personality.json (редактируется через admin panel) ───────────────
 interface PersonalityOverride {
   characterName?: string;
+  characterGender?: "женский" | "мужской";
   persona?: string;
   communicationStyle?: string;
   biography?: string;
@@ -249,8 +250,10 @@ function assistants(activeAssistant: string): AssistantConfig {
         "скептичное",
       ]),
       defaultMood: kiraP.defaultMood || undefined,
-      proactiveMessageHint: kiraP.proactiveMessageHint || "как будто ты сама написала первой",
-      eventDescriptionGender: "женский",
+      proactiveMessageHint: kiraP.proactiveMessageHint || (kiraP.characterGender === "мужской"
+        ? "как будто ты сам написал первым"
+        : "как будто ты сама написала первой"),
+      eventDescriptionGender: kiraP.characterGender || "женский",
       userGender: "male",
       kiraLifeProactiveEnabled: toBoolean(process.env.KIRA_PROACTIVE_ENABLED, true),
       kiraLifeProactiveIntervalMs: toNumber(process.env.KIRA_PROACTIVE_INTERVAL_MS, 1000 * 60 * 60 * 24),
