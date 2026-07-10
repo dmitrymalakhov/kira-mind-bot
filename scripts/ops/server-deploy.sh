@@ -58,7 +58,6 @@ source "$SCRIPT_DIR/server-common.sh"
 
 ensure_server_repo_root || error "Не найден серверный compose-сценарий в корне репозитория"
 resolve_compose_cmd || error "Docker Compose недоступен для текущего пользователя"
-acquire_deploy_lock || error "Не удалось получить deploy lock"
 
 DEPLOY_CLEAN=false
 TARGET_SERVICE=""
@@ -124,10 +123,19 @@ case "$COMMAND" in
         ;;
 esac
 
-load_env_if_present
-ensure_admin_state
-write_compose_env
-collect_app_services
+case "$COMMAND" in
+    status|logs)
+        # Read-only команды не должны блокироваться параллельным deploy и не
+        # должны переписывать .env/state перед чтением статуса или логов.
+        ;;
+    *)
+        acquire_deploy_lock || error "Не удалось получить deploy lock"
+        load_env_if_present
+        ensure_admin_state
+        write_compose_env
+        collect_app_services
+        ;;
+esac
 
 deploy_stack() {
     header "Redeploy"
