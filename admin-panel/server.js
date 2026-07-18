@@ -28,6 +28,7 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'changeme';
 const BOT_ENV_FILE = process.env.BOT_ENV_FILE || '/app/env/bot.env';
 const PERSONALITY_FILE = process.env.PERSONALITY_FILE || '/app/personality/personality.json';
 const KIRA_BOT_CONTAINER_NAME = process.env.KIRA_BOT_CONTAINER_NAME || 'kira-mind-bot';
+const KIRA_INSTANCE_NAME = process.env.KIRA_INSTANCE_NAME || KIRA_BOT_CONTAINER_NAME;
 
 // Default personality values (mirrors config.ts hardcoded defaults)
 const DEFAULT_PERSONALITY = {
@@ -60,6 +61,10 @@ function sanitizeLegacyPersonality(profile) {
 const SESSION_SECRET = crypto.createHash('sha256')
   .update(ADMIN_PASSWORD + 'kira-panel-2024')
   .digest('hex');
+const SESSION_COOKIE_INSTANCE = String(KIRA_INSTANCE_NAME)
+  .trim()
+  .replace(/[^A-Za-z0-9._-]/g, '_') || 'kira-mind-bot';
+const SESSION_COOKIE_NAME = `kira.sid.${SESSION_COOKIE_INSTANCE}`;
 
 // Rate limiting
 const loginAttempts = new Map();
@@ -272,6 +277,7 @@ function dockerRequest(method, path) {
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(session({
+  name: SESSION_COOKIE_NAME,
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
