@@ -15,7 +15,7 @@ function cleanup() {
   fs.rmSync(tempDir, { recursive: true, force: true });
 }
 
-function render(instanceName, adminPort) {
+function render(instanceName, adminPort, storageNames = {}) {
   const result = spawnSync(
     'docker',
     ['compose', '-f', composeFile, 'config', '--format', 'json'],
@@ -25,6 +25,8 @@ function render(instanceName, adminPort) {
       env: {
         ...process.env,
         KIRA_INSTANCE_NAME: instanceName,
+        ...(storageNames.postgres ? { POSTGRES_VOLUME_NAME: storageNames.postgres } : {}),
+        ...(storageNames.qdrant ? { QDRANT_VOLUME_NAME: storageNames.qdrant } : {}),
         ADMIN_PORT: String(adminPort),
         DB_PASSWORD: 'test-password',
       },
@@ -119,6 +121,15 @@ try {
     assert.notStrictEqual(primary.volumes.postgres_data.name, secondary.volumes.postgres_data.name);
     assert.notStrictEqual(primary.volumes.qdrant_storage.name, secondary.volumes.qdrant_storage.name);
     assert.notStrictEqual(primary.networks.default.name, secondary.networks.default.name);
+
+    const renamed = render('enya-mind-bot', 7877, {
+      postgres: 'kira-mind-bot_postgres_data',
+      qdrant: 'kira-mind-bot_qdrant_storage',
+    });
+    assert.strictEqual(renamed.name, 'enya-mind-bot');
+    assert.strictEqual(renamed.services['kira-mind-bot'].container_name, 'enya-mind-bot');
+    assert.strictEqual(renamed.volumes.postgres_data.name, 'kira-mind-bot_postgres_data');
+    assert.strictEqual(renamed.volumes.qdrant_storage.name, 'kira-mind-bot_qdrant_storage');
     console.log('multi-instance compose isolation checks passed');
   }
 } finally {

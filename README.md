@@ -77,6 +77,7 @@ make deploy-clean
 | `make pause` | Остановить только `kira-mind-bot` и `admin-panel` |
 | `make restart` | Перезапустить app-сервисы |
 | `make stop` | Остановить весь стек |
+| `make migrate-instance NEW_INSTANCE=enya-mind-bot` | Переименовать project и контейнер, сохранив текущие volumes |
 | `make help` | Показать все доступные цели |
 
 `make` нужен только как shortcut на хосте. Docker-контейнерам он не нужен.
@@ -516,13 +517,30 @@ make remote-deploy-admin SERVER_IP=<ip>
 
 Каждый инстанс должен находиться в отдельной папке и иметь отдельные `.env.production`, `personality.json`, Telegram bot token, PostgreSQL, Qdrant и админку. PostgreSQL и Qdrant наружу не публикуются: одинаковые внутренние адреса `postgres:5432` и `qdrant:6333` относятся к разным изолированным Docker-сетям.
 
-Из-за разных сетей DNS-имя `postgres` во втором боте указывает только на PostgreSQL второго Compose project, а `qdrant` — только на его Qdrant. Физические данные лежат в volumes с именем инстанса, поэтому SQL-данные, память Qdrant и коллекции одного бота не доступны другому через штатную конфигурацию.
+Из-за разных сетей DNS-имя `postgres` во втором боте указывает только на PostgreSQL второго Compose project, а `qdrant` — только на его Qdrant. По умолчанию физические данные лежат в volumes с именем инстанса. При безопасном переименовании project storage может сохранить прежние физические имена через `POSTGRES_VOLUME_NAME` и `QDRANT_VOLUME_NAME`; preflight проверяет именно эти ожидаемые volumes.
 
-Перед каждой серверной Compose-операцией preflight сверяет volumes уже существующих контейнеров с ожидаемыми именами инстанса. При несовпадении deploy останавливается до запуска контейнеров, чтобы бот не стартовал на пустой или чужой базе. Операционные команды не используют `volume prune`, `docker volume rm` или `compose down -v`.
+Перед каждой серверной Compose-операцией preflight сверяет volumes уже существующих контейнеров с ожидаемыми storage names. При несовпадении deploy останавливается до запуска контейнеров, чтобы бот не стартовал на пустой или чужой базе. Операционные команды не используют `volume prune`, `docker volume rm` или `compose down -v`.
 
 Install/deploy одного инстанса не выполняет глобальные `container/image/builder prune`: такие команды могли бы удалить остановленные контейнеры или кеши соседнего стека. Параллельные запуски install/deploy на одном Linux-хосте сериализуются lock-файлом, чтобы два инстанса не выбрали один admin-порт одновременно.
 
 Для существующей установки в `/opt/docker/kira-mind-bot` ничего дополнительно задавать не нужно: имя папки даёт прежний project name `kira-mind-bot`, используются текущие volumes `kira-mind-bot_postgres_data` и `kira-mind-bot_qdrant_storage`, а текущие настройки админки переносятся из `.env` в локальный `.kira-admin-state`.
+
+Если папку существующего инстанса переименовали, перенесённая вместе с ней compose `.env` сохраняет прежнюю identity и не даёт следующему deploy создать пустые volumes по новому имени каталога. Чтобы осознанно переименовать project и bot-контейнер, но оставить PostgreSQL и Qdrant на месте, после переименования папки выполните:
+
+```bash
+cd /opt/docker/enya-mind-bot
+make migrate-instance NEW_INSTANCE=enya-mind-bot
+```
+
+Команда проверяет наличие обоих прежних volumes и отсутствие конфликта целевого project, останавливает старый stack обычным `compose down` без `-v`, атомарно сохраняет новое имя вместе со storage aliases в `.env.production` и поднимает stack заново. Например, контейнер станет `enya-mind-bot`, а данные продолжат храниться в `kira-mind-bot_postgres_data` и `kira-mind-bot_qdrant_storage`. Физическое переименование Docker volumes не требуется и Docker его напрямую не поддерживает.
+
+Соответствующая явная конфигурация выглядит так:
+
+```env
+KIRA_INSTANCE_NAME=enya-mind-bot
+POSTGRES_VOLUME_NAME=kira-mind-bot_postgres_data
+QDRANT_VOLUME_NAME=kira-mind-bot_qdrant_storage
+```
 
 Для второго бота создайте соседнюю папку и выполните установку из неё:
 
@@ -553,7 +571,7 @@ KIRA_INSTANCE_NAME=kira-wife
 | Docker network | `kira-mind-bot_default` | `kira-wife_default` |
 | Админка | `server-ip:7875` | отдельный свободный порт |
 
-Не копируйте из основного каталога файлы `.env`, `.kira-admin-state`, `personality.json` и `.env.production` без последующей замены токенов и `KIRA_INSTANCE_NAME`. Если новое имя совпадает с project name, уже запущенным из другой папки, скрипт остановит запуск до обращения к Compose. Если у нового инстанса занят admin-порт и ещё нет собственного state-файла, будет выбран другой свободный порт.
+Не копируйте из основного каталога файлы `.env`, `.kira-admin-state`, `personality.json` и `.env.production` для создания независимого второго бота: перенесённая `.env` намеренно сохраняет identity исходного storage. Для переименования существующего инстанса используйте `migrate-instance`, а для новой независимой копии выполните обычный install с новым `KIRA_INSTANCE_NAME`. Если новое имя совпадает с project name, уже запущенным из другой папки, скрипт остановит запуск до обращения к Compose. Если у нового инстанса занят admin-порт и ещё нет собственного state-файла, будет выбран другой свободный порт.
 
 При первом redeploy существующей установки скрипт переносит текущие `ADMIN_PORT`, `ADMIN_USERNAME` и `ADMIN_PASSWORD` из compose-файла `.env` в локальный `.kira-admin-state`. Это сохраняет адрес и credentials админки, одновременно изолируя их от других инстансов.
 

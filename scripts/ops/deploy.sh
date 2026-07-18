@@ -172,6 +172,7 @@ ssh root@${SERVER_IP} << EOF
   source ./scripts/ops/server-common.sh
   resolve_compose_cmd || { echo "❌ Docker Compose недоступен"; exit 1; }
   acquire_deploy_lock || { echo "❌ Другой deploy уже выполняется"; exit 1; }
+  load_compose_identity_if_present
   load_env_if_present
   ensure_admin_state
   write_compose_env

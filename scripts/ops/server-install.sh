@@ -122,6 +122,8 @@ ZAI_API_KEY=${ZAI_API_KEY}
 KIRA_BOT_TOKEN=${KIRA_BOT_TOKEN}
 KIRA_ALLOWED_USER_ID=${KIRA_ALLOWED_USER_ID}
 KIRA_INSTANCE_NAME=${KIRA_INSTANCE_NAME:-$DEFAULT_KIRA_INSTANCE_NAME}
+POSTGRES_VOLUME_NAME=${POSTGRES_VOLUME_NAME:-${KIRA_INSTANCE_NAME:-$DEFAULT_KIRA_INSTANCE_NAME}_postgres_data}
+QDRANT_VOLUME_NAME=${QDRANT_VOLUME_NAME:-${KIRA_INSTANCE_NAME:-$DEFAULT_KIRA_INSTANCE_NAME}_qdrant_storage}
 
 DB_HOST=postgres
 DB_PORT=5432
@@ -336,6 +338,7 @@ echo -e "${BOLD}  Установка Kira Mind Bot прямо на VPS${NC}\n"
 ensure_repo_root
 ensure_docker
 acquire_deploy_lock || error "Не удалось получить deploy lock"
+load_compose_identity_if_present
 
 if [ "$SKIP_CONFIG" = true ]; then
     validate_existing_config

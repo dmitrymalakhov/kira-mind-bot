@@ -32,6 +32,35 @@ resolve_instance_name() {
     sanitize_instance_name "${KIRA_INSTANCE_NAME:-$DEFAULT_KIRA_INSTANCE_NAME}"
 }
 
+validate_volume_name() {
+    local volume_name="${1:-}"
+    [ "${#volume_name}" -le 255 ] &&
+        [[ "$volume_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]
+}
+
+resolve_storage_volume_name() {
+    local configured_name="${1:-}"
+    local default_name="$2"
+    local volume_name="${configured_name:-$default_name}"
+
+    if ! validate_volume_name "$volume_name"; then
+        echo "Ошибка: недопустимое имя Docker volume '$volume_name'." >&2
+        return 1
+    fi
+
+    printf '%s' "$volume_name"
+}
+
+resolve_postgres_volume_name() {
+    local instance_name="${KIRA_INSTANCE_NAME:-$(resolve_instance_name)}"
+    resolve_storage_volume_name "${POSTGRES_VOLUME_NAME:-}" "${instance_name}_postgres_data"
+}
+
+resolve_qdrant_volume_name() {
+    local instance_name="${KIRA_INSTANCE_NAME:-$(resolve_instance_name)}"
+    resolve_storage_volume_name "${QDRANT_VOLUME_NAME:-}" "${instance_name}_qdrant_storage"
+}
+
 resolve_instance_name_for_directory() {
     local configured_name="${1:-}"
     local directory="${2:-$PWD}"
@@ -85,6 +114,29 @@ docker_inspect() {
     "${DOCKER_CMD[@]}" inspect "$@"
 }
 
+docker_volume_inspect() {
+    "${DOCKER_CMD[@]}" volume inspect "$@"
+}
+
+ensure_volume_exists() {
+    local volume_name="$1"
+    if ! docker_volume_inspect "$volume_name" >/dev/null 2>&1; then
+        echo "Ошибка: Docker volume '$volume_name' не найден; миграция остановлена." >&2
+        return 1
+    fi
+}
+
+ensure_project_name_available() {
+    local project_name="$1"
+    local container_id=""
+
+    while IFS= read -r container_id; do
+        [ -n "$container_id" ] || continue
+        echo "Ошибка: Docker Compose project '$project_name' уже существует; выберите другое имя или сначала разберите конфликт вручную." >&2
+        return 1
+    done < <(docker_ps -aq --filter "label=com.docker.compose.project=$project_name")
+}
+
 acquire_deploy_lock() {
     command -v flock >/dev/null 2>&1 || return 0
     exec 9>"$DEPLOY_LOCK_FILE"
@@ -130,6 +182,38 @@ load_env_if_present() {
     load_key_value_file "$ENV_FILE"
 }
 
+load_compose_identity_if_present() {
+    [ -f "$COMPOSE_ENV_FILE" ] || return 0
+
+    local line=""
+    local key=""
+    local value=""
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            KIRA_INSTANCE_NAME=*|POSTGRES_VOLUME_NAME=*|QDRANT_VOLUME_NAME=*)
+                key="${line%%=*}"
+                value="${line#*=}"
+                case "$key" in
+                    KIRA_INSTANCE_NAME)
+                        COMPOSE_STATE_KIRA_INSTANCE_NAME="$value"
+                        [ -n "${KIRA_INSTANCE_NAME:-}" ] || KIRA_INSTANCE_NAME="$value"
+                        ;;
+                    POSTGRES_VOLUME_NAME)
+                        COMPOSE_STATE_POSTGRES_VOLUME_NAME="$value"
+                        [ -n "${POSTGRES_VOLUME_NAME:-}" ] || POSTGRES_VOLUME_NAME="$value"
+                        ;;
+                    QDRANT_VOLUME_NAME)
+                        COMPOSE_STATE_QDRANT_VOLUME_NAME="$value"
+                        [ -n "${QDRANT_VOLUME_NAME:-}" ] || QDRANT_VOLUME_NAME="$value"
+                        ;;
+                esac
+                ;;
+        esac
+    done < "$COMPOSE_ENV_FILE"
+    export KIRA_INSTANCE_NAME POSTGRES_VOLUME_NAME QDRANT_VOLUME_NAME
+    export COMPOSE_STATE_KIRA_INSTANCE_NAME COMPOSE_STATE_POSTGRES_VOLUME_NAME COMPOSE_STATE_QDRANT_VOLUME_NAME
+}
+
 load_admin_state_if_present() {
     load_key_value_file "$ADMIN_STATE_FILE"
 }
@@ -171,9 +255,58 @@ EOF
     chmod 600 "$ADMIN_STATE_FILE"
 }
 
+write_instance_storage_config() {
+    local file="$1"
+    local instance_name="$2"
+    local postgres_volume_name="$3"
+    local qdrant_volume_name="$4"
+    local temp_file=""
+
+    validate_volume_name "$postgres_volume_name" || return 1
+    validate_volume_name "$qdrant_volume_name" || return 1
+    instance_name="$(sanitize_instance_name "$instance_name")"
+    temp_file="$(mktemp "${file}.tmp.XXXXXX")" || return 1
+
+    if ! awk \
+        -v instance_name="$instance_name" \
+        -v postgres_volume_name="$postgres_volume_name" \
+        -v qdrant_volume_name="$qdrant_volume_name" '
+        BEGIN { instance_seen = 0; postgres_seen = 0; qdrant_seen = 0 }
+        /^KIRA_INSTANCE_NAME=/ {
+            if (!instance_seen) print "KIRA_INSTANCE_NAME=" instance_name
+            instance_seen = 1
+            next
+        }
+        /^POSTGRES_VOLUME_NAME=/ {
+            if (!postgres_seen) print "POSTGRES_VOLUME_NAME=" postgres_volume_name
+            postgres_seen = 1
+            next
+        }
+        /^QDRANT_VOLUME_NAME=/ {
+            if (!qdrant_seen) print "QDRANT_VOLUME_NAME=" qdrant_volume_name
+            qdrant_seen = 1
+            next
+        }
+        { print }
+        END {
+            if (!instance_seen) print "KIRA_INSTANCE_NAME=" instance_name
+            if (!postgres_seen) print "POSTGRES_VOLUME_NAME=" postgres_volume_name
+            if (!qdrant_seen) print "QDRANT_VOLUME_NAME=" qdrant_volume_name
+        }
+    ' "$file" > "$temp_file"; then
+        rm -f "$temp_file"
+        return 1
+    fi
+
+    chmod 600 "$temp_file" || { rm -f "$temp_file"; return 1; }
+    mv -f "$temp_file" "$file"
+}
+
 write_compose_env() {
     local temp_file=""
     KIRA_INSTANCE_NAME="$(resolve_instance_name)"
+    POSTGRES_VOLUME_NAME="$(resolve_postgres_volume_name)" || return 1
+    QDRANT_VOLUME_NAME="$(resolve_qdrant_volume_name)" || return 1
 
     ensure_working_directory_not_owned_by_other_project || return 1
     ensure_instance_not_owned_by_other_directory || return 1
@@ -182,6 +315,8 @@ write_compose_env() {
     temp_file="$(mktemp "${COMPOSE_ENV_FILE}.tmp.XXXXXX")" || return 1
     if ! (umask 077 && cat > "$temp_file" << EOF
 KIRA_INSTANCE_NAME=${KIRA_INSTANCE_NAME}
+POSTGRES_VOLUME_NAME=${POSTGRES_VOLUME_NAME}
+QDRANT_VOLUME_NAME=${QDRANT_VOLUME_NAME}
 DB_HOST=postgres
 DB_PORT=5432
 DB_USER=postgres
@@ -274,14 +409,19 @@ verify_storage_service_binding() {
 verify_existing_storage_bindings() {
     [ "${#DOCKER_CMD[@]}" -gt 0 ] || return 0
 
+    local postgres_volume_name=""
+    local qdrant_volume_name=""
+    postgres_volume_name="$(resolve_postgres_volume_name)" || return 1
+    qdrant_volume_name="$(resolve_qdrant_volume_name)" || return 1
+
     verify_storage_service_binding \
         "postgres" \
         "/var/lib/postgresql/data" \
-        "${KIRA_INSTANCE_NAME}_postgres_data" || return 1
+        "$postgres_volume_name" || return 1
     verify_storage_service_binding \
         "qdrant" \
         "/qdrant/storage" \
-        "${KIRA_INSTANCE_NAME}_qdrant_storage" || return 1
+        "$qdrant_volume_name" || return 1
 }
 
 admin_port_is_available_for_instance() {

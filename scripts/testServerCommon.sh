@@ -35,6 +35,8 @@ docker_ps() {
     storage-ok:*service=qdrant*) echo "qdrant-id" ;;
     storage-bad:*service=postgres*) echo "postgres-id" ;;
     storage-bad:*service=qdrant*) echo "qdrant-id" ;;
+    storage-alias:*service=postgres*) echo "postgres-id" ;;
+    storage-alias:*service=qdrant*) echo "qdrant-id" ;;
   esac
 }
 
@@ -65,14 +67,18 @@ docker_inspect() {
       ;;
     legacy-bot) echo "source" ;;
     postgres-id)
-      if [ "$FAKE_MODE" = "storage-bad" ]; then
+      if [ "$FAKE_MODE" = "storage-alias" ]; then
+        echo "volume|legacy_postgres_data"
+      elif [ "$FAKE_MODE" = "storage-bad" ]; then
         echo "volume|foreign_postgres_data"
       else
         echo "volume|kira-second-bot_postgres_data"
       fi
       ;;
     qdrant-id)
-      if [ "$FAKE_MODE" = "storage-bad" ]; then
+      if [ "$FAKE_MODE" = "storage-alias" ]; then
+        echo "volume|legacy_qdrant_storage"
+      elif [ "$FAKE_MODE" = "storage-bad" ]; then
         echo "volume|foreign_qdrant_storage"
       else
         echo "volume|kira-second-bot_qdrant_storage"
@@ -123,6 +129,8 @@ DOCKER_CMD=()
 write_compose_env
 COMPOSE_ENV_MODE="$(stat -c '%a' "$COMPOSE_ENV_FILE" 2>/dev/null || stat -f '%Lp' "$COMPOSE_ENV_FILE")"
 [ "$COMPOSE_ENV_MODE" = "600" ]
+grep -q '^POSTGRES_VOLUME_NAME=kira-mind-bot_postgres_data$' "$COMPOSE_ENV_FILE"
+grep -q '^QDRANT_VOLUME_NAME=kira-mind-bot_qdrant_storage$' "$COMPOSE_ENV_FILE"
 DOCKER_CMD=(fake-docker)
 
 cat > "$ADMIN_STATE_FILE" <<'EOF'
@@ -139,7 +147,7 @@ ensure_admin_state
 [ "$ADMIN_PASSWORD" = "instance-password" ]
 
 DEFAULT_KIRA_INSTANCE_NAME="Kira Second Bot"
-unset KIRA_INSTANCE_NAME
+unset KIRA_INSTANCE_NAME POSTGRES_VOLUME_NAME QDRANT_VOLUME_NAME
 [ "$(resolve_instance_name)" = "kira-second-bot" ]
 [ "$(resolve_instance_name_for_directory "" "/root/source")" = "source" ]
 [ "$(resolve_instance_name_for_directory "kira-primary" "/root/source")" = "kira-primary" ]
@@ -152,6 +160,8 @@ for unsafe_remote_dir in "/" "/etc" "/root/other" "/root/source/../etc" "/root/.
   fi
 done
 KIRA_INSTANCE_NAME="kira-second-bot"
+POSTGRES_VOLUME_NAME="kira-second-bot_postgres_data"
+QDRANT_VOLUME_NAME="kira-second-bot_qdrant_storage"
 
 FAKE_MODE="directory-conflict"
 if ensure_working_directory_not_owned_by_other_project 2>/dev/null; then
@@ -174,6 +184,14 @@ ensure_instance_not_owned_by_other_directory
 FAKE_MODE="storage-ok"
 verify_existing_storage_bindings
 
+FAKE_MODE="storage-alias"
+POSTGRES_VOLUME_NAME="legacy_postgres_data"
+QDRANT_VOLUME_NAME="legacy_qdrant_storage"
+verify_existing_storage_bindings
+
+POSTGRES_VOLUME_NAME="kira-second-bot_postgres_data"
+QDRANT_VOLUME_NAME="kira-second-bot_qdrant_storage"
+
 FAKE_MODE="storage-bad"
 if verify_existing_storage_bindings 2>/dev/null; then
   echo "foreign storage volume must stop deploy" >&2
@@ -187,6 +205,38 @@ if write_compose_env 2>/dev/null; then
   exit 1
 fi
 [ "$(cat "$COMPOSE_ENV_FILE")" = "ORIGINAL_COMPOSE_ENV=preserved" ]
+
+cat > "$ENV_FILE" <<'EOF'
+DB_PASSWORD=preserved
+KIRA_INSTANCE_NAME=kira-second-bot
+EOF
+write_instance_storage_config \
+  "$ENV_FILE" \
+  "enya-mind-bot" \
+  "kira-second-bot_postgres_data" \
+  "kira-second-bot_qdrant_storage"
+grep -q '^DB_PASSWORD=preserved$' "$ENV_FILE"
+grep -q '^KIRA_INSTANCE_NAME=enya-mind-bot$' "$ENV_FILE"
+grep -q '^POSTGRES_VOLUME_NAME=kira-second-bot_postgres_data$' "$ENV_FILE"
+grep -q '^QDRANT_VOLUME_NAME=kira-second-bot_qdrant_storage$' "$ENV_FILE"
+[ "$(grep -c '^KIRA_INSTANCE_NAME=' "$ENV_FILE")" -eq 1 ]
+
+cat > "$COMPOSE_ENV_FILE" <<'EOF'
+KIRA_INSTANCE_NAME=kira-second-bot
+POSTGRES_VOLUME_NAME=legacy_postgres_data
+QDRANT_VOLUME_NAME=legacy_qdrant_storage
+EOF
+unset KIRA_INSTANCE_NAME POSTGRES_VOLUME_NAME QDRANT_VOLUME_NAME
+unset COMPOSE_STATE_KIRA_INSTANCE_NAME COMPOSE_STATE_POSTGRES_VOLUME_NAME COMPOSE_STATE_QDRANT_VOLUME_NAME
+load_compose_identity_if_present
+[ "$KIRA_INSTANCE_NAME" = "kira-second-bot" ]
+[ "$POSTGRES_VOLUME_NAME" = "legacy_postgres_data" ]
+[ "$QDRANT_VOLUME_NAME" = "legacy_qdrant_storage" ]
+[ "$COMPOSE_STATE_KIRA_INSTANCE_NAME" = "kira-second-bot" ]
+
+KIRA_INSTANCE_NAME="kira-second-bot"
+POSTGRES_VOLUME_NAME="kira-second-bot_postgres_data"
+QDRANT_VOLUME_NAME="kira-second-bot_qdrant_storage"
 
 FAKE_MODE="port-free"
 FAKE_HOST_PORT_BUSY=true

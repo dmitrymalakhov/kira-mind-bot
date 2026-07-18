@@ -18,7 +18,7 @@
     "typecheck": "npm exec tsc -- --noEmit --project tsconfig.server.json && npm --prefix admin-panel exec tsc -- -b",
     "test:ai-preset-availability": "node scripts/testAiPresetAvailability.js",
     "test:memory-embedding-http": "node scripts/testMemoryEmbeddingHttp.js",
-    "test:server-common": "bash scripts/testServerCommon.sh",
+    "test:server-common": "bash scripts/testServerCommon.sh && bash scripts/testInstanceMigration.sh",
     "test:multi-instance-compose": "node scripts/testMultiInstanceCompose.js",
     "build:server": "tsc --project tsconfig.server.json && mkdir -p dist/utils && cp utils/legacyPersonalitySanitizer.js dist/utils/legacyPersonalitySanitizer.js",
     "test:built-server-runtime": "node scripts/testBuiltServerRuntime.js",

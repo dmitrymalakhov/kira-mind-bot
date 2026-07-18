@@ -16,12 +16,14 @@
   - при миграции старой установки существующие `ADMIN_*` сначала читаются из compose `.env`, а затем сохраняются в локальном `.kira-admin-state`; state-файл конкретного инстанса имеет приоритет.
   - безопасный default для серверного workflow выводится из имени каталога; перед Compose-командой запрещено продолжать, если тот же project name уже принадлежит другому working directory.
   - при первом запуске admin-порт выбирается из свободных `7000–8999`; занятый порт старого собственного контейнера допустим при redeploy, порт чужого project — нет.
-  - перед Compose-командами mount существующих `postgres` и `qdrant` обязан совпадать с `${KIRA_INSTANCE_NAME}_postgres_data` и `${KIRA_INSTANCE_NAME}_qdrant_storage`; несовпадение блокирует deploy до запуска контейнеров.
+  - физические имена storage отделены от project identity через `POSTGRES_VOLUME_NAME` и `QDRANT_VOLUME_NAME`; по умолчанию они выводятся из `KIRA_INSTANCE_NAME`, но при переименовании project могут сохранять прежние значения.
+  - перед Compose-командами mount существующих `postgres` и `qdrant` обязан совпадать с ожидаемыми `POSTGRES_VOLUME_NAME` и `QDRANT_VOLUME_NAME`; несовпадение блокирует deploy до запуска контейнеров.
   - server workflow не должен использовать `volume prune`, `docker volume rm`, `compose down -v` или `system prune --volumes`.
   - install/deploy не выполняет глобальные container/image/builder prune; операции очистки должны быть ограничены текущим Compose project.
   - direct и remote workflow используют общий `server-common.sh` preflight; дополнительные remote-инстансы живут в отдельных каталогах.
   - remote-deploy разрешает только legacy-каталог `/root/source` и прямой дочерний каталог `/opt/docker/<instance>`; пути к `/`, системным каталогам, вложенным директориям и сегментам `.` / `..` должны отклоняться до загрузки архива.
   - compose `.env` записывается атомарно только после успешных project/storage checks; неудачный preflight не должен менять существующий файл.
+  - перенесённая вместе с каталогом compose `.env` является fallback-источником identity: простое переименование папки не должно создавать новый project/storage; явная смена имени выполняется через `migrate-instance`, который сохраняет прежние volumes aliases.
   - admin-порт работающего контейнера текущего инстанса допустим для redeploy; для остановленного собственного контейнера обязательно отдельно проверяется host listener.
   - legacy remote-deploy без `KIRA_INSTANCE_NAME` выводит имя Compose project из remote-каталога (`/root/source` → `source`), чтобы существующие `source_*` volumes не подменялись новыми пустыми volumes.
   - `.kira-admin-state` и compose `.env` содержат секреты, обязаны быть исключены из Git, иметь права `600` и храниться отдельно для каждого инстанса.

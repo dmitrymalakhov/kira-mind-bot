@@ -80,8 +80,8 @@ services:
 
 volumes:
   postgres_data:
-    name: ${KIRA_INSTANCE_NAME:-kira-mind-bot}_postgres_data
+    name: ${POSTGRES_VOLUME_NAME:-${KIRA_INSTANCE_NAME:-kira-mind-bot}_postgres_data}
     driver: local
   qdrant_storage:
-    name: ${KIRA_INSTANCE_NAME:-kira-mind-bot}_qdrant_storage
+    name: ${QDRANT_VOLUME_NAME:-${KIRA_INSTANCE_NAME:-kira-mind-bot}_qdrant_storage}
     driver: local

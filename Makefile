@@ -4,7 +4,7 @@
 	help \
 	install-server remote-install remote-deploy-bot remote-deploy-admin remote-deploy-all \
 	deploy deploy-clean up down status logs logs-follow logs-no-db logs-no-db-follow logs-bot logs-bot-follow logs-admin logs-admin-follow \
-	pause pause-bot pause-admin restart restart-bot restart-admin stop \
+	pause pause-bot pause-admin restart restart-bot restart-admin stop migrate-instance \
 	admin-up admin-rebuild admin-restart admin-pause admin-stop admin-logs admin-logs-follow \
 	bot-up bot-rebuild bot-restart bot-pause bot-stop bot-logs bot-logs-follow \
 	install install-admin build build-admin build-all test lint dev dev-admin
@@ -14,6 +14,7 @@ source ./scripts/ops/server-common.sh && \
 ensure_server_repo_root && \
 resolve_compose_cmd && \
 acquire_deploy_lock && \
+load_compose_identity_if_present && \
 load_env_if_present && \
 ensure_admin_state && \
 write_compose_env
@@ -32,6 +33,7 @@ help:
 	@printf '  %-28s %s\n' 'make deploy-clean' 'Redeploy с compose down и очисткой Docker cache.'
 	@printf '  %-28s %s\n' 'make pause' 'Поставить app-сервисы на паузу.'
 	@printf '  %-28s %s\n' 'make stop' 'Остановить весь стек без удаления volumes.'
+	@printf '  %-28s %s\n' 'make migrate-instance NEW_INSTANCE=...' 'Переименовать project/контейнер без переноса данных.'
 	@printf '  %-28s %s\n' 'make down' 'Полностью завершить работу: docker compose down.'
 	@printf '  %-28s %s\n' 'make status' 'Показать статус контейнеров.'
 	@printf '  %-28s %s\n' 'make logs' 'Показать последние логи всего стека.'
@@ -151,6 +153,10 @@ restart-admin:
 
 stop:
 	./scripts/ops/server-deploy.sh stop
+
+migrate-instance:
+	@test -n "$(NEW_INSTANCE)" || { echo 'Укажите NEW_INSTANCE, например: make migrate-instance NEW_INSTANCE=enya-mind-bot'; exit 1; }
+	./scripts/ops/server-deploy.sh migrate-instance "$(NEW_INSTANCE)"
 
 admin-up:
 	@bash -lc '$(SERVER_COMPOSE_PREP) && compose up -d admin-panel'
