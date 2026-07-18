@@ -399,6 +399,64 @@ async function testSerializesTextAndMarkupEditsTogether(): Promise<void> {
     assert.deepStrictEqual(currentMarkup, markupC, "последний поставленный edit должен определять итоговую клавиатуру");
 }
 
+async function testSerializesDifferentPlainTextCallbackEditsInOrder(): Promise<void> {
+    const calls: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+    });
+    let currentText = "";
+    const api = {
+        editMessageText: async (
+            _chatId: number | string,
+            _messageId: number,
+            text: string,
+        ) => {
+            calls.push(`${text}:start`);
+            if (text === "Уведомление переключено") {
+                await firstGate;
+            }
+            currentText = text;
+            calls.push(`${text}:done`);
+        },
+    };
+    const messageId = 53;
+
+    const toggleNotifyEdit = editMessageTextIfChanged(
+        api,
+        1001,
+        messageId,
+        "Уведомление переключено",
+        { reply_markup: namedMarkup("notify") },
+    );
+    const timeSelectionEdit = editMessageTextIfChanged(
+        api,
+        1001,
+        messageId,
+        "Время изменено",
+        { reply_markup: namedMarkup("time") },
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.deepStrictEqual(
+        calls,
+        ["Уведомление переключено:start"],
+        "выбор времени должен ждать завершения предыдущего callback-edit",
+    );
+
+    releaseFirst();
+    await Promise.all([toggleNotifyEdit, timeSelectionEdit]);
+
+    assert.deepStrictEqual(calls, [
+        "Уведомление переключено:start",
+        "Уведомление переключено:done",
+        "Время изменено:start",
+        "Время изменено:done",
+    ]);
+    assert.equal(currentText, "Время изменено", "последний callback должен определять итоговое состояние сообщения");
+}
+
 async function testPropagatesErrorsAndAllowsRetry(): Promise<void> {
     const expectedError = new Error("Telegram unavailable");
     let calls = 0;
@@ -455,6 +513,7 @@ async function main(): Promise<void> {
     await testMarkupOnlyEditInvalidatesStructuredState();
     await testPreservesDifferentUpdateOrder();
     await testSerializesTextAndMarkupEditsTogether();
+    await testSerializesDifferentPlainTextCallbackEditsInOrder();
     await testPropagatesErrorsAndAllowsRetry();
     await testNonCriticalEditLogsAndContinues();
     console.log("telegram message edit checks passed");

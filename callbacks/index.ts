@@ -1192,9 +1192,13 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     });
 
                     // Обновляем сообщение с черновиком
-                    await ctx.editMessageText(responseText, {
-                        reply_markup: confirmKeyboard
-                    });
+                    await editMessageTextIfChanged(
+                        ctx.api,
+                        ctx.chat.id,
+                        ctx.callbackQuery.message!.message_id,
+                        responseText,
+                        { reply_markup: confirmKeyboard },
+                    );
                 }
             } else if (callbackData === "unread_summary") {
                 await ctx.answerCallbackQuery();
@@ -1304,9 +1308,13 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         `${notifyIndicator}\n\n` +
                         `Подтверди отправку или внеси изменения:`;
 
-                    await ctx.editMessageText(responseText, {
-                        reply_markup: confirmKeyboard
-                    });
+                    await editMessageTextIfChanged(
+                        ctx.api,
+                        ctx.chat.id,
+                        ctx.callbackQuery.message!.message_id,
+                        responseText,
+                        { reply_markup: confirmKeyboard },
+                    );
                 }
             } else if (callbackData === 'implicit_reminder_yes') {
                 const pending = ctx.session.pendingImplicitReminder;
