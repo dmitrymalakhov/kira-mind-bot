@@ -12,6 +12,13 @@
  * «как живой человек» и форматирование намеренно не применяется.
  */
 
+import type { InlineKeyboardMarkup } from "grammy/types";
+import {
+    recordReplyMarkupState,
+    runMessageEditIfChanged,
+    stableTelegramStateFingerprint,
+} from "./telegramMessageEdit";
+
 /**
  * Аварийный рубильник rich-форматирования без редеплоя кода.
  * Читается из env напрямую, чтобы модуль не зависел от инициализации config
@@ -384,7 +391,7 @@ export interface SendStructuredOptions {
 }
 
 export interface EditStructuredOptions {
-    replyMarkup?: unknown;
+    replyMarkup?: InlineKeyboardMarkup;
     extra?: Record<string, unknown>;
 }
 
@@ -443,6 +450,23 @@ export async function editStructured(
     blocks: RichBlock[],
     opts: EditStructuredOptions = {},
 ): Promise<unknown> {
+    const desiredFingerprint = stableTelegramStateFingerprint({
+        blocks,
+        replyMarkup: opts.replyMarkup,
+        extra: opts.extra,
+    });
+    return runMessageEditIfChanged(chatId, messageId, desiredFingerprint, () =>
+        performStructuredEdit(api, chatId, messageId, blocks, opts)
+    );
+}
+
+async function performStructuredEdit(
+    api: ApiLike,
+    chatId: number | string,
+    messageId: number,
+    blocks: RichBlock[],
+    opts: EditStructuredOptions,
+): Promise<unknown> {
     const useRich = isRichEnabled() && !richUnsupported && blocks.length > 0;
 
     if (useRich) {
@@ -451,8 +475,12 @@ export async function editStructured(
             const other: Record<string, unknown> = { rich_message: { html } };
             if (opts.replyMarkup !== undefined) other.reply_markup = opts.replyMarkup;
             if (opts.extra) Object.assign(other, opts.extra);
-            return await (api as { editMessageText: (a: unknown, b: unknown, c: unknown, d?: unknown) => Promise<unknown> })
+            const result = await (api as { editMessageText: (a: unknown, b: unknown, c: unknown, d?: unknown) => Promise<unknown> })
                 .editMessageText(chatId, messageId, "", other);
+            if (opts.replyMarkup !== undefined) {
+                recordReplyMarkupState(chatId, messageId, opts.replyMarkup);
+            }
+            return result;
         } catch (error) {
             if (isRichDisabledByError(error)) {
                 markRichUnsupported();
@@ -466,7 +494,11 @@ export async function editStructured(
     const other: Record<string, unknown> = { parse_mode: "HTML" };
     if (opts.replyMarkup !== undefined) other.reply_markup = opts.replyMarkup;
     if (opts.extra) Object.assign(other, opts.extra);
-    return api.editMessageText(chatId, messageId, html, other);
+    const result = await api.editMessageText(chatId, messageId, html, other);
+    if (opts.replyMarkup !== undefined) {
+        recordReplyMarkupState(chatId, messageId, opts.replyMarkup);
+    }
+    return result;
 }
 
 // ── Split для длинных fallback-сообщений ──────────────────────
