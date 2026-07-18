@@ -52,7 +52,7 @@ if [ -z "$REMOTE_DIR" ]; then
         REMOTE_DIR="/opt/docker/$(sanitize_instance_name "$CONFIGURED_KIRA_INSTANCE_NAME")"
     fi
 fi
-if [[ ! "$REMOTE_DIR" =~ ^/[a-zA-Z0-9._/-]+$ ]]; then
+if ! validate_remote_deploy_directory "$REMOTE_DIR"; then
     echo "❌ Недопустимый remote-каталог: $REMOTE_DIR" >&2
     exit 1
 fi

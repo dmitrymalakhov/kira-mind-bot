@@ -25,6 +25,8 @@ DOCKER_CMD=(fake-docker)
 docker_ps() {
   case "$FAKE_MODE:$*" in
     port-collision:*publish=7875*) echo "foreign-admin" ;;
+    own-stopped-port:*publish=8124*) echo "own-stopped-admin" ;;
+    own-running-port:*publish=8125*) echo "own-running-admin" ;;
     owner-conflict:*project=kira-second-bot*) echo "foreign-bot" ;;
     owner-ok:*project=kira-second-bot*) echo "own-bot" ;;
     directory-conflict:*working_dir=*) echo "legacy-bot" ;;
@@ -39,6 +41,20 @@ docker_ps() {
 docker_inspect() {
   case "$1" in
     foreign-admin) echo "foreign-project" ;;
+    own-stopped-admin)
+      if [[ "$*" == *'.State.Running'* ]]; then
+        echo "false"
+      else
+        echo "kira-second-bot"
+      fi
+      ;;
+    own-running-admin)
+      if [[ "$*" == *'.State.Running'* ]]; then
+        echo "true"
+      else
+        echo "kira-second-bot"
+      fi
+      ;;
     foreign-bot) echo "/opt/docker/foreign" ;;
     own-bot)
       if [[ "$*" == *'com.docker.compose.project.working_dir'* ]]; then
@@ -127,6 +143,14 @@ unset KIRA_INSTANCE_NAME
 [ "$(resolve_instance_name)" = "kira-second-bot" ]
 [ "$(resolve_instance_name_for_directory "" "/root/source")" = "source" ]
 [ "$(resolve_instance_name_for_directory "kira-primary" "/root/source")" = "kira-primary" ]
+validate_remote_deploy_directory "/root/source"
+validate_remote_deploy_directory "/opt/docker/kira.second_bot-2"
+for unsafe_remote_dir in "/" "/etc" "/root/other" "/root/source/../etc" "/root/./source" "/root//source" "/root/source/" "root/source" "/root/.hidden" "/opt/docker/kira/child"; do
+  if validate_remote_deploy_directory "$unsafe_remote_dir"; then
+    echo "unsafe remote directory must be rejected: $unsafe_remote_dir" >&2
+    exit 1
+  fi
+done
 KIRA_INSTANCE_NAME="kira-second-bot"
 
 FAKE_MODE="directory-conflict"
@@ -156,6 +180,14 @@ if verify_existing_storage_bindings 2>/dev/null; then
   exit 1
 fi
 
+# Ошибка preflight не должна менять уже существующий compose .env.
+printf '%s\n' "ORIGINAL_COMPOSE_ENV=preserved" > "$COMPOSE_ENV_FILE"
+if write_compose_env 2>/dev/null; then
+  echo "write_compose_env must stop on storage mismatch" >&2
+  exit 1
+fi
+[ "$(cat "$COMPOSE_ENV_FILE")" = "ORIGINAL_COMPOSE_ENV=preserved" ]
+
 FAKE_MODE="port-free"
 FAKE_HOST_PORT_BUSY=true
 if admin_port_is_available_for_instance "8123"; then
@@ -164,6 +196,17 @@ if admin_port_is_available_for_instance "8123"; then
 fi
 FAKE_HOST_PORT_BUSY=false
 admin_port_is_available_for_instance "8123"
+
+FAKE_MODE="own-stopped-port"
+FAKE_HOST_PORT_BUSY=true
+if admin_port_is_available_for_instance "8124"; then
+  echo "host listener must block port of stopped own container" >&2
+  exit 1
+fi
+
+FAKE_MODE="own-running-port"
+admin_port_is_available_for_instance "8125"
+FAKE_HOST_PORT_BUSY=false
 
 # Даже остановленный чужой контейнер с опубликованным портом должен блокировать
 # выбор этого порта: после его запуска возникнет конфликт bind.

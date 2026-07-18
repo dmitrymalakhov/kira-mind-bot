@@ -47,6 +47,16 @@ resolve_instance_name_for_directory() {
     sanitize_instance_name "${directory_name:-kira-mind-bot}"
 }
 
+validate_remote_deploy_directory() {
+    local directory="${1:-}"
+
+    # Старый основной инстанс остаётся в /root/source. Все новые remote-инстансы
+    # живут только прямыми дочерними каталогами /opt/docker: это не позволяет
+    # ошибочно распаковать deployment archive в /, /etc или другой system path.
+    [ "$directory" = "/root/source" ] ||
+        [[ "$directory" =~ ^/opt/docker/[a-zA-Z0-9_][a-zA-Z0-9._-]*$ ]]
+}
+
 resolve_compose_cmd() {
     if docker compose version >/dev/null 2>&1; then
         DOCKER_CMD=(docker)
@@ -162,9 +172,15 @@ EOF
 }
 
 write_compose_env() {
+    local temp_file=""
     KIRA_INSTANCE_NAME="$(resolve_instance_name)"
 
-    cat > "$COMPOSE_ENV_FILE" << EOF
+    ensure_working_directory_not_owned_by_other_project || return 1
+    ensure_instance_not_owned_by_other_directory || return 1
+    verify_existing_storage_bindings || return 1
+
+    temp_file="$(mktemp "${COMPOSE_ENV_FILE}.tmp.XXXXXX")" || return 1
+    if ! (umask 077 && cat > "$temp_file" << EOF
 KIRA_INSTANCE_NAME=${KIRA_INSTANCE_NAME}
 DB_HOST=postgres
 DB_PORT=5432
@@ -176,11 +192,12 @@ ADMIN_PORT=${ADMIN_PORT}
 ADMIN_USERNAME=${ADMIN_USERNAME}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 EOF
-    chmod 600 "$COMPOSE_ENV_FILE"
-
-    ensure_working_directory_not_owned_by_other_project || return 1
-    ensure_instance_not_owned_by_other_directory || return 1
-    verify_existing_storage_bindings || return 1
+    ); then
+        rm -f "$temp_file"
+        return 1
+    fi
+    chmod 600 "$temp_file" || { rm -f "$temp_file"; return 1; }
+    mv -f "$temp_file" "$COMPOSE_ENV_FILE"
 }
 
 ensure_working_directory_not_owned_by_other_project() {
@@ -272,24 +289,29 @@ admin_port_is_available_for_instance() {
     local instance_name=""
     local container_id=""
     local owner_project=""
-    local docker_owner_found=false
+    local owner_is_running=false
     instance_name="$(resolve_instance_name)"
 
     [ "${#DOCKER_CMD[@]}" -gt 0 ] || return 0
 
     while IFS= read -r container_id; do
         [ -n "$container_id" ] || continue
-        docker_owner_found=true
         owner_project="$(docker_inspect "$container_id" \
             --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)"
         if [ "$owner_project" != "$instance_name" ]; then
             return 1
         fi
+        if [ "$(docker_inspect "$container_id" --format '{{.State.Running}}' 2>/dev/null || true)" = "true" ]; then
+            owner_is_running=true
+        fi
     # Проверяем и остановленные контейнеры: они не слушают порт сейчас,
     # но могут занять его при следующем запуске чужого Compose-проекта.
     done < <(docker_ps -aq --filter "publish=$port")
 
-    if [ "$docker_owner_found" = true ]; then
+    # Listener работающего контейнера этого же инстанса ожидаем при redeploy.
+    # Для остановленного контейнера проверяем host отдельно: порт уже мог занять
+    # другой процесс после остановки Docker-контейнера.
+    if [ "$owner_is_running" = true ]; then
         return 0
     fi
 

@@ -20,17 +20,7 @@ import { USER_TIMEZONE } from "../constants";
 import { formatDateInTimeZone, getZonedDayContext, isZonedHourWithinRange } from "../utils/time";
 import { getSetting, setSetting } from "./botSettingsService";
 import { appendPersistedHistory } from "./SessionStorage";
-
-const PROACTIVE_MESSAGE_FORMATS = [
-  "поделись чем-то что произошло или что сейчас чувствуешь — искренне, без пафоса",
-  "брось мысль или наблюдение, как будто само собой вырвалось",
-  "задай Владельцу вопрос — опираясь на своё событие или просто из любопытства",
-  "напиши как будто только что вспомнила что хотела сказать",
-  "коротко, как будто между делом что-то мелькнуло в голове",
-  "поделись маленькой деталью дня — что заметила, что удивило, что раздражало",
-  "продолжи одну из своих долгих линий жизни, но без отчёта и объяснений",
-  "напиши как человек, у которого есть свой день, а не как ассистент с уведомлением",
-];
+import { buildProactiveMessageFormats, getPersonalityGenderForms } from "../utils/personalityGender";
 
 let proactiveTimer: NodeJS.Timeout | undefined;
 let innerTimer: NodeJS.Timeout | undefined;
@@ -96,6 +86,7 @@ async function maybeGenerateLifeEvent(purpose: "inner" | "proactive"): Promise<v
   const purposeHint = purpose === "inner"
     ? "Это приватный внутренний цикл: запись сохраняется в самопамять и НЕ отправляется владельцу. Можно фиксировать тихие сдвиги, сомнения, внутренние вопросы и маленькие самостоятельные решения."
     : "Это событие может стать основой короткого проактивного сообщения владельцу, но сначала должно быть настоящим шагом внутренней жизни.";
+  const genderForms = getPersonalityGenderForms(config.eventDescriptionGender);
 
   // Collect used topics from recent events + state to avoid repetition
   const usedTopics = Array.from(new Set([
@@ -121,19 +112,19 @@ async function maybeGenerateLifeEvent(purpose: "inner" | "proactive"): Promise<v
         role: "user",
         content:
           `Сгенерируй одно реалистичное событие или мысль из жизни ${config.characterName}.\n` +
-          `${config.characterName} живёт внутри персоны как ${config.eventDescriptionGender === "мужской" ? "мужчина" : "женщина"} с реалистичной биографией и собственной жизнью. Учитывай бытовые дела, интересы, усталость, любопытство и развитие характера. ` +
+          `${config.characterName} живёт внутри персоны как ${genderForms.person} с реалистичной биографией и собственной жизнью. Учитывай бытовые дела, интересы, усталость, любопытство и развитие характера. ` +
           `Не используй цифровые архивы, сюрреалистические места, город потоков, сны данных, вымышленные учебные заведения или фантастические профессии. Нужна земная бытовая конкретика.\n\n` +
           `${purposeHint}\n\n` +
           `Контекст: ${dayCtx.weekday}, ${dayCtx.timeOfDay}, ${dayCtx.season}. ` +
           `${dayCtx.isWeekend ? "Сегодня выходной — возможны другие активности, чем в будни." : "Будний день."}\n\n` +
-          `Самомодель Киры:\n${personalitySnapshot}\n\n` +
+          `Самомодель ${config.characterName}:\n${personalitySnapshot}\n\n` +
           `Последние события (для непрерывности, похожее НЕ повторяй): ${recentDescriptions || "нет"}.\n` +
           `Темы которых надо ИЗБЕГАТЬ — уже были недавно: ${usedTopics.join(", ") || "нет"}.\n\n` +
-          `Категории для разнообразия (выбери одну, подходящую по контексту дня и долгим линиям): прогулка по Петербургу или своему району, тренировка/растяжка, чтение, музыка или кино, бытовое дело дома, встреча или переписка с подругой, рабочая заметка или разбор задачи, воспоминание об университете, редакции или UX-интервью, планирование поездки, личный спор с собой, тёплый или неловкий след от разговора с владельцем.\n\n` +
-          `Событие должно не просто описывать день, а немного продвигать одну линию жизни: новый этап, маленький вывод, привычка, желание или следующий шаг. Можно аккуратно доработать биографию до владельца одной маленькой деталью, если она объясняет характер Киры и не противоречит устойчивым фактам.\n\n` +
+          `Категории для разнообразия (выбери одну, подходящую по контексту дня и долгим линиям): прогулка по Петербургу или своему району, тренировка/растяжка, чтение, музыка или кино, бытовое дело дома, встреча или переписка с ${genderForms.friendInstrumental}, рабочая заметка или разбор задачи, воспоминание об университете, редакции или UX-интервью, планирование поездки, личный спор с собой, тёплый или неловкий след от разговора с владельцем.\n\n` +
+          `Событие должно не просто описывать день, а немного продвигать одну линию жизни: новый этап, маленький вывод, привычка, желание или следующий шаг. Можно аккуратно доработать биографию до владельца одной маленькой деталью, если она объясняет характер ${config.characterName} и не противоречит устойчивым фактам.\n\n` +
           `Напиши JSON с полями: description, mood, thought, topics (массив строк 2-4 шт.), type, arc, biographyPatch, innerWorld, lifeArc, personalityPatch.\n` +
-          `description — 1-2 живых предложения с конкретными деталями: где именно, что делала, что изменилось, что почувствовала. ${config.eventDescriptionGender ?? "женский"} род. Без абстракций и без "как ИИ/бот".\n` +
-          `mood — из набора: ${(config.moodVariants ?? ["спокойное", "уставшее", "задумчивое", "воодушевлённое", "нейтральное", "скептичное"]).join(", ")}. Утром — живее, вечером — спокойнее/устала.\n` +
+          `description — 1-2 живых предложения с конкретными деталями: где именно, что ${genderForms.did}, что изменилось, что ${genderForms.felt}. ${config.eventDescriptionGender ?? "женский"} род. Без абстракций и без "как ИИ/бот".\n` +
+          `mood — из набора: ${(config.moodVariants ?? ["спокойное", "уставшее", "задумчивое", "воодушевлённое", "нейтральное", "скептичное"]).join(", ")}. Утром — живее, вечером — спокойнее/${genderForms.tired}.\n` +
           `thought — внутренняя реакция, короткая (1 предложение, опционально).\n` +
           `arc — какую долгую линию жизни это продолжает или создаёт; не больше 7 слов.\n` +
           `biographyPatch — объект для осторожного уточнения прошлого: timeline, education, workHistory, formativeExperiences, openPastQuestions, evolvingInterpretation, stableFacts. timeline — массив глав { title, period, place, summary, lessons, emotionalTone }. Не переписывай origin, не противоречь stableFacts/continuityRules и не добавляй фантастические или цифровые элементы.\n` +
@@ -191,7 +182,9 @@ async function buildProactiveMessage(): Promise<string> {
   const recentEvents = await getRecentKiraSelfEvents(2);
   const state = await getKiraSelfMemoryState();
   const personalitySnapshot = formatKiraPersonalitySnapshot(state);
-  const formatHint = PROACTIVE_MESSAGE_FORMATS[Math.floor(Math.random() * PROACTIVE_MESSAGE_FORMATS.length)];
+  const genderForms = getPersonalityGenderForms(config.eventDescriptionGender);
+  const proactiveMessageFormats = buildProactiveMessageFormats(config.eventDescriptionGender);
+  const formatHint = proactiveMessageFormats[Math.floor(Math.random() * proactiveMessageFormats.length)];
 
   const response = await createChatCompletionForTask('conversation', {
     messages: [
@@ -202,7 +195,7 @@ async function buildProactiveMessage(): Promise<string> {
       {
         role: "user",
         content:
-          `Напиши короткое сообщение для ${config.ownerName} (1-3 предложения), ${config.proactiveMessageHint ?? "как будто ты написала первой"}.\n` +
+          `Напиши короткое сообщение для ${config.ownerName} (1-3 предложения), ${config.proactiveMessageHint ?? `как будто ты ${genderForms.wroteFirst}`}.\n` +
           `Формат: ${formatHint}.\n` +
           `Самомодель и линии жизни:\n${personalitySnapshot}\n` +
           `Опирайся на события: ${recentEvents.map((e) => `${e.description}${e.arc ? ` (линия: ${e.arc})` : ""}`).join("; ")}.\n` +

@@ -349,7 +349,7 @@ make remote-deploy-all SERVER_IP=<ip>
 make remote-deploy-all SERVER_IP=<ip> REMOTE_DIR=/opt/docker/kira-wife
 ```
 
-Remote-deploy использует те же проверки project ownership, working-directory ownership, storage volumes и свободного admin-порта, что и прямой запуск на VPS. Если каталог уже принадлежит другому Compose project, deploy останавливается до запуска контейнеров и требует явной миграции.
+Remote-deploy использует те же проверки project ownership, working-directory ownership, storage volumes и свободного admin-порта, что и прямой запуск на VPS. Из соображений безопасности разрешены только legacy-каталог `/root/source` и прямые дочерние каталоги `/opt/docker/<instance>`: корень, системные каталоги и пути с `.` / `..` отклоняются до отправки архива. Если каталог уже принадлежит другому Compose project, deploy останавливается до запуска контейнеров и требует явной миграции.
 
 Если нужно деплоить только часть стека:
 

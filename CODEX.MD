@@ -20,6 +20,9 @@
   - server workflow не должен использовать `volume prune`, `docker volume rm`, `compose down -v` или `system prune --volumes`.
   - install/deploy не выполняет глобальные container/image/builder prune; операции очистки должны быть ограничены текущим Compose project.
   - direct и remote workflow используют общий `server-common.sh` preflight; дополнительные remote-инстансы живут в отдельных каталогах.
+  - remote-deploy разрешает только legacy-каталог `/root/source` и прямой дочерний каталог `/opt/docker/<instance>`; пути к `/`, системным каталогам, вложенным директориям и сегментам `.` / `..` должны отклоняться до загрузки архива.
+  - compose `.env` записывается атомарно только после успешных project/storage checks; неудачный preflight не должен менять существующий файл.
+  - admin-порт работающего контейнера текущего инстанса допустим для redeploy; для остановленного собственного контейнера обязательно отдельно проверяется host listener.
   - legacy remote-deploy без `KIRA_INSTANCE_NAME` выводит имя Compose project из remote-каталога (`/root/source` → `source`), чтобы существующие `source_*` volumes не подменялись новыми пустыми volumes.
   - `.kira-admin-state` и compose `.env` содержат секреты, обязаны быть исключены из Git, иметь права `600` и храниться отдельно для каждого инстанса.
 - Live health/monitoring для внешних систем должен жить отдельным диагностическим слоем:
