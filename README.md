@@ -343,13 +343,13 @@ make remote-install SERVER_IP=<ip>
 make remote-deploy-all SERVER_IP=<ip>
 ```
 
-Для отдельного удалённого инстанса задайте уникальный `KIRA_INSTANCE_NAME` в его локальном `.env.production`. По умолчанию основной `kira-mind-bot` сохраняет исторический каталог `/root/source`, а дополнительные инстансы разворачиваются в `/opt/docker/<KIRA_INSTANCE_NAME>`. Каталог можно указать явно:
+Для отдельного удалённого инстанса задайте уникальный `KIRA_INSTANCE_NAME` в его локальном `.env.production`. Основной инстанс сохраняет исторический каталог `/root/source`, а дополнительные инстансы разворачиваются в `/opt/docker/<KIRA_INSTANCE_NAME>`. Если старая установка в `/root/source` ещё не содержит `KIRA_INSTANCE_NAME`, remote-deploy сохраняет её прежний Compose project `source` и volumes `source_postgres_data` / `source_qdrant_storage`, а не создаёт новый пустой storage. Каталог можно указать явно:
 
 ```bash
 make remote-deploy-all SERVER_IP=<ip> REMOTE_DIR=/opt/docker/kira-wife
 ```
 
-Remote-deploy использует те же проверки project ownership, storage volumes и свободного admin-порта, что и прямой запуск на VPS.
+Remote-deploy использует те же проверки project ownership, working-directory ownership, storage volumes и свободного admin-порта, что и прямой запуск на VPS. Если каталог уже принадлежит другому Compose project, deploy останавливается до запуска контейнеров и требует явной миграции.
 
 Если нужно деплоить только часть стека:
 

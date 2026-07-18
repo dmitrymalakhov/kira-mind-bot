@@ -44,19 +44,19 @@ DEPLOY_STARTED_AT=$(date '+%Y-%m-%d %H:%M:%S')
 
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/server-common.sh"
-KIRA_INSTANCE_NAME="$(grep -E '^KIRA_INSTANCE_NAME=' .env.production 2>/dev/null | tail -1 | cut -d= -f2- || true)"
-KIRA_INSTANCE_NAME="$(sanitize_instance_name "${KIRA_INSTANCE_NAME:-kira-mind-bot}")"
+CONFIGURED_KIRA_INSTANCE_NAME="$(grep -E '^KIRA_INSTANCE_NAME=' .env.production 2>/dev/null | tail -1 | cut -d= -f2- || true)"
 if [ -z "$REMOTE_DIR" ]; then
-    if [ "$KIRA_INSTANCE_NAME" = "kira-mind-bot" ]; then
+    if [ -z "$CONFIGURED_KIRA_INSTANCE_NAME" ] || [ "$(sanitize_instance_name "$CONFIGURED_KIRA_INSTANCE_NAME")" = "kira-mind-bot" ]; then
         REMOTE_DIR="/root/source"
     else
-        REMOTE_DIR="/opt/docker/$KIRA_INSTANCE_NAME"
+        REMOTE_DIR="/opt/docker/$(sanitize_instance_name "$CONFIGURED_KIRA_INSTANCE_NAME")"
     fi
 fi
 if [[ ! "$REMOTE_DIR" =~ ^/[a-zA-Z0-9._/-]+$ ]]; then
     echo "❌ Недопустимый remote-каталог: $REMOTE_DIR" >&2
     exit 1
 fi
+KIRA_INSTANCE_NAME="$(resolve_instance_name_for_directory "$CONFIGURED_KIRA_INSTANCE_NAME" "$REMOTE_DIR")"
 
 echo ""
 echo "=============================================="

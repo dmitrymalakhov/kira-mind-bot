@@ -20,6 +20,7 @@
   - server workflow не должен использовать `volume prune`, `docker volume rm`, `compose down -v` или `system prune --volumes`.
   - install/deploy не выполняет глобальные container/image/builder prune; операции очистки должны быть ограничены текущим Compose project.
   - direct и remote workflow используют общий `server-common.sh` preflight; дополнительные remote-инстансы живут в отдельных каталогах.
+  - legacy remote-deploy без `KIRA_INSTANCE_NAME` выводит имя Compose project из remote-каталога (`/root/source` → `source`), чтобы существующие `source_*` volumes не подменялись новыми пустыми volumes.
   - `.kira-admin-state` и compose `.env` содержат секреты, обязаны быть исключены из Git, иметь права `600` и храниться отдельно для каждого инстанса.
 - Live health/monitoring для внешних систем должен жить отдельным диагностическим слоем:
   - bot runtime публикует узкие internal health endpoints;
@@ -52,8 +53,10 @@
   - аварийный рубильник rich-форматирования — `RICH_MESSAGES_ENABLED` (по умолчанию `true`).
 - Редактирование Telegram-сообщений должно быть идемпотентным:
   - текст и inline-клавиатура одного сообщения изменяются одним атомарным запросом;
-  - отдельные markup-only изменения проходят через общий helper с проверкой состояния и сериализацией по сообщению;
+  - полные text+markup и отдельные markup-only изменения проходят через одну per-message очередь; разные типы edit-запросов нельзя сериализовать независимо;
+  - отдельные markup-only изменения проходят через общий helper с проверкой состояния;
   - `message is not modified` нельзя подавлять как штатную ошибку — no-op запрос не должен отправляться в Telegram.
+- Personality defaults обязаны соответствовать `characterGender` и в runtime, и в admin-panel; при смене рода можно заменять только неизменённые системные defaults, но не пользовательские persona/biography.
 
 ## Что куда документировать
 - `README.md`: пользовательские сценарии, настройка, эксплуатация и высокоуровневое описание возможностей. Не дублировать туда внутренние implementation details.

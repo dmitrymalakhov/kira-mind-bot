@@ -32,6 +32,21 @@ resolve_instance_name() {
     sanitize_instance_name "${KIRA_INSTANCE_NAME:-$DEFAULT_KIRA_INSTANCE_NAME}"
 }
 
+resolve_instance_name_for_directory() {
+    local configured_name="${1:-}"
+    local directory="${2:-$PWD}"
+    local directory_name=""
+
+    if [ -n "$configured_name" ]; then
+        sanitize_instance_name "$configured_name"
+        return
+    fi
+
+    directory="${directory%/}"
+    directory_name="${directory##*/}"
+    sanitize_instance_name "${directory_name:-kira-mind-bot}"
+}
+
 resolve_compose_cmd() {
     if docker compose version >/dev/null 2>&1; then
         DOCKER_CMD=(docker)
@@ -163,8 +178,30 @@ ADMIN_PASSWORD=${ADMIN_PASSWORD}
 EOF
     chmod 600 "$COMPOSE_ENV_FILE"
 
-    ensure_instance_not_owned_by_other_directory
-    verify_existing_storage_bindings
+    ensure_working_directory_not_owned_by_other_project || return 1
+    ensure_instance_not_owned_by_other_directory || return 1
+    verify_existing_storage_bindings || return 1
+}
+
+ensure_working_directory_not_owned_by_other_project() {
+    [ "${#DOCKER_CMD[@]}" -gt 0 ] || return 0
+
+    local current_dir=""
+    local container_id=""
+    local owner_project=""
+    current_dir="$(pwd -P)"
+
+    while IFS= read -r container_id; do
+        [ -n "$container_id" ] || continue
+        owner_project="$(docker_inspect "$container_id" \
+            --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)"
+        if [ -n "$owner_project" ] && [ "$owner_project" != "$KIRA_INSTANCE_NAME" ]; then
+            echo "Ошибка: каталог '$current_dir' уже принадлежит Docker Compose project '$owner_project'." >&2
+            echo "Нельзя переключать его на '$KIRA_INSTANCE_NAME' без явной миграции storage." >&2
+            return 1
+        fi
+    done < <(docker_ps -aq \
+        --filter "label=com.docker.compose.project.working_dir=$current_dir")
 }
 
 ensure_instance_not_owned_by_other_directory() {

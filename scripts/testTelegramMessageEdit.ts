@@ -346,6 +346,59 @@ async function testPreservesDifferentUpdateOrder(): Promise<void> {
     assert.deepStrictEqual(calls, [firstMarkup, secondMarkup]);
 }
 
+async function testSerializesTextAndMarkupEditsTogether(): Promise<void> {
+    const calls: string[] = [];
+    let releaseText!: () => void;
+    const textGate = new Promise<void>((resolve) => {
+        releaseText = resolve;
+    });
+    const markupA = namedMarkup("cross-A");
+    const markupB = namedMarkup("cross-B");
+    const markupC = namedMarkup("cross-C");
+    let currentMarkup = markupA;
+    const api = {
+        editMessageText: async (
+            _chatId: number | string,
+            _messageId: number,
+            _text: string,
+            options?: Record<string, unknown>,
+        ) => {
+            calls.push("text:start");
+            await textGate;
+            currentMarkup = options?.reply_markup as InlineKeyboardMarkup;
+            calls.push("text:done");
+        },
+        editMessageReplyMarkup: async (
+            _chatId: number | string,
+            _messageId: number,
+            options: { reply_markup: InlineKeyboardMarkup },
+        ) => {
+            currentMarkup = options.reply_markup;
+            calls.push("markup:done");
+        },
+    };
+    const messageId = 52;
+
+    const textEdit = editMessageTextIfChanged(api, 1001, messageId, "Новый текст", {
+        reply_markup: markupB,
+    });
+    const markupEdit = editReplyMarkupIfChanged(
+        api,
+        { ...message(markupA), message_id: messageId },
+        markupC,
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.deepStrictEqual(calls, ["text:start"], "markup-only edit должен ждать полный edit того же сообщения");
+
+    releaseText();
+    await Promise.all([textEdit, markupEdit]);
+
+    assert.deepStrictEqual(calls, ["text:start", "text:done", "markup:done"]);
+    assert.deepStrictEqual(currentMarkup, markupC, "последний поставленный edit должен определять итоговую клавиатуру");
+}
+
 async function testPropagatesErrorsAndAllowsRetry(): Promise<void> {
     const expectedError = new Error("Telegram unavailable");
     let calls = 0;
@@ -401,6 +454,7 @@ async function main(): Promise<void> {
     await testPlainTextEditInvalidatesStructuredState();
     await testMarkupOnlyEditInvalidatesStructuredState();
     await testPreservesDifferentUpdateOrder();
+    await testSerializesTextAndMarkupEditsTogether();
     await testPropagatesErrorsAndAllowsRetry();
     await testNonCriticalEditLogsAndContinues();
     console.log("telegram message edit checks passed");

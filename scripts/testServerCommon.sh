@@ -27,6 +27,8 @@ docker_ps() {
     port-collision:*publish=7875*) echo "foreign-admin" ;;
     owner-conflict:*project=kira-second-bot*) echo "foreign-bot" ;;
     owner-ok:*project=kira-second-bot*) echo "own-bot" ;;
+    directory-conflict:*working_dir=*) echo "legacy-bot" ;;
+    directory-ok:*working_dir=*) echo "own-bot" ;;
     storage-ok:*service=postgres*) echo "postgres-id" ;;
     storage-ok:*service=qdrant*) echo "qdrant-id" ;;
     storage-bad:*service=postgres*) echo "postgres-id" ;;
@@ -38,7 +40,14 @@ docker_inspect() {
   case "$1" in
     foreign-admin) echo "foreign-project" ;;
     foreign-bot) echo "/opt/docker/foreign" ;;
-    own-bot) pwd -P ;;
+    own-bot)
+      if [[ "$*" == *'com.docker.compose.project.working_dir'* ]]; then
+        pwd -P
+      else
+        echo "kira-second-bot"
+      fi
+      ;;
+    legacy-bot) echo "source" ;;
     postgres-id)
       if [ "$FAKE_MODE" = "storage-bad" ]; then
         echo "volume|foreign_postgres_data"
@@ -116,7 +125,18 @@ ensure_admin_state
 DEFAULT_KIRA_INSTANCE_NAME="Kira Second Bot"
 unset KIRA_INSTANCE_NAME
 [ "$(resolve_instance_name)" = "kira-second-bot" ]
+[ "$(resolve_instance_name_for_directory "" "/root/source")" = "source" ]
+[ "$(resolve_instance_name_for_directory "kira-primary" "/root/source")" = "kira-primary" ]
 KIRA_INSTANCE_NAME="kira-second-bot"
+
+FAKE_MODE="directory-conflict"
+if ensure_working_directory_not_owned_by_other_project 2>/dev/null; then
+  echo "working directory owned by another project must stop deploy" >&2
+  exit 1
+fi
+
+FAKE_MODE="directory-ok"
+ensure_working_directory_not_owned_by_other_project
 
 FAKE_MODE="owner-conflict"
 if ensure_instance_not_owned_by_other_directory 2>/dev/null; then

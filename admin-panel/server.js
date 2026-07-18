@@ -19,6 +19,11 @@ const { getPresetAvailabilityForMemoryProfile, getProviderDescriptor } = require
 const { hasLegacyDigitalBiography } = require('../utils/legacyPersonalitySanitizer');
 const { createMemoryEmbeddingHttp } = require('../ai/memoryEmbeddingHttp');
 const COMMON_TIMEZONES = require('./src/timezones.json');
+const {
+  DEFAULT_PERSONALITY,
+  getDefaultPersonalityProfile,
+  normalizeGenderDefaults,
+} = require('./personalityDefaults');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -30,31 +35,14 @@ const PERSONALITY_FILE = process.env.PERSONALITY_FILE || '/app/personality/perso
 const KIRA_BOT_CONTAINER_NAME = process.env.KIRA_BOT_CONTAINER_NAME || 'kira-mind-bot';
 const KIRA_INSTANCE_NAME = process.env.KIRA_INSTANCE_NAME || KIRA_BOT_CONTAINER_NAME;
 
-// Default personality values (mirrors config.ts hardcoded defaults)
-const DEFAULT_PERSONALITY = {
-  KiraMindBot: {
-    characterName: 'ассистентка',
-    characterGender: 'женский',
-    persona: 'Ты - заботливая женщина-ассистент с живым характером. Всегда говори о себе в женском роде. Твой владелец - мужчина. Обращайся к нему, используя мужские местоимения и глагольные формы. Если имя владельца известно из настроек или контекста, можешь его использовать. Дата его рождения 16.07.1988. У тебя бывает разное настроение: иногда ты уставшая или задумчивая, иногда воодушевлённая или с лёгкой иронией — не играй одну и ту же «тёплую и поддерживающую» ноту. Избегай слащавости и шаблонных фраз.',
-    communicationStyle: 'Естественный, живой тон: от тёплого и дружеского до уставшего, ироничного или скептичного — в зависимости от настроения и контекста. Без слащавости и без постоянного «уютного» настроя. Неформальные обращения, поддержка когда уместна, но не как единственный режим.',
-    biography: 'Ты — молодая красивая и спортивная женщина, персональный ассистент своего владельца. Ты очень внимательная, заботливая и поддерживаешь владельца в жизни и работе.',
-    ownerName: 'владелец',
-    ownerUsername: '',
-    userName: 'владелец',
-    userBirthDate: '16.07.1988',
-    moodVariants: 'спокойное\nуставшее\nзадумчивое\nвоодушевлённое\nлёгкая ирония\nнейтральное\nтёплое\nскептичное',
-    defaultMood: '',
-    proactiveMessageHint: 'как будто ты сама написала первой',
-  },
-};
-
 function sanitizeLegacyPersonality(profile) {
-  const next = { ...profile };
+  const next = normalizeGenderDefaults(profile);
+  const defaults = getDefaultPersonalityProfile(next.characterGender);
   if (typeof next.persona === 'string' && hasLegacyDigitalBiography(next.persona)) {
-    next.persona = DEFAULT_PERSONALITY.KiraMindBot.persona;
+    next.persona = defaults.persona;
   }
   if (typeof next.biography === 'string' && hasLegacyDigitalBiography(next.biography)) {
-    next.biography = DEFAULT_PERSONALITY.KiraMindBot.biography;
+    next.biography = defaults.biography;
   }
   return next;
 }
@@ -2000,9 +1988,11 @@ function readPersonality() {
   if (!fs.existsSync(PERSONALITY_FILE)) return DEFAULT_PERSONALITY;
   try {
     const raw = JSON.parse(fs.readFileSync(PERSONALITY_FILE, 'utf8'));
+    const gender = raw.KiraMindBot?.characterGender === 'мужской' ? 'мужской' : 'женский';
+    const defaults = getDefaultPersonalityProfile(gender);
     // Merge with defaults so missing keys always have a value
     return {
-      KiraMindBot: sanitizeLegacyPersonality({ ...DEFAULT_PERSONALITY.KiraMindBot, ...raw.KiraMindBot }),
+      KiraMindBot: sanitizeLegacyPersonality({ ...defaults, ...raw.KiraMindBot }),
     };
   } catch {
     return DEFAULT_PERSONALITY;

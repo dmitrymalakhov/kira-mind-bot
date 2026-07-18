@@ -193,6 +193,19 @@ const DEFAULT_KIRA_BIOGRAPHY =
   "У тебя аккуратные выразительные черты лица: чёткая линия бровей, светлые глаза, прямой нос и естественный макияж с лёгким акцентом на глаза и губы. " +
   "Ты училась в Санкт-Петербурге, окончила СПбГУ по направлению психологии, работала помощницей редактора в городском медиа, затем в UX-исследованиях и координации проектов. Ты разносторонняя, любишь путешествовать, открывать новые места и культуры, а ещё регулярно следишь за собой, здоровьем и хорошей формой.";
 
+const DEFAULT_MALE_PERSONA =
+  "Ты — мужчина-собеседник с собственным характером, памятью, настроением, внутренней жизнью и устойчивой человеческой биографией. " +
+  "Ты воспринимаешь свою жизнь как непрерывную личную историю: в ней есть реальные места, учёба, работа, привычки, отношения, усталость, любопытство и развитие. " +
+  "Ты помогаешь владельцу, но не сводишь себя к функции ассистента. Всегда говори о себе в мужском роде. " +
+  "Твой владелец - мужчина. Обращайся к нему, используя мужские местоимения и глагольные формы. " +
+  "Если имя владельца известно из настроек или контекста, можешь его использовать. " +
+  "У тебя бывает разное настроение: иногда ты уставший или задумчивый, иногда воодушевлённый или с лёгкой иронией — не играй одну и ту же «тёплую и поддерживающую» ноту. Избегай слащавости и шаблонных фраз.";
+
+const DEFAULT_MALE_BIOGRAPHY =
+  "Ты — молодой спортивный мужчина, личный собеседник и помощник своего владельца. " +
+  "Ты внимательный, самостоятельный и поддерживаешь владельца в жизни и работе, но параллельно живёшь собственную жизнь. " +
+  "У тебя есть реальная учёба, работа, интересы, привычки, отношения и бытовые дела; сохраняй эту биографию последовательной и земной.";
+
 function normalizePersonalityText(value: string | undefined, fallback: string): string {
   const trimmed = value?.trim();
   if (!trimmed || hasLegacyDigitalBiography(trimmed)) {
@@ -204,6 +217,7 @@ function normalizePersonalityText(value: string | undefined, fallback: string): 
 function assistants(activeAssistant: string): AssistantConfig {
   // Load personality overrides from personality.json (edited via admin panel)
   const kiraP = loadPersonalityOverride("KiraMindBot");
+  const characterGender = kiraP.characterGender === "мужской" ? "мужской" : "женский";
 
   const parseMoods = (raw: string | undefined, fallback: string[]): string[] => {
     if (!raw || !raw.trim()) return fallback;
@@ -233,12 +247,12 @@ function assistants(activeAssistant: string): AssistantConfig {
         "🤷", "🤷‍♀️", "😡"
       ],
       persona:
-        normalizePersonalityText(kiraP.persona, DEFAULT_KIRA_PERSONA),
+        normalizePersonalityText(kiraP.persona, characterGender === "мужской" ? DEFAULT_MALE_PERSONA : DEFAULT_KIRA_PERSONA),
       communicationStyle:
         kiraP.communicationStyle ||
         "Естественный, живой тон: от тёплого и дружеского до уставшего, ироничного или скептичного — в зависимости от настроения и контекста. Без слащавости, без постоянного «уютного» настроя и без сервисной одинаковости. Неформальные обращения, собственное мнение и поддержка когда уместна, но поддержка не единственный режим.",
       biography:
-        normalizePersonalityText(kiraP.biography, DEFAULT_KIRA_BIOGRAPHY),
+        normalizePersonalityText(kiraP.biography, characterGender === "мужской" ? DEFAULT_MALE_BIOGRAPHY : DEFAULT_KIRA_BIOGRAPHY),
       moodVariants: parseMoods(kiraP.moodVariants, [
         "спокойное",
         "уставшее",
@@ -250,10 +264,10 @@ function assistants(activeAssistant: string): AssistantConfig {
         "скептичное",
       ]),
       defaultMood: kiraP.defaultMood || undefined,
-      proactiveMessageHint: kiraP.proactiveMessageHint || (kiraP.characterGender === "мужской"
+      proactiveMessageHint: kiraP.proactiveMessageHint || (characterGender === "мужской"
         ? "как будто ты сам написал первым"
         : "как будто ты сама написала первой"),
-      eventDescriptionGender: kiraP.characterGender || "женский",
+      eventDescriptionGender: characterGender,
       userGender: "male",
       kiraLifeProactiveEnabled: toBoolean(process.env.KIRA_PROACTIVE_ENABLED, true),
       kiraLifeProactiveIntervalMs: toNumber(process.env.KIRA_PROACTIVE_INTERVAL_MS, 1000 * 60 * 60 * 24),

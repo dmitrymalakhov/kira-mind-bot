@@ -24,7 +24,6 @@ interface TelegramTextApiLike {
 }
 
 interface PendingMarkupEdit {
-    tail: Promise<void>;
     pending: number;
     currentFingerprint: string;
     appliedTransitions: Set<string>;
@@ -37,9 +36,13 @@ interface KnownMarkupState {
 }
 
 interface PendingMessageEdit {
-    tail: Promise<void>;
     pending: number;
     currentFingerprint?: string;
+}
+
+interface MessageEditQueue {
+    tail: Promise<void>;
+    pending: number;
 }
 
 interface KnownMessageEditState {
@@ -51,6 +54,7 @@ const pendingMarkupEdits = new Map<string, PendingMarkupEdit>();
 const knownMarkupStates = new Map<string, KnownMarkupState>();
 const pendingMessageEdits = new Map<string, PendingMessageEdit>();
 const knownMessageEditStates = new Map<string, KnownMessageEditState>();
+const messageEditQueues = new Map<string, MessageEditQueue>();
 const KNOWN_MARKUP_STATE_TTL_MS = 5 * 60_000;
 
 function markupFingerprint(markup: InlineKeyboardMarkup | undefined): string {
@@ -90,15 +94,45 @@ export function recordReplyMarkupState(
     const key = messageKey(chatId, messageId);
     const currentFingerprint = markupFingerprint(replyMarkup);
     const previous = knownMarkupStates.get(key);
-    const appliedTransitions = new Set(previous?.appliedTransitions ?? []);
+    const pending = pendingMarkupEdits.get(key);
+    const appliedTransitions = new Set(pending?.appliedTransitions ?? previous?.appliedTransitions ?? []);
     const previousFingerprint = previousReplyMarkup !== undefined
         ? markupFingerprint(previousReplyMarkup)
-        : previous?.currentFingerprint;
+        : pending?.currentFingerprint ?? previous?.currentFingerprint;
     if (previousFingerprint !== undefined && previousFingerprint !== currentFingerprint) {
         appliedTransitions.add(transitionKey(previousFingerprint, currentFingerprint));
     }
     storeKnownMarkupState(key, currentFingerprint, appliedTransitions);
+    if (pending) {
+        pending.currentFingerprint = currentFingerprint;
+        pending.appliedTransitions = new Set(appliedTransitions);
+    }
     invalidateMessageEditState(chatId, messageId);
+}
+
+async function runSerializedMessageEdit<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    let queue = messageEditQueues.get(key);
+    if (!queue) {
+        queue = { tail: Promise.resolve(), pending: 0 };
+        messageEditQueues.set(key, queue);
+    }
+
+    queue.pending += 1;
+    let result!: T;
+    const scheduled = queue.tail.then(async () => {
+        result = await operation();
+    });
+    queue.tail = scheduled.then(() => undefined, () => undefined);
+
+    try {
+        await scheduled;
+        return result;
+    } finally {
+        queue.pending -= 1;
+        if (queue.pending === 0 && messageEditQueues.get(key) === queue) {
+            messageEditQueues.delete(key);
+        }
+    }
 }
 
 function storeKnownMarkupState(
@@ -148,7 +182,6 @@ export async function editReplyMarkupIfChanged(
         }
         const activeKnown = known && known.expiresAt > Date.now() ? known : undefined;
         entry = {
-            tail: Promise.resolve(),
             pending: 0,
             currentFingerprint: activeKnown?.currentFingerprint ?? observedFingerprint,
             appliedTransitions: new Set(activeKnown?.appliedTransitions ?? []),
@@ -157,15 +190,14 @@ export async function editReplyMarkupIfChanged(
     }
 
     entry.pending += 1;
-    let changed = false;
-    const operation = entry.tail.then(async () => {
+    const operation = runSerializedMessageEdit(key, async () => {
         if (entry!.currentFingerprint === desiredFingerprint) {
-            return;
+            return false;
         }
 
         const requestedTransition = transitionKey(observedFingerprint, desiredFingerprint);
         if (observedFingerprint !== entry!.currentFingerprint && entry!.appliedTransitions.has(requestedTransition)) {
-            return;
+            return false;
         }
 
         if (observedFingerprint !== entry!.currentFingerprint && !entry!.appliedTransitions.has(requestedTransition)) {
@@ -181,16 +213,11 @@ export async function editReplyMarkupIfChanged(
         storeKnownMarkupState(key, desiredFingerprint, entry!.appliedTransitions);
         invalidateMessageEditState(message.chat.id, message.message_id);
         entry!.currentFingerprint = desiredFingerprint;
-        changed = true;
+        return true;
     });
 
-    // Ошибка остаётся на operation и будет проброшена текущему caller-у.
-    // Внутренняя очередь должна продолжить работу после уже обработанного сбоя.
-    entry.tail = operation.then(() => undefined, () => undefined);
-
     try {
-        await operation;
-        return changed;
+        return await operation;
     } finally {
         entry.pending -= 1;
         if (entry.pending === 0 && pendingMarkupEdits.get(key) === entry) {
@@ -218,7 +245,6 @@ export async function runMessageEditIfChanged(
             knownMessageEditStates.delete(key);
         }
         entry = {
-            tail: Promise.resolve(),
             pending: 0,
             currentFingerprint: known && known.expiresAt > Date.now() ? known.currentFingerprint : undefined,
         };
@@ -226,20 +252,18 @@ export async function runMessageEditIfChanged(
     }
 
     entry.pending += 1;
-    let result: unknown;
-    const operation = entry.tail.then(async () => {
+    const operation = runSerializedMessageEdit(key, async () => {
         if (entry!.currentFingerprint === desiredFingerprint) {
             return;
         }
-        result = await edit();
+        const result = await edit();
         entry!.currentFingerprint = desiredFingerprint;
         storeKnownMessageEditState(key, desiredFingerprint);
+        return result;
     });
-    entry.tail = operation.then(() => undefined, () => undefined);
 
     try {
-        await operation;
-        return result;
+        return await operation;
     } finally {
         entry.pending -= 1;
         if (entry.pending === 0 && pendingMessageEdits.get(key) === entry) {
