@@ -309,6 +309,7 @@ export interface AiUsageSummaryResponse {
 
 export interface PersonalityProfile {
   characterName: string;
+  characterGender: 'женский' | 'мужской';
   persona: string;
   communicationStyle: string;
   biography: string;

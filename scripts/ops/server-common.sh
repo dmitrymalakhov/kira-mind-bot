@@ -4,11 +4,87 @@ SERVER_COMPOSE_FILE="${SERVER_COMPOSE_FILE:-docker-compose.server.yml}"
 ENV_FILE="${ENV_FILE:-.env.production}"
 COMPOSE_ENV_FILE="${COMPOSE_ENV_FILE:-.env}"
 PERSONALITY_FILE="${PERSONALITY_FILE:-personality.json}"
-ADMIN_STATE_FILE="${ADMIN_STATE_FILE:-${HOME}/.kira-admin-state}"
+ADMIN_STATE_FILE="${ADMIN_STATE_FILE:-.kira-admin-state}"
 DEFAULT_ADMIN_USERNAME="${DEFAULT_ADMIN_USERNAME:-admin}"
 ADMIN_PORT_FALLBACK="${ADMIN_PORT_FALLBACK:-8080}"
+DEFAULT_KIRA_INSTANCE_NAME="${DEFAULT_KIRA_INSTANCE_NAME:-${PWD##*/}}"
 COMPOSE_CMD=()
 DOCKER_CMD=()
+DEPLOY_LOCK_FILE="${DEPLOY_LOCK_FILE:-/tmp/kira-mind-bot-deploy.lock}"
+
+sanitize_instance_name() {
+    local raw="${1:-kira-mind-bot}"
+    local sanitized=""
+
+    sanitized="$(printf '%s' "$raw" \
+        | tr '[:upper:]' '[:lower:]' \
+        | tr -cs 'a-z0-9_-' '-' \
+        | sed -E 's/^-+//; s/-+$//; s/-{2,}/-/g')"
+
+    if [[ ! "$sanitized" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+        sanitized="kira-mind-bot"
+    fi
+
+    printf '%s' "$sanitized"
+}
+
+resolve_instance_name() {
+    sanitize_instance_name "${KIRA_INSTANCE_NAME:-$DEFAULT_KIRA_INSTANCE_NAME}"
+}
+
+validate_volume_name() {
+    local volume_name="${1:-}"
+    [ "${#volume_name}" -le 255 ] &&
+        [[ "$volume_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]
+}
+
+resolve_storage_volume_name() {
+    local configured_name="${1:-}"
+    local default_name="$2"
+    local volume_name="${configured_name:-$default_name}"
+
+    if ! validate_volume_name "$volume_name"; then
+        echo "Ошибка: недопустимое имя Docker volume '$volume_name'." >&2
+        return 1
+    fi
+
+    printf '%s' "$volume_name"
+}
+
+resolve_postgres_volume_name() {
+    local instance_name="${KIRA_INSTANCE_NAME:-$(resolve_instance_name)}"
+    resolve_storage_volume_name "${POSTGRES_VOLUME_NAME:-}" "${instance_name}_postgres_data"
+}
+
+resolve_qdrant_volume_name() {
+    local instance_name="${KIRA_INSTANCE_NAME:-$(resolve_instance_name)}"
+    resolve_storage_volume_name "${QDRANT_VOLUME_NAME:-}" "${instance_name}_qdrant_storage"
+}
+
+resolve_instance_name_for_directory() {
+    local configured_name="${1:-}"
+    local directory="${2:-$PWD}"
+    local directory_name=""
+
+    if [ -n "$configured_name" ]; then
+        sanitize_instance_name "$configured_name"
+        return
+    fi
+
+    directory="${directory%/}"
+    directory_name="${directory##*/}"
+    sanitize_instance_name "${directory_name:-kira-mind-bot}"
+}
+
+validate_remote_deploy_directory() {
+    local directory="${1:-}"
+
+    # Старый основной инстанс остаётся в /root/source. Все новые remote-инстансы
+    # живут только прямыми дочерними каталогами /opt/docker: это не позволяет
+    # ошибочно распаковать deployment archive в /, /etc или другой system path.
+    [ "$directory" = "/root/source" ] ||
+        [[ "$directory" =~ ^/opt/docker/[a-zA-Z0-9_][a-zA-Z0-9._-]*$ ]]
+}
 
 resolve_compose_cmd() {
     if docker compose version >/dev/null 2>&1; then
@@ -30,32 +106,144 @@ compose() {
     "${COMPOSE_CMD[@]}" "$@"
 }
 
+docker_ps() {
+    "${DOCKER_CMD[@]}" ps "$@"
+}
+
+docker_inspect() {
+    "${DOCKER_CMD[@]}" inspect "$@"
+}
+
+docker_volume_inspect() {
+    "${DOCKER_CMD[@]}" volume inspect "$@"
+}
+
+ensure_volume_exists() {
+    local volume_name="$1"
+    if ! docker_volume_inspect "$volume_name" >/dev/null 2>&1; then
+        echo "Ошибка: Docker volume '$volume_name' не найден; миграция остановлена." >&2
+        return 1
+    fi
+}
+
+ensure_project_name_available() {
+    local project_name="$1"
+    local container_id=""
+
+    while IFS= read -r container_id; do
+        [ -n "$container_id" ] || continue
+        echo "Ошибка: Docker Compose project '$project_name' уже существует; выберите другое имя или сначала разберите конфликт вручную." >&2
+        return 1
+    done < <(docker_ps -aq --filter "label=com.docker.compose.project=$project_name")
+}
+
+acquire_deploy_lock() {
+    command -v flock >/dev/null 2>&1 || return 0
+    exec 9>"$DEPLOY_LOCK_FILE"
+    if ! flock -n 9; then
+        echo "Ошибка: другой install/deploy уже выполняется на этом хосте." >&2
+        return 1
+    fi
+}
+
 ensure_server_repo_root() {
     [ -f "$SERVER_COMPOSE_FILE" ] || return 1
     [ -f "package.json" ] || return 1
     [ -d "admin-panel" ] || return 1
 }
 
+load_key_value_file() {
+    local file="$1"
+    local line=""
+    local key=""
+    local value=""
+
+    [ -f "$file" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        case "$line" in
+            ''|'#'*) continue ;;
+        esac
+        key="${line%%=*}"
+        [ "$key" != "$line" ] || continue
+        [[ "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || continue
+        value="${line#*=}"
+        if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+            value="${value:1:${#value}-2}"
+        elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+            value="${value:1:${#value}-2}"
+        fi
+        printf -v "$key" '%s' "$value"
+        export "$key"
+    done < "$file"
+}
+
 load_env_if_present() {
-    if [ -f "$ENV_FILE" ]; then
-        set -a
-        # shellcheck disable=SC1090
-        source "$ENV_FILE"
-        set +a
-    fi
+    load_key_value_file "$ENV_FILE"
+}
+
+load_compose_identity_if_present() {
+    [ -f "$COMPOSE_ENV_FILE" ] || return 0
+
+    local line=""
+    local key=""
+    local value=""
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            KIRA_INSTANCE_NAME=*|POSTGRES_VOLUME_NAME=*|QDRANT_VOLUME_NAME=*)
+                key="${line%%=*}"
+                value="${line#*=}"
+                case "$key" in
+                    KIRA_INSTANCE_NAME)
+                        COMPOSE_STATE_KIRA_INSTANCE_NAME="$value"
+                        [ -n "${KIRA_INSTANCE_NAME:-}" ] || KIRA_INSTANCE_NAME="$value"
+                        ;;
+                    POSTGRES_VOLUME_NAME)
+                        COMPOSE_STATE_POSTGRES_VOLUME_NAME="$value"
+                        [ -n "${POSTGRES_VOLUME_NAME:-}" ] || POSTGRES_VOLUME_NAME="$value"
+                        ;;
+                    QDRANT_VOLUME_NAME)
+                        COMPOSE_STATE_QDRANT_VOLUME_NAME="$value"
+                        [ -n "${QDRANT_VOLUME_NAME:-}" ] || QDRANT_VOLUME_NAME="$value"
+                        ;;
+                esac
+                ;;
+        esac
+    done < "$COMPOSE_ENV_FILE"
+    export KIRA_INSTANCE_NAME POSTGRES_VOLUME_NAME QDRANT_VOLUME_NAME
+    export COMPOSE_STATE_KIRA_INSTANCE_NAME COMPOSE_STATE_POSTGRES_VOLUME_NAME COMPOSE_STATE_QDRANT_VOLUME_NAME
 }
 
 load_admin_state_if_present() {
-    if [ -f "$ADMIN_STATE_FILE" ]; then
-        set -a
-        # shellcheck disable=SC1090
-        source "$ADMIN_STATE_FILE"
-        set +a
-    fi
+    load_key_value_file "$ADMIN_STATE_FILE"
+}
+
+load_compose_env_if_present() {
+    [ -f "$COMPOSE_ENV_FILE" ] || return 0
+
+    local line=""
+    local key=""
+    local value=""
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ADMIN_PORT=*|ADMIN_USERNAME=*|ADMIN_PASSWORD=*)
+                key="${line%%=*}"
+                value="${line#*=}"
+                case "$key" in
+                    ADMIN_PORT) ADMIN_PORT="$value" ;;
+                    ADMIN_USERNAME) ADMIN_USERNAME="$value" ;;
+                    ADMIN_PASSWORD) ADMIN_PASSWORD="$value" ;;
+                esac
+                ;;
+        esac
+    done < "$COMPOSE_ENV_FILE"
 }
 
 generate_admin_password() {
-    cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 20 2>/dev/null || openssl rand -hex 10
+    local password=""
+    password="$(openssl rand -hex 10 2>/dev/null || true)"
+    [ -n "$password" ] || return 1
+    printf '%s' "$password"
 }
 
 save_admin_state() {
@@ -64,10 +252,71 @@ ADMIN_PORT=${ADMIN_PORT}
 ADMIN_USERNAME=${ADMIN_USERNAME}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 EOF
+    chmod 600 "$ADMIN_STATE_FILE"
+}
+
+write_instance_storage_config() {
+    local file="$1"
+    local instance_name="$2"
+    local postgres_volume_name="$3"
+    local qdrant_volume_name="$4"
+    local temp_file=""
+
+    validate_volume_name "$postgres_volume_name" || return 1
+    validate_volume_name "$qdrant_volume_name" || return 1
+    instance_name="$(sanitize_instance_name "$instance_name")"
+    temp_file="$(mktemp "${file}.tmp.XXXXXX")" || return 1
+
+    if ! awk \
+        -v instance_name="$instance_name" \
+        -v postgres_volume_name="$postgres_volume_name" \
+        -v qdrant_volume_name="$qdrant_volume_name" '
+        BEGIN { instance_seen = 0; postgres_seen = 0; qdrant_seen = 0 }
+        /^KIRA_INSTANCE_NAME=/ {
+            if (!instance_seen) print "KIRA_INSTANCE_NAME=" instance_name
+            instance_seen = 1
+            next
+        }
+        /^POSTGRES_VOLUME_NAME=/ {
+            if (!postgres_seen) print "POSTGRES_VOLUME_NAME=" postgres_volume_name
+            postgres_seen = 1
+            next
+        }
+        /^QDRANT_VOLUME_NAME=/ {
+            if (!qdrant_seen) print "QDRANT_VOLUME_NAME=" qdrant_volume_name
+            qdrant_seen = 1
+            next
+        }
+        { print }
+        END {
+            if (!instance_seen) print "KIRA_INSTANCE_NAME=" instance_name
+            if (!postgres_seen) print "POSTGRES_VOLUME_NAME=" postgres_volume_name
+            if (!qdrant_seen) print "QDRANT_VOLUME_NAME=" qdrant_volume_name
+        }
+    ' "$file" > "$temp_file"; then
+        rm -f "$temp_file"
+        return 1
+    fi
+
+    chmod 600 "$temp_file" || { rm -f "$temp_file"; return 1; }
+    mv -f "$temp_file" "$file"
 }
 
 write_compose_env() {
-    cat > "$COMPOSE_ENV_FILE" << EOF
+    local temp_file=""
+    KIRA_INSTANCE_NAME="$(resolve_instance_name)"
+    POSTGRES_VOLUME_NAME="$(resolve_postgres_volume_name)" || return 1
+    QDRANT_VOLUME_NAME="$(resolve_qdrant_volume_name)" || return 1
+
+    ensure_working_directory_not_owned_by_other_project || return 1
+    ensure_instance_not_owned_by_other_directory || return 1
+    verify_existing_storage_bindings || return 1
+
+    temp_file="$(mktemp "${COMPOSE_ENV_FILE}.tmp.XXXXXX")" || return 1
+    if ! (umask 077 && cat > "$temp_file" << EOF
+KIRA_INSTANCE_NAME=${KIRA_INSTANCE_NAME}
+POSTGRES_VOLUME_NAME=${POSTGRES_VOLUME_NAME}
+QDRANT_VOLUME_NAME=${QDRANT_VOLUME_NAME}
 DB_HOST=postgres
 DB_PORT=5432
 DB_USER=postgres
@@ -78,13 +327,191 @@ ADMIN_PORT=${ADMIN_PORT}
 ADMIN_USERNAME=${ADMIN_USERNAME}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 EOF
+    ); then
+        rm -f "$temp_file"
+        return 1
+    fi
+    chmod 600 "$temp_file" || { rm -f "$temp_file"; return 1; }
+    mv -f "$temp_file" "$COMPOSE_ENV_FILE"
+}
+
+ensure_working_directory_not_owned_by_other_project() {
+    [ "${#DOCKER_CMD[@]}" -gt 0 ] || return 0
+
+    local current_dir=""
+    local container_id=""
+    local owner_project=""
+    current_dir="$(pwd -P)"
+
+    while IFS= read -r container_id; do
+        [ -n "$container_id" ] || continue
+        owner_project="$(docker_inspect "$container_id" \
+            --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)"
+        if [ -n "$owner_project" ] && [ "$owner_project" != "$KIRA_INSTANCE_NAME" ]; then
+            echo "Ошибка: каталог '$current_dir' уже принадлежит Docker Compose project '$owner_project'." >&2
+            echo "Нельзя переключать его на '$KIRA_INSTANCE_NAME' без явной миграции storage." >&2
+            return 1
+        fi
+    done < <(docker_ps -aq \
+        --filter "label=com.docker.compose.project.working_dir=$current_dir")
+}
+
+ensure_instance_not_owned_by_other_directory() {
+    [ "${#DOCKER_CMD[@]}" -gt 0 ] || return 0
+
+    local current_dir=""
+    local container_id=""
+    local owner_dir=""
+    current_dir="$(pwd -P)"
+
+    while IFS= read -r container_id; do
+        [ -n "$container_id" ] || continue
+        owner_dir="$(docker_inspect "$container_id" \
+            --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' 2>/dev/null || true)"
+        if [ -n "$owner_dir" ] && [ "$owner_dir" != "$current_dir" ]; then
+            echo "Ошибка: Docker Compose project '$KIRA_INSTANCE_NAME' уже принадлежит каталогу '$owner_dir'." >&2
+            echo "Задайте уникальный KIRA_INSTANCE_NAME для каталога '$current_dir'." >&2
+            return 1
+        fi
+    done < <(docker_ps -aq --filter "label=com.docker.compose.project=$KIRA_INSTANCE_NAME")
+}
+
+validate_storage_mount() {
+    local service="$1"
+    local actual_mount="$2"
+    local expected_volume="$3"
+
+    if [ "$actual_mount" != "volume|$expected_volume" ]; then
+        echo "Ошибка: сервис '$service' использует storage '$actual_mount', ожидался volume '$expected_volume'." >&2
+        echo "Deploy остановлен до запуска Compose, чтобы не подключить пустую или чужую базу." >&2
+        return 1
+    fi
+}
+
+verify_storage_service_binding() {
+    local service="$1"
+    local destination="$2"
+    local expected_volume="$3"
+    local container_id=""
+    local actual_mount=""
+
+    while IFS= read -r container_id; do
+        [ -n "$container_id" ] || continue
+        actual_mount="$(docker_inspect "$container_id" \
+            --format "{{range .Mounts}}{{if eq .Destination \"$destination\"}}{{.Type}}|{{.Name}}{{end}}{{end}}" \
+            2>/dev/null || true)"
+        validate_storage_mount "$service" "$actual_mount" "$expected_volume" || return 1
+    done < <(docker_ps -aq \
+        --filter "label=com.docker.compose.project=$KIRA_INSTANCE_NAME" \
+        --filter "label=com.docker.compose.service=$service")
+}
+
+verify_existing_storage_bindings() {
+    [ "${#DOCKER_CMD[@]}" -gt 0 ] || return 0
+
+    local postgres_volume_name=""
+    local qdrant_volume_name=""
+    postgres_volume_name="$(resolve_postgres_volume_name)" || return 1
+    qdrant_volume_name="$(resolve_qdrant_volume_name)" || return 1
+
+    verify_storage_service_binding \
+        "postgres" \
+        "/var/lib/postgresql/data" \
+        "$postgres_volume_name" || return 1
+    verify_storage_service_binding \
+        "qdrant" \
+        "/qdrant/storage" \
+        "$qdrant_volume_name" || return 1
+}
+
+admin_port_is_available_for_instance() {
+    local port="$1"
+    local instance_name=""
+    local container_id=""
+    local owner_project=""
+    local owner_is_running=false
+    instance_name="$(resolve_instance_name)"
+
+    [ "${#DOCKER_CMD[@]}" -gt 0 ] || return 0
+
+    while IFS= read -r container_id; do
+        [ -n "$container_id" ] || continue
+        owner_project="$(docker_inspect "$container_id" \
+            --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)"
+        if [ "$owner_project" != "$instance_name" ]; then
+            return 1
+        fi
+        if [ "$(docker_inspect "$container_id" --format '{{.State.Running}}' 2>/dev/null || true)" = "true" ]; then
+            owner_is_running=true
+        fi
+    # Проверяем и остановленные контейнеры: они не слушают порт сейчас,
+    # но могут занять его при следующем запуске чужого Compose-проекта.
+    done < <(docker_ps -aq --filter "publish=$port")
+
+    # Listener работающего контейнера этого же инстанса ожидаем при redeploy.
+    # Для остановленного контейнера проверяем host отдельно: порт уже мог занять
+    # другой процесс после остановки Docker-контейнера.
+    if [ "$owner_is_running" = true ]; then
+        return 0
+    fi
+
+    if host_port_has_listener "$port"; then
+        return 1
+    fi
+
+    return 0
+}
+
+host_port_has_listener() {
+    local port="$1"
+
+    if command -v ss >/dev/null 2>&1; then
+        ss -H -ltn "sport = :$port" 2>/dev/null | grep -q .
+        return
+    fi
+
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | grep -q .
+        return
+    fi
+
+    if command -v netstat >/dev/null 2>&1; then
+        netstat -an 2>/dev/null | grep -E "[.:]$port[[:space:]].*LISTEN" | grep -q .
+        return
+    fi
+
+    return 1
+}
+
+find_available_admin_port() {
+    local candidate=""
+    local attempt=0
+    while [ "$attempt" -lt 200 ]; do
+        candidate=$(( (RANDOM % 2000) + 7000 ))
+        if admin_port_is_available_for_instance "$candidate"; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+        attempt=$((attempt + 1))
+    done
+
+    return 1
 }
 
 ensure_admin_state() {
+    # Старые установки хранили ADMIN_* только в compose .env. Сначала
+    # импортируем их, чтобы первый redeploy не сменил порт и credentials.
+    load_compose_env_if_present
     load_admin_state_if_present
 
     if [ -z "${ADMIN_PORT:-}" ]; then
-        ADMIN_PORT=$(( (RANDOM % 2000) + 7000 ))
+        ADMIN_PORT="$(find_available_admin_port)"
+    elif ! admin_port_is_available_for_instance "$ADMIN_PORT"; then
+        if [ -f "$ADMIN_STATE_FILE" ]; then
+            echo "Ошибка: ADMIN_PORT=$ADMIN_PORT уже занят другим Docker Compose project." >&2
+            return 1
+        fi
+        ADMIN_PORT="$(find_available_admin_port)"
     fi
 
     if [ -z "${ADMIN_USERNAME:-}" ]; then
@@ -95,6 +522,11 @@ ensure_admin_state() {
         ADMIN_PASSWORD="$(generate_admin_password)"
     fi
 
+    [ -n "$ADMIN_PASSWORD" ] || {
+        echo "Ошибка: не удалось сгенерировать пароль админки." >&2
+        return 1
+    }
+
     save_admin_state
 }
 
@@ -103,9 +535,8 @@ collect_app_services() {
 }
 
 safe_docker_cleanup() {
-    "${DOCKER_CMD[@]}" image prune -af
-    "${DOCKER_CMD[@]}" builder prune -af
-    "${DOCKER_CMD[@]}" container prune -f
+    # Глобальные prune-команды запрещены: на хосте могут жить другие инстансы.
+    compose rm -f 2>/dev/null || true
 }
 
 service_is_running() {

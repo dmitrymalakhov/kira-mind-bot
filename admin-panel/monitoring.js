@@ -275,7 +275,7 @@ function createMonitoringService({
 
   async function checkKiraContainerHealth() {
     const checkedAt = nowIso();
-    const container = await getContainerStatus('kira-mind-bot');
+    const container = await getContainerStatus(env.KIRA_BOT_CONTAINER_NAME || 'kira-mind-bot');
 
     if (container.status === 'running') {
       return buildCheck({

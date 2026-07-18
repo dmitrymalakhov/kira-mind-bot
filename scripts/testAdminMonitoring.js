@@ -145,10 +145,34 @@ async function testSnapshotStatuses() {
   assert.strictEqual(byKey['zai'].status, 'ok');
 }
 
+async function testCustomBotContainerName() {
+  let requestedContainerName = null;
+  const service = createMonitoringService({
+    env: { KIRA_BOT_CONTAINER_NAME: 'kira-wife' },
+    readEnvFile: () => ({}),
+    createDbPool: () => ({ async query() {}, async end() {} }),
+    getContainerStatus: async (name) => {
+      requestedContainerName = name;
+      return {
+        status: 'running',
+        statusLabel: 'online',
+        details: 'Контейнер запущен.',
+        running: true,
+        startedAt: '2026-06-11T10:00:00.000Z',
+      };
+    },
+  });
+
+  const check = await service.checkKiraContainerHealth();
+  assert.strictEqual(requestedContainerName, 'kira-wife');
+  assert.strictEqual(check.status, 'ok');
+}
+
 async function main() {
   await testAggregateOverallStatus();
   await testDisabledChecks();
   await testSnapshotStatuses();
+  await testCustomBotContainerName();
   console.log('testAdminMonitoring: ok');
 }
 

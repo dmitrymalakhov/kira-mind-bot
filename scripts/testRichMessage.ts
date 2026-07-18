@@ -45,11 +45,11 @@ console.log("✓ escAttr() экранирует кавычки");
 
 // ── renderRichHtml: базовые блоки ────────────────────────────
 
-assert.equal(renderRichHtml([paragraph("привет")]), "<p>привет</p>");
-assert.equal(renderRichHtml([heading("Заголовок", 2)]), "<h2>Заголовок</h2>");
-assert.equal(renderRichHtml([heading("Подзаголовок", 4)]), "<h4>Подзаголовок</h4>");
-assert.equal(renderRichHtml([divider()]), "<hr/>");
-assert.equal(renderRichHtml([footer("сноска")]), "<footer>сноска</footer>");
+assert.equal(renderRichHtml([paragraph("привет")]), "привет");
+assert.equal(renderRichHtml([heading("Заголовок", 2)]), "<b>Заголовок</b>");
+assert.equal(renderRichHtml([heading("Подзаголовок", 4)]), "<b>Подзаголовок</b>");
+assert.equal(renderRichHtml([divider()]), "──────────");
+assert.equal(renderRichHtml([footer("сноска")]), "<i>сноска</i>");
 assert.equal(renderRichHtml([code("x = 1")]), "<pre>x = 1</pre>");
 assert.equal(
     renderRichHtml([code("print(1)", "python")]),
@@ -73,15 +73,15 @@ console.log("✓ renderRichHtml рендерит blockquote с credit");
 
 assert.equal(
     renderRichHtml([list(["раз", "два"], false)]),
-    "<ul><li>раз</li><li>два</li></ul>",
+    "• раз<br/>• два",
 );
 assert.equal(
     renderRichHtml([list(["раз", "два"], true)]),
-    "<ol><li>раз</li><li>два</li></ol>",
+    "1. раз<br/>2. два",
 );
 assert.equal(
     renderRichHtml([checklist([{ text: "done", checked: true }, { text: "todo" }])]),
-    "<ul><li><input type=\"checkbox\" checked>done</li><li><input type=\"checkbox\">todo</li></ul>",
+    "[x] done<br/>[ ] todo",
 );
 console.log("✓ renderRichHtml рендерит списки и чек-листы");
 
@@ -103,14 +103,11 @@ console.log("✓ renderRichHtml рендерит caption таблицы");
 // ── renderRichHtml: details ──────────────────────────────────
 
 const detailsRich = renderRichHtml([details("сводка", [paragraph("тело")])]);
-assert.ok(detailsRich.startsWith("<details>"), `ожидался <details>, got: ${detailsRich}`);
-assert.ok(detailsRich.includes("<summary>сводка</summary>"));
-assert.ok(detailsRich.includes("<p>тело</p>"));
-assert.ok(!detailsRich.includes(" open"), "без open по умолчанию");
+assert.equal(detailsRich, "<b>сводка</b><br/>тело");
 
 const detailsOpen = renderRichHtml([details("сводка", [paragraph("тело")], { open: true })]);
-assert.ok(detailsOpen.startsWith("<details open>"));
-console.log("✓ renderRichHtml рендерит details с open-флагом");
+assert.equal(detailsOpen, detailsRich, "компактный renderer не добавляет сворачиваемый контейнер");
+console.log("✓ renderRichHtml компактно рендерит details");
 
 // ── renderFallbackHtml: эмуляция таблицы через <pre> ──────────
 

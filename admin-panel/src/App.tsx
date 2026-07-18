@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Box, CircularProgress } from '@mui/material';
 import { LoginPage } from './pages/LoginPage';
 import { Dashboard } from './components/Dashboard';
-import { fetchConfig } from './api';
+import { AUTH_REQUIRED_EVENT, fetchConfig } from './api';
 import type { ConfigResponse } from './types';
 
 type AuthState = 'loading' | 'unauthenticated' | 'authenticated';
@@ -12,12 +12,20 @@ export default function App() {
   const [config, setConfig] = useState<ConfigResponse>({});
 
   useEffect(() => {
+    const handleAuthRequired = () => {
+      setConfig({});
+      setAuth('unauthenticated');
+    };
+
+    window.addEventListener(AUTH_REQUIRED_EVENT, handleAuthRequired);
     fetchConfig()
       .then((cfg) => {
         setConfig(cfg);
         setAuth('authenticated');
       })
       .catch(() => setAuth('unauthenticated'));
+
+    return () => window.removeEventListener(AUTH_REQUIRED_EVENT, handleAuthRequired);
   }, []);
 
   const handleLogin = (cfg: ConfigResponse) => {

@@ -22,6 +22,7 @@ import { initTelegramClient, sendMessage as sendTelegramMessage } from "../servi
 import { getMessagesSummary, handleChatAnalysisPeriodCallback, handleStudyChatPeriodCallback } from "../agents/readMessagesAgent";
 import { sendMessage } from "../utils";
 import { editStructured } from "../utils/richMessage";
+import { editMessageTextIfChanged, editReplyMarkupIfChanged, runNonCriticalTelegramEdit } from "../utils/telegramMessageEdit";
 import type { StudyChatPeriod } from "../utils/studyChatFlow";
 import { handleContactMemoryCallback } from "../utils/contactMemory";
 import { handleContactMemoryLookupCallback } from "../utils/contactMemoryLookup";
@@ -276,22 +277,18 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 if (!selection) {
                     await ctx.answerCallbackQuery({ text: "Этот вариант уже недоступен." });
                     if (ctx.callbackQuery.message?.message_id && ctx.callbackQuery.message?.chat?.id) {
-                        await ctx.api.editMessageReplyMarkup(
-                            ctx.callbackQuery.message.chat.id,
-                            ctx.callbackQuery.message.message_id,
-                            { reply_markup: new InlineKeyboard() }
-                        ).catch(() => {});
+                        await runNonCriticalTelegramEdit("expired quick choice keyboard update", () =>
+                            editReplyMarkupIfChanged(ctx.api, ctx.callbackQuery.message!, new InlineKeyboard())
+                        );
                     }
                     return;
                 }
 
                 await ctx.answerCallbackQuery({ text: "Выбрано" });
                 if (ctx.callbackQuery.message?.message_id && ctx.callbackQuery.message?.chat?.id) {
-                    await ctx.api.editMessageReplyMarkup(
-                        ctx.callbackQuery.message.chat.id,
-                        ctx.callbackQuery.message.message_id,
-                        { reply_markup: new InlineKeyboard() }
-                    ).catch(() => {});
+                    await runNonCriticalTelegramEdit("quick choice keyboard update", () =>
+                        editReplyMarkupIfChanged(ctx.api, ctx.callbackQuery.message!, new InlineKeyboard())
+                    );
                 }
 
                 await sendChoiceReceipt(ctx, selection.choice.label);
@@ -331,22 +328,18 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 if (!pending || !choice || pending.sessionId !== sessionId || Date.now() > pending.expiresAt) {
                     await ctx.answerCallbackQuery({ text: "Этот выбор уже недоступен." });
                     if (ctx.callbackQuery.message?.message_id && ctx.callbackQuery.message?.chat?.id) {
-                        await ctx.api.editMessageReplyMarkup(
-                            ctx.callbackQuery.message.chat.id,
-                            ctx.callbackQuery.message.message_id,
-                            { reply_markup: new InlineKeyboard() }
-                        ).catch(() => {});
+                        await runNonCriticalTelegramEdit("expired browser choice keyboard update", () =>
+                            editReplyMarkupIfChanged(ctx.api, ctx.callbackQuery.message!, new InlineKeyboard())
+                        );
                     }
                     return;
                 }
 
                 await ctx.answerCallbackQuery({ text: "Выбрано" });
                 if (ctx.callbackQuery.message?.message_id && ctx.callbackQuery.message?.chat?.id) {
-                    await ctx.api.editMessageReplyMarkup(
-                        ctx.callbackQuery.message.chat.id,
-                        ctx.callbackQuery.message.message_id,
-                        { reply_markup: new InlineKeyboard() }
-                    ).catch(() => {});
+                    await runNonCriticalTelegramEdit("browser choice keyboard update", () =>
+                        editReplyMarkupIfChanged(ctx.api, ctx.callbackQuery.message!, new InlineKeyboard())
+                    );
                 }
 
                 await sendChoiceReceipt(ctx, choice.label || choice.answer);
@@ -384,11 +377,9 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 ctx.session.pendingBrowserTask = undefined;
                 await ctx.answerCallbackQuery({ text: "Браузерная задача отменена" });
                 if (ctx.callbackQuery.message?.message_id && ctx.callbackQuery.message?.chat?.id) {
-                    await ctx.api.editMessageReplyMarkup(
-                        ctx.callbackQuery.message.chat.id,
-                        ctx.callbackQuery.message.message_id,
-                        { reply_markup: new InlineKeyboard() }
-                    ).catch(() => {});
+                    await runNonCriticalTelegramEdit("browser cancellation keyboard update", () =>
+                        editReplyMarkupIfChanged(ctx.api, ctx.callbackQuery.message!, new InlineKeyboard())
+                    );
                 }
                 await sendChoiceReceipt(ctx, "Отменить браузерную задачу");
                 return;
@@ -438,11 +429,11 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 NegotiationStore.set(session);
                 const summaryText = buildNegotiationSummaryText(session);
                 const keyboard = buildNegotiationStopKeyboard();
-                try {
-                    await ctx.api.editMessageText(chatId, messageId, summaryText, {
+                await runNonCriticalTelegramEdit("negotiation start summary update", () =>
+                    editMessageTextIfChanged(ctx.api, chatId, messageId, summaryText, {
                         reply_markup: keyboard,
-                    });
-                } catch (_) {}
+                    })
+                );
                 await ctx.answerCallbackQuery({ text: "Переговоры начаты" });
                 return;
             }
@@ -466,16 +457,16 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 NegotiationStore.delete(originalChatId, contactId);
                 await ctx.answerCallbackQuery({ text: "Переговоры завершены" });
                 if (summaryChatId != null && summaryMessageId != null) {
-                    try {
-                        await ctx.api.editMessageText(
+                    await runNonCriticalTelegramEdit("negotiation stop summary update", () =>
+                        editMessageTextIfChanged(ctx.api,
                             summaryChatId,
                             summaryMessageId,
-                            `📩 Переговоры с ${contactName} завершены по твоей инициативе.`
-                        );
-                        await ctx.api.editMessageReplyMarkup(summaryChatId, summaryMessageId, {
-                            reply_markup: new InlineKeyboard(),
-                        });
-                    } catch (_) {}
+                            `📩 Переговоры с ${contactName} завершены по твоей инициативе.`,
+                            {
+                                reply_markup: new InlineKeyboard(),
+                            }
+                        )
+                    );
                 }
                 await scheduleNegotiationAgreementReminders(ctx, bot, sessionSnapshot);
                 return;
@@ -488,7 +479,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 const chats = ReminderRegistry.getInstance().getChatsWithActive();
                 if (ctx.callbackQuery.message?.message_id) {
                     if (chats.length === 0) {
-                        await ctx.api.editMessageText(
+                        await editMessageTextIfChanged(ctx.api,
                             ctx.callbackQuery.message.chat.id,
                             ctx.callbackQuery.message.message_id,
                             '✅ Все напоминания выполнены!',
@@ -531,7 +522,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 await ctx.answerCallbackQuery();
                 if (ctx.callbackQuery.message?.message_id) {
                     if (active.length === 0) {
-                        await ctx.api.editMessageText(
+                        await editMessageTextIfChanged(ctx.api,
                             ctx.callbackQuery.message.chat.id,
                             ctx.callbackQuery.message.message_id,
                             '✅ Нет активных напоминаний в этом чате.',
@@ -563,7 +554,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 await ctx.answerCallbackQuery();
                 if (ctx.callbackQuery.message?.message_id) {
                     if (active.length === 0) {
-                        await ctx.api.editMessageText(
+                        await editMessageTextIfChanged(ctx.api,
                             ctx.callbackQuery.message.chat.id,
                             ctx.callbackQuery.message.message_id,
                             '✅ Все напоминания выполнены!',
@@ -594,7 +585,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     if (ctx.callbackQuery.message?.message_id) {
                         const cid = ctx.callbackQuery.message.chat.id;
                         const mid = ctx.callbackQuery.message.message_id;
-                        await ctx.api.editMessageText(cid, mid, '✅ Все напоминания выполнены!',
+                        await editMessageTextIfChanged(ctx.api, cid, mid, '✅ Все напоминания выполнены!',
                             { reply_markup: showBack ? new InlineKeyboard().text('↩️ К чатам', 'reminder_chat_back') : new InlineKeyboard() }
                         );
                     }
@@ -641,11 +632,14 @@ export function registerCallback(bot: Bot<BotContext>): void {
                             message.reply_markup?.inline_keyboard,
                             reminderId
                         );
-                        await ctx.api.editMessageReplyMarkup(
-                            message.chat.id,
-                            message.message_id,
-                            { reply_markup: { inline_keyboard: remainingKeyboard } }
-                        ).catch(() => {});
+                        await runNonCriticalTelegramEdit(
+                            "expired target notification keyboard update",
+                            () => editReplyMarkupIfChanged(
+                                ctx.api,
+                                message,
+                                { inline_keyboard: remainingKeyboard },
+                            ),
+                        );
                     }
                     return;
                 }
@@ -678,26 +672,18 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     const replyMarkup = { inline_keyboard: remainingKeyboard };
                     const currentText = "text" in message ? message.text : undefined;
 
-                    if (currentText) {
-                        await ctx.api.editMessageText(
-                            message.chat.id,
-                            message.message_id,
-                            `${currentText}\n\n${statusText}`,
-                            { reply_markup: replyMarkup }
-                        ).catch(async () => {
-                            await ctx.api.editMessageReplyMarkup(
-                                message.chat.id,
-                                message.message_id,
-                                { reply_markup: replyMarkup }
-                            ).catch(() => {});
-                        });
-                    } else {
-                        await ctx.api.editMessageReplyMarkup(
-                            message.chat.id,
-                            message.message_id,
-                            { reply_markup: replyMarkup }
-                        ).catch(() => {});
-                    }
+                    await runNonCriticalTelegramEdit("target notification choice message update", () =>
+                        currentText
+                            ? editMessageTextIfChanged(
+                                ctx.api,
+                                    message.chat.id,
+                                    message.message_id,
+                                    `${currentText}\n\n${statusText}`,
+                                    { reply_markup: replyMarkup },
+                                    message.reply_markup,
+                                )
+                            : editReplyMarkupIfChanged(ctx.api, message, replyMarkup)
+                    );
                 }
                 return;
             }
@@ -736,7 +722,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         // Кнопка нажата на карточке из /reminders — обновляем карточку
                         const remaining = getActiveReminders(ctx);
                         if (remaining.length === 0) {
-                            await ctx.api.editMessageText(cid, mid, '✅ Все напоминания выполнены!',
+                            await editMessageTextIfChanged(ctx.api, cid, mid, '✅ Все напоминания выполнены!',
                                 { reply_markup: showBack ? new InlineKeyboard().text('↩️ К чатам', 'reminder_chat_back') : new InlineKeyboard() }
                             );
                         } else {
@@ -746,7 +732,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         }
                     } else {
                         // Кнопка нажата на самом уведомлении — заменяем его текстом об отмене
-                        await ctx.api.editMessageText(cid, mid, `❌ Отменено: ${reminderDisplayText}`,
+                        await editMessageTextIfChanged(ctx.api, cid, mid, `❌ Отменено: ${reminderDisplayText}`,
                             { reply_markup: new InlineKeyboard() }
                         );
                     }
@@ -767,26 +753,26 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 const callbackChatId = ctx.callbackQuery.message?.chat.id;
                 const callbackMessageId = ctx.callbackQuery.message?.message_id;
                 if (callbackChatId && callbackMessageId) {
-                    await ctx.api.editMessageText(
+                    await editMessageTextIfChanged(ctx.api,
                         callbackChatId,
                         callbackMessageId,
                         "Период выбран. Начинаю анализ и пришлю результат здесь…",
                         { reply_markup: new InlineKeyboard() }
-                    ).catch(() => {});
+                    ).catch((error) => console.error("[telegram-edit] chat analysis progress update failed:", error));
                 }
 
                 const result = await handleChatAnalysisPeriodCallback(ctx, period, requestId);
                 const replyOptions = result.keyboard ? { reply_markup: result.keyboard } : { reply_markup: new InlineKeyboard() };
                 if (result.voiceReplyRequested) {
                     if (callbackChatId && callbackMessageId) {
-                        await ctx.api.editMessageText(
+                        await editMessageTextIfChanged(ctx.api,
                             callbackChatId,
                             callbackMessageId,
                             result.keyboard
                                 ? "Готово. Голосовая сводка ниже. Этот набор чатов можно сохранить кнопкой."
                                 : "Готово. Голосовая сводка ниже.",
                             replyOptions
-                        ).catch(() => {});
+                        ).catch((error) => console.error("[telegram-edit] chat analysis voice summary update failed:", error));
                     }
 
                     const voiceReadinessIssue = await getTelegramVoiceReadinessIssue(result.responseText);
@@ -806,22 +792,23 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 }
 
                 if (callbackChatId && callbackMessageId && result.responseText.length <= MAX_MESSAGE_LENGTH) {
-                    await ctx.api.editMessageText(
+                    await editMessageTextIfChanged(ctx.api,
                         callbackChatId,
                         callbackMessageId,
                         result.responseText,
                         replyOptions
-                    ).catch(async () => {
+                    ).catch(async (error) => {
+                        console.error("[telegram-edit] chat analysis result update failed, sending separately:", error);
                         await sendMessage(ctx, result.responseText, result.keyboard ? { reply_markup: result.keyboard } : {});
                     });
                 } else {
                     if (callbackChatId && callbackMessageId) {
-                        await ctx.api.editMessageText(
+                        await editMessageTextIfChanged(ctx.api,
                             callbackChatId,
                             callbackMessageId,
                             "Готово. Результат отправляю отдельными сообщениями.",
                             { reply_markup: new InlineKeyboard() }
-                        ).catch(() => {});
+                        ).catch((error) => console.error("[telegram-edit] chat analysis fallback notice update failed:", error));
                     }
                     await sendMessage(ctx, result.responseText, result.keyboard ? { reply_markup: result.keyboard } : {});
                 }
@@ -841,32 +828,33 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 const callbackChatId = ctx.callbackQuery.message?.chat.id;
                 const callbackMessageId = ctx.callbackQuery.message?.message_id;
                 if (callbackChatId && callbackMessageId) {
-                    await ctx.api.editMessageText(
+                    await editMessageTextIfChanged(ctx.api,
                         callbackChatId,
                         callbackMessageId,
                         "Период выбран. Начинаю анализ и буду писать этапы отдельными сообщениями…",
                         { reply_markup: new InlineKeyboard() }
-                    ).catch(() => {});
+                    ).catch((error) => console.error("[telegram-edit] study chat progress update failed:", error));
                 }
 
                 const { responseText } = await handleStudyChatPeriodCallback(ctx, period, requestId);
                 if (callbackChatId && callbackMessageId && responseText.length <= MAX_MESSAGE_LENGTH) {
-                    await ctx.api.editMessageText(
+                    await editMessageTextIfChanged(ctx.api,
                         callbackChatId,
                         callbackMessageId,
                         responseText,
                         { reply_markup: new InlineKeyboard() }
-                    ).catch(async () => {
+                    ).catch(async (error) => {
+                        console.error("[telegram-edit] study chat result update failed, sending separately:", error);
                         await sendMessage(ctx, responseText);
                     });
                 } else {
                     if (callbackChatId && callbackMessageId) {
-                        await ctx.api.editMessageText(
+                        await editMessageTextIfChanged(ctx.api,
                             callbackChatId,
                             callbackMessageId,
                             "Готово. Результат отправляю отдельными сообщениями.",
                             { reply_markup: new InlineKeyboard() }
-                        ).catch(() => {});
+                        ).catch((error) => console.error("[telegram-edit] study chat fallback notice update failed:", error));
                     }
                     await sendMessage(ctx, responseText);
                 }
@@ -911,7 +899,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         const remaining = getActiveReminders(ctx);
                         const cid = ctx.callbackQuery.message!.chat.id;
                         if (remaining.length === 0) {
-                            await ctx.api.editMessageText(cid, callbackMid, '✅ Все напоминания выполнены!',
+                            await editMessageTextIfChanged(ctx.api, cid, callbackMid, '✅ Все напоминания выполнены!',
                                 { reply_markup: showBack ? new InlineKeyboard().text('↩️ К чатам', 'reminder_chat_back') : new InlineKeyboard() }
                             );
                         } else {
@@ -923,10 +911,10 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 } else if (action === "postpone") {
                     await ctx.answerCallbackQuery();
                     if (ctx.callbackQuery.message?.message_id) {
-                        await ctx.api.editMessageReplyMarkup(
-                            ctx.callbackQuery.message.chat.id,
-                            ctx.callbackQuery.message.message_id,
-                            { reply_markup: buildPostponeKeyboard(reminderId) }
+                        await editReplyMarkupIfChanged(
+                            ctx.api,
+                            ctx.callbackQuery.message,
+                            buildPostponeKeyboard(reminderId),
                         );
                     }
                 } else if (action === "edit") {
@@ -984,7 +972,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     await ctx.answerCallbackQuery();
                     if (ctx.callbackQuery.message?.message_id) {
                         if (active.length === 0) {
-                            await ctx.api.editMessageText(
+                            await editMessageTextIfChanged(ctx.api,
                                 ctx.callbackQuery.message.chat.id,
                                 ctx.callbackQuery.message.message_id,
                                 '✅ Все напоминания выполнены!',
@@ -1069,7 +1057,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         const returnIndex = Math.max(0, activeAfterPostpone.findIndex((r) => r.id === reminderId));
                         const backKeyboard = new InlineKeyboard().text('📋 К списку напоминаний', `reminders_nav_${returnIndex}`);
                         if (showBackAfterPostpone) backKeyboard.row().text('↩️ К чатам', 'reminder_chat_back');
-                        await ctx.api.editMessageText(chatId, messageId, confirmText, { reply_markup: backKeyboard });
+                        await editMessageTextIfChanged(ctx.api, chatId, messageId, confirmText, { reply_markup: backKeyboard });
                     }
                 } else {
                     await ctx.answerCallbackQuery({ text: "Произошла ошибка при откладывании напоминания" });
@@ -1204,9 +1192,13 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     });
 
                     // Обновляем сообщение с черновиком
-                    await ctx.editMessageText(responseText, {
-                        reply_markup: confirmKeyboard
-                    });
+                    await editMessageTextIfChanged(
+                        ctx.api,
+                        ctx.chat.id,
+                        ctx.callbackQuery.message!.message_id,
+                        responseText,
+                        { reply_markup: confirmKeyboard },
+                    );
                 }
             } else if (callbackData === "unread_summary") {
                 await ctx.answerCallbackQuery();
@@ -1316,9 +1308,13 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         `${notifyIndicator}\n\n` +
                         `Подтверди отправку или внеси изменения:`;
 
-                    await ctx.editMessageText(responseText, {
-                        reply_markup: confirmKeyboard
-                    });
+                    await editMessageTextIfChanged(
+                        ctx.api,
+                        ctx.chat.id,
+                        ctx.callbackQuery.message!.message_id,
+                        responseText,
+                        { reply_markup: confirmKeyboard },
+                    );
                 }
             } else if (callbackData === 'implicit_reminder_yes') {
                 const pending = ctx.session.pendingImplicitReminder;

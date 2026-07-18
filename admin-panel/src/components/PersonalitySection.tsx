@@ -5,6 +5,7 @@ import {
   CardContent,
   CardHeader,
   TextField,
+  MenuItem,
   Button,
   CircularProgress,
   Grid,
@@ -18,6 +19,7 @@ import type { PersonalityConfig, PersonalityProfile } from '../types';
 
 const EMPTY_PROFILE: PersonalityProfile = {
   characterName: '',
+  characterGender: 'женский',
   persona: '',
   communicationStyle: '',
   biography: '',
@@ -67,12 +69,26 @@ function ProfileEditor({ icon, title, values, onChange, onSave, saving }: Profil
         <Grid container spacing={2}>
           <Grid item xs={12} sm={3}>
             <TextField
+              select
+              label="Род персонажа"
+              value={values.characterGender}
+              onChange={(e) => onChange('characterGender', e.target.value)}
+              fullWidth
+              helperText="Используется для согласования ответов, self-memory и событий"
+              FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px' } }}
+            >
+              <MenuItem value="женский">Женский</MenuItem>
+              <MenuItem value="мужской">Мужской</MenuItem>
+            </TextField>
+          </Grid>
+          <Grid item xs={12} sm={3}>
+            <TextField
               label="Имя ассистента"
               value={values.characterName}
               onChange={(e) => onChange('characterName', e.target.value)}
               fullWidth
               placeholder="например, Эни"
-              helperText="Имя ассистента задаётся вручную. Если оставить пустым, используется «ассистентка»."
+              helperText="Имя персонажа задаётся вручную. Если оставить пустым, используется имя по умолчанию."
               FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px' } }}
             />
           </Grid>
@@ -275,7 +291,7 @@ export function PersonalitySection({ onToast }: Props) {
 
       <ProfileEditor
         icon="🌸"
-        title="Kira — Личность и характер"
+        title={`${data.KiraMindBot.characterName.trim() || 'Персонаж'} — Личность и характер`}
         values={data.KiraMindBot}
         onChange={(key, value) => handleChange('KiraMindBot', key, value)}
         onSave={handleSave}

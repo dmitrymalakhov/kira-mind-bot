@@ -21,6 +21,7 @@ import { reconsolidateAfterResponse } from "../services/MemoryReconsolidationSer
 import { looksLikeBrowserTaskCancellation } from "../utils/browserTaskCancellation";
 import { applyReminderEditInput, extractReminderPostponeDate } from "../utils/reminderEditor";
 import { stripVoiceReplyDirective, wantsVoiceReply } from "../utils/voiceReply";
+import { editMessageTextIfChanged } from "../utils/telegramMessageEdit";
 import { normalizeNumbersForVoiceMessage } from "../utils/russianSpeechNumbers";
 import { syncReminderMemoryMutation } from "../services/ReminderMemorySync";
 import {
@@ -310,12 +311,12 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
                     const { summaryChatId, summaryMessageId, contactName } = negotiationSession;
                     NegotiationStore.delete(negotiationSession.originalChatId, negotiationSession.contactId);
                     if (summaryChatId != null && summaryMessageId != null) {
-                        await ctx.api.editMessageText(
+                        await editMessageTextIfChanged(ctx.api,
                             summaryChatId,
                             summaryMessageId,
                             `📩 Переговоры с ${contactName} отменены.`,
                             { reply_markup: { inline_keyboard: [] } }
-                        ).catch(() => {});
+                        ).catch((error) => console.error("[telegram-edit] negotiation cancellation summary update failed:", error));
                     }
                     await replyAndStore(ctx, "Переговоры отменены.");
                     return;
@@ -337,7 +338,7 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
                                 negotiationSession.summaryMessageId,
                                 summaryText,
                                 buildNegotiationStopKeyboard()
-                            ).catch(() => {});
+                            ).catch((error) => console.error("[telegram-edit] negotiation summary update failed:", error));
                         }
                         await replyAndStore(ctx, "Отправлено.");
                     } else {

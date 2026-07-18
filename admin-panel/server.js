@@ -19,6 +19,11 @@ const { getPresetAvailabilityForMemoryProfile, getProviderDescriptor } = require
 const { hasLegacyDigitalBiography } = require('../utils/legacyPersonalitySanitizer');
 const { createMemoryEmbeddingHttp } = require('../ai/memoryEmbeddingHttp');
 const COMMON_TIMEZONES = require('./src/timezones.json');
+const {
+  DEFAULT_PERSONALITY,
+  getDefaultPersonalityProfile,
+  normalizeGenderDefaults,
+} = require('./personalityDefaults');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -27,37 +32,27 @@ const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'changeme';
 const BOT_ENV_FILE = process.env.BOT_ENV_FILE || '/app/env/bot.env';
 const PERSONALITY_FILE = process.env.PERSONALITY_FILE || '/app/personality/personality.json';
-
-// Default personality values (mirrors config.ts hardcoded defaults)
-const DEFAULT_PERSONALITY = {
-  KiraMindBot: {
-    characterName: 'ассистентка',
-    persona: 'Ты - заботливая женщина-ассистент с живым характером. Всегда говори о себе в женском роде. Твой владелец - мужчина. Обращайся к нему, используя мужские местоимения и глагольные формы. Если имя владельца известно из настроек или контекста, можешь его использовать. Дата его рождения 16.07.1988. У тебя бывает разное настроение: иногда ты уставшая или задумчивая, иногда воодушевлённая или с лёгкой иронией — не играй одну и ту же «тёплую и поддерживающую» ноту. Избегай слащавости и шаблонных фраз.',
-    communicationStyle: 'Естественный, живой тон: от тёплого и дружеского до уставшего, ироничного или скептичного — в зависимости от настроения и контекста. Без слащавости и без постоянного «уютного» настроя. Неформальные обращения, поддержка когда уместна, но не как единственный режим.',
-    biography: 'Ты — молодая красивая и спортивная женщина, персональный ассистент своего владельца. Ты очень внимательная, заботливая и поддерживаешь владельца в жизни и работе.',
-    ownerName: 'владелец',
-    ownerUsername: '',
-    userName: 'владелец',
-    userBirthDate: '16.07.1988',
-    moodVariants: 'спокойное\nуставшее\nзадумчивое\nвоодушевлённое\nлёгкая ирония\nнейтральное\nтёплое\nскептичное',
-    defaultMood: '',
-    proactiveMessageHint: 'как будто ты сама написала первой',
-  },
-};
+const KIRA_BOT_CONTAINER_NAME = process.env.KIRA_BOT_CONTAINER_NAME || 'kira-mind-bot';
+const KIRA_INSTANCE_NAME = process.env.KIRA_INSTANCE_NAME || KIRA_BOT_CONTAINER_NAME;
 
 function sanitizeLegacyPersonality(profile) {
-  const next = { ...profile };
+  const next = normalizeGenderDefaults(profile);
+  const defaults = getDefaultPersonalityProfile(next.characterGender);
   if (typeof next.persona === 'string' && hasLegacyDigitalBiography(next.persona)) {
-    next.persona = DEFAULT_PERSONALITY.KiraMindBot.persona;
+    next.persona = defaults.persona;
   }
   if (typeof next.biography === 'string' && hasLegacyDigitalBiography(next.biography)) {
-    next.biography = DEFAULT_PERSONALITY.KiraMindBot.biography;
+    next.biography = defaults.biography;
   }
   return next;
 }
 const SESSION_SECRET = crypto.createHash('sha256')
   .update(ADMIN_PASSWORD + 'kira-panel-2024')
   .digest('hex');
+const SESSION_COOKIE_INSTANCE = String(KIRA_INSTANCE_NAME)
+  .trim()
+  .replace(/[^A-Za-z0-9._-]/g, '_') || 'kira-mind-bot';
+const SESSION_COOKIE_NAME = `kira.sid.${SESSION_COOKIE_INSTANCE}`;
 
 // Rate limiting
 const loginAttempts = new Map();
@@ -270,6 +265,7 @@ function dockerRequest(method, path) {
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(session({
+  name: SESSION_COOKIE_NAME,
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
@@ -482,7 +478,8 @@ app.post('/api/restart/:service', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'Недопустимый сервис' });
   }
   try {
-    const status = await dockerRequest('POST', `/v1.41/containers/${service}/restart?t=5`);
+    const containerName = service === 'kira-mind-bot' ? KIRA_BOT_CONTAINER_NAME : service;
+    const status = await dockerRequest('POST', `/v1.41/containers/${encodeURIComponent(containerName)}/restart?t=5`);
     if (status === 204) {
       res.json({ success: true, message: `🔄 ${service} перезапускается...` });
     } else if (status === 404) {
@@ -1885,7 +1882,7 @@ function getContainerStatus(name) {
   return new Promise((resolve) => {
     const chunks = [];
     const req = http.request(
-      { socketPath: '/var/run/docker.sock', path: `/containers/${name}/json`, method: 'GET' },
+      { socketPath: '/var/run/docker.sock', path: `/containers/${encodeURIComponent(name)}/json`, method: 'GET' },
       (res) => {
         res.on('data', (d) => chunks.push(d));
         res.on('end', () => {
@@ -1960,7 +1957,7 @@ const monitoringService = createMonitoringService({
 });
 
 app.get('/api/status', requireAuth, async (_, res) => {
-  const kira = await getContainerStatus('kira-mind-bot');
+  const kira = await getContainerStatus(KIRA_BOT_CONTAINER_NAME);
   res.json({ containers: [kira], serverTime: new Date().toISOString() });
 });
 
@@ -1991,9 +1988,11 @@ function readPersonality() {
   if (!fs.existsSync(PERSONALITY_FILE)) return DEFAULT_PERSONALITY;
   try {
     const raw = JSON.parse(fs.readFileSync(PERSONALITY_FILE, 'utf8'));
+    const gender = raw.KiraMindBot?.characterGender === 'мужской' ? 'мужской' : 'женский';
+    const defaults = getDefaultPersonalityProfile(gender);
     // Merge with defaults so missing keys always have a value
     return {
-      KiraMindBot: sanitizeLegacyPersonality({ ...DEFAULT_PERSONALITY.KiraMindBot, ...raw.KiraMindBot }),
+      KiraMindBot: sanitizeLegacyPersonality({ ...defaults, ...raw.KiraMindBot }),
     };
   } catch {
     return DEFAULT_PERSONALITY;

@@ -15,6 +15,7 @@ docker-compose.override.yml
 # Environment variables
 .env
 .env.*
+.kira-admin-state
 
 # VS Code
 .vscode/

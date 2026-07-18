@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Box, Chip, Tooltip, Typography, CircularProgress } from '@mui/material';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
+import { apiFetch } from '../api';
 
 interface ContainerInfo {
   name: string;
@@ -71,8 +72,15 @@ export function StatusBar() {
   const [loading, setLoading] = useState(true);
 
   const load = () =>
-    fetch('/api/status')
-      .then((r) => r.json())
+    apiFetch('/api/status')
+      .then((r) => {
+        if (!r.ok) throw new Error(`Status request failed: ${r.status}`);
+        return r.json();
+      })
+      .then((payload: StatusResponse) => {
+        if (!Array.isArray(payload.containers)) throw new Error('Invalid status response');
+        return payload;
+      })
       .then(setData)
       .catch(() => {})
       .finally(() => setLoading(false));
