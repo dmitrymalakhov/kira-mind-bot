@@ -106,13 +106,7 @@ export interface SessionData {
     /** Unix-timestamp последней проактивной подсказки из памяти (для cooldown) */
     lastProactiveHintAt?: number;
     /** Последняя проактивная подсказка и факты памяти, на которых она была основана */
-    lastProactiveInsight?: {
-        message: string;
-        sourceMemories: string[];
-        createdAt: number;
-        messageId?: number;
-        kind: 'memoryInsight' | 'contextHint';
-    };
+    lastProactiveInsight?: ProactiveInsightContext;
     /** Unix-timestamp последнего вопроса о пробеле в памяти (для cooldown) */
     lastMemoryGapAt?: number;
     /** Контекст вопроса о неизвестном человеке; связывает только следующий ответ. */
@@ -351,6 +345,16 @@ export interface MessageHistory {
     timestamp: Date;
 }
 
+export interface ProactiveInsightContext {
+    message: string;
+    sourceMemories: string[];
+    createdAt: number;
+    messageId?: number;
+    kind: 'memoryInsight' | 'contextHint' | 'kiraLife';
+    /** Отличает отправленную генерацию от безопасного резервного текста Kira Life. */
+    generationOutcome?: 'generated' | 'fallback';
+}
+
 export interface SentMessageContext {
     messageId: number;
     text: string;
@@ -361,6 +365,8 @@ export interface SentMessageContext {
     contactName?: string;
     personId?: string;
     memoryIds?: string[];
+    /** Provenance конкретного proactive-сообщения; не перезаписывается следующим insight. */
+    proactiveInsight?: ProactiveInsightContext;
     createdAt: number;
 }
 
@@ -374,6 +380,7 @@ export interface ConversationReplyContext {
     contactName?: string;
     personId?: string;
     memoryIds?: string[];
+    proactiveInsight?: ProactiveInsightContext;
 }
 
 export interface ConversationTurn {

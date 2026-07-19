@@ -596,6 +596,7 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
                             contactName: proactiveCandidate.contactName,
                             personId: proactiveCandidate.personId,
                             memoryIds: proactiveCandidate.sourceMemoryIds,
+                            proactiveInsight: ctx.session.lastProactiveInsight,
                         });
                     }
 

@@ -656,30 +656,45 @@ export async function appendPersistedHistory(
 
 export async function saveProactiveInsight(
     chatId: number,
-    insight: NonNullable<SessionData['lastProactiveInsight']>
+    insight: NonNullable<SessionData['lastProactiveInsight']>,
+    options: { touchMemoryHintCooldown?: boolean } = {},
 ): Promise<void> {
     try {
         const repo = AppDataSource.getRepository(SessionEntity);
         const key = scopedBotKey(chatId);
         const rawQuery = repositoryRawQuery(repo);
         const now = Date.now();
+        const touchMemoryHintCooldown = options.touchMemoryHintCooldown !== false;
         if (rawQuery) {
             await ensureSessionRow(rawQuery, key);
-            await rawQuery(`
-                UPDATE bot_sessions
-                SET data = jsonb_set(
-                    jsonb_set(
-                        ${NORMALIZED_SESSION_DATA_SQL},
-                        '{lastProactiveHintAt}',
-                        to_jsonb($2::bigint),
+            if (touchMemoryHintCooldown) {
+                await rawQuery(`
+                    UPDATE bot_sessions
+                    SET data = jsonb_set(
+                        jsonb_set(
+                            ${NORMALIZED_SESSION_DATA_SQL},
+                            '{lastProactiveHintAt}',
+                            to_jsonb($2::bigint),
+                            true
+                        ),
+                        '{lastProactiveInsight}',
+                        $3::jsonb,
                         true
-                    ),
-                    '{lastProactiveInsight}',
-                    $3::jsonb,
-                    true
-                )
-                WHERE key = $1
-            `, [key, now, JSON.stringify(insight)]);
+                    )
+                    WHERE key = $1
+                `, [key, now, JSON.stringify(insight)]);
+            } else {
+                await rawQuery(`
+                    UPDATE bot_sessions
+                    SET data = jsonb_set(
+                        ${NORMALIZED_SESSION_DATA_SQL},
+                        '{lastProactiveInsight}',
+                        $2::jsonb,
+                        true
+                    )
+                    WHERE key = $1
+                `, [key, JSON.stringify(insight)]);
+            }
             return;
         }
         const row = await repo.findOne({ where: { key } });
@@ -693,7 +708,7 @@ export async function saveProactiveInsight(
             domains: persisted.domains ?? {},
             workingMemory: persisted.workingMemory,
             recentlySavedFacts: persisted.recentlySavedFacts,
-            lastProactiveHintAt: now,
+            lastProactiveHintAt: touchMemoryHintCooldown ? now : persisted.lastProactiveHintAt,
             lastProactiveInsight: insight,
             pendingContactMemory: persisted.pendingContactMemory,
             pendingContactLookup: persisted.pendingContactLookup,

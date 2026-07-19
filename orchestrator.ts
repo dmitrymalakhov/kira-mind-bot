@@ -12,7 +12,7 @@ import { llmCache, LLM_CACHE_TTL } from "./utils/llmCache";
 import { fetchAgentMemoryContext, buildMemoryContextBlock } from "./utils/agentMemoryContext";
 import type { RecalledMemoryRef } from "./utils/multiQueryMemory";
 import { extractExplicitRememberFact } from "./utils/enhancedFactExtraction";
-import { isProactiveSourceQuestion } from './utils/proactiveSourceQuestion';
+import { buildProactiveSourceExplanation, resolveProactiveSourceQuestion } from './utils/proactiveSourceQuestion';
 import { detectRelationshipInMessage, resolveRelationshipFromMemory } from "./utils/resolveRelationshipFromMemory";
 import { createPlan } from "./orchestration/planner";
 import { executePlan } from "./orchestration/executor";
@@ -457,31 +457,13 @@ function buildProactiveInsightExplanation(
     message: string,
     replyContext?: ConversationReplyContext,
 ): ProcessingResult | null {
-    if (!isProactiveSourceQuestion(message)) return null;
-
-    const insight = ctx?.session?.lastProactiveInsight;
-    if (!insight || !replyContext || !insight.messageId || replyContext.messageId !== insight.messageId) return null;
-
-    const ageMs = Date.now() - Number(insight.createdAt || 0);
-    if (ageMs < 0 || ageMs > 3 * 24 * 60 * 60 * 1000) return null;
-    if (!Array.isArray(insight.sourceMemories) || insight.sourceMemories.length === 0) {
-        return {
-            responseText: 'Я не сохранила источник той подсказки, поэтому не могу честно объяснить, из какого именно факта взяла это. Это нужно исправить в логике проактивных сообщений.',
-        };
-    }
-
-    const sources = insight.sourceMemories
-        .slice(0, 5)
-        .map((source: string, index: number) => `${index + 1}. ${source}`)
-        .join('\n');
-
-    return {
-        responseText:
-            `Я написала это из проактивной памяти, а не из текущей переписки.\n\n` +
-            `Моя подсказка была: «${insight.message}»\n\n` +
-            `Факты, на которые я опиралась:\n${sources}\n\n` +
-            `Если среди этих фактов нет нужного Владельца или вывод неверный, значит я неправильно связала имя с контекстом.`,
-    };
+    const insight = resolveProactiveSourceQuestion({
+        message,
+        replyContext,
+        history: ctx?.session?.messageHistory,
+        insight: ctx?.session?.lastProactiveInsight,
+    });
+    return insight ? { responseText: buildProactiveSourceExplanation(insight) } : null;
 }
 
 /**

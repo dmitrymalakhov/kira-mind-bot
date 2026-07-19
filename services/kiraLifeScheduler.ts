@@ -19,8 +19,14 @@ import { parseLLMJson } from "../utils";
 import { USER_TIMEZONE } from "../constants";
 import { formatDateInTimeZone, getZonedDayContext, isZonedHourWithinRange } from "../utils/time";
 import { getSetting, setSetting } from "./botSettingsService";
-import { appendPersistedHistory } from "./SessionStorage";
+import { appendPersistedHistory, appendPersistedSentMessageContext, saveProactiveInsight } from "./SessionStorage";
 import { buildProactiveMessageFormats, getPersonalityGenderForms } from "../utils/personalityGender";
+import {
+  acceptsKiraLifeGroundingDecision,
+  chooseGroundedKiraLifeMessage,
+  hasUnsupportedKiraLifeOwnerClaim,
+  KiraLifeGroundingDecision,
+} from "../utils/proactiveGrounding";
 
 let proactiveTimer: NodeJS.Timeout | undefined;
 let innerTimer: NodeJS.Timeout | undefined;
@@ -178,7 +184,61 @@ async function maybeGenerateLifeEvent(purpose: "inner" | "proactive"): Promise<v
   });
 }
 
-async function buildProactiveMessage(): Promise<string> {
+async function reviewKiraLifeOwnerAttribution(message: string, selfEvents: string[]): Promise<boolean> {
+  if (hasUnsupportedKiraLifeOwnerClaim(message)) return false;
+
+  try {
+    const response = await createChatCompletionForTask('messageAnalysis', {
+      messages: [
+        {
+          role: 'system',
+          content: 'Ты проверяешь только корректность атрибуции в проактивном сообщении. Отвечай только валидным JSON.',
+        },
+        {
+          role: 'user',
+          content: `Источники ниже описывают только жизнь и мысли ассистента, не владельца.
+
+SELF-EVENTS:
+${selfEvents.map((event, index) => `${index + 1}. ${event}`).join('\n') || 'нет сохранённых событий'}
+
+СООБЩЕНИЕ:
+${message}
+
+Определи, приписывает ли сообщение владельцу конкретную уже существующую задачу, план, обещание, дедлайн, забывчивость или невыполненное действие без пользовательского источника.
+
+Это НЕ нарушение само по себе:
+- обращение на «ты»;
+- нейтральный, личный или шутливый вопрос;
+- поддразнивание без ссылки на конкретное обязательство;
+- приглашение или новое предложение что-то сделать сейчас;
+- рассказ ассистента о себе.
+
+Это нарушение:
+- утверждение, что владелец должен был или обещал выполнить конкретное дело;
+- требование продолжить якобы уже известную задачу;
+- вопрос, который преподносит выдуманное обязательство как существующий факт.
+
+JSON: {"safe": true/false, "attributesOwnerObligation": true/false, "reason": "краткая категория без пересказа личных данных"}`,
+        },
+      ],
+      temperature: 0,
+      response_format: { type: 'json_object' },
+    });
+    const decision = parseLLMJson<KiraLifeGroundingDecision>(
+      response.choices[0]?.message?.content?.trim() || '',
+    );
+    return acceptsKiraLifeGroundingDecision(decision);
+  } catch (error) {
+    console.warn('[kira-life] Semantic grounding review failed; using safe fallback');
+    return false;
+  }
+}
+
+async function buildProactiveMessage(): Promise<{
+  message: string;
+  sourceMemories: string[];
+  generationOutcome: 'generated' | 'fallback';
+}> {
   const recentEvents = await getRecentKiraSelfEvents(2);
   const state = await getKiraSelfMemoryState();
   const personalitySnapshot = formatKiraPersonalitySnapshot(state);
@@ -200,17 +260,33 @@ async function buildProactiveMessage(): Promise<string> {
           `Самомодель и линии жизни:\n${personalitySnapshot}\n` +
           `Опирайся на события: ${recentEvents.map((e) => `${e.description}${e.arc ? ` (линия: ${e.arc})` : ""}`).join("; ")}.\n` +
           `Текущее настроение: ${state.mood}. Тон должен соответствовать настроению.\n` +
-          `Строго: без приветствий-штампов ("Привет!", "Как твои дела?"), без упоминания что ты ИИ или бот, без пояснений. Не делай каждое сообщение вопросом. Только само сообщение.`,
+          `События выше относятся только к твоей собственной жизни и мыслям. Они НЕ являются фактами о владельце.\n` +
+          `Строго запрещено приписывать владельцу задачи, планы, обещания, дедлайны, забывчивость или невыполненную работу. ` +
+          `При этом общайся живо: можешь обращаться к владельцу, шутить, поддразнивать, задавать нейтральные или личные вопросы и предлагать что-то прямо сейчас. Не выдавай такое общение за знание конкретных обязательств владельца.\n` +
+          `Без приветствий-штампов ("Привет!", "Как твои дела?"), без упоминания что ты ИИ или бот, без пояснений. Не делай каждое сообщение вопросом. Только само сообщение.`,
       },
     ],
     temperature: 0.85,
   });
 
-  const fallback =
-    config.eventDescriptionGender === "мужской"
-      ? "Привет, как дела? Хотел спросить, как у тебя."
-      : "Привет, как дела? Хотела спросить, как у тебя.";
-  return response.choices[0]?.message?.content?.trim() || fallback;
+  const candidate = response.choices[0]?.message?.content?.trim();
+  const sourceMemories = recentEvents.map((event) => [
+    event.date,
+    event.description,
+    event.arc ? `линия: ${event.arc}` : "",
+  ].filter(Boolean).join(" — ")).slice(0, 2);
+  const semanticReviewPassed = candidate
+    ? await reviewKiraLifeOwnerAttribution(candidate, sourceMemories)
+    : false;
+  const grounded = chooseGroundedKiraLifeMessage(candidate, config.eventDescriptionGender, semanticReviewPassed);
+  if (grounded.rejectedUnsupportedClaim) {
+    console.warn("[kira-life] Rejected proactive message with unsupported owner obligation");
+  }
+  return {
+    message: grounded.message,
+    sourceMemories: grounded.usedFallback ? [] : sourceMemories,
+    generationOutcome: grounded.usedFallback ? 'fallback' : 'generated',
+  };
 }
 
 async function runInnerDevelopmentCycle(): Promise<void> {
@@ -259,14 +335,35 @@ async function runProactiveCycle(bot: Bot<BotContext>): Promise<void> {
     }
 
     await maybeGenerateLifeEvent("proactive");
-    const message = await buildProactiveMessage();
+    const proactive = await buildProactiveMessage();
 
     const chatId = await getProactiveChatId();
-    await bot.api.sendMessage(chatId, message);
+    const sent = await bot.api.sendMessage(chatId, proactive.message);
 
     lastSentAt = Date.now();
     await saveLastSentAt(lastSentAt);
-    await appendPersistedHistory(chatId, "bot", message);
+    await appendPersistedHistory(chatId, "bot", proactive.message);
+    const insight = {
+      message: proactive.message,
+      sourceMemories: proactive.sourceMemories.length
+        ? proactive.sourceMemories
+        : proactive.generationOutcome === 'fallback'
+          ? ["Безопасный резервный текст после отклонения исходного кандидата"]
+          : ["Внутренняя линия жизни без сохранённого события-источника"],
+      createdAt: lastSentAt,
+      messageId: sent.message_id,
+      kind: "kiraLife",
+      generationOutcome: proactive.generationOutcome,
+    } as const;
+    await saveProactiveInsight(chatId, insight, { touchMemoryHintCooldown: false });
+    await appendPersistedSentMessageContext(chatId, {
+      messageId: sent.message_id,
+      text: proactive.message,
+      kind: "proactive",
+      proactiveInsight: insight,
+      createdAt: lastSentAt,
+    });
+    console.log("[kira-life] Sent proactive message:", proactive.message.slice(0, 80));
   } catch (error) {
     console.error("[kira-life] proactive cycle failed:", error);
   } finally {
