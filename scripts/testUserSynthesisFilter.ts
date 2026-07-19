@@ -68,18 +68,33 @@ assert.equal(
     "legacy-факт без subject должен проходить",
 );
 
-// 7. subject:bot / system — helper сам их не отсекает (это делают вызывающие
-//    сервисы), но проверим, что не падает и не ложно исключает user-контент.
+// 7. subject:bot / system исключаются централизованно, чтобы chapters,
+//    schemas и sleep-cycle не расходились в правилах доверия.
 const botFact: UserSynthesisSourceLike = {
     subject: "bot",
     tags: ["subject:bot"],
 };
-// helper исключает только contact и source_chat/contact; bot-записи сервисы
-// фильтруют сами. Проверяем просто, что функция корректно отрабатывает.
 assert.equal(
-    typeof isEligibleForUserSynthesis(botFact),
-    "boolean",
-    "helper должен корректно обрабатывать subject:bot",
+    isEligibleForUserSynthesis(botFact),
+    false,
+    "bot-факт не должен быть источником user-синтеза",
+);
+const systemEpisode: UserSynthesisSourceLike = {
+    subject: "system",
+    tags: ["memory-episode", "conversation-episode", "subject:system"],
+};
+assert.equal(
+    isEligibleForUserSynthesis(systemEpisode),
+    false,
+    "смешанный system-эпизод не должен закрепляться через user-синтез",
+);
+const legacySystemTag: UserSynthesisSourceLike = {
+    tags: ["subject:system"],
+};
+assert.equal(
+    isEligibleForUserSynthesis(legacySystemTag),
+    false,
+    "subject:system tag должен блокировать legacy-запись без поля subject",
 );
 
 console.log("userSynthesisFilter checks passed");

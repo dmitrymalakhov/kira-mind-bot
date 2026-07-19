@@ -5,6 +5,7 @@ import { getVectorService } from './VectorServiceFactory';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { devLog, parseLLMJson } from '../utils';
 import { getActiveMemoryBotId } from '../utils/botIdentity';
+import { CONVERSATION_EPISODE_TRUST } from '../utils/proactiveGrounding';
 
 const EPISODE_DOMAIN = PREDEFINED_DOMAINS.GENERAL;
 const EPISODE_TAG = 'memory-episode';
@@ -95,7 +96,7 @@ async function analyzeEpisode(messages: MemorySourceMessage[]): Promise<EpisodeL
             messages: [
                 {
                     role: 'system',
-                    content: 'Ты выделяешь эпизодическую память из короткого диалога. Отвечай только валидным JSON.',
+                    content: 'Ты выделяешь эпизодическую память из короткого диалога и строго различаешь слова пользователя и бота. Отвечай только валидным JSON.',
                 },
                 {
                     role: 'user',
@@ -103,6 +104,12 @@ async function analyzeEpisode(messages: MemorySourceMessage[]): Promise<EpisodeL
 ${dialogue}
 
 Сожми это не как список фактов, а как человеческий эпизод: что происходило, кто/что упоминалось, почему это может быть важно позже.
+
+Критичные правила атрибуции:
+- утверждение бота не является фактом о пользователе без явного подтверждения пользователя;
+- вопрос «какая задача?», «о чём ты?» или отрицание пользователя НЕ подтверждает предыдущее утверждение бота;
+- если бот приписал пользователю неподтверждённую задачу, план или событие, прямо назови это в summary неподтверждённым утверждением бота;
+- entities могут описывать тему разговора, но не превращай их в обязательства пользователя.
 
 JSON:
 {
@@ -171,6 +178,7 @@ export async function createMemoryEpisode(
             importance: Math.max(0.55, episode.salience),
             tags: [
                 EPISODE_TAG,
+                ...CONVERSATION_EPISODE_TRUST.tags,
                 ...episode.domains.map((d) => `episode_domain:${d}`),
                 ...tags,
             ],
@@ -186,7 +194,8 @@ export async function createMemoryEpisode(
             sourceEpisodeId: episode.id,
             sourceContext: episode.summary,
             extractionMethod: 'episode',
-            subject: 'user',
+            // Смешанный диалог хранит историю взаимодействия, но не доказывает факты о пользователе.
+            subject: CONVERSATION_EPISODE_TRUST.subject,
             status: 'active',
             confirmationCount: 1,
             lastConfirmedAt: episode.timestamp,
@@ -227,6 +236,7 @@ ${dialogue}
 ${episode ? `Эпизод: ${episode.summary}` : ''}
 
 Обнови рабочую память. Это краткая текущая ситуация, не долговременная биография.
+Утверждения бота не являются фактами о пользователе. Вопрос или отрицание пользователя не подтверждает сказанное ботом. Неподтверждённые задачи и обещания бота не добавляй в openLoops.
 JSON:
 {
   "summary": "одно короткое резюме текущего контекста",

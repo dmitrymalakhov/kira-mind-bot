@@ -236,6 +236,7 @@ ${factsText}
             contactName: candidate.contactName,
             personId: candidate.personId,
             memoryIds: candidate.sourceMemoryIds,
+            proactiveInsight: ctx.session.lastProactiveInsight,
             createdAt: Date.now(),
         };
         await persistSessionNow(ctx);

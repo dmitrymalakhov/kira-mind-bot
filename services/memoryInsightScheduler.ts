@@ -25,9 +25,10 @@ import { getProactiveChatId } from '../utils/allowedUserChatStore';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { parseLLMJson } from '../utils';
 import { getBotPersona, getCommunicationStyle } from '../persona';
-import { appendPersistedHistory, saveProactiveInsight } from './SessionStorage';
+import { appendPersistedHistory, appendPersistedSentMessageContext, saveProactiveInsight } from './SessionStorage';
 import { USER_TIMEZONE } from '../constants';
 import { formatDateInTimeZone, getZonedDayContext, isZonedHourWithinRange } from '../utils/time';
+import { isEligibleMemoryInsightSource, normalizeInsightSourceIndexes } from '../utils/proactiveGrounding';
 
 /** Интервал проверки — берётся из конфига, дефолт 3 часа */
 const INTERVAL_MS = config.memoryInsightIntervalMs ?? 3 * 60 * 60 * 1000;
@@ -117,7 +118,7 @@ async function gatherRelevantMemories(userId: string): Promise<{ plans: string[]
             try {
                 const results = await svc.searchAllDomains(query, userId, 4);
                 for (const r of results) {
-                    if (r.score >= 0.55 && !planResults.has(r.id)) {
+                    if (r.score >= 0.55 && isEligibleMemoryInsightSource(r, 'plan') && !planResults.has(r.id)) {
                         planResults.set(r.id, r.content);
                     }
                 }
@@ -129,7 +130,7 @@ async function gatherRelevantMemories(userId: string): Promise<{ plans: string[]
             try {
                 const results = await svc.searchAllDomains(query, userId, 4);
                 for (const r of results) {
-                    if (r.score >= 0.55 && !doneResults.has(r.id)) {
+                    if (r.score >= 0.55 && isEligibleMemoryInsightSource(r, 'done') && !doneResults.has(r.id)) {
                         doneResults.set(r.id, r.content);
                     }
                 }
@@ -144,6 +145,7 @@ async function gatherRelevantMemories(userId: string): Promise<{ plans: string[]
         const recent = await svc.getRecentMemories(userId, 50);
         const now = new Date();
         for (const m of recent) {
+            if (!isEligibleMemoryInsightSource(m, 'plan')) continue;
             if (!m.expiresAt) continue;
             const daysLeft = (new Date(m.expiresAt).getTime() - now.getTime()) / 86_400_000;
             if (daysLeft >= 0 && daysLeft <= 30 && !planResults.has(m.id)) {
@@ -214,13 +216,21 @@ ${doneText}
 
     const text = resp.choices[0]?.message?.content?.trim() || '';
     const data = parseLLMJson<InsightDecision>(text);
+    const sourceIndexes = normalizeInsightSourceIndexes(data?.sourceIndexes, memories.plans.length);
     if (!data || !data.shouldSend || !data.message?.trim()) {
+        return { shouldSend: false, message: '' };
+    }
+    if (sourceIndexes.length === 0) {
+        console.warn('[memory-insight] Suppressed ungrounded insight: no valid sourceIndexes', {
+            suppliedIndexCount: Array.isArray(data.sourceIndexes) ? data.sourceIndexes.length : 0,
+            availablePlanCount: memories.plans.length,
+        });
         return { shouldSend: false, message: '' };
     }
     return {
         shouldSend: true,
         message: data.message.trim(),
-        sourceIndexes: Array.isArray(data.sourceIndexes) ? data.sourceIndexes : [],
+        sourceIndexes,
     };
 }
 
@@ -253,12 +263,20 @@ async function runCycle(bot: Bot<BotContext>): Promise<void> {
             .filter((memory): memory is string => Boolean(memory))
             .slice(0, 5);
         await appendPersistedHistory(chatId, 'bot', decision.message);
-        await saveProactiveInsight(chatId, {
+        const insight = {
             message: decision.message,
-            sourceMemories: sourceMemories.length ? sourceMemories : memories.plans.slice(0, 3),
+            sourceMemories,
             createdAt: Date.now(),
             messageId: sent.message_id,
             kind: 'memoryInsight',
+        } as const;
+        await saveProactiveInsight(chatId, insight);
+        await appendPersistedSentMessageContext(chatId, {
+            messageId: sent.message_id,
+            text: decision.message,
+            kind: 'proactive',
+            proactiveInsight: insight,
+            createdAt: insight.createdAt,
         });
         console.log('[memory-insight] Sent proactive insight:', decision.message.slice(0, 80));
     } catch (error) {

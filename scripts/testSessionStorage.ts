@@ -278,6 +278,87 @@ async function testBackgroundUpdatesPreserveStructuredContext() {
     });
 }
 
+async function testKiraLifeProvenanceDoesNotTouchMemoryHintCooldown() {
+    await withMockedRepo(async () => {
+        const chatId = 910000017;
+        const storage = new TypeORMSessionStorage();
+        const session = createInitialSession();
+        session.lastProactiveHintAt = 123456;
+        await storage.write(String(chatId), session);
+
+        await saveProactiveInsight(chatId, {
+            message: 'Синтетическое сообщение внутренней жизни',
+            sourceMemories: ['Синтетическое self-event'],
+            createdAt: Date.now(),
+            messageId: 170,
+            kind: 'kiraLife',
+        }, { touchMemoryHintCooldown: false });
+
+        const restored = await storage.read(String(chatId));
+        assert.equal(restored?.lastProactiveHintAt, 123456);
+        assert.equal(restored?.lastProactiveInsight?.kind, 'kiraLife');
+        assert.equal(restored?.lastProactiveInsight?.messageId, 170);
+    });
+}
+
+async function testPerMessageProactiveProvenanceSurvivesRestart() {
+    await withMockedRepo(async () => {
+        const chatId = 910000019;
+        const createdAt = Date.now();
+        const firstInsight = {
+            message: 'Первое синтетическое сообщение внутренней жизни',
+            sourceMemories: ['Первое синтетическое self-event'],
+            createdAt,
+            messageId: 171,
+            kind: 'kiraLife' as const,
+            generationOutcome: 'generated' as const,
+        };
+        await appendPersistedSentMessageContext(chatId, {
+            messageId: 171,
+            text: firstInsight.message,
+            kind: 'proactive',
+            proactiveInsight: firstInsight,
+            createdAt,
+        });
+        await saveProactiveInsight(chatId, {
+            message: 'Более новое синтетическое сообщение',
+            sourceMemories: ['Другой синтетический источник'],
+            createdAt: createdAt + 1,
+            messageId: 172,
+            kind: 'memoryInsight',
+        });
+
+        const restored = await new TypeORMSessionStorage().read(String(chatId));
+        assert.equal(restored?.lastProactiveInsight?.messageId, 172);
+        assert.equal(restored?.sentMessageContexts?.[171]?.proactiveInsight?.messageId, 171);
+        assert.equal(restored?.sentMessageContexts?.[171]?.proactiveInsight?.kind, 'kiraLife');
+        assert.equal(restored?.sentMessageContexts?.[171]?.proactiveInsight?.generationOutcome, 'generated');
+        assert.deepStrictEqual(
+            restored?.sentMessageContexts?.[171]?.proactiveInsight?.sourceMemories,
+            ['Первое синтетическое self-event'],
+        );
+    });
+}
+
+async function testRawKiraLifeProvenanceSkipsCooldownField() {
+    const repo = new RawCapturingSessionRepo();
+    await withMockedRepo(async () => {
+        await saveProactiveInsight(910000018, {
+            message: 'Синтетическое фоновое сообщение',
+            sourceMemories: ['Синтетический источник'],
+            createdAt: Date.now(),
+            messageId: 180,
+            kind: 'kiraLife',
+        }, { touchMemoryHintCooldown: false });
+    }, repo);
+
+    const update = repo.queries.find(item => /UPDATE bot_sessions/u.test(item.sql));
+    assert(update);
+    assert.doesNotMatch(update.sql, /lastProactiveHintAt/u);
+    assert.match(update.sql, /lastProactiveInsight/u);
+    assert.equal(update.parameters?.length, 2);
+}
+
 async function testMiddlewareFlushPreservesConcurrentBackgroundUpdates() {
     await withMockedRepo(async () => {
         const chatId = 910000014;
@@ -425,6 +506,9 @@ async function main() {
     await testStructuredSentMessageRoundTrip();
     await testLegacyStringJsonbIsReadable();
     await testBackgroundUpdatesPreserveStructuredContext();
+    await testKiraLifeProvenanceDoesNotTouchMemoryHintCooldown();
+    await testPerMessageProactiveProvenanceSurvivesRestart();
+    await testRawKiraLifeProvenanceSkipsCooldownField();
     await testMiddlewareFlushPreservesConcurrentBackgroundUpdates();
     await testConcurrentSessionReadsKeepIndependentSnapshots();
     await testBoundedLocalHistoryKeepsConcurrentAppend();

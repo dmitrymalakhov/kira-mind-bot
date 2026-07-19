@@ -29,6 +29,7 @@ const SUITES = {
         "testGeminiStudyChatFlow.ts",
         "testTodayImportance.ts",
         "testProactiveMemoryEvidence.ts",
+        "testProactiveGrounding.ts",
         "testContextKnowledgeRouting.ts",
     ],
     interaction: [
@@ -70,6 +71,7 @@ const SUITES = {
         "testGeminiStudyChatFlow.ts",
         "testTodayImportance.ts",
         "testProactiveMemoryEvidence.ts",
+        "testProactiveGrounding.ts",
         "testContextKnowledgeRouting.ts",
         "testIncomingTelegramQueue.ts",
         "testTelegramMessageEdit.ts",

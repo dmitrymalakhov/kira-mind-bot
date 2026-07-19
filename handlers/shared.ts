@@ -70,6 +70,7 @@ export function storeSentMessageContext(
         contactName: metadata.contactName ?? existing?.contactName,
         personId: metadata.personId ?? existing?.personId,
         memoryIds: metadata.memoryIds ?? existing?.memoryIds,
+        proactiveInsight: metadata.proactiveInsight ?? existing?.proactiveInsight,
         createdAt: existing?.createdAt ?? Date.now(),
     };
     const storedIds = Object.keys(ctx.session.sentMessageContexts)
@@ -315,6 +316,7 @@ export function resolveReplyTo(ctx: BotContext): {
             contactName: storedContext?.contactName,
             personId: storedContext?.personId,
             memoryIds: storedContext?.memoryIds,
+            proactiveInsight: storedContext?.proactiveInsight,
         };
     }
 

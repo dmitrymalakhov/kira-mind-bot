@@ -92,6 +92,13 @@ const ctx = {
                 contactId: 900000001,
                 contactName: 'Тестовый Контакт Альфа',
                 memoryIds: ['memory-1'],
+                proactiveInsight: {
+                    message: 'Синтетическая проактивная карточка',
+                    sourceMemories: ['Синтетический источник карточки'],
+                    createdAt: Date.now(),
+                    messageId: 77,
+                    kind: 'contextHint',
+                },
                 createdAt: Date.now(),
             },
         },
@@ -102,6 +109,8 @@ assert.equal(reply.replyToContent, '🧠 1 факт · «Тестовый Кон
 assert.equal(reply.replyContext?.contactId, 900000001);
 assert.equal(reply.replyContext?.kind, 'memory_card');
 assert.deepEqual(reply.replyContext?.memoryIds, ['memory-1']);
+assert.equal(reply.replyContext?.proactiveInsight?.messageId, 77);
+assert.deepEqual(reply.replyContext?.proactiveInsight?.sourceMemories, ['Синтетический источник карточки']);
 
 const voiceCtx = { session: { sentMessageContexts: {} } } as unknown as BotContext;
 storeSentMessageContext(voiceCtx, 78, 'Голосовой ответ', { delivery: 'voice' });
