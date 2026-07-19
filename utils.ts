@@ -225,12 +225,15 @@ export function processMarkdownLinks(inputText: string): string {
     const markdownLinkRegex = /\[.*?\]\((https?:\/\/[^\s)]+)\)/g;
 
     return inputText.replace(markdownLinkRegex, (match, url) => {
-        // Создаем объект URL для удобной работы с адресом
-        const urlObject = new URL(url);
-        // Очищаем параметры запроса
-        urlObject.search = '';
-        // Возвращаем обновленный URL без текстовой метки и параметров запроса
-        return urlObject.toString();
+        try {
+            const urlObject = new URL(url);
+            for (const key of [...urlObject.searchParams.keys()]) {
+                if (/^(?:utm_.+|gclid|fbclid|yclid)$/iu.test(key)) urlObject.searchParams.delete(key);
+            }
+            return urlObject.toString();
+        } catch {
+            return match;
+        }
     });
 }
 
@@ -398,4 +401,3 @@ export async function editStructuredBlocks(
 }
 
 export type { RichBlock, SendStructuredOptions, EditStructuredOptions };
-

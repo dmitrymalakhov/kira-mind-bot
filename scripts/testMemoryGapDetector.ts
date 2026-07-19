@@ -48,6 +48,7 @@ function makeVectorService(
         cleanupOldMemories: async () => 0,
         getMemoryStats: async () => ({ total: 0, domains: {} }),
         getRecentMemories: async () => [],
+        getAllMemories: async () => [],
         getMemoriesForCompression: async () => [],
         addRelationship: async () => undefined,
         getRelatedFacts: async () => [],
@@ -59,7 +60,7 @@ function makeVectorService(
 
 function makeContext(): BotContext {
     return {
-        from: { id: 176779906 },
+        from: { id: 900000010 },
         session: {},
     } as unknown as BotContext;
 }

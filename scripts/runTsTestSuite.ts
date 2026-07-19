@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { buildSyntheticTestEnv } from './testEnv';
 
 const SUITES = {
     ai: [
@@ -14,6 +15,8 @@ const SUITES = {
         "testQdrantMemoryProfileCompatibility.ts",
         "testSessionStorage.ts",
         "testReflectionMemoryFilter.ts",
+        "testMemoryAudit.ts",
+        "testQdrantMemoryAuditPagination.ts",
         "testFactAttributionFilter.ts",
         "testUserSynthesisFilter.ts",
         "testLegacyPersonalitySanitizer.ts",
@@ -26,6 +29,7 @@ const SUITES = {
         "testGeminiStudyChatFlow.ts",
         "testTodayImportance.ts",
         "testProactiveMemoryEvidence.ts",
+        "testContextKnowledgeRouting.ts",
     ],
     interaction: [
         "testVoiceReply.ts",
@@ -52,6 +56,8 @@ const SUITES = {
         "testSpeechTextPreparation.ts",
         "testGroupChatContext.ts",
         "testReflectionMemoryFilter.ts",
+        "testMemoryAudit.ts",
+        "testQdrantMemoryAuditPagination.ts",
         "testFactAttributionFilter.ts",
         "testUserSynthesisFilter.ts",
         "testLegacyPersonalitySanitizer.ts",
@@ -64,6 +70,7 @@ const SUITES = {
         "testGeminiStudyChatFlow.ts",
         "testTodayImportance.ts",
         "testProactiveMemoryEvidence.ts",
+        "testContextKnowledgeRouting.ts",
         "testIncomingTelegramQueue.ts",
         "testTelegramMessageEdit.ts",
         "testChatPromptWatchers.ts",
@@ -90,11 +97,12 @@ async function run(): Promise<void> {
 
 function runTsScript(fileName: string): Promise<void> {
     const scriptPath = path.join(process.cwd(), "scripts", fileName);
+    const testEnv = buildSyntheticTestEnv();
     return new Promise((resolve, reject) => {
         const child = spawn("ts-node", [scriptPath], {
             cwd: process.cwd(),
             stdio: "inherit",
-            env: process.env,
+            env: testEnv,
             shell: process.platform === "win32",
         });
 

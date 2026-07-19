@@ -1,5 +1,5 @@
 import { InlineKeyboard, InputFile } from "grammy";
-import { BotContext } from "../types";
+import { BotContext, ConversationReplyContext, SentMessageContext } from "../types";
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -15,7 +15,7 @@ import { addToHistory } from "../utils/history";
 import { config } from "../config";
 import { ReminderRegistry } from "../stores/ReminderRegistry";
 import { ReminderRepository } from "../services/ReminderRepository";
-import { persistSessionNow } from "../services/SessionStorage";
+import { MAX_SENT_MESSAGE_CONTEXTS, persistSessionNow } from "../services/SessionStorage";
 import { getTelegramVoiceReadinessIssue, withTelegramVoiceFile } from "../services/elevenLabsTts";
 import { addTargetNotificationButtons, appendTargetNotificationPrompt, buildDefaultTargetReminderMessage } from "../utils/reminderTargetNotification";
 import { createOrRefreshReminderMemory } from "../services/ReminderMemorySync";
@@ -30,8 +30,6 @@ if (!fs.existsSync(TEMP_DIR)) {
 } else {
     console.log('📂 Временная директория уже существует:', TEMP_DIR);
 }
-
-export const MAX_STORED_SENT_MESSAGES = 50;
 
 export const ALLOWED_REACTIONS = config.allowedReactions;
 export const REACTIONS_ENABLED = config.reactionsEnabled;
@@ -50,14 +48,43 @@ export function storeSentMessageText(ctx: BotContext, messageId: number, text: s
         .filter(Number.isFinite)
         .sort((a, b) => b - a);
 
-    for (const staleMessageId of storedIds.slice(MAX_STORED_SENT_MESSAGES)) {
+    for (const staleMessageId of storedIds.slice(MAX_SENT_MESSAGE_CONTEXTS)) {
         delete ctx.session.sentMessages[staleMessageId];
+    }
+}
+
+export function storeSentMessageContext(
+    ctx: BotContext,
+    messageId: number,
+    text: string,
+    metadata: Partial<Omit<SentMessageContext, 'messageId' | 'text' | 'createdAt'>> = {},
+): void {
+    if (!ctx.session.sentMessageContexts) ctx.session.sentMessageContexts = {};
+    const existing = ctx.session.sentMessageContexts[messageId];
+    ctx.session.sentMessageContexts[messageId] = {
+        messageId,
+        text,
+        kind: metadata.kind ?? existing?.kind ?? 'plain',
+        delivery: metadata.delivery ?? existing?.delivery ?? 'text',
+        contactId: metadata.contactId ?? existing?.contactId,
+        contactName: metadata.contactName ?? existing?.contactName,
+        personId: metadata.personId ?? existing?.personId,
+        memoryIds: metadata.memoryIds ?? existing?.memoryIds,
+        createdAt: existing?.createdAt ?? Date.now(),
+    };
+    const storedIds = Object.keys(ctx.session.sentMessageContexts)
+        .map(Number)
+        .filter(Number.isFinite)
+        .sort((a, b) => b - a);
+    for (const staleMessageId of storedIds.slice(MAX_SENT_MESSAGE_CONTEXTS)) {
+        delete ctx.session.sentMessageContexts[staleMessageId];
     }
 }
 
 export async function replyAndStore(ctx: BotContext, text: string, options: any = {}) {
     const msg = await sendMessage(ctx, text, options);
     storeSentMessageText(ctx, msg.message_id, text);
+    storeSentMessageContext(ctx, msg.message_id, text);
     return msg;
 }
 
@@ -109,6 +136,7 @@ async function replyWithGeneratedVoiceAndStore(ctx: BotContext, text: string) {
         const inputFile = new InputFile(voice.filePath, voice.filename);
         const msg = await ctx.replyWithVoice(inputFile);
         storeSentMessageText(ctx, msg.message_id, text);
+        storeSentMessageContext(ctx, msg.message_id, text, { delivery: 'voice' });
         return msg;
     });
 }
@@ -240,22 +268,28 @@ export function resolveReplyTo(ctx: BotContext): {
     isReply: boolean;
     replyToContent: string | undefined;
     replyToSender: string | undefined;
+    replyContext: ConversationReplyContext | undefined;
 } {
     let isReply = false;
     let replyToContent: string | undefined = undefined;
     let replyToSender: string | undefined = undefined;
+    let replyContext: ConversationReplyContext | undefined = undefined;
 
     const replyTo = ctx.message?.reply_to_message;
     if (replyTo) {
         isReply = true;
-        if (replyTo.text) {
+        const storedContext = ctx.session.sentMessageContexts?.[replyTo.message_id];
+        const storedText = storedContext?.text ?? ctx.session.sentMessages?.[replyTo.message_id];
+        if (storedText) {
+            replyToContent = storedText;
+        } else if (replyTo.text) {
             replyToContent = replyTo.text;
         } else if (replyTo.caption) {
             replyToContent = `[Медиа с подписью: "${replyTo.caption}"]`;
         } else if (replyTo.photo) {
             replyToContent = '[Изображение]';
         } else if (replyTo.voice) {
-            const knownVoiceText = ctx.session.sentMessages?.[replyTo.message_id];
+            const knownVoiceText = storedText;
             replyToContent = knownVoiceText ? `[Голосовое сообщение: "${knownVoiceText}"]` : '[Голосовое сообщение]';
         } else if (replyTo.document) {
             replyToContent = `[Документ: ${replyTo.document.file_name || 'документ'}]`;
@@ -270,9 +304,21 @@ export function resolveReplyTo(ctx: BotContext): {
         } else {
             replyToSender = 'Неизвестный пользователь';
         }
+
+        replyContext = {
+            messageId: replyTo.message_id,
+            text: replyToContent,
+            sender: replyToSender,
+            kind: storedContext?.kind ?? (replyTo.text ? 'plain' : 'unknown'),
+            delivery: storedContext?.delivery,
+            contactId: storedContext?.contactId,
+            contactName: storedContext?.contactName,
+            personId: storedContext?.personId,
+            memoryIds: storedContext?.memoryIds,
+        };
     }
 
-    return { isReply, replyToContent, replyToSender };
+    return { isReply, replyToContent, replyToSender, replyContext };
 }
 
 // ── Единая отправка результата обработки ───────────────────
@@ -283,10 +329,14 @@ export function resolveReplyTo(ctx: BotContext): {
  *
  * @param voiceRequested — если true, пытается отправить ответ голосовым при возможности
  */
-export async function sendResultToUser(ctx: BotContext, result: ProcessingResult, voiceRequested = false): Promise<void> {
+export async function sendResultToUser(
+    ctx: BotContext,
+    result: ProcessingResult,
+    voiceRequested = false,
+): Promise<{ message_id: number }> {
     // ICS-файл (календарное событие)
     if (result.reminderCreated && result.icsFilePath) {
-        await replyAndStore(ctx, result.responseText, result.keyboard ? {
+        const sent = await replyAndStore(ctx, result.responseText, result.keyboard ? {
             reply_markup: result.keyboard
         } : {});
 
@@ -304,21 +354,21 @@ export async function sendResultToUser(ctx: BotContext, result: ProcessingResult
             console.error("Ошибка при отправке ICS файла:", fileError);
             await ctx.reply("К сожалению, не удалось отправить файл календаря. Но я всё равно напомню тебе о событии в назначенное время.");
         }
-        return;
+        return sent;
     }
 
     // Документ
     if (result.documentFilePath) {
-        await replyAndStore(ctx, result.responseText, result.keyboard ? {
+        const sent = await replyAndStore(ctx, result.responseText, result.keyboard ? {
             reply_markup: result.keyboard
         } : {});
         await sendDocumentFromResult(ctx, result);
-        return;
+        return sent;
     }
 
     // Сгенерированное изображение
     if (result.imageGenerated && result.generatedImageUrl) {
-        await replyAndStore(ctx, result.responseText, result.keyboard ? {
+        const sent = await replyAndStore(ctx, result.responseText, result.keyboard ? {
             reply_markup: result.keyboard
         } : {});
 
@@ -330,11 +380,11 @@ export async function sendResultToUser(ctx: BotContext, result: ProcessingResult
             console.error("Ошибка при отправке сгенерированного изображения:", imageError);
             await ctx.reply("К сожалению, не удалось отправить сгенерированное изображение. Возможно, проблема с URL или сервисом генерации изображений.");
         }
-        return;
+        return sent;
     }
 
     // Обычный текстовый ответ (с возможной голосовой отправкой)
-    await replyProcessingResult(ctx, result, voiceRequested);
+    return replyProcessingResult(ctx, result, voiceRequested);
 }
 
 // ── Проверка ошибок сохранения фактов ──────────────────────

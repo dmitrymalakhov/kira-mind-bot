@@ -1,5 +1,5 @@
 import * as dotenv from "dotenv";
-import { MessageHistory } from "./types";
+import { ConversationReplyContext, ConversationTurn, KnowledgeSource, KnowledgeSourceDecision, MessageHistory } from "./types";
 import { reminderAgent } from "./agents/reminderAgent";
 import { imageAgent } from "./agents/imageAgent";
 import { imageGenerationAgent } from "./agents/imageGenerationAgent";
@@ -12,6 +12,7 @@ import { llmCache, LLM_CACHE_TTL } from "./utils/llmCache";
 import { fetchAgentMemoryContext, buildMemoryContextBlock } from "./utils/agentMemoryContext";
 import type { RecalledMemoryRef } from "./utils/multiQueryMemory";
 import { extractExplicitRememberFact } from "./utils/enhancedFactExtraction";
+import { isProactiveSourceQuestion } from './utils/proactiveSourceQuestion';
 import { detectRelationshipInMessage, resolveRelationshipFromMemory } from "./utils/resolveRelationshipFromMemory";
 import { createPlan } from "./orchestration/planner";
 import { executePlan } from "./orchestration/executor";
@@ -22,6 +23,7 @@ import { handlePendingContactLookupText, maybeStartContactMemoryLookup } from ".
 import { hasActiveBrowserRunForContext } from "./agents/browserAgent";
 import { looksLikeBrowserTaskCancellation, looksLikeNegatedBookingRequest } from "./utils/browserTaskCancellation";
 import { isTodayImportanceRequest } from "./utils/todayImportanceIntent";
+import { applyKnowledgeSourceDecision, buildKnowledgeSourcePrompt, decideKnowledgeSource, shouldInterruptPendingContactMemory } from "./utils/knowledgeSource";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -97,6 +99,10 @@ export interface MessageClassification {
         reminderUpdateNewTime?: string;
         /** Новый текст напоминания при reminderAction = "update" */
         reminderUpdateNewText?: string;
+        /** Выбранный источник знаний до contact-memory и LLM-классификации. */
+        knowledgeSource?: KnowledgeSource;
+        /** Аспекты внешнего запроса, которые должен покрыть веб-поиск. */
+        requestedFacets?: KnowledgeSourceDecision['requestedFacets'];
     };
 }
 
@@ -177,7 +183,6 @@ const BROWSER_FOLLOW_UP_RE = new RegExp(
 const EXPLICIT_REMINDER_RE = /(^|\s)(напомни|напоминай|не\s+дай\s+забыть|не\s+забудь|(?:создай|поставь|добавь)(?:\s+\S+){0,3}\s+напоминание)(?=\s|$|[,.!?;:])/iu;
 const SELF_STUDY_TASK_RE = /(?:^|[\s,.!?;:])(?:(?:изучи|исследуй|проанализируй|оцени|проведи|сделай|запусти)[\s\S]{0,100}(?:себя|свои\s+(?:возможности|ограничения|потребности)|самоанализ|самоизучение)|(?:пойми|выясни)[\s\S]{0,80}чего\s+тебе\s+не\s+хватает|самоанализ|самоизучение)(?=$|[\s,.!?;:])/iu;
 const ASSISTANT_SELF_LIFE_REQUEST_RE = /^(?:кто\s+ты|расскажи\s+(?:мне\s+)?(?:о|про)\s+себя)\??$|(?:расскажи|расскажешь|скажи|что|кто|какая|какой|как|где|почему|зачем|помнишь)[\s\S]{0,140}(?:о\s+себе|про\s+себя|тво[яйёе]\s+(?:жизн|биограф|истори|цель|прошл|уч[её]б|работ)|где\s+ты\s+(?:училась|работала)|почему\s+ты\s+такая)/iu;
-const PROACTIVE_SOURCE_QUESTION_RE = /(?:с\s+каким|какой\s+именно|о\s+ком|кто\s+так(?:ой|ая)|откуда|почему|на\s+основе\s+чего|из\s+чего|какая\s+информация|что\s+за|поясни|объясни)[\s\S]{0,120}(?:дмитр|это|так\s+реш|созвон|напомн|предлож)/iu;
 const INTENT_SCORE_CLOSE_DELTA = 0.12;
 const INTENT_SCORE_VERY_CLOSE_DELTA = 0.06;
 const INTENT_SCORE_CLEAR_WINNER_MIN = 0.82;
@@ -447,18 +452,23 @@ function saveSessionDedupSnapshot(ctx: any, params: {
     };
 }
 
-function buildProactiveInsightExplanation(ctx: any, message: string): ProcessingResult | null {
-    if (!PROACTIVE_SOURCE_QUESTION_RE.test(message)) return null;
+function buildProactiveInsightExplanation(
+    ctx: any,
+    message: string,
+    replyContext?: ConversationReplyContext,
+): ProcessingResult | null {
+    if (!isProactiveSourceQuestion(message)) return null;
 
     const insight = ctx?.session?.lastProactiveInsight;
-    if (!insight || !Array.isArray(insight.sourceMemories) || insight.sourceMemories.length === 0) {
+    if (!insight || !replyContext || !insight.messageId || replyContext.messageId !== insight.messageId) return null;
+
+    const ageMs = Date.now() - Number(insight.createdAt || 0);
+    if (ageMs < 0 || ageMs > 3 * 24 * 60 * 60 * 1000) return null;
+    if (!Array.isArray(insight.sourceMemories) || insight.sourceMemories.length === 0) {
         return {
             responseText: 'Я не сохранила источник той подсказки, поэтому не могу честно объяснить, из какого именно факта взяла это. Это нужно исправить в логике проактивных сообщений.',
         };
     }
-
-    const ageMs = Date.now() - Number(insight.createdAt || 0);
-    if (ageMs < 0 || ageMs > 3 * 24 * 60 * 60 * 1000) return null;
 
     const sources = insight.sourceMemories
         .slice(0, 5)
@@ -798,11 +808,16 @@ export async function processMessage(
     forwardFrom: string = "",
     messageHistory: MessageHistory[] = [],
     lastLocation?: { latitude: number; longitude: number; address?: string; },
-    options: { voiceReplyRequested?: boolean } = {}
+    options: { voiceReplyRequested?: boolean; turn?: ConversationTurn } = {}
 ): Promise<ProcessingResult> {
     try {
-        const originalMessage = message;
-        const proactiveExplanation = buildProactiveInsightExplanation(ctx, originalMessage);
+        const originalMessage = options.turn?.userText ?? message;
+        const replyContext = options.turn?.replyContext;
+        const forwardContext = options.turn?.forwardContext;
+        const internalBrowserContinuation = BROWSER_CONTINUATION_RE.test(message);
+        const routingMessage = internalBrowserContinuation ? message : originalMessage;
+        const knowledgeDecision = decideKnowledgeSource(originalMessage, replyContext, options.turn?.currentTopic);
+        const proactiveExplanation = buildProactiveInsightExplanation(ctx, originalMessage, replyContext);
         if (proactiveExplanation) return proactiveExplanation;
 
         const pendingHealthDiscomfort = ctx?.session?.pendingHealthDiscomfort;
@@ -810,12 +825,12 @@ export async function processMessage(
             ctx.session.pendingHealthDiscomfort = undefined;
         } else if (
             pendingHealthDiscomfort &&
-            !BROWSER_CONTINUATION_RE.test(originalMessage) &&
-            !looksLikeBrowserTaskText(originalMessage)
+            !BROWSER_CONTINUATION_RE.test(routingMessage) &&
+            !looksLikeBrowserTaskText(routingMessage)
         ) {
             devLog("Pending health discomfort input detected, routing to healthAgent");
             console.log("[ORCH] pending health discomfort:", pendingHealthDiscomfort.recordId);
-            return healthAgent(ctx, originalMessage, isForwarded, forwardFrom, messageHistory);
+            return healthAgent(ctx, routingMessage, isForwarded, forwardFrom, messageHistory);
         }
 
         const pendingHealthLog = ctx?.session?.pendingHealthLog;
@@ -823,23 +838,24 @@ export async function processMessage(
             ctx.session.pendingHealthLog = undefined;
         } else if (
             pendingHealthLog &&
-            !BROWSER_CONTINUATION_RE.test(originalMessage) &&
-            !looksLikeBrowserTaskText(originalMessage)
+            !BROWSER_CONTINUATION_RE.test(routingMessage) &&
+            !looksLikeBrowserTaskText(routingMessage)
         ) {
             devLog("Pending health log input detected, routing to healthAgent");
             console.log("[ORCH] pending health log:", pendingHealthLog.mode);
-            return healthAgent(ctx, originalMessage, isForwarded, forwardFrom, messageHistory);
+            return healthAgent(ctx, routingMessage, isForwarded, forwardFrom, messageHistory);
         }
 
         const originalLooksLikeNewBrowserTask =
-            !BROWSER_CONTINUATION_RE.test(originalMessage) &&
-            looksLikeBrowserTaskText(originalMessage);
+            !BROWSER_CONTINUATION_RE.test(routingMessage) &&
+            looksLikeBrowserTaskText(routingMessage);
         if (originalLooksLikeNewBrowserTask && hasActivePendingBrowserTask(ctx)) {
             devLog("New browser task detected while another browser task is paused; clearing pending browser task");
             console.log("[ORCH] clearing pending browser task for new request:", originalMessage.slice(0, 100));
             ctx.session.pendingBrowserTask = undefined;
         }
 
+        message = routingMessage;
         const browserFollowUpMessage = buildBrowserFollowUpMessage(ctx, message);
         if (browserFollowUpMessage) {
             devLog("Browser follow-up detected, routing to browserTask");
@@ -847,13 +863,13 @@ export async function processMessage(
             message = browserFollowUpMessage;
         }
         const isBrowserTaskLike = Boolean(browserFollowUpMessage) || looksLikeBrowserTaskText(message);
-        if (isBrowserTaskLike && ctx.session?.pendingContactMemory) {
-            devLog("Clearing pending contact memory before browser task routing");
+        if (shouldInterruptPendingContactMemory(knowledgeDecision, isBrowserTaskLike) && ctx.session?.pendingContactMemory) {
+            devLog("Clearing pending contact memory before unrelated external routing");
             ctx.session.pendingContactMemory = undefined;
         }
 
         const explicitRemember = extractExplicitRememberFact(message);
-        if (!explicitRemember && !isBrowserTaskLike) {
+        if (!explicitRemember && !isBrowserTaskLike && !knowledgeDecision.requiresWeb) {
             const contactMemoryResolution = await handlePendingContactMemoryText(ctx, message);
             if (contactMemoryResolution) {
                 return { responseText: contactMemoryResolution };
@@ -892,13 +908,44 @@ export async function processMessage(
         }
 
         // Шаг 1: Донасыщаем запрос из долговременной памяти (факты по интентам + роль→имя). Контекст передаём агенту позже.
-        const initialMemory = await fetchAgentMemoryContext(ctx, message);
+        const initialMemory = await fetchAgentMemoryContext(ctx, originalMessage);
         const initialBlock = buildMemoryContextBlock(initialMemory);
         let enrichedContextFromMemory = initialBlock ? initialBlock + '\n\n' : '';
+        const knowledgeBlock = buildKnowledgeSourcePrompt(knowledgeDecision);
+        if (knowledgeBlock) enrichedContextFromMemory += `${knowledgeBlock}\n\n`;
+        if (replyContext) {
+            enrichedContextFromMemory += [
+                'Структурированный контекст сообщения, на которое отвечает пользователь:',
+                `- messageId: ${replyContext.messageId}`,
+                `- sender: ${replyContext.sender ?? 'неизвестно'}`,
+                replyContext.contactId ? `- contactId: ${replyContext.contactId}` : '',
+                replyContext.contactName ? `- contactName: ${replyContext.contactName}` : '',
+                `- text: ${replyContext.text}`,
+                'Это контекст reply, а не слова текущей реплики пользователя.',
+                '',
+            ].filter(Boolean).join('\n');
+        }
+        if (forwardContext) {
+            enrichedContextFromMemory += [
+                'Структурированный контекст пересланного сообщения:',
+                `- sender: ${forwardContext.sender ?? 'неизвестно'}`,
+                `- text: ${forwardContext.text}`,
+                'Это пересланный материал, а не слова текущей реплики пользователя.',
+                '',
+            ].join('\n');
+        }
+        if (options.turn?.activePeople?.length) {
+            enrichedContextFromMemory += `Активная личность текущего эпизода: ${options.turn.activePeople
+                .map(person => `${person.contactName ?? 'контакт'}${person.contactId ? ` (contactId:${person.contactId})` : ''}`)
+                .join(', ')}. Используй только как контекст эпизода, не как новый факт.\n`;
+        }
+        if (options.turn?.currentTopic) {
+            enrichedContextFromMemory += `Текущая тема эпизода: ${options.turn.currentTopic}.\n`;
+        }
 
-        const roleInMessage = await detectRelationshipInMessage(message);
+        const roleInMessage = await detectRelationshipInMessage(originalMessage);
         if (roleInMessage) {
-            const resolvedName = await resolveRelationshipFromMemory(ctx, roleInMessage, message);
+            const resolvedName = await resolveRelationshipFromMemory(ctx, roleInMessage, originalMessage);
             if (resolvedName) {
                 enrichedContextFromMemory += `В запросе пользователя под «${roleInMessage}» имеется в виду: ${resolvedName} (из долговременной памяти).\n\n`;
                 devLog("Orchestrator: enriched with resolved contact", roleInMessage, "->", resolvedName);
@@ -931,10 +978,22 @@ export async function processMessage(
                 ? buildExplicitReminderClassification(message)
                 : null;
         let classification = deterministicReminderClassification
-            ?? await classifyMessage(message, isForwarded, forwardFrom, messageHistory, knownChatGroups);
+            ?? await classifyMessage(originalMessage, isForwarded, forwardFrom, messageHistory, knownChatGroups);
         let deterministicOverrideApplied = Boolean(deterministicReminderClassification);
         if (deterministicReminderClassification) {
             devLog("Explicit reminder fast-path: routing to НАПОМИНАНИЕ");
+        }
+
+        if (knowledgeDecision.requiresWeb && !isBrowserTaskLike && !explicitRemember) {
+            const routedKnowledge = applyKnowledgeSourceDecision(classification, knowledgeDecision);
+            classification = routedKnowledge.classification;
+            if (routedKnowledge.primaryIntentOverridden) deterministicOverrideApplied = true;
+            devLog(
+                routedKnowledge.primaryIntentOverridden
+                    ? 'External current knowledge detected, routing to web search'
+                    : 'External current knowledge detected, preserving primary action intent',
+                knowledgeDecision,
+            );
         }
 
         if (BROWSER_CONTINUATION_RE.test(message)) {
@@ -1095,8 +1154,12 @@ export async function processMessage(
         devLog("Message classified as:", classification.intent, "with confidence:", classification.confidenceLevel);
         console.log("[ORCH] message:", message.slice(0, 80), "| intent:", classification.intent, "| confidence:", classification.confidenceLevel);
 
+        // Внутренние browser-continuation/follow-up содержат служебный контекст,
+        // обычные ходы и web-search всегда получают только новую реплику.
+        const executionMessage = isBrowserTaskLike ? message : originalMessage;
+
         const plan = await createPlan({
-            message,
+            message: executionMessage,
             classification,
             messageHistory: messageHistory.map((m) => ({ role: m.role, content: m.content })),
         });
@@ -1108,7 +1171,7 @@ export async function processMessage(
         const result = await executePlan({
             ctx,
             plan,
-            message,
+            message: executionMessage,
             isForwarded,
             forwardFrom,
             messageHistory,

@@ -79,6 +79,15 @@ export interface SessionData {
     };
     /** Сопоставление идентификаторов отправленных сообщений и их текста */
     sentMessages?: Record<number, string>;
+    /** Структурный контекст отправленных сообщений для безопасной обработки reply. */
+    sentMessageContexts?: Record<number, SentMessageContext>;
+    /** Сильная личность текущего эпизода; короткоживущая, не заменяет person_id. */
+    activePersonContext?: {
+        contactId?: number;
+        contactName?: string;
+        personId?: string;
+        expiresAt: number;
+    };
     domains: Record<string, DomainMemory>;
     /**
      * Компактная модель текущей ситуации в разговоре.
@@ -106,6 +115,13 @@ export interface SessionData {
     };
     /** Unix-timestamp последнего вопроса о пробеле в памяти (для cooldown) */
     lastMemoryGapAt?: number;
+    /** Контекст вопроса о неизвестном человеке; связывает только следующий ответ. */
+    pendingMemoryGap?: {
+        contactName: string;
+        createdAt: number;
+        expiresAt: number;
+        messageId?: number;
+    };
     /** Unix-timestamp последнего предложения создать implicit reminder (для cooldown) */
     lastImplicitReminderAt?: number;
     /** Ожидание ввода кастомного времени для переноса напоминания */
@@ -152,6 +168,30 @@ export interface SessionData {
         };
         candidateIds: number[];
         createdAt: number;
+        /** Зафиксированная личность после частично успешного сохранения. */
+        resolvedPersonIdentityId?: string;
+        resolvedContactId?: number;
+        forceDetachedNew?: boolean;
+        /** Отдельные атомарные факты, ожидающие одного и того же разрешения личности. */
+        assertions?: Array<{
+            content: string;
+            domain: string;
+            importance: number;
+            tags: string[];
+            isAnchor?: boolean;
+            memoryMetadata?: {
+                sourceEpisodeId?: string;
+                sourceContext?: string;
+                sourceMessageIds?: string[];
+                extractionMethod?: MemoryExtractionMethod;
+                subject?: MemorySubject;
+                predicate?: string;
+                object?: string;
+                validFrom?: Date;
+                validTo?: Date;
+                status?: MemoryStatus;
+            };
+        }>;
     };
     /** Ожидает уточнения, о каком контакте спрашивает пользователь при чтении памяти */
     pendingContactLookup?: {
@@ -311,6 +351,66 @@ export interface MessageHistory {
     timestamp: Date;
 }
 
+export interface SentMessageContext {
+    messageId: number;
+    text: string;
+    kind: 'plain' | 'structured' | 'proactive' | 'memory_card' | 'identity_gap' | 'system';
+    /** Способ доставки; не смешивается с семантическим kind. */
+    delivery?: 'text' | 'voice';
+    contactId?: number;
+    contactName?: string;
+    personId?: string;
+    memoryIds?: string[];
+    createdAt: number;
+}
+
+export interface ConversationReplyContext {
+    messageId: number;
+    text: string;
+    sender?: string;
+    kind: SentMessageContext['kind'] | 'media' | 'unknown';
+    delivery?: SentMessageContext['delivery'];
+    contactId?: number;
+    contactName?: string;
+    personId?: string;
+    memoryIds?: string[];
+}
+
+export interface ConversationTurn {
+    userText: string;
+    replyContext?: ConversationReplyContext;
+    forwardContext?: {
+        sender?: string;
+        text: string;
+    };
+    activePeople?: Array<{ contactId?: number; contactName?: string; personId?: string }>;
+    currentTopic?: string;
+}
+
+export type KnowledgeSource = 'personal' | 'assistant_self' | 'stable_general' | 'external_current';
+
+export interface KnowledgeSourceDecision {
+    source: KnowledgeSource;
+    requiresWeb: boolean;
+    requestedFacets: Array<'facts' | 'current_state' | 'schedule' | 'results' | 'sources'>;
+    reason: string;
+}
+
+export interface MemoryAssertion {
+    subjectRef:
+        | { kind: 'user' }
+        | { kind: 'person'; personId?: string; contactId?: number; displayName: string }
+        | { kind: 'third_party'; displayName?: string; relatedContactId?: number }
+        | { kind: 'unknown' };
+    predicate: string;
+    object: string;
+    negated?: boolean;
+    confidence: number;
+    evidence: string;
+    validFrom?: Date;
+    validTo?: Date;
+}
+
 export interface DomainMemory {
     summary: string;
     facts: string[];
@@ -361,7 +461,7 @@ export interface EmotionalTag {
     isFlashbulb: boolean;
 }
 
-export type MemorySubject = 'user' | 'contact' | 'bot' | 'system';
+export type MemorySubject = 'user' | 'contact' | 'third_party' | 'unknown' | 'bot' | 'system';
 export type MemoryStatus = 'active' | 'planned' | 'done' | 'superseded' | 'expired' | 'unknown';
 export type MemoryKind =
     | 'fact'
@@ -508,6 +608,8 @@ export interface MemoryEntry {
     predicate?: string;
     /** Структурированная часть утверждения: значение/объект. */
     object?: string;
+    /** Является ли предикат отрицанием. */
+    negated?: boolean;
     /** С какого момента утверждение считается актуальным. */
     validFrom?: Date;
     /** До какого момента утверждение считается актуальным. */
@@ -534,6 +636,7 @@ export interface SearchResult {
     timestamp: Date;
     importance: number;
     tags: string[];
+    negated?: boolean;
     domain: string;
     confidence?: number;
     lastAccessedAt?: Date;

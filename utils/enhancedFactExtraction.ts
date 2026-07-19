@@ -7,11 +7,16 @@ import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { normalizeContactLookupValue, saveContactMemoryFactOrAsk } from './contactMemory';
 import { createMemoryEpisode, updateWorkingMemoryFromMessages } from '../services/MemoryEpisodeService';
 
-interface QuickFact {
+export interface QuickFact {
     content: string;
     domain: string;
     importance: number;
     tags: string[];
+    subject: 'user' | 'contact' | 'third_party' | 'unknown';
+    contactName?: string;
+    predicate: string;
+    object: string;
+    negated?: boolean;
 }
 
 const factService = new FactExtractionService();
@@ -258,6 +263,11 @@ export async function extractAndSaveFactsFromConversation(
                 }
 
                 if (fact.subject === 'contact' && fact.contactName) {
+                    const activePerson = ctx.session.activePersonContext;
+                    const resolvedContactId = activePerson?.contactName && activePerson.expiresAt > Date.now() &&
+                        normalizeContactLookupValue(fact.contactName) === normalizeContactLookupValue(activePerson.contactName)
+                        ? activePerson.contactId
+                        : undefined;
                     const result = await saveContactMemoryFactOrAsk(ctx, {
                         contactName: fact.contactName,
                         content: fact.content,
@@ -275,6 +285,7 @@ export async function extractAndSaveFactsFromConversation(
                         },
                     }, {
                         askOnAmbiguous: false,
+                        resolvedContactId,
                     });
                     if (result.status === 'pending') {
                         devLog(`Факт о контакте ожидает уточнения: [${fact.contactName}] ${fact.content}`);
@@ -285,7 +296,7 @@ export async function extractAndSaveFactsFromConversation(
                         continue;
                     }
                     devLog(`Сохранен факт о контакте [${fact.contactName}]: ${fact.content}`);
-                } else {
+                } else if (fact.subject === 'user') {
                     const saved = await saveMemory(ctx, fact.domain, fact.content, fact.importance, fact.tags, false, {
                         sourceEpisodeId: episode?.id,
                         sourceContext: fact.sourceContext,
@@ -298,6 +309,9 @@ export async function extractAndSaveFactsFromConversation(
                     if (!saved) continue;
                     rememberFact(ctx, fact.domain, fact.content);
                     devLog(`Сохранен факт о пользователе: ${fact.content}`);
+                } else {
+                    devLog(`Факт с субъектом ${fact.subject ?? 'unknown'} оставлен только в evidence: ${fact.content}`);
+                    continue;
                 }
                 savedCount++;
             } else {
@@ -320,23 +334,27 @@ export async function extractAndSaveFactsFromConversation(
     }
 }
 
-export async function quickFactCheck(message: string): Promise<QuickFact[]> {
+export async function quickFactCheck(message: string, contextContactName?: string): Promise<QuickFact[]> {
     const trimmed = message.trim();
     if (!trimmed) return [];
 
     const today = new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
     const prompt = `
-Определи, содержит ли сообщение пользователя ЯВНЫЕ личные факты о НЁМ САМОМ (имя, возраст, отношения, семья, личные данные, устойчивые предпочтения, работа, место жительства, текущее местонахождение, поездки и путешествия).
+Извлеки только явно сказанные атомарные факты из НОВОЙ реплики пользователя: о нём самом или о конкретно названном человеке.
 
 Сегодняшняя дата: ${today}
 
 Сообщение:
 "${trimmed}"
 
+${contextContactName ? `Контекст отдельного предыдущего вопроса: пользователь отвечает на вопрос о человеке «${contextContactName}». Используй это только для разрешения опущенного субъекта; не копируй из контекста новые факты.` : ''}
+
 КРИТИЧЕСКИ ВАЖНО:
-- Если сообщение содержит инструкцию запомнить или сохранить факты О КОНКРЕТНОМ ЧЕЛОВЕКЕ (например: "запомни об Иване", "сохрани эти факты о Юрии Никишенко", "запомни про Юру") — это НЕ факты о пользователе. Верни {"facts": []}.
 - Если в сообщении есть реплай или цитата чужого сообщения (например "[В ответ на ...]") — не извлекай факты из цитируемого текста, только из слов самого пользователя.
-- Извлекай ТОЛЬКО факты о самом пользователе, пишущем сообщение.
+- Каждая запись содержит ровно один subject/predicate/object. «Друг, коллега, познакомились через общего знакомого» — три записи, не одна.
+- Не добавляй хронологию, причинность, мотивы или эмоции, которых нет в сообщении.
+- Для именованного человека ставь subject=contact и точное contactName. Для родственника контакта ставь third_party; не делай контакт субъектом автоматически.
+- Если субъект неясен, subject=unknown; такая запись не должна сохраняться долговременно.
 
 ВАЖНО: Если пользователь сообщает о своём ТЕКУЩЕМ местонахождении или состоянии события (поездка, путешествие, конференция и т.д.) — это факт, включай его с датой.
 Примеры:
@@ -350,6 +368,11 @@ export async function quickFactCheck(message: string): Promise<QuickFact[]> {
   "facts": [
     {
       "content": "краткий факт",
+      "subject": "user|contact|third_party|unknown",
+      "contactName": "только для contact или null",
+      "predicate": "один атомарный предикат",
+      "object": "объект предиката",
+      "negated": false,
       "domain": "work|health|family|finance|education|hobbies|travel|social|home|personal|entertainment|general",
       "importance": 0.0-1.0,
       "tags": ["tag1", "tag2"]
@@ -382,6 +405,13 @@ export async function quickFactCheck(message: string): Promise<QuickFact[]> {
                 domain: String(fact.domain).trim() || 'general',
                 importance: typeof fact.importance === 'number' ? Math.min(1, Math.max(0, fact.importance)) : 0.75,
                 tags: Array.isArray(fact.tags) ? fact.tags.map((tag: unknown) => String(tag)) : [],
+                subject: ['user', 'contact', 'third_party', 'unknown'].includes(fact.subject)
+                    ? fact.subject
+                    : 'unknown',
+                contactName: fact.contactName ? String(fact.contactName).trim() : undefined,
+                predicate: String(fact.predicate || fact.domain).trim(),
+                object: String(fact.object || fact.content).trim(),
+                negated: fact.negated === true,
             }))
             .filter((fact: QuickFact) => fact.content.length > 0);
 

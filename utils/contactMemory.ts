@@ -1,11 +1,12 @@
 import { InlineKeyboard } from 'grammy';
 import { get as levenshtein } from 'fast-levenshtein';
 import { transliterate as toLatin } from 'transliteration';
-import { BotContext } from '../types';
+import { BotContext, SessionData } from '../types';
 import { Contact, ContactsStore } from '../stores/ContactsStore';
 import { MemorySaveMetadata, saveMemory } from './enhancedDomainMemory';
 import { rememberFact } from './domainMemory';
 import { devLog } from '../utils';
+import { resolveOrCreatePersonIdentity } from '../services/PersonIdentityService';
 
 const PENDING_CONTACT_MEMORY_TTL_MS = 10 * 60 * 1000;
 const RECENT_FACT_TTL_MS = 10 * 60 * 1000;
@@ -27,6 +28,7 @@ export interface ContactMemorySaveResult {
 
 export interface ContactMemorySaveOptions {
     askOnAmbiguous?: boolean;
+    resolvedContactId?: number;
 }
 
 export interface ContactIdentityScope {
@@ -387,10 +389,9 @@ export function resolveContactIdentity(contactName: string): { status: 'resolved
     }
 
     const plausible = plausibleContactMatches(name, allContacts).slice(0, 6);
-    if (plausible.length === 1) {
-        return { status: 'resolved', contact: plausible[0], displayName: contactDisplayName(plausible[0]) };
-    }
-    if (plausible.length > 1) {
+    // Fuzzy-сходство только формирует кандидатов и никогда само не объединяет
+    // личность, даже когда кандидат один.
+    if (plausible.length > 0) {
         return { status: 'ambiguous', candidates: plausible };
     }
 
@@ -399,16 +400,32 @@ export function resolveContactIdentity(contactName: string): { status: 'resolved
         : { status: 'needs_name' };
 }
 
-async function persistContactFact(ctx: BotContext, fact: ContactMemoryFact, contact?: Contact): Promise<string | null> {
+async function persistContactFact(
+    ctx: BotContext,
+    fact: ContactMemoryFact,
+    contact?: Contact,
+    identityOptions: { forceDetachedNew?: boolean; personIdentityId?: string; skipIdentityResolution?: boolean } = {},
+): Promise<string | null> {
     const displayName = contact ? contactDisplayName(contact) : fact.contactName.trim();
     const cleanContent = stripContactLead(fact.content, fact.contactName);
     const memoryContent = `[${displayName}] ${cleanContent}`;
+    const personIdentityId = identityOptions.personIdentityId ?? (
+        identityOptions.skipIdentityResolution
+            ? undefined
+            : await resolveOrCreatePersonIdentity(
+                String(ctx.from?.id ?? ''),
+                fact.contactName,
+                contact,
+                identityOptions,
+            ).then(identity => identity?.id).catch(() => undefined)
+    );
     const tags = [
         ...(fact.tags ?? []),
         ...contactIdentityTags(fact.contactName, contact),
+        personIdentityId ? `person_id:${personIdentityId}` : '',
     ];
 
-    const saved = await saveMemory(ctx, fact.domain, memoryContent, fact.importance, [...new Set(tags)], fact.isAnchor, {
+    const saved = await saveMemory(ctx, fact.domain, memoryContent, fact.importance, [...new Set(tags.filter(Boolean))], fact.isAnchor, {
         ...fact.memoryMetadata,
         subject: 'contact',
         sourceContext: fact.memoryMetadata?.sourceContext ?? fact.content,
@@ -417,6 +434,90 @@ async function persistContactFact(ctx: BotContext, fact: ContactMemoryFact, cont
     rememberFact(ctx, fact.domain, memoryContent);
     pushRecentFact(ctx, memoryContent);
     return memoryContent;
+}
+
+export type PendingContactMemory = NonNullable<SessionData['pendingContactMemory']>;
+type PendingContactAssertion = NonNullable<PendingContactMemory['assertions']>[number];
+
+function pendingAssertions(pending: PendingContactMemory): ContactMemoryFact[] {
+    const assertions = pending.assertions?.length
+        ? pending.assertions
+        : [{
+            content: pending.content,
+            domain: pending.domain,
+            importance: pending.importance,
+            tags: pending.tags,
+            isAnchor: pending.isAnchor,
+            memoryMetadata: pending.memoryMetadata,
+        }];
+    return assertions.map(assertion => ({ contactName: pending.contactName, ...assertion }));
+}
+
+export interface PendingContactPersistenceResult {
+    savedContents: string[];
+    failedAssertions: PendingContactAssertion[];
+    personIdentityId?: string;
+}
+
+function assertionFromFact(fact: ContactMemoryFact): PendingContactAssertion {
+    return {
+        content: fact.content,
+        domain: fact.domain,
+        importance: fact.importance,
+        tags: fact.tags ?? [],
+        isAnchor: fact.isAnchor,
+        memoryMetadata: fact.memoryMetadata,
+    };
+}
+
+function retainFailedPendingAssertions(
+    pending: PendingContactMemory,
+    result: PendingContactPersistenceResult,
+    contact?: Contact,
+    forceDetachedNew = false,
+): void {
+    const first = result.failedAssertions[0];
+    if (!first) return;
+    pending.content = first.content;
+    pending.domain = first.domain;
+    pending.importance = first.importance;
+    pending.tags = first.tags;
+    pending.isAnchor = first.isAnchor;
+    pending.memoryMetadata = first.memoryMetadata;
+    pending.assertions = result.failedAssertions;
+    pending.resolvedPersonIdentityId = result.personIdentityId;
+    pending.resolvedContactId = contact?.id;
+    pending.forceDetachedNew = forceDetachedNew;
+    pending.candidateIds = contact ? [contact.id] : [];
+    pending.createdAt = Date.now();
+}
+
+export async function persistPendingContactFacts(
+    ctx: BotContext,
+    pending: PendingContactMemory,
+    contact?: Contact,
+    forceDetachedNew = false,
+    persistFact: typeof persistContactFact = persistContactFact,
+): Promise<PendingContactPersistenceResult> {
+    const personIdentityId = pending.resolvedPersonIdentityId ?? await resolveOrCreatePersonIdentity(
+        String(ctx.from?.id ?? ''),
+        pending.contactName,
+        contact,
+        { forceDetachedNew },
+    ).then(identity => identity?.id).catch(() => undefined);
+    const savedContents: string[] = [];
+    const failedAssertions: PendingContactAssertion[] = [];
+    for (const fact of pendingAssertions(pending)) {
+        const content = await persistFact(ctx, fact, contact, {
+            personIdentityId,
+            skipIdentityResolution: true,
+        }).catch(() => null);
+        if (content) savedContents.push(content);
+        else failedAssertions.push(assertionFromFact(fact));
+    }
+    const result = { savedContents, failedAssertions, personIdentityId };
+    if (failedAssertions.length > 0) retainFailedPendingAssertions(pending, result, contact, forceDetachedNew);
+    return result;
 }
 
 function setPendingContactMemory(ctx: BotContext, fact: ContactMemoryFact, candidates: Contact[]): void {
@@ -430,19 +531,19 @@ function setPendingContactMemory(ctx: BotContext, fact: ContactMemoryFact, candi
         memoryMetadata: fact.memoryMetadata,
         candidateIds: candidates.map(c => c.id),
         createdAt: Date.now(),
+        assertions: [{
+            content: fact.content,
+            domain: fact.domain,
+            importance: fact.importance,
+            tags: fact.tags ?? [],
+            isAnchor: fact.isAnchor,
+            memoryMetadata: fact.memoryMetadata,
+        }],
     };
 }
 
 function normalizedContentKey(content: string): string {
     return content.trim().replace(/\s+/g, ' ').toLowerCase();
-}
-
-function mergeSourceMessageIds(
-    existing?: string[],
-    incoming?: string[]
-): string[] | undefined {
-    const merged = [...(existing ?? []), ...(incoming ?? [])].filter(Boolean);
-    return merged.length > 0 ? [...new Set(merged)] : undefined;
 }
 
 function mergePendingContactMemory(ctx: BotContext, fact: ContactMemoryFact, candidates: Contact[]): boolean {
@@ -458,42 +559,61 @@ function mergePendingContactMemory(ctx: BotContext, fact: ContactMemoryFact, can
         return false;
     }
 
-    const incomingContent = stripContactLead(fact.content, fact.contactName);
-    const existingKey = normalizedContentKey(pending.content);
-    const incomingKey = normalizedContentKey(incomingContent);
-
-    if (incomingKey && !existingKey.includes(incomingKey) && !incomingKey.includes(existingKey)) {
-        pending.content = `${pending.content.trim()}\n${incomingContent}`;
+    const incomingKey = normalizedContentKey(stripContactLead(fact.content, fact.contactName));
+    const assertions = pendingAssertions(pending);
+    const alreadyQueued = assertions.some(assertion =>
+        normalizedContentKey(stripContactLead(assertion.content, assertion.contactName)) === incomingKey
+    );
+    if (!alreadyQueued) {
+        pending.assertions = [
+            ...(pending.assertions ?? assertions.map(assertion => ({
+                content: assertion.content,
+                domain: assertion.domain,
+                importance: assertion.importance,
+                tags: assertion.tags ?? [],
+                isAnchor: assertion.isAnchor,
+                memoryMetadata: assertion.memoryMetadata,
+            }))),
+            {
+                content: fact.content,
+                domain: fact.domain,
+                importance: fact.importance,
+                tags: fact.tags ?? [],
+                isAnchor: fact.isAnchor,
+                memoryMetadata: fact.memoryMetadata,
+            },
+        ];
     }
-
-    pending.tags = [...new Set([...(pending.tags ?? []), ...(fact.tags ?? [])])];
     if (candidates.length > 0) {
         pending.candidateIds = [...new Set([...(pending.candidateIds ?? []), ...candidates.map(c => c.id)])];
     }
-    pending.memoryMetadata = {
-        ...pending.memoryMetadata,
-        ...fact.memoryMetadata,
-        sourceContext: [pending.memoryMetadata?.sourceContext, fact.memoryMetadata?.sourceContext]
-            .filter(Boolean)
-            .join('\n') || pending.memoryMetadata?.sourceContext,
-        sourceMessageIds: mergeSourceMessageIds(
-            pending.memoryMetadata?.sourceMessageIds,
-            fact.memoryMetadata?.sourceMessageIds
-        ),
-    };
     pending.createdAt = Date.now();
     devLog('Contact memory clarification already pending, merged duplicate prompt:', fact.contactName);
     return true;
 }
 
-async function askContactClarification(ctx: BotContext, fact: ContactMemoryFact, candidates: Contact[]): Promise<void> {
-    setPendingContactMemory(ctx, fact, candidates);
+async function askContactClarification(
+    ctx: BotContext,
+    fact: ContactMemoryFact,
+    candidates: Contact[],
+    existingPending?: PendingContactMemory,
+): Promise<void> {
+    if (existingPending) {
+        ctx.session.pendingContactMemory = {
+            ...existingPending,
+            candidateIds: candidates.map(candidate => candidate.id),
+            createdAt: Date.now(),
+        };
+    } else {
+        setPendingContactMemory(ctx, fact, candidates);
+    }
 
     const keyboard = new InlineKeyboard();
     for (const candidate of candidates.slice(0, 6)) {
         keyboard.text(contactOptionLabel(candidate), `cmem:${candidate.id}`).row();
     }
-    keyboard.text('Не сохранять', 'cmem:cancel');
+    keyboard.text('Новый человек', 'cmem:new').row();
+    keyboard.text('Не сейчас', 'cmem:later');
 
     await ctx.reply(
         `У меня несколько контактов по имени «${fact.contactName}». К кому сохранить этот факт?\n\n«${stripContactLead(fact.content, fact.contactName)}»`,
@@ -509,6 +629,22 @@ export async function saveContactMemoryFactOrAsk(
     const askOnAmbiguous = options.askOnAmbiguous ?? true;
     const contactName = fact.contactName.trim();
     if (!contactName || !fact.content.trim()) return { status: 'skipped' };
+
+    const metadataContact = options.resolvedContactId != null
+        ? ContactsStore.getInstance().getContact(options.resolvedContactId)
+        : undefined;
+    if (options.resolvedContactId != null) {
+        const nameParts = contactName.split(/\s+/u);
+        const strongContact: Contact = metadataContact ?? {
+            id: options.resolvedContactId,
+            firstName: nameParts[0] || contactName,
+            lastName: nameParts.slice(1).join(' ') || undefined,
+        };
+        const content = await persistContactFact(ctx, fact, strongContact);
+        if (!content) return { status: 'skipped' };
+        ctx.session.pendingContactMemory = undefined;
+        return { status: 'saved', content };
+    }
 
     const resolution = resolveContactIdentity(contactName);
     if (resolution.status === 'resolved') {
@@ -538,6 +674,14 @@ export async function saveContactMemoryFactOrAsk(
         memoryMetadata: fact.memoryMetadata,
         candidateIds: [],
         createdAt: Date.now(),
+        assertions: [{
+            content: fact.content,
+            domain: fact.domain,
+            importance: fact.importance,
+            tags: fact.tags ?? [],
+            isAnchor: fact.isAnchor,
+            memoryMetadata: fact.memoryMetadata,
+        }],
     };
     await ctx.reply(
         `Не буду сохранять факт про «${contactName}» без уточнения: укажи фамилию или username, чтобы я не смешала разных людей.`
@@ -555,10 +699,41 @@ export async function handleContactMemoryCallback(ctx: BotContext, callbackData:
         return true;
     }
 
-    if (callbackData === 'cmem:cancel') {
+    if (callbackData === 'cmem:later' || callbackData === 'cmem:cancel') {
         ctx.session.pendingContactMemory = undefined;
         await ctx.answerCallbackQuery({ text: 'Не сохраняю' });
         await ctx.editMessageText('Ок, не сохраняю этот факт в память.');
+        return true;
+    }
+
+    if (callbackData === 'cmem:new' || callbackData === 'cmem:retry') {
+        const retryContact = pending.resolvedContactId != null
+            ? ContactsStore.getInstance().getContact(pending.resolvedContactId)
+            : undefined;
+        if (pending.resolvedContactId != null && !retryContact) {
+            await ctx.answerCallbackQuery({ text: 'Выбранный контакт больше недоступен.' });
+            return true;
+        }
+        const forceDetachedNew = callbackData === 'cmem:retry'
+            ? Boolean(pending.forceDetachedNew)
+            : true;
+        const result = await persistPendingContactFacts(ctx, pending, retryContact, forceDetachedNew);
+        if (result.failedAssertions.length > 0) {
+            const keyboard = new InlineKeyboard().text('Повторить сохранение', 'cmem:retry');
+            await ctx.answerCallbackQuery({ text: 'Часть фактов пока не сохранилась.' });
+            await ctx.editMessageText(
+                `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}.`,
+                { reply_markup: keyboard },
+            );
+            return true;
+        }
+        ctx.session.pendingContactMemory = undefined;
+        if (result.savedContents.length === 0) {
+            await ctx.answerCallbackQuery({ text: 'Не удалось сохранить.' });
+            return true;
+        }
+        await ctx.answerCallbackQuery({ text: retryContact ? 'Сохранено в память' : 'Сохранено как новый человек' });
+        await ctx.editMessageText(`Сохранила факты:\n${result.savedContents.join('\n')}`);
         return true;
     }
 
@@ -574,15 +749,20 @@ export async function handleContactMemoryCallback(ctx: BotContext, callbackData:
         return true;
     }
 
-    const savedContent = await persistContactFact(ctx, pending, contact);
-    if (!savedContent) {
-        await ctx.answerCallbackQuery({ text: 'Не удалось сохранить' });
+    const result = await persistPendingContactFacts(ctx, pending, contact);
+    if (result.failedAssertions.length > 0) {
+        const keyboard = new InlineKeyboard().text('Повторить сохранение', 'cmem:retry');
+        await ctx.answerCallbackQuery({ text: 'Часть фактов пока не сохранилась.' });
+        await ctx.editMessageText(
+            `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}.`,
+            { reply_markup: keyboard },
+        );
         return true;
     }
     ctx.session.pendingContactMemory = undefined;
     await ctx.answerCallbackQuery({ text: 'Сохранила в память' });
-    await ctx.editMessageText(`Сохранила как факт о ${contactDisplayName(contact)}:\n\n${savedContent}`);
-    devLog('Contact memory disambiguated via callback:', savedContent);
+    await ctx.editMessageText(`Сохранила как факты о ${contactDisplayName(contact)}:\n\n${result.savedContents.join('\n')}`);
+    devLog('Contact memory disambiguated via callback:', result.savedContents);
     return true;
 }
 
@@ -596,6 +776,24 @@ export async function handlePendingContactMemoryText(ctx: BotContext, message: s
     const text = message.trim();
     if (!text || text.startsWith('/')) return null;
 
+    if (pending.resolvedPersonIdentityId) {
+        if (!/^(?:повтори|попробуй\s+ещ[её]\s+раз)$/iu.test(text)) {
+            return 'Часть фактов уже сохранена к выбранной личности. Напиши «повтори», чтобы сохранить оставшиеся.';
+        }
+        const retryContact = pending.resolvedContactId != null
+            ? ContactsStore.getInstance().getContact(pending.resolvedContactId)
+            : undefined;
+        if (pending.resolvedContactId != null && !retryContact) {
+            return 'Выбранный контакт больше недоступен. Повтори факт позже с актуальным контактом.';
+        }
+        const result = await persistPendingContactFacts(ctx, pending, retryContact, Boolean(pending.forceDetachedNew));
+        if (result.failedAssertions.length > 0) {
+            return `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}. Попробуй ещё раз позже.`;
+        }
+        ctx.session.pendingContactMemory = undefined;
+        return `Сохранила оставшиеся факты:\n${result.savedContents.join('\n')}`;
+    }
+
     const candidates = pending.candidateIds
         .map(id => ContactsStore.getInstance().getContact(id))
         .filter((c): c is Contact => Boolean(c));
@@ -604,29 +802,30 @@ export async function handlePendingContactMemoryText(ctx: BotContext, message: s
         : exactContactMatches(text, ContactsStore.getInstance().getAllContacts());
 
     if (narrowed.length === 1) {
-        const savedContent = await persistContactFact(ctx, pending, narrowed[0]);
-        if (!savedContent) return 'Не удалось сохранить факт в долговременную память. Попробуй позже.';
+        const result = await persistPendingContactFacts(ctx, pending, narrowed[0]);
+        if (result.failedAssertions.length > 0) {
+            return `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}. Напиши «повтори».`;
+        }
         ctx.session.pendingContactMemory = undefined;
-        return `Сохранила как факт о ${contactDisplayName(narrowed[0])}:\n${savedContent}`;
+        return `Сохранила как факты о ${contactDisplayName(narrowed[0])}:\n${result.savedContents.join('\n')}`;
     }
 
     const resolution = resolveContactIdentity(text);
     if (resolution.status === 'resolved') {
-        const factForSave = resolution.contact
+        const pendingForSave = resolution.contact
             ? pending
             : { ...pending, contactName: resolution.displayName };
-        const savedContent = await persistContactFact(
-            ctx,
-            factForSave,
-            resolution.contact
-        );
-        if (!savedContent) return 'Не удалось сохранить факт в долговременную память. Попробуй позже.';
+        const result = await persistPendingContactFacts(ctx, pendingForSave, resolution.contact);
+        if (result.failedAssertions.length > 0) {
+            ctx.session.pendingContactMemory = pendingForSave;
+            return `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}. Напиши «повтори».`;
+        }
         ctx.session.pendingContactMemory = undefined;
-        return `Сохранила как факт о ${resolution.displayName}:\n${savedContent}`;
+        return `Сохранила как факты о ${resolution.displayName}:\n${result.savedContents.join('\n')}`;
     }
 
     if (resolution.status === 'ambiguous') {
-        await askContactClarification(ctx, { ...pending, contactName: text }, resolution.candidates);
+        await askContactClarification(ctx, { ...pending, contactName: text }, resolution.candidates, pending);
         return 'Нашла несколько вариантов, выбери нужный контакт кнопкой.';
     }
 

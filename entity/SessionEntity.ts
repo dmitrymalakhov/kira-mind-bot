@@ -11,7 +11,7 @@ export class SessionEntity {
     key!: string;
 
     @Column({ type: 'jsonb' })
-    data!: string;
+    data!: Record<string, any> | string;
 
     @UpdateDateColumn()
     updatedAt!: Date;
