@@ -58,7 +58,7 @@ async function main() {
             content: JSON.stringify({
               facts: [
                 {
-                  content: `Олег любит порядок ${currentCall}`,
+                  content: `Пользователь любит порядок ${currentCall}`,
                   domain: 'personal',
                   importance: 0.8,
                   confidence: 0.9,

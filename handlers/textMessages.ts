@@ -1,7 +1,7 @@
 import { Bot, InlineKeyboard } from "grammy";
 import { Chat, User } from "grammy/types";
 import { Reminder, postponeReminderUntil } from "../reminder";
-import { BotContext } from "../types";
+import { BotContext, ConversationTurn } from "../types";
 import { processMessage } from "../orchestrator";
 import { getMessageDraft, saveMessageDraft } from "../agents/sendMessagesAgent";
 import {
@@ -14,9 +14,6 @@ import { devLog } from "../utils";
 import { addToHistory } from "../utils/history";
 import { ContactsStore } from "../stores/ContactsStore";
 import { ReminderRegistry } from "../stores/ReminderRegistry";
-import { maybeProactiveHint } from "../utils/proactiveMemory";
-import { maybeAskMemoryGap } from "../utils/memoryGapDetector";
-import { maybeDetectImplicitReminder } from "../utils/implicitReminderDetector";
 import { reconsolidateAfterResponse } from "../services/MemoryReconsolidationService";
 import { looksLikeBrowserTaskCancellation } from "../utils/browserTaskCancellation";
 import { applyReminderEditInput, extractReminderPostponeDate } from "../utils/reminderEditor";
@@ -24,6 +21,18 @@ import { stripVoiceReplyDirective, wantsVoiceReply } from "../utils/voiceReply";
 import { editMessageTextIfChanged } from "../utils/telegramMessageEdit";
 import { normalizeNumbersForVoiceMessage } from "../utils/russianSpeechNumbers";
 import { syncReminderMemoryMutation } from "../services/ReminderMemorySync";
+import {
+    commitImplicitReminderCandidate,
+    detectImplicitReminderCandidate,
+} from "../utils/implicitReminderDetector";
+import { commitMemoryGapCandidate, detectMemoryGapCandidate } from "../utils/memoryGapDetector";
+import { detectCurrentConversationTopic } from '../utils/conversationTopic';
+import {
+    commitProactiveHintCandidate,
+    maybeProactiveHint,
+    ProactiveHintCandidate,
+} from "../utils/proactiveMemory";
+import { decideKnowledgeSource } from "../utils/knowledgeSource";
 import {
     MEMORY_HEARS_RE,
     MEMORY_DELETE_RE,
@@ -34,6 +43,7 @@ import {
     sendResultToUser,
     checkLastFactSaveError,
     shouldRunProactiveHint,
+    storeSentMessageContext,
     flushSessionAfterAsyncWork,
 } from "./shared";
 
@@ -99,21 +109,6 @@ async function processForwardedGroup(ctx: BotContext, forwardKey: string) {
             return;
         }
 
-        // Форматируем информацию для истории сообщений в виде единого треда
-        let historyEntry = "[Пересланный тред сообщений]:\n";
-
-        for (const source in sources) {
-            const messages = sources[source];
-            if (messages.length > 0) {
-                historyEntry += `${source}: ${messages.join("\n" + source + ": ")}\n`;
-            }
-        }
-
-        if (userMessages.length > 0) {
-            historyEntry += "\n[Комментарий пользователя]:\n";
-            historyEntry += userMessages.join("\n");
-        }
-
         // Проверка на наличие первого сообщения пользователя в истории
         const recentUserMessage = ctx.session.messageHistory.find(msg =>
             msg.role === 'user' &&
@@ -122,43 +117,41 @@ async function processForwardedGroup(ctx: BotContext, forwardKey: string) {
             new Date().getTime() - new Date(msg.timestamp).getTime() < 5000
         );
 
-        if (recentUserMessage && !historyEntry.includes(recentUserMessage.content)) {
+        if (recentUserMessage && !userMessages.includes(recentUserMessage.content)) {
             ctx.session.messageHistory = ctx.session.messageHistory.filter(
                 msg => msg !== recentUserMessage
             );
 
             if (userMessages.length === 0) {
-                historyEntry += "\n[Комментарий пользователя]:\n";
-                historyEntry += recentUserMessage.content;
                 userMessages.push(recentUserMessage.content);
             }
         }
 
-        await addToHistory(ctx, 'user', historyEntry);
+        const forwardText = Object.entries(sources)
+            .flatMap(([source, messages]) => messages.map(text => `${source}: ${text}`))
+            .join('\n');
+        const forwardedTurn: ConversationTurn = {
+            userText: userMessages.join(' ').trim() || 'Проанализируй пересланные сообщения',
+            forwardContext: {
+                sender: Object.keys(sources).join(', ') || 'неизвестный источник',
+                text: forwardText,
+            },
+        };
+        // В обычной user-history хранится только новая реплика владельца. Сам
+        // пересланный материал передаётся отдельно и не участвует в извлечении
+        // фактов как будто это слова пользователя.
+        await addToHistory(ctx, 'user', forwardedTurn.userText, { turn: forwardedTurn });
         await ctx.api.sendChatAction(ctx.chat.id, "typing");
-
-        // Формируем общий текст сообщения для обработки
-        let textToProcess = "Пересланные сообщения из треда:\n";
-
-        for (const source in sources) {
-            const messages = sources[source];
-            if (messages.length > 0) {
-                textToProcess += `${source}:\n${messages.join("\n")}\n\n`;
-            }
-        }
-
-        if (userMessages.length > 0) {
-            textToProcess += `Мой комментарий: ${userMessages.join(" ")}`;
-        }
-
-        devLog("Обработка треда сообщений:", textToProcess);
+        devLog("Обработка пересланного треда:", { userText: forwardedTurn.userText, forwardText });
 
         const result = await processMessage(
             ctx,
-            textToProcess,
+            forwardedTurn.userText,
             true,
             "треда сообщений",
-            ctx.session.messageHistory.slice().reverse()
+            ctx.session.messageHistory.slice().reverse(),
+            undefined,
+            { turn: forwardedTurn },
         );
 
         await saveRemindersFromResult(ctx, result);
@@ -358,15 +351,43 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
             };
 
             // Определяем контекст ответа (reply_to)
-            const { isReply, replyToContent, replyToSender } = resolveReplyTo(ctx);
+            const { replyContext } = resolveReplyTo(ctx);
 
-            // Если сообщение является ответом, добавляем эту информацию в историю
-            let userMessage = message;
-            if (isReply && replyToContent) {
-                userMessage = `[В ответ на "${replyToContent}" от ${replyToSender}]: ${message}`;
+            if (ctx.session.activePersonContext && ctx.session.activePersonContext.expiresAt <= Date.now()) {
+                ctx.session.activePersonContext = undefined;
             }
+            if (replyContext?.contactId || replyContext?.personId) {
+                ctx.session.activePersonContext = {
+                    contactId: replyContext.contactId,
+                    contactName: replyContext.contactName,
+                    personId: replyContext.personId,
+                    expiresAt: Date.now() + 30 * 60 * 1000,
+                };
+            }
+            const activePerson = ctx.session.activePersonContext;
+            const pendingGap = ctx.session.pendingMemoryGap && ctx.session.pendingMemoryGap.expiresAt > Date.now()
+                ? ctx.session.pendingMemoryGap
+                : undefined;
+            if (ctx.session.pendingMemoryGap && !pendingGap) ctx.session.pendingMemoryGap = undefined;
+            const inheritedTopic = ctx.session.workingMemory?.activeTopics?.[0];
+            const detectedTopic = detectCurrentConversationTopic(message, inheritedTopic);
 
-            await addToHistory(ctx, 'user', userMessage);
+            const turn: ConversationTurn = {
+                userText: message,
+                replyContext,
+                activePeople: pendingGap && !replyContext?.contactId && !replyContext?.personId ? [{
+                    contactName: pendingGap.contactName,
+                }] : activePerson ? [{
+                    contactId: activePerson.contactId,
+                    contactName: activePerson.contactName,
+                    personId: activePerson.personId,
+                }] : undefined,
+                currentTopic: detectedTopic,
+            };
+            // Reply-контекст не склеиваем с новой репликой: delayed extraction и
+            // summaries должны видеть только слова пользователя.
+            await addToHistory(ctx, 'user', message, { turn });
+            if (pendingGap) ctx.session.pendingMemoryGap = undefined;
 
             // Устанавливаем таймер для обработки одиночного сообщения
             setTimeout(async () => {
@@ -458,7 +479,7 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
                         return;
                     }
 
-                    let messageForProcessing = userMessage;
+                    let messageForProcessing = message;
                     const pendingBrowserTask = ctx.session.pendingBrowserTask;
                     if (pendingBrowserTask) {
                         if (Date.now() > pendingBrowserTask.expiresAt) {
@@ -493,7 +514,7 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
                     }
 
                     let voiceReplyRequested = false;
-                    if (messageForProcessing === userMessage && wantsVoiceReply(message)) {
+                    if (messageForProcessing === message && wantsVoiceReply(message)) {
                         voiceReplyRequested = true;
                         messageForProcessing = stripVoiceReplyDirective(messageForProcessing);
                     }
@@ -507,10 +528,48 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
                         "",
                         ctx.session.messageHistory.slice().reverse(),
                         undefined,
-                        { voiceReplyRequested: voiceReplyRequested }
+                        { voiceReplyRequested: voiceReplyRequested, turn }
                     );
 
                     await saveRemindersFromResult(ctx, result);
+
+                    // Один follow-up включается в тот же ответ, а не прилетает
+                    // отдельным fire-and-forget сообщением после него.
+                    let identityGapCandidate: Awaited<ReturnType<typeof detectMemoryGapCandidate>>;
+                    let proactiveCandidate: ProactiveHintCandidate | undefined;
+                    if (
+                        shouldRunProactiveHint(result, messageForProcessing) &&
+                        !decideKnowledgeSource(message, turn.replyContext, turn.currentTopic).requiresWeb &&
+                        !result.keyboard &&
+                        !ctx.session.pendingContactMemory
+                    ) {
+                        const identityCandidate = turn.replyContext?.contactId
+                            ? undefined
+                            : await detectMemoryGapCandidate(ctx, message).catch(() => undefined);
+                        if (identityCandidate) {
+                            identityGapCandidate = identityCandidate;
+                            result.responseText = `${result.responseText}\n\n${identityCandidate.question}`;
+                        } else {
+                            const reminderCandidate = await detectImplicitReminderCandidate(ctx, message).catch(() => undefined);
+                            if (reminderCandidate) {
+                                commitImplicitReminderCandidate(ctx, reminderCandidate);
+                                result.responseText = `${result.responseText}\n\nХочешь, поставлю напоминание на «${reminderCandidate.eventSummary}»?`;
+                                result.keyboard = new InlineKeyboard()
+                                    .text('⏰ Создать напоминание', 'implicit_reminder_yes')
+                                    .text('Не сейчас', 'implicit_reminder_no');
+                            } else {
+                                proactiveCandidate = await maybeProactiveHint(
+                                    ctx,
+                                    message,
+                                    result.responseText,
+                                    { delivery: 'candidate' },
+                                ).catch(() => undefined) as ProactiveHintCandidate | undefined;
+                                if (proactiveCandidate?.hint) {
+                                    result.responseText = `${result.responseText}\n\n${proactiveCandidate.hint}`;
+                                }
+                            }
+                        }
+                    }
 
                     if (result.negotiationSummarySent) {
                         await addToHistory(ctx, 'bot', '[Переговоры запущены — см. сообщение выше]');
@@ -521,22 +580,30 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
                     await addToHistory(ctx, 'bot', result.responseText);
 
                     // Единая отправка результата вместо дублированного if/else
-                    await sendResultToUser(ctx, result, voiceReplyRequested);
+                    const sentResult = await sendResultToUser(ctx, result, voiceReplyRequested);
+                    if (identityGapCandidate && sentResult?.message_id) {
+                        commitMemoryGapCandidate(ctx, identityGapCandidate, sentResult.message_id);
+                        storeSentMessageContext(ctx, sentResult.message_id, result.responseText, {
+                            kind: 'identity_gap',
+                            contactName: identityGapCandidate.name,
+                        });
+                    }
+                    if (proactiveCandidate && sentResult?.message_id) {
+                        commitProactiveHintCandidate(ctx, proactiveCandidate, sentResult.message_id);
+                        storeSentMessageContext(ctx, sentResult.message_id, result.responseText, {
+                            kind: 'proactive',
+                            contactId: proactiveCandidate.contactId,
+                            contactName: proactiveCandidate.contactName,
+                            personId: proactiveCandidate.personId,
+                            memoryIds: proactiveCandidate.sourceMemoryIds,
+                        });
+                    }
 
                     maybeReactToUser(ctx, result.botReaction);
                     await checkLastFactSaveError(ctx);
 
-                    // Проактивная память
-                    if (shouldRunProactiveHint(result, messageForProcessing)) {
-                        maybeProactiveHint(ctx, message, result.responseText).catch(() => {});
-                    }
                     // Reconsolidation
-                    reconsolidateAfterResponse(ctx, message, result.responseText, result.recalledMemories).catch(() => {});
-                    // Детекция пробелов
-                    maybeAskMemoryGap(ctx, message).catch(() => {});
-                    // Детекция неявных напоминаний
-                    const wasConversation = !result.reminderCreated && !result.imageGenerated && !result.messageDraft;
-                    maybeDetectImplicitReminder(ctx, message, wasConversation).catch(() => {});
+                    reconsolidateAfterResponse(ctx, message, result.responseText, result.recalledMemories, turn).catch(() => {});
                 }
                 } catch (timerError) {
                     console.error("Ошибка при обработке сообщения в setTimeout:", timerError);

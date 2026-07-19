@@ -48,6 +48,42 @@ const GAP_QUESTION_TEMPLATES = [
     (name: string) => `Ты упомянул ${name} — мне о нём ничего не известно, расскажешь?`,
 ];
 
+export interface MemoryGapCandidate {
+    name: string;
+    question: string;
+}
+
+export async function detectMemoryGapCandidate(
+    ctx: BotContext,
+    userMessage: string,
+): Promise<MemoryGapCandidate | undefined> {
+    if (ctx.chat?.type !== 'private') return undefined;
+    const lastGapAt = ctx.session.lastMemoryGapAt ?? 0;
+    if (Date.now() - lastGapAt < GAP_COOLDOWN_MS) return undefined;
+    const trimmed = userMessage.trim();
+    if (trimmed.length < 5 || trimmed.startsWith('/') || !/[А-ЯЁA-Z]/.test(trimmed)) return undefined;
+
+    return withTimeout(async () => {
+        const names = await extractPersonNames(trimmed);
+        for (const name of names) {
+            if (!await checkIfPersonKnown(ctx, name)) return { name, question: pickQuestion(name) };
+        }
+        return undefined;
+    }, GAP_COMPUTE_TIMEOUT_MS);
+}
+
+export function commitMemoryGapCandidate(ctx: BotContext, candidate?: MemoryGapCandidate, messageId?: number): void {
+    ctx.session.lastMemoryGapAt = Date.now();
+    if (candidate) {
+        ctx.session.pendingMemoryGap = {
+            contactName: candidate.name,
+            createdAt: Date.now(),
+            expiresAt: Date.now() + 5 * 60 * 1000,
+            messageId,
+        };
+    }
+}
+
 /**
  * После основного ответа бота проверяет: не упомянул ли пользователь человека,
  * о котором в памяти нет никаких данных? Если да — задаёт уточняющий вопрос.
@@ -63,38 +99,13 @@ export async function maybeAskMemoryGap(
 ): Promise<void> {
     if (ctx.chat?.type !== 'private') return;
 
-    // Cooldown: не спрашиваем чаще раза в 10 минут
-    const lastGapAt = ctx.session.lastMemoryGapAt ?? 0;
-    if (Date.now() - lastGapAt < GAP_COOLDOWN_MS) return;
-
-    // Быстрый пре-фильтр: нет заглавных букв → точно нет имён собственных
-    const trimmed = userMessage.trim();
-    if (trimmed.length < 5 || trimmed.startsWith('/')) return;
-    if (!/[А-ЯЁA-Z]/.test(trimmed)) return;
-
     try {
-        await withTimeout(async () => {
-        const names = await extractPersonNames(trimmed);
-        if (names.length === 0) return;
-
-        for (const name of names) {
-            const isKnown = await checkIfPersonKnown(ctx, name);
-            if (!isKnown) {
-                const question = pickQuestion(name);
-
-                ctx.session.lastMemoryGapAt = Date.now();
-
-                // Небольшая пауза — бот как будто "задумался"
-                await new Promise((res) => setTimeout(res, 2000));
-                await ctx.reply(question);
-                await addToHistory(ctx, 'bot', question);
-                devLog('Memory gap question sent:', question);
-
-                // Только один вопрос за раз — не перегружаем пользователя
-                return;
-            }
-        }
-        }, GAP_COMPUTE_TIMEOUT_MS);
+        const candidate = await detectMemoryGapCandidate(ctx, userMessage);
+        if (!candidate) return;
+        const sent = await ctx.reply(candidate.question);
+        commitMemoryGapCandidate(ctx, candidate, sent.message_id);
+        await addToHistory(ctx, 'bot', candidate.question);
+        devLog('Memory gap question sent:', candidate.question);
     } catch (e: any) {
         if (e?.message === 'timeout') {
             devLog('maybeAskMemoryGap: timed out, skipping');

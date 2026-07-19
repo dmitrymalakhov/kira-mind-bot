@@ -6,6 +6,7 @@ import { config } from '../config';
 import { parseLLMJson } from '../utils';
 import type { MemoryStatus } from '../types';
 import { filterUserFactsForThirdPartyEvents } from './factAttributionFilter';
+import { containsMultipleAssertions } from './atomicAssertion';
 
 const BATCH_SIZE = 100;
 const MAX_MESSAGES = 5000;
@@ -97,6 +98,10 @@ export interface ExtractedFactAboutUser {
     subject: 'user' | 'contact';
     /** Имя собеседника (заполняется только когда subject = 'contact') */
     contactName?: string;
+    /** Один канонический предикат; не домен и не составное описание. */
+    predicate?: string;
+    /** Объект того же атомарного утверждения, согласованный с content. */
+    object?: string;
 }
 
 export type StudyChatAnalysisProgress =
@@ -254,6 +259,8 @@ function normalizeFactLike(f: any, subject: 'user' | 'contact'): ExtractedFactAb
     if (status && status !== 'active') tags.push(`status:${status}`);
     return {
         content,
+        predicate: normalizeText(f?.predicate, 100) ?? normalizeDomain(f.domain),
+        object: normalizeText(f?.object, 320) ?? content,
         subject,
         domain: normalizeDomain(f.domain),
         importance: clamp01(f.importance, 0.5),
@@ -322,7 +329,8 @@ function buildReflectionExtractionRules(ownerName: string, contactName: string):
 - временное местонахождение вида "пока в городе", если это не переезд, поездка с явными датами или важное событие;
 - одноразовое настроение/стресс из-за текущей задачи, если нет устойчивого паттерна или риска.
 
-Если сомневаешься, не извлекай факт. Для слабых одноразовых наблюдений ставь importance ниже 0.45, чтобы они не попали в память.`;
+Если сомневаешься, не извлекай факт. Для слабых одноразовых наблюдений ставь importance ниже 0.45, чтобы они не попали в память.
+Поле evidence копируй вместе с датой и именем автора исходной строки, например "[дата] ${contactName}: я работаю...". Не убирай speaker label и не заменяй его местоимением.`;
 }
 
 /** Промпт для извлечения фактов о владельце бота ("Я") */
@@ -339,6 +347,7 @@ function buildUserFactsPrompt(
     return `Переписка ${ownerName} ("Я") с ${contactName}. Период: ${periodLabel}.
 
 Твоя задача: извлечь факты ТОЛЬКО о ${ownerName}.
+Каждый элемент facts — ровно одно атомарное утверждение subject/predicate/object. Не склеивай отношения, работу, знакомство и хронологию в одну запись.
 
 Источники фактов о ${ownerName}:
 1. Строки "[дата] Я: ..." — что ${ownerName} говорит о себе напрямую
@@ -387,6 +396,8 @@ JSON:
   "facts": [
     {
       "content": "Факт о ${ownerName}, одно предложение от третьего лица",
+      "predicate": "один атомарный предикат",
+      "object": "объект этого предиката",
       "domain": "work",
       "importance": 0.0-1.0,
       "confidence": 0.0-1.0,
@@ -417,6 +428,7 @@ function buildContactFactsPrompt(
     return `Переписка ${ownerName} ("Я") с ${contactName}. Период: ${periodLabel}.
 
 Твоя задача: извлечь факты ТОЛЬКО о ${contactName}.
+Каждый элемент facts — ровно одно атомарное утверждение subject/predicate/object. Не склеивай отношения, работу, знакомство и хронологию в одну запись.
 
 Источники фактов о ${contactName}:
 1. Строки "[дата] ${contactName}: ..." — что ${contactName} говорит о себе
@@ -435,6 +447,10 @@ function buildContactFactsPrompt(
 
 НЕ включай: факты о ${ownerName}.
 НЕ включай: тривиальное, единичные случайные фразы без контекста.
+КРИТИЧНО ПРО СУБЪЕКТА: владелец чата ${contactName} не становится субъектом события автоматически.
+Фраза с пропущенным субъектом вроде «в понедельник будут делать операцию» — не факт о ${contactName}, если в текущем или предыдущем сообщении нет доказуемого antecedent.
+Событие про бабушку, родственника, коллегу или иное третье лицо не переписывай как событие самого ${contactName}.
+Если субъект не доказан, не извлекай contact-факт. Не дополняй evidence именем, которого не было в исходной реплике.
 Если переписка старше 6 месяцев — снижай importance для планов и временных состояний.
 Для каждого факта укажи temporalScope:
 - stable/preference/routine/relationship — устойчивое знание
@@ -461,6 +477,8 @@ JSON:
   "facts": [
     {
       "content": "Факт о ${contactName}, одно предложение от третьего лица",
+      "predicate": "один атомарный предикат",
+      "object": "объект этого предиката",
       "domain": "work",
       "importance": 0.0-1.0,
       "confidence": 0.0-1.0,
@@ -574,10 +592,10 @@ function buildSynthesisPrompt(facts: ExtractedFactAboutUser[], personName: strin
 ${factsText}
 
 Задача:
-1. Объедини семантически похожие факты в один (наиболее точная формулировка)
+1. Дедуплицируй только варианты одного и того же subject/predicate/object. Разные предикаты никогда не объединяй.
 2. Если факт встречается в нескольких вариантах → это паттерн → повысь importance
 3. Убери тривиальные факты (importance < 0.3 без явной ценности)
-4. Формулируй конкретно от третьего лица: не "любит работу", а "работает в IT, часто задерживается"
+4. Каждая запись должна содержать ровно одно атомарное утверждение; не добавляй вторую характеристику через запятую или союз.
 5. Уточняй домен если нужно
 6. Сохраняй evidence и confidence. Если обобщаешь несколько слабых намёков в паттерн — confidence не выше 0.65.
 7. Не превращай одноразовое настроение в черту характера.
@@ -630,10 +648,15 @@ async function synthesizeGroup(
         const data = parseLLMJson<{ facts?: unknown[] }>(text);
         if (!data || !Array.isArray(data.facts)) return deduplicateExact(facts);
 
-        return data.facts
+        const synthesized = data.facts
             .filter((f: any) => f?.content && f?.domain)
             .map((f: any) => normalizeFactLike(f, subject))
             .filter((fact) => fact.content.length >= 8);
+        // При нарушении атомарности не теряем исходные проверяемые факты и не
+        // сохраняем склейку, придуманную этапом синтеза.
+        return synthesized.some(fact => containsMultipleAssertions(fact.content))
+            ? deduplicateExact(facts)
+            : synthesized;
     } catch (e) {
         console.error(`synthesizeGroup(${subject}) error:`, e);
         return deduplicateExact(facts);
@@ -738,7 +761,8 @@ function deterministicQualityGate(facts: ExtractedFactAboutUser[], contactName?:
         })
         .filter((fact) => fact.importance >= 0.25)
         .filter((fact) => (fact.confidence ?? 0.62) >= 0.35)
-        .filter((fact) => !fact.qualityWarnings?.includes('too-generic'));
+        .filter((fact) => !fact.qualityWarnings?.includes('too-generic'))
+        .filter((fact) => !containsMultipleAssertions(fact.content));
 }
 
 function buildCriticPrompt(
@@ -755,6 +779,8 @@ function buildCriticPrompt(
 - drop для одноразовых технических/рабочих деталей про инструменты, ChatGPT, файлы, распознавание, портирование, обработку материалов.
 - drop для "сейчас занимается задачей", "пока находится в городе", "долго обрабатывает", если нет долгосрочного значения.
 - keep только если факт помогает будущему поведению ассистента, отражает устойчивое знание или важное событие.
+- Для subject=contact делай drop, если evidence не содержит явного имени/обращения или первого лица собеседника. Источник-чата сам по себе не доказывает субъект.
+- Фразу с пропущенным субъектом и событие про родственника нельзя переписывать как факт о владельце чата.
 - rewrite допустим, если из технической детали можно аккуратно получить устойчивое правило помощи, явно поддержанное перепиской.`
         : '';
     const factsText = facts.map((fact, index) => [
@@ -850,6 +876,7 @@ function applyCriticDecision(
     return {
         ...fact,
         content,
+        object: content !== fact.content ? content : fact.object,
         domain: normalizeDomain(decision.domain ?? fact.domain),
         importance: clamp01(decision.importance, fact.importance),
         confidence,

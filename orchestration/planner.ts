@@ -33,15 +33,22 @@ function hasSubIntent(
     return classification.subIntents?.some((subIntent) => subIntent.intent === intent) ?? false;
 }
 
-function postProcessPlan(plan: Plan, classification: PlanningInput['classification']): Plan {
+const EXTERNAL_ACTION_STEPS = new Set<PlanStep['agentId']>([
+    'reminder',
+    'readMessages',
+    'sendMessage',
+    'negotiateOnBehalf',
+    'imageGeneration',
+    'maps',
+    'browserTask',
+    'health',
+]);
+
+export function postProcessPlan(plan: Plan, classification: PlanningInput['classification']): Plan {
     const intent = classification.intent || 'РАЗГОВОР';
 
     if (intent === 'БРАУЗЕР_ЗАДАЧА') {
         return { steps: [{ agentId: 'browserTask' }] };
-    }
-
-    if (intent === 'ЗДОРОВЬЕ') {
-        return { steps: [{ agentId: 'health' }] };
     }
 
     if (intent === 'НЕОПРЕДЕЛЕНО') {
@@ -50,6 +57,35 @@ function postProcessPlan(plan: Plan, classification: PlanningInput['classificati
 
     if (intent === 'САМОИЗУЧЕНИЕ') {
         return { steps: [{ agentId: 'selfStudy' }] };
+    }
+
+    if (classification.details?.knowledgeSource === 'external_current') {
+        let steps = [...plan.steps];
+        if (intent === 'ВЕБ_ПОИСК' && !hasSubIntent(classification, 'КАРТЫ_ЛОКАЦИИ')) {
+            steps = steps.filter(step => step.agentId !== 'maps');
+        }
+
+        // conversation завершает executor немедленно, поэтому внешний контекст
+        // всегда канонизируется в identity -> web -> action ИЛИ conversation.
+        const identitySteps = steps.filter(step => step.agentId === 'resolveContact' || step.agentId === 'memory');
+        const workSteps = steps.filter(step =>
+            step.agentId !== 'resolveContact' &&
+            step.agentId !== 'memory' &&
+            step.agentId !== 'webSearch' &&
+            step.agentId !== 'conversation'
+        );
+        const hasAction = workSteps.some(step => EXTERNAL_ACTION_STEPS.has(step.agentId));
+        const canonicalSteps: PlanStep[] = [
+            ...identitySteps,
+            { agentId: 'webSearch' },
+            ...workSteps,
+        ];
+        if (!hasAction) canonicalSteps.push({ agentId: 'conversation' });
+        return { steps: canonicalSteps };
+    }
+
+    if (intent === 'ЗДОРОВЬЕ') {
+        return { steps: [{ agentId: 'health' }] };
     }
 
     if (intent === 'ВЕБ_ПОИСК' && !hasSubIntent(classification, 'КАРТЫ_ЛОКАЦИИ')) {
@@ -76,10 +112,6 @@ export async function createPlan(input: PlanningInput): Promise<Plan> {
         return { steps: [{ agentId: 'browserTask' }] };
     }
 
-    if (intent === 'ЗДОРОВЬЕ') {
-        return { steps: [{ agentId: 'health' }] };
-    }
-
     if (intent === 'НЕОПРЕДЕЛЕНО') {
         return { steps: [{ agentId: 'unclearIntent' }] };
     }
@@ -88,12 +120,24 @@ export async function createPlan(input: PlanningInput): Promise<Plan> {
         return { steps: [{ agentId: 'selfStudy' }] };
     }
 
+    if (
+        intent === 'ВЕБ_ПОИСК' &&
+        classification.details?.knowledgeSource === 'external_current' &&
+        !classification.subIntents?.length
+    ) {
+        return { steps: [{ agentId: 'webSearch' }, { agentId: 'conversation' }] };
+    }
+
+    if (intent === 'ЗДОРОВЬЕ') {
+        return postProcessPlan({ steps: [{ agentId: 'health' }] }, classification);
+    }
+
     if (isTodayImportanceRequest(message)) {
         return { steps: [{ agentId: 'conversation' }] };
     }
 
     if (intent === 'НАПОМИНАНИЕ' && !classification.subIntents?.length) {
-        return { steps: [{ agentId: 'reminder' }] };
+        return postProcessPlan({ steps: [{ agentId: 'reminder' }] }, classification);
     }
 
     const cacheKey = `plan:${intent}:${message.slice(0, 200)}`;
@@ -149,7 +193,7 @@ ${AVAILABLE_STEPS}
         const parsed = parseLLMJson<{ steps?: unknown[] }>(text);
         if (!parsed) {
             devLog('Planner: no JSON in response, using fallback');
-            return fallbackPlan(intent, message);
+            return postProcessPlan(fallbackPlan(intent, message), classification);
         }
         let steps: PlanStep[] = Array.isArray(parsed.steps)
             ? parsed.steps
@@ -161,19 +205,19 @@ ${AVAILABLE_STEPS}
                 .filter((s: PlanStep) => s.agentId)
             : [];
         steps = postProcessPlan({ steps }, input.classification).steps;
-        if (steps.length === 0) return fallbackPlan(intent, message);
+        if (steps.length === 0) return postProcessPlan(fallbackPlan(intent, message), classification);
         // Если интент — отправка сообщения, в плане обязан быть sendMessage; иначе пользователь получит уточняющий диалог вместо черновика сообщения.
         if (intent === 'ОТПРАВКА_СООБЩЕНИЯ' && !steps.some((s) => s.agentId === 'sendMessage')) {
             devLog('Planner: intent ОТПРАВКА_СООБЩЕНИЯ but no sendMessage in plan, using fallback');
             console.log("[ORCH] planner: intent ОТПРАВКА_СООБЩЕНИЯ but LLM plan had no sendMessage, using fallback");
-            return fallbackPlan(intent, message);
+            return postProcessPlan(fallbackPlan(intent, message), classification);
         }
         // Для проверки сообщений всегда используем fallback — readMessages сам возвращает ответ,
         // добавление conversation после него ломает клавиатуру выбора периода.
         if (intent === 'ПРОВЕРКА_СООБЩЕНИЙ') {
             devLog('Planner: intent ПРОВЕРКА_СООБЩЕНИЙ, using fallback plan');
             console.log("[ORCH] planner: intent ПРОВЕРКА_СООБЩЕНИЙ, using fallback");
-            return fallbackPlan(intent, message);
+            return postProcessPlan(fallbackPlan(intent, message), classification);
         }
         // Шаги, которые дают ответ пользователю. Если план содержит только memory/resolveContact — ответа не будет.
         const respondingAgentIds = new Set(['conversation', 'reminder', 'readMessages', 'sendMessage', 'negotiateOnBehalf', 'imageGeneration', 'maps', 'unclearIntent', 'capabilities', 'selfStudy', 'browserTask', 'health']);
@@ -189,7 +233,7 @@ ${AVAILABLE_STEPS}
         return plan;
     } catch (e) {
         console.error('Planner failed, using deterministic fallback:', buildSafeAiErrorLog(e));
-        return fallbackPlan(intent, message);
+        return postProcessPlan(fallbackPlan(intent, message), classification);
     }
 }
 
@@ -232,7 +276,7 @@ function fallbackPlan(intent: string, message: string): Plan {
             return { steps: [{ agentId: 'readMessages' }] };
         }
         case 'ВЕБ_ПОИСК':
-            return { steps: [{ agentId: 'webSearch' }] };
+            return { steps: [{ agentId: 'webSearch' }, { agentId: 'conversation' }] };
         case 'ОТПРАВКА_СООБЩЕНИЯ':
             return { steps: [{ agentId: 'sendMessage' }] };
         case 'ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ':

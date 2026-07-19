@@ -27,6 +27,48 @@ interface LLMCheckResult {
     eventSummary?: string;
 }
 
+export interface ImplicitReminderCandidate {
+    originalMessage: string;
+    eventSummary: string;
+}
+
+export async function detectImplicitReminderCandidate(
+    ctx: BotContext,
+    userMessage: string,
+): Promise<ImplicitReminderCandidate | undefined> {
+    if (ctx.chat?.type !== 'private') return undefined;
+    if (!TEMPORAL_RE.test(userMessage) || !EVENT_RE.test(userMessage)) return undefined;
+    const lastAt = ctx.session.lastImplicitReminderAt ?? 0;
+    if (Date.now() - lastAt < COOLDOWN_MS) return undefined;
+
+    const resp = await createChatCompletionForTask('memoryExtraction', {
+        messages: [
+            {
+                role: 'system',
+                content:
+                    'Определи: содержит ли сообщение конкретное событие с временной привязкой, о котором пользователь вероятно хотел бы получить напоминание? ' +
+                    'Напоминание уместно, если есть КОНКРЕТНОЕ время или дата + КОНКРЕТНОЕ событие. ' +
+                    'НЕ предлагай для фактического вопроса о внешнем расписании или спортивном турнире. ' +
+                    'Верни только JSON: {"shouldSuggest": true/false, "eventSummary": "краткое описание события 3-5 слов"}',
+            },
+            { role: 'user', content: userMessage.slice(0, 400) },
+        ],
+        temperature: 1,
+    });
+    const parsed = parseLLMJson<LLMCheckResult>(resp.choices[0]?.message?.content || '');
+    if (!parsed?.shouldSuggest || !parsed.eventSummary) return undefined;
+    return { originalMessage: userMessage, eventSummary: parsed.eventSummary };
+}
+
+export function commitImplicitReminderCandidate(ctx: BotContext, candidate: ImplicitReminderCandidate): void {
+    ctx.session.lastImplicitReminderAt = Date.now();
+    ctx.session.pendingImplicitReminder = {
+        originalMessage: candidate.originalMessage,
+        eventSummary: candidate.eventSummary,
+        createdAt: Date.now(),
+    };
+}
+
 /**
  * После РАЗГОВОР-ответа проверяет, не упомянул ли пользователь конкретное
  * событие с временной привязкой, и предлагает создать напоминание.
@@ -40,39 +82,10 @@ export async function maybeDetectImplicitReminder(
     if (!wasConversationIntent) return;
     if (ctx.chat?.type !== 'private') return;
 
-    // Быстрый pre-filter: оба маркера должны быть в сообщении
-    if (!TEMPORAL_RE.test(userMessage) || !EVENT_RE.test(userMessage)) return;
-
-    // Cooldown: не предлагаем чаще раза в 15 минут
-    const lastAt = ctx.session.lastImplicitReminderAt ?? 0;
-    if (Date.now() - lastAt < COOLDOWN_MS) return;
-
     try {
-        const resp = await createChatCompletionForTask('memoryExtraction', {
-            messages: [
-                {
-                    role: 'system',
-                    content:
-                        'Определи: содержит ли сообщение конкретное событие с временной привязкой, о котором пользователь вероятно хотел бы получить напоминание? ' +
-                        'Напоминание уместно, если есть КОНКРЕТНОЕ время или дата + КОНКРЕТНОЕ событие (встреча, звонок, вылет, запись и т.п.). ' +
-                        'НЕ предлагай напоминание для расплывчатых упоминаний без чёткого времени. ' +
-                        'Верни только JSON: {"shouldSuggest": true/false, "eventSummary": "краткое описание события 3-5 слов"}',
-                },
-                { role: 'user', content: userMessage.slice(0, 400) },
-            ],
-            temperature: 1,
-        });
-
-        const content = resp.choices[0]?.message?.content || '';
-        const parsed = parseLLMJson<LLMCheckResult>(content);
-        if (!parsed?.shouldSuggest || !parsed.eventSummary) return;
-
-        ctx.session.lastImplicitReminderAt = Date.now();
-        ctx.session.pendingImplicitReminder = {
-            originalMessage: userMessage,
-            eventSummary: parsed.eventSummary,
-            createdAt: Date.now(),
-        };
+        const candidate = await detectImplicitReminderCandidate(ctx, userMessage);
+        if (!candidate) return;
+        commitImplicitReminderCandidate(ctx, candidate);
 
         const keyboard = new InlineKeyboard()
             .text('⏰ Создать напоминание', 'implicit_reminder_yes')
@@ -80,7 +93,7 @@ export async function maybeDetectImplicitReminder(
 
         await new Promise((res) => setTimeout(res, 1200));
         await ctx.reply(
-            `📅 Хочешь, поставлю напоминание на «${parsed.eventSummary}»?`,
+            `📅 Хочешь, поставлю напоминание на «${candidate.eventSummary}»?`,
             { reply_markup: keyboard }
         );
     } catch {

@@ -1,5 +1,10 @@
 import assert from "assert";
-import { TypeORMSessionStorage } from "../services/SessionStorage";
+import {
+    appendPersistedHistory,
+    appendPersistedSentMessageContext,
+    saveProactiveInsight,
+    TypeORMSessionStorage,
+} from "../services/SessionStorage";
 import { AppDataSource } from "../data-source";
 import { SessionEntity } from "../entity/SessionEntity";
 import type { SessionData } from "../types";
@@ -7,7 +12,7 @@ import { scopedBotKey } from "../utils/botIdentity";
 
 interface StoredRow {
     key: string;
-    data: string;
+    data: Record<string, unknown> | string;
 }
 
 interface SessionRepo {
@@ -47,8 +52,10 @@ class InMemorySessionRepo implements SessionRepo {
     }
 }
 
-async function withMockedRepo(run: (repo: InMemorySessionRepo) => Promise<void>) {
-    const repo = new InMemorySessionRepo();
+async function withMockedRepo(
+    run: (repo: InMemorySessionRepo) => Promise<void>,
+    repo: InMemorySessionRepo = new InMemorySessionRepo(),
+) {
     const originalDescriptor = Object.getOwnPropertyDescriptor(AppDataSource, "getRepository");
 
     Object.defineProperty(AppDataSource, "getRepository", {
@@ -65,10 +72,19 @@ async function withMockedRepo(run: (repo: InMemorySessionRepo) => Promise<void>)
     }
 }
 
+class RawCapturingSessionRepo extends InMemorySessionRepo {
+    readonly queries: Array<{ sql: string; parameters?: unknown[] }> = [];
+
+    async query(sql: string, parameters?: unknown[]): Promise<unknown> {
+        this.queries.push({ sql, parameters });
+        return [];
+    }
+}
+
 async function testPendingPostponeRoundTrip() {
     await withMockedRepo(async (repo) => {
         const storage = new TypeORMSessionStorage();
-        const key = "176779906";
+        const key = "910000006";
         const expiresAt = Date.now() + 60_000;
         const session: SessionData = {
             ...createInitialSession(),
@@ -85,7 +101,7 @@ async function testPendingPostponeRoundTrip() {
 
         const stored = repo.getRow(scopedBotKey(key));
         assert(stored, "pendingPostpone should be written to storage");
-        assert(stored.data.includes("\"pendingPostpone\""));
+        assert(JSON.stringify(stored.data).includes("\"pendingPostpone\""));
 
         const restored = await storage.read(key);
         assert(restored, "session should be restored");
@@ -96,7 +112,7 @@ async function testPendingPostponeRoundTrip() {
 async function testPendingReminderEditRoundTrip() {
     await withMockedRepo(async (repo) => {
         const storage = new TypeORMSessionStorage();
-        const key = "176779907";
+        const key = "910000007";
         const expiresAt = Date.now() + 60_000;
         const session: SessionData = {
             ...createInitialSession(),
@@ -113,7 +129,7 @@ async function testPendingReminderEditRoundTrip() {
 
         const stored = repo.getRow(scopedBotKey(key));
         assert(stored, "pendingReminderEdit should be written to storage");
-        assert(stored.data.includes("\"pendingReminderEdit\""));
+        assert(JSON.stringify(stored.data).includes("\"pendingReminderEdit\""));
 
         const restored = await storage.read(key);
         assert(restored, "session should be restored");
@@ -121,10 +137,43 @@ async function testPendingReminderEditRoundTrip() {
     });
 }
 
+async function testDialoguePendingContextsRoundTripAndExpire() {
+    await withMockedRepo(async (repo) => {
+        const storage = new TypeORMSessionStorage();
+        const key = '910000013';
+        const now = Date.now();
+        const session: SessionData = {
+            ...createInitialSession(),
+            pendingImplicitReminder: {
+                originalMessage: 'Синтетическое событие',
+                eventSummary: 'синтетическое событие',
+                createdAt: now,
+            },
+            pendingMemoryGap: {
+                contactName: 'Контакт Гамма',
+                createdAt: now,
+                expiresAt: now + 60_000,
+                messageId: 123,
+            },
+        };
+        await storage.write(key, session);
+        const restored = await storage.read(key);
+        assert.deepStrictEqual(restored?.pendingImplicitReminder, session.pendingImplicitReminder);
+        assert.deepStrictEqual(restored?.pendingMemoryGap, session.pendingMemoryGap);
+
+        session.pendingImplicitReminder!.createdAt = now - 10 * 60_000;
+        session.pendingMemoryGap!.expiresAt = now - 1;
+        await storage.write(key, session);
+        const stored = repo.getRow(scopedBotKey(key));
+        assert(!JSON.stringify(stored?.data).includes('pendingImplicitReminder'));
+        assert(!JSON.stringify(stored?.data).includes('pendingMemoryGap'));
+    });
+}
+
 async function testExpiredPendingStatesPruned() {
     await withMockedRepo(async (repo) => {
         const storage = new TypeORMSessionStorage();
-        const key = "176779908";
+        const key = "910000008";
         const session: SessionData = {
             ...createInitialSession(),
             pendingPostpone: {
@@ -147,8 +196,8 @@ async function testExpiredPendingStatesPruned() {
 
         const stored = repo.getRow(scopedBotKey(key));
         assert(stored, "expired state should still produce a session row");
-        assert(!stored.data.includes("\"pendingPostpone\""));
-        assert(!stored.data.includes("\"pendingReminderEdit\""));
+        assert(!JSON.stringify(stored.data).includes("\"pendingPostpone\""));
+        assert(!JSON.stringify(stored.data).includes("\"pendingReminderEdit\""));
 
         await repo.upsert({
             key: scopedBotKey(key),
@@ -169,10 +218,217 @@ async function testExpiredPendingStatesPruned() {
     });
 }
 
+async function testLegacyStringJsonbIsReadable() {
+    await withMockedRepo(async (repo) => {
+        const key = '910000010';
+        await repo.upsert({
+            key: scopedBotKey(key),
+            data: JSON.stringify({
+                messageHistory: [],
+                dialogueSummary: 'legacy summary',
+                lastSummarizedIndex: 2,
+                domains: {},
+            }),
+        }, ['key']);
+
+        const restored = await new TypeORMSessionStorage().read(key);
+        assert.equal(restored?.dialogueSummary, 'legacy summary');
+        assert.equal(restored?.lastSummarizedIndex, 2);
+    });
+}
+
+async function testBackgroundUpdatesPreserveStructuredContext() {
+    await withMockedRepo(async () => {
+        const chatId = 910000011;
+        const storage = new TypeORMSessionStorage();
+        const session = createInitialSession();
+        session.sentMessageContexts = {
+            88: {
+                messageId: 88,
+                text: 'Синтетическая подсказка',
+                kind: 'proactive',
+                personId: 'synthetic-person-id',
+                memoryIds: ['synthetic-memory-id'],
+                createdAt: Date.now(),
+            },
+        };
+        session.sentMessages = { 88: 'Синтетическая подсказка' };
+        session.pendingContactLookup = {
+            contactName: 'Тестовый Контакт',
+            originalMessage: 'Синтетическая исходная реплика',
+            candidateIds: [900000003],
+            createdAt: Date.now(),
+        };
+        await storage.write(String(chatId), session);
+
+        await appendPersistedHistory(chatId, 'bot', 'Фоновая запись');
+        await saveProactiveInsight(chatId, {
+            message: 'Синтетическая подсказка',
+            sourceMemories: ['Синтетический факт'],
+            createdAt: Date.now(),
+            messageId: 88,
+            kind: 'contextHint',
+        });
+
+        const restored = await storage.read(String(chatId));
+        assert.equal(restored?.sentMessageContexts?.[88]?.personId, 'synthetic-person-id');
+        assert.equal(restored?.pendingContactLookup?.contactName, 'Тестовый Контакт');
+        assert.equal(restored?.messageHistory?.[0]?.content, 'Фоновая запись');
+        assert.equal(restored?.lastProactiveInsight?.messageId, 88);
+    });
+}
+
+async function testMiddlewareFlushPreservesConcurrentBackgroundUpdates() {
+    await withMockedRepo(async () => {
+        const chatId = 910000014;
+        const storage = new TypeORMSessionStorage();
+        const session = createInitialSession();
+        await storage.write(String(chatId), session);
+
+        // Имитируем raw/background update после read/write middleware snapshot.
+        await appendPersistedHistory(chatId, 'bot', 'Фоновая история');
+        await appendPersistedSentMessageContext(chatId, {
+            messageId: 144,
+            text: 'Фоновая карточка',
+            kind: 'proactive',
+            createdAt: Date.now(),
+        });
+        await saveProactiveInsight(chatId, {
+            message: 'Фоновая карточка',
+            sourceMemories: ['Синтетический источник'],
+            createdAt: Date.now(),
+            messageId: 144,
+            kind: 'contextHint',
+        });
+
+        session.dialogueSummary = 'Локальное изменение middleware';
+        session.pendingMemoryGap = {
+            contactName: 'Контакт Дельта',
+            createdAt: Date.now(),
+            expiresAt: Date.now() + 60_000,
+            messageId: 145,
+        };
+        await storage.write(String(chatId), session);
+
+        // Повторный flush того же in-memory ctx не должен принять неизвестные ему
+        // фоновые поля за намеренное удаление.
+        session.pendingMemoryGap = undefined;
+        await storage.write(String(chatId), session);
+        const afterCleanup = await storage.read(String(chatId));
+        assert.equal(afterCleanup?.dialogueSummary, 'Локальное изменение middleware');
+        assert.equal(afterCleanup?.pendingMemoryGap, undefined);
+        assert.equal(afterCleanup?.messageHistory?.[0]?.content, 'Фоновая история');
+        assert.equal(afterCleanup?.sentMessageContexts?.[144]?.text, 'Фоновая карточка');
+        assert.equal(afterCleanup?.lastProactiveInsight?.messageId, 144);
+    });
+}
+
+async function testConcurrentSessionReadsKeepIndependentSnapshots() {
+    await withMockedRepo(async () => {
+        const chatId = 910000015;
+        const storage = new TypeORMSessionStorage();
+        await storage.write(String(chatId), createInitialSession());
+        const firstContext = await storage.read(String(chatId));
+        assert(firstContext);
+
+        // Второй read того же ключа не должен заменить baseline первого ctx.
+        await storage.read(String(chatId));
+        await appendPersistedSentMessageContext(chatId, {
+            messageId: 155,
+            text: 'Контекст конкурентного чтения',
+            kind: 'system',
+            createdAt: Date.now(),
+        });
+        firstContext.dialogueSummary = 'Изменение первого ctx';
+        await storage.write(String(chatId), firstContext);
+
+        const restored = await storage.read(String(chatId));
+        assert.equal(restored?.dialogueSummary, 'Изменение первого ctx');
+        assert.equal(restored?.sentMessageContexts?.[155]?.text, 'Контекст конкурентного чтения');
+    });
+}
+
+async function testBoundedLocalHistoryKeepsConcurrentAppend() {
+    await withMockedRepo(async () => {
+        const chatId = 910000016;
+        const storage = new TypeORMSessionStorage();
+        const session = createInitialSession();
+        session.messageHistory = Array.from({ length: 20 }, (_, index) => ({
+            role: 'user',
+            content: `Исходная запись ${index}`,
+            timestamp: new Date(1_700_000_000_000 - index * 1_000),
+        }));
+        await storage.write(String(chatId), session);
+        await appendPersistedHistory(chatId, 'bot', 'Конкурентная фоновая запись');
+
+        session.messageHistory = [
+            { role: 'user', content: 'Новая локальная запись 1', timestamp: new Date() },
+            { role: 'bot', content: 'Новая локальная запись 2', timestamp: new Date() },
+            ...session.messageHistory,
+        ].slice(0, 20);
+        await storage.write(String(chatId), session);
+
+        const restored = await storage.read(String(chatId));
+        const contents = restored?.messageHistory.map(entry => entry.content) ?? [];
+        assert.equal(contents.length, 20);
+        assert(contents.includes('Новая локальная запись 1'));
+        assert(contents.includes('Новая локальная запись 2'));
+        assert(contents.includes('Конкурентная фоновая запись'));
+    });
+}
+
+async function testStructuredSentMessageRoundTrip() {
+    await withMockedRepo(async () => {
+        const chatId = 910000009;
+        await appendPersistedSentMessageContext(chatId, {
+            messageId: 77,
+            text: 'Карточка тестового контакта',
+            kind: 'memory_card',
+            contactId: 900000001,
+            contactName: 'Тестовый Контакт Альфа',
+            memoryIds: ['memory-1'],
+            createdAt: Date.now(),
+        });
+        const restored = await new TypeORMSessionStorage().read(String(chatId));
+        assert.equal(restored?.sentMessages?.[77], 'Карточка тестового контакта');
+        assert.equal(restored?.sentMessageContexts?.[77]?.contactId, 900000001);
+        assert.deepStrictEqual(restored?.sentMessageContexts?.[77]?.memoryIds, ['memory-1']);
+    });
+}
+
+async function testRawStructuredContextIsBoundedAndExpires() {
+    const repo = new RawCapturingSessionRepo();
+    await withMockedRepo(async () => {
+        await appendPersistedSentMessageContext(910000012, {
+            messageId: 99,
+            text: 'Синтетическая карточка',
+            kind: 'memory_card',
+            personId: 'synthetic-person-bounded',
+            memoryIds: ['synthetic-memory-bounded'],
+            createdAt: Date.now(),
+        });
+    }, repo);
+
+    const update = repo.queries.find(item => /UPDATE bot_sessions/u.test(item.sql));
+    assert(update, 'production SQL update should be issued');
+    assert.match(update.sql, /LIMIT 50/u);
+    assert.match(update.sql, /createdAt/u);
+    assert.equal(update.parameters?.length, 5);
+    assert.equal(typeof update.parameters?.[4], 'number');
+}
+
 async function main() {
     await testPendingPostponeRoundTrip();
     await testPendingReminderEditRoundTrip();
+    await testDialoguePendingContextsRoundTripAndExpire();
     await testExpiredPendingStatesPruned();
+    await testStructuredSentMessageRoundTrip();
+    await testLegacyStringJsonbIsReadable();
+    await testBackgroundUpdatesPreserveStructuredContext();
+    await testMiddlewareFlushPreservesConcurrentBackgroundUpdates();
+    await testConcurrentSessionReadsKeepIndependentSnapshots();
+    await testBoundedLocalHistoryKeepsConcurrentAppend();
+    await testRawStructuredContextIsBoundedAndExpires();
     console.log("sessionStorage reminder pending-state checks passed");
 }
 

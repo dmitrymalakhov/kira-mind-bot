@@ -4,7 +4,7 @@ export interface EmotionalTag {
     isFlashbulb: boolean;
 }
 
-export type MemorySubject = 'user' | 'contact' | 'bot' | 'system';
+export type MemorySubject = 'user' | 'contact' | 'third_party' | 'unknown' | 'bot' | 'system';
 export type MemoryStatus = 'active' | 'planned' | 'done' | 'superseded' | 'expired' | 'unknown';
 export type MemoryKind =
     | 'fact'
@@ -90,6 +90,7 @@ export interface MemoryEntry {
     subject?: MemorySubject;
     predicate?: string;
     object?: string;
+    negated?: boolean;
     validFrom?: Date;
     validTo?: Date;
     status?: MemoryStatus;
@@ -138,6 +139,7 @@ export interface SearchResult {
     subject?: MemorySubject;
     predicate?: string;
     object?: string;
+    negated?: boolean;
     validFrom?: Date;
     validTo?: Date;
     status?: MemoryStatus;
@@ -162,6 +164,8 @@ export abstract class IVectorService {
     abstract cleanupOldMemories(userId: string, daysToKeep?: number): Promise<number>;
     abstract getMemoryStats(userId: string): Promise<MemoryStats>;
     abstract getRecentMemories(userId: string, limit?: number): Promise<MemoryEntry[]>;
+    /** Полный read-only scan памяти пользователя; используется аудитами, а не runtime retrieval. */
+    abstract getAllMemories(userId: string): Promise<MemoryEntry[]>;
     /**
      * Возвращает факты в конкретном домене старше olderThanDays.
      * Используется для эпизодической компрессии.

@@ -59,6 +59,10 @@ export class PineconeVectorService implements IDomainVectorService {
         return [];
     }
 
+    async getAllMemories(_userId: string): Promise<MemoryEntry[]> {
+        throw new Error('Полный аудит памяти для Pinecone пока не поддерживается');
+    }
+
     async createDomain(config: DomainConfig): Promise<void> {
         // TODO
     }

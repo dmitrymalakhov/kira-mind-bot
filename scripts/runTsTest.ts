@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { buildSyntheticTestEnv } from './testEnv';
 
 const requested = process.argv[2]?.trim();
 
@@ -14,7 +15,7 @@ const scriptPath = path.join(process.cwd(), "scripts", fileName);
 const child = spawn("ts-node", [scriptPath], {
     cwd: process.cwd(),
     stdio: "inherit",
-    env: process.env,
+    env: buildSyntheticTestEnv(),
     shell: process.platform === "win32",
 });
 
@@ -25,4 +26,3 @@ child.on("exit", (code, signal) => {
     }
     process.exit(code ?? 1);
 });
-

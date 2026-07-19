@@ -13,6 +13,20 @@ import {
 } from './contactMemory';
 import { formatProactiveMemoryEvidence } from './proactiveMemoryEvidence';
 
+export function identityMetadataFromMemoryTags(tags: string[] | undefined): Pick<
+    ProactiveHintCandidate,
+    'contactId' | 'contactName' | 'personId'
+> {
+    const values = tags ?? [];
+    const contactIdValue = values.find(tag => tag.startsWith('contact_id:'))?.slice('contact_id:'.length);
+    return {
+        contactId: contactIdValue && /^\d+$/u.test(contactIdValue) ? Number(contactIdValue) : undefined,
+        contactName: values.find(tag => tag.startsWith('contact_name:'))?.slice('contact_name:'.length)
+            ?? values.find(tag => tag.startsWith('contact:'))?.slice('contact:'.length),
+        personId: values.find(tag => tag.startsWith('person_id:'))?.slice('person_id:'.length),
+    };
+}
+
 /** Минимальный интервал между проактивными подсказками (20 минут) */
 const HINT_COOLDOWN_MS = 20 * 60 * 1000;
 
@@ -78,8 +92,9 @@ function isLikelyContactMemory(memory: { content: string; tags?: string[] | unde
 export async function maybeProactiveHint(
     ctx: BotContext,
     userMessage: string,
-    botResponse: string
-): Promise<void> {
+    botResponse: string,
+    options: { delivery?: 'send' | 'candidate' } = {},
+): Promise<ProactiveHintCandidate | void> {
     const svc = getVectorService();
     if (!svc) return;
 
@@ -94,7 +109,7 @@ export async function maybeProactiveHint(
     if (Date.now() - lastHintAt < HINT_COOLDOWN_MS) return;
 
     try {
-        await withTimeout(async () => {
+        return await withTimeout(async () => {
         const contactScope = resolveContactIdentityScope(userMessage);
         const userTokens = tokenizeForProactiveOverlap(userMessage);
         const responseTokens = tokenizeForProactiveOverlap(botResponse);
@@ -191,33 +206,41 @@ ${factsText}
         const hint = data.hint.trim();
         if (!hint) return;
 
-        // Обновляем cooldown и трекинг факта
-        ctx.session.lastProactiveHintAt = Date.now();
         const usedFact = candidates[data.factIndex ?? 0];
-        if (usedFact) {
-            recentlyHintedIds.add(usedFact.id);
-            // Ограничиваем размер Set
-            if (recentlyHintedIds.size > 100) {
-                const oldest = recentlyHintedIds.values().next().value;
-                if (oldest !== undefined) recentlyHintedIds.delete(oldest);
-            }
+        const identityMetadata = identityMetadataFromMemoryTags(usedFact?.tags);
+        const candidate: ProactiveHintCandidate = {
+            hint,
+            sourceMemories: usedFact ? [usedFact.content] : candidates.map((c) => c.content).slice(0, 3),
+            sourceMemoryIds: usedFact ? [usedFact.id] : candidates.map((c) => c.id).slice(0, 3),
+            usedMemoryId: usedFact?.id,
+            ...identityMetadata,
+        };
+
+        if (options.delivery === 'candidate') {
+            return candidate;
         }
 
         // Небольшая задержка для естественности — бот "вспомнил" после паузы
         await new Promise((res) => setTimeout(res, 1500));
         const sent = await ctx.reply(hint);
         await addToHistory(ctx, 'bot', hint);
-        ctx.session.lastProactiveInsight = {
-            message: hint,
-            sourceMemories: usedFact ? [usedFact.content] : candidates.map((c) => c.content).slice(0, 3),
-            createdAt: Date.now(),
-            messageId: sent.message_id,
-            kind: 'contextHint',
-        };
+        commitProactiveHintCandidate(ctx, candidate, sent.message_id);
         if (!ctx.session.sentMessages) ctx.session.sentMessages = {};
         ctx.session.sentMessages[sent.message_id] = hint;
+        if (!ctx.session.sentMessageContexts) ctx.session.sentMessageContexts = {};
+        ctx.session.sentMessageContexts[sent.message_id] = {
+            messageId: sent.message_id,
+            text: hint,
+            kind: 'proactive',
+            contactId: candidate.contactId,
+            contactName: candidate.contactName,
+            personId: candidate.personId,
+            memoryIds: candidate.sourceMemoryIds,
+            createdAt: Date.now(),
+        };
         await persistSessionNow(ctx);
         devLog('🔔 Proactive hint sent:', hint.slice(0, 80));
+        return undefined;
         }, HINT_COMPUTE_TIMEOUT_MS);
     } catch (e: any) {
         if (e?.message === 'timeout') {
@@ -226,4 +249,37 @@ ${factsText}
             devLog('maybeProactiveHint error (ignored):', e);
         }
     }
+}
+
+export interface ProactiveHintCandidate {
+    hint: string;
+    sourceMemories: string[];
+    sourceMemoryIds: string[];
+    usedMemoryId?: string;
+    contactId?: number;
+    contactName?: string;
+    personId?: string;
+}
+
+/** Фиксирует подсказку только после успешной отправки общего сообщения. */
+export function commitProactiveHintCandidate(
+    ctx: BotContext,
+    candidate: ProactiveHintCandidate,
+    messageId: number,
+): void {
+    ctx.session.lastProactiveHintAt = Date.now();
+    if (candidate.usedMemoryId) {
+        recentlyHintedIds.add(candidate.usedMemoryId);
+        if (recentlyHintedIds.size > 100) {
+            const oldest = recentlyHintedIds.values().next().value;
+            if (oldest !== undefined) recentlyHintedIds.delete(oldest);
+        }
+    }
+    ctx.session.lastProactiveInsight = {
+        message: candidate.hint,
+        sourceMemories: candidate.sourceMemories,
+        createdAt: Date.now(),
+        messageId,
+        kind: 'contextHint',
+    };
 }

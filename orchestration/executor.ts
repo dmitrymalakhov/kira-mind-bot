@@ -28,6 +28,7 @@ import { applyReminderEditInput } from '../utils/reminderEditor';
 import { syncReminderMemoryMutation } from '../services/ReminderMemorySync';
 import { USER_TIMEZONE } from '../constants';
 import { addZonedDays, formatPromptDateTime, getZonedDateKey } from '../utils/time';
+import { isSilentInternalKnowledgePipeline, SILENT_STEPS } from './progressPolicy';
 
 /**
  * Ищет напоминание по текстовому запросу и отменяет его.
@@ -347,9 +348,6 @@ const STEP_LABELS: Record<string, string> = {
     health: '🩺 Открываю дневник здоровья…',
 };
 
-/** Шаги, которые не видны пользователю (нет полезного действия для отображения) */
-const SILENT_STEPS = new Set(['memory', 'resolveContact']);
-
 export interface ExecutePlanParams {
     ctx: BotContext;
     plan: Plan;
@@ -415,10 +413,11 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
     /** Видимые (не-silent) шаги плана — только по ним показываем прогресс */
     const visibleSteps = steps.filter((s) => !SILENT_STEPS.has(s.agentId));
     const isMultiStepPlan = visibleSteps.length > 1;
+    const isInternalKnowledgePipeline = isSilentInternalKnowledgePipeline(steps);
 
     /** Отправить пользователю уведомление о прогрессе (только для многошаговых планов) */
     const notifyProgress = async (stepAgentId: string) => {
-        if (!isMultiStepPlan) return;
+        if (!isMultiStepPlan || isInternalKnowledgePipeline) return;
         const label = STEP_LABELS[stepAgentId];
         if (!label) return;
         try {

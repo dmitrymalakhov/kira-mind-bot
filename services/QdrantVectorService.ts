@@ -149,6 +149,7 @@ export class QdrantVectorService implements IDomainVectorService {
             subject: memory.subject ?? existingPayload?.subject,
             predicate: memory.predicate ?? existingPayload?.predicate,
             object: memory.object ?? existingPayload?.object,
+            negated: memory.negated ?? existingPayload?.negated,
             validFrom: this.serializeDate(memory.validFrom) ?? this.serializeDate(existingPayload?.validFrom),
             validTo: this.serializeDate(memory.validTo) ?? this.serializeDate(existingPayload?.validTo),
             status: memory.status ?? existingPayload?.status,
@@ -179,6 +180,7 @@ export class QdrantVectorService implements IDomainVectorService {
         if (payload.subject === undefined) delete payload.subject;
         if (payload.predicate === undefined) delete payload.predicate;
         if (payload.object === undefined) delete payload.object;
+        if (payload.negated === undefined) delete payload.negated;
         if (payload.validFrom === undefined) delete payload.validFrom;
         if (payload.validTo === undefined) delete payload.validTo;
         if (payload.status === undefined) delete payload.status;
@@ -266,6 +268,7 @@ export class QdrantVectorService implements IDomainVectorService {
             subject: payload.subject ? String(payload.subject) as any : undefined,
             predicate: payload.predicate ? String(payload.predicate) : undefined,
             object: payload.object ? String(payload.object) : undefined,
+            negated: typeof payload.negated === 'boolean' ? payload.negated : undefined,
             validFrom: payload.validFrom ? new Date(payload.validFrom) : undefined,
             validTo: payload.validTo ? new Date(payload.validTo) : undefined,
             status: payload.status ? String(payload.status) as any : undefined,
@@ -332,7 +335,7 @@ export class QdrantVectorService implements IDomainVectorService {
             .map(({ _rankScore, ...r }) => r);
     }
 
-    constructor() {
+    constructor(client?: QdrantClient) {
         console.log('🔧 Инициализация QdrantVectorService...');
 
         // Используем botUsername из конфигурации для уникальной идентификации
@@ -351,7 +354,7 @@ export class QdrantVectorService implements IDomainVectorService {
         console.log('- Config Collection:', this.configCollection);
         console.log('- Vector Search Threshold:', this.defaultSearchThreshold);
 
-        this.client = new QdrantClient({
+        this.client = client ?? new QdrantClient({
             url: process.env.QDRANT_URL || 'http://localhost:6333',
             apiKey: process.env.QDRANT_API_KEY || undefined,
         });
@@ -993,6 +996,7 @@ export class QdrantVectorService implements IDomainVectorService {
                     subject: p.subject,
                     predicate: p.predicate,
                     object: p.object,
+                    negated: typeof p.negated === 'boolean' ? p.negated : undefined,
                     validFrom: p.validFrom ? new Date(p.validFrom as Date | string) : undefined,
                     validTo: p.validTo ? new Date(p.validTo as Date | string) : undefined,
                     status: p.status,
@@ -1092,25 +1096,40 @@ export class QdrantVectorService implements IDomainVectorService {
         return { total, domains };
     }
 
-    async getRecentMemories(userId: string, limit = 5): Promise<MemoryEntry[]> {
+    private async collectMemories(userId: string, exhaustive: boolean): Promise<MemoryEntry[]> {
         const memories: MemoryEntry[] = [];
 
         for (const domainKey of Object.values(PREDEFINED_DOMAINS)) {
             const collection = this.collectionFor(domainKey);
-            const scroll = await this.client.scroll(collection, {
-                filter: {
-                    must: [
-                        { key: 'botId', match: { value: this.botId } },
-                        { key: 'userId', match: { value: userId } },
-                    ],
-                    must_not: this.activeMustNotFilter(),
-                },
-                limit: 1000,
-                with_payload: true,
-                with_vector: false,
-            });
+            let offset: string | number | undefined;
+            const visitedOffsets = new Set<string>();
+            do {
+                const scroll = await this.client.scroll(collection, {
+                    filter: {
+                        must: [
+                            { key: 'botId', match: { value: this.botId } },
+                            { key: 'userId', match: { value: userId } },
+                        ],
+                        must_not: this.activeMustNotFilter(),
+                    },
+                    limit: 1000,
+                    offset,
+                    with_payload: true,
+                    with_vector: false,
+                });
+                const nextOffset = scroll.next_page_offset;
+                offset = typeof nextOffset === 'string' || typeof nextOffset === 'number'
+                    ? nextOffset
+                    : undefined;
+                if (offset !== undefined) {
+                    const offsetKey = `${typeof offset}:${offset}`;
+                    if (visitedOffsets.has(offsetKey)) {
+                        throw new Error(`Qdrant pagination repeated offset for ${domainKey}`);
+                    }
+                    visitedOffsets.add(offsetKey);
+                }
 
-            for (const point of scroll.points || []) {
+                for (const point of scroll.points || []) {
                 const payload = point.payload as Partial<MemoryEntry> & { lastAccessedAt?: string } | undefined;
                 if (!payload?.content || !payload?.timestamp) continue;
                 if (this.isExpiredPayload(payload)) continue;
@@ -1169,18 +1188,27 @@ export class QdrantVectorService implements IDomainVectorService {
                     subject: payload.subject,
                     predicate: payload.predicate,
                     object: payload.object,
+                    negated: typeof payload.negated === 'boolean' ? payload.negated : undefined,
                     validFrom: payload.validFrom ? new Date(payload.validFrom as Date | string) : undefined,
                     validTo: payload.validTo ? new Date(payload.validTo as Date | string) : undefined,
                     status: payload.status,
                     confirmationCount: typeof payload.confirmationCount === 'number' ? payload.confirmationCount : undefined,
                     lastConfirmedAt: payload.lastConfirmedAt ? new Date(payload.lastConfirmedAt as Date | string) : undefined,
                 });
-            }
+                }
+            } while (exhaustive && offset !== undefined);
         }
 
         return memories
-            .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
-            .slice(0, limit);
+            .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+    }
+
+    async getRecentMemories(userId: string, limit = 5): Promise<MemoryEntry[]> {
+        return (await this.collectMemories(userId, false)).slice(0, limit);
+    }
+
+    async getAllMemories(userId: string): Promise<MemoryEntry[]> {
+        return this.collectMemories(userId, true);
     }
 
 
