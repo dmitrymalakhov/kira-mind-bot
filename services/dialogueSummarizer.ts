@@ -153,7 +153,8 @@ export function enhancePromptWithSummary(
     sessionData: EnhancedSessionData
 ): string {
     // Если нет суммаризации, возвращаем исходный промпт
-    if (!sessionData.dialogueSummary) {
+    const dialogueSummary = sessionData.dialogueSummary?.trim();
+    if (!dialogueSummary) {
         return prompt;
     }
 
@@ -162,15 +163,17 @@ export function enhancePromptWithSummary(
 
     if (prompt.includes(historyMarker)) {
         // Добавляем суммаризацию перед историей сообщений
-        const parts = prompt.split(historyMarker);
+        const markerIndex = prompt.indexOf(historyMarker);
+        const beforeHistory = prompt.slice(0, markerIndex);
+        const historyAndRest = prompt.slice(markerIndex);
 
         // Форматируем суммаризацию для вставки
-        const summarySection = `\nДолговременный контекст диалога:\n${sessionData.dialogueSummary}\n\n`;
+        const summarySection = `\nДолговременный контекст диалога:\n${dialogueSummary}\n\n`;
 
         // Собираем промпт с добавленной суммаризацией
-        return parts[0] + summarySection + historyMarker + parts[1];
+        return beforeHistory + summarySection + historyAndRest;
     }
 
     // Если маркер не найден, добавляем суммаризацию в конец промпта
-    return prompt + `\n\nДолговременный контекст диалога:\n${sessionData.dialogueSummary}`;
+    return prompt + `\n\nДолговременный контекст диалога:\n${dialogueSummary}`;
 }

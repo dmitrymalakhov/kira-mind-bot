@@ -305,29 +305,32 @@ function splitMessage(text: string): string[] {
     }
 
     let remainingText = text;
+    // Оставляем место для заголовка «Часть N/M», чтобы уже подписанный
+    // фрагмент не превысил лимит Telegram.
+    const maxPartContentLength = MAX_MESSAGE_LENGTH - 32;
 
     while (remainingText.length > 0) {
         // Если оставшийся текст короче или равен максимальной длине
-        if (remainingText.length <= MAX_MESSAGE_LENGTH) {
+        if (remainingText.length <= maxPartContentLength) {
             parts.push(remainingText);
             break;
         }
 
         // Ищем позицию для разбивки текста
         // Сначала пытаемся разбить по абзацам
-        let splitPos = remainingText.lastIndexOf('\n\n', MAX_MESSAGE_LENGTH);
+        let splitPos = remainingText.lastIndexOf('\n\n', maxPartContentLength);
 
         // Если абзац не найден, пытаемся разбить по переносам строки
-        if (splitPos === -1 || splitPos < MAX_MESSAGE_LENGTH / 2) {
-            splitPos = remainingText.lastIndexOf('\n', MAX_MESSAGE_LENGTH);
+        if (splitPos === -1 || splitPos < maxPartContentLength / 2) {
+            splitPos = remainingText.lastIndexOf('\n', maxPartContentLength);
         }
 
         // Если перенос строки не найден, пытаемся разбить по предложениям
-        if (splitPos === -1 || splitPos < MAX_MESSAGE_LENGTH / 2) {
+        if (splitPos === -1 || splitPos < maxPartContentLength / 2) {
             const sentenceBreaks = ['. ', '! ', '? '];
             for (const sentenceBreak of sentenceBreaks) {
-                const tempSplitPos = remainingText.lastIndexOf(sentenceBreak, MAX_MESSAGE_LENGTH);
-                if (tempSplitPos !== -1 && tempSplitPos > MAX_MESSAGE_LENGTH / 2) {
+                const tempSplitPos = remainingText.lastIndexOf(sentenceBreak, maxPartContentLength);
+                if (tempSplitPos !== -1 && tempSplitPos > maxPartContentLength / 2) {
                     splitPos = tempSplitPos + 1; // +1 чтобы включить пробел после знака
                     break;
                 }
@@ -335,8 +338,8 @@ function splitMessage(text: string): string[] {
         }
 
         // Если не удалось найти удобное место для разбивки, просто разбиваем по максимальной длине
-        if (splitPos === -1 || splitPos < MAX_MESSAGE_LENGTH / 2) {
-            splitPos = MAX_MESSAGE_LENGTH;
+        if (splitPos === -1 || splitPos < maxPartContentLength / 2) {
+            splitPos = maxPartContentLength;
         }
 
         // Добавляем часть сообщения

@@ -356,7 +356,7 @@ function normalizeSegment(segment: string): string {
             if (hour > 23 || minute > 59) return match;
             const hourPart = `${cardinalInteger(hour)} ${pluralRu(hour, "час", "часа", "часов")}`;
             if (minute === 0) return `${hourPart} ровно`;
-            return `${hourPart} ${cardinalInteger(minute)} ${pluralRu(minute, "минута", "минуты", "минут")}`;
+            return `${hourPart} ${cardinalIntegerWithGender(minute, "feminine")} ${pluralRu(minute, "минута", "минуты", "минут")}`;
         })
         .replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (match, yearRaw: string, monthRaw: string, dayRaw: string) => {
             return dateToSpeech(dayRaw, monthRaw, yearRaw) ?? match;

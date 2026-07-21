@@ -72,11 +72,12 @@ export function contactOptionLabel(contact: Contact): string {
 }
 
 export function contactIdentityTags(contactName: string, contact?: Contact): string[] {
-    const display = contact ? contactDisplayName(contact) : contactName.trim();
+    const alias = contactName.trim().replace(/\s+/g, ' ');
+    const display = contact ? contactDisplayName(contact) : alias;
     const tags = [
         `contact:${display}`,
         `contact_name:${display}`,
-        `contact_alias:${contactName.trim()}`,
+        `contact_alias:${alias}`,
     ];
     if (contact) {
         tags.push(`contact_id:${contact.id}`);

@@ -72,13 +72,15 @@ export function addTargetNotificationButtons(
     keyboard: InlineKeyboard,
     reminders: TargetReminderButtonSource[]
 ): InlineKeyboard {
-    for (const reminder of reminders) {
-        if (!reminder.targetChat) continue;
+    const targetedReminders = reminders.filter(
+        (reminder): reminder is TargetReminderButtonSource & { targetChat: ReminderTargetChat } => Boolean(reminder.targetChat)
+    );
+    targetedReminders.forEach((reminder, index) => {
         keyboard
             .text(`📨 Оповестить ${targetChatButtonLabel(reminder.targetChat)}`, buildTargetNotificationCallback("enable", reminder.id))
-            .text("Только мне", buildTargetNotificationCallback("disable", reminder.id))
-            .row();
-    }
+            .text("Только мне", buildTargetNotificationCallback("disable", reminder.id));
+        if (index < targetedReminders.length - 1) keyboard.row();
+    });
     return keyboard;
 }
 
