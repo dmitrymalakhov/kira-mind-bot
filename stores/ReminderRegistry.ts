@@ -1,4 +1,5 @@
-import { Reminder, ReminderStatus } from '../reminder';
+import type { Reminder } from '../reminder';
+import { ReminderStatus } from '../types/reminderTypes';
 
 function isActive(r: Reminder): boolean {
     if (r.status === ReminderStatus.Completed) return false;

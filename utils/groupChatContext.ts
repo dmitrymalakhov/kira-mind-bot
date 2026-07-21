@@ -123,7 +123,7 @@ export function isContextDependentGroupMessage(text: string): boolean {
     if (!clean) return false;
     if (CONTEXT_DEPENDENT_RE.test(clean)) return true;
     if (clean.length <= 90 && SHORT_REFERENCE_RE.test(clean)) return true;
-    if (clean.length <= 70 && /^(?:а|ну|и)\b[\s\S]*\?$/iu.test(clean)) return true;
+    if (clean.length <= 70 && /^(?:а|ну|и)(?:\s|$)[\s\S]*\?$/iu.test(clean)) return true;
     return false;
 }
 

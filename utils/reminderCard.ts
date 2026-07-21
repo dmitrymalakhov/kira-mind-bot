@@ -1,5 +1,6 @@
 import { InlineKeyboard } from 'grammy';
-import { Reminder, ReminderStatus, RecurrenceRule } from '../reminder';
+import type { Reminder } from '../reminder';
+import { ReminderStatus, type RecurrenceRule } from '../types/reminderTypes';
 import { BotContext } from '../types';
 import { USER_TIMEZONE } from '../constants';
 import { ReminderRegistry } from '../stores/ReminderRegistry';
@@ -35,9 +36,10 @@ export function buildChatPicker(
         paragraph('Выбери чат:'),
     ];
     const keyboard = new InlineKeyboard();
-    for (const c of chats) {
-        keyboard.text(`${c.title} (${c.count})`, `reminder_chat_${c.chatId}`).row();
-    }
+    chats.forEach((c, index) => {
+        keyboard.text(`${c.title} (${c.count})`, `reminder_chat_${c.chatId}`);
+        if (index < chats.length - 1) keyboard.row();
+    });
     return { blocks, keyboard };
 }
 
