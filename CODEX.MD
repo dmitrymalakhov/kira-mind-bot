@@ -27,6 +27,11 @@
   - admin-порт работающего контейнера текущего инстанса допустим для redeploy; для остановленного собственного контейнера обязательно отдельно проверяется host listener.
   - legacy remote-deploy без `KIRA_INSTANCE_NAME` выводит имя Compose project из remote-каталога (`/root/source` → `source`), чтобы существующие `source_*` volumes не подменялись новыми пустыми volumes.
   - `.kira-admin-state` и compose `.env` содержат секреты, обязаны быть исключены из Git, иметь права `600` и храниться отдельно для каждого инстанса.
+  - файловое runtime-состояние инстанса живёт только в его `runtime-data/`, смонтированном в `/app/runtime-data`; оно не входит в image/archive и не очищается remote-распаковкой. Общий preflight переносит legacy `/usr/src/app/dist/data` или `/usr/src/app/data` только когда целевая папка пуста.
+- Фоновые Telegram-каналы имеют разные контракты:
+  - DM Report — утилитарное дословное напоминание только о подтверждённых Telegram unread старше таймера; `(chatId,messageId)` является ключом, а чтение никогда не выполняется от имени владельца;
+  - reflection extraction сохраняет память без технических карточек; отдельный дневной фильтр под управлением `DAYTIME_REFLECTION_ENABLED` может отправить одно grounded-наблюдение по новому фрагменту с высокой уверенностью, максимум шестью AI-анализами и двумя отправками в час;
+  - Inbox Guardian — максимум три grounded-наблюдения с реальными message ID, мнением Киры и одним действием; простой unread не является сигналом, AI error/неуверенность означают молчание без сырого fallback.
 - Live health/monitoring для внешних систем должен жить отдельным диагностическим слоем:
   - bot runtime публикует узкие internal health endpoints;
   - admin backend агрегирует их вместе с infra/API checks;

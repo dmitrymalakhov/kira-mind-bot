@@ -19,8 +19,9 @@ import { getVectorService } from './VectorServiceFactory';
 import { runMemorySchemaConsolidationForUser } from './MemorySchemaConsolidationService';
 import { runMemorySleepCycleForUser } from './MemorySleepCycleService';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
+import { RUNTIME_DATA_DIR } from '../utils/runtimeData';
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
+const DATA_DIR = RUNTIME_DATA_DIR;
 const STATE_PATH = path.join(DATA_DIR, `${config.botUsername.toLowerCase()}-personal-chat-memory-index.json`);
 const BATCH_SIZE = 100;
 const MAX_PAGES_PER_CHAT = 30;
@@ -116,7 +117,8 @@ async function loadState(): Promise<PersonalChatMemoryIndexState> {
 async function saveState(state: PersonalChatMemoryIndexState): Promise<void> {
     await ensureDir();
     state.updatedAt = new Date().toISOString();
-    await fs.writeFile(STATE_PATH, JSON.stringify(state, null, 2), 'utf-8');
+    await fs.writeFile(STATE_PATH, JSON.stringify(state, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    await fs.chmod(STATE_PATH, 0o600);
 }
 
 function createBackgroundContext(): BotContext {

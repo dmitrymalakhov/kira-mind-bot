@@ -353,4 +353,5 @@ fi
 ensure_admin_state
 write_compose_env
 ensure_personality_file
+prepare_runtime_data || error "Не удалось подготовить instance-local runtime-data"
 deploy_stack

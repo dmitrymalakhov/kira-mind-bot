@@ -2,6 +2,7 @@ import { Bot } from "grammy";
 import { config } from "../config";
 import { USER_TIMEZONE } from "../constants";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
+import { getBotPersona, getCommunicationStyle } from "../persona";
 import { MessageStore, StoredMessage } from "../stores/MessageStore";
 import { BotContext } from "../types";
 import { parseLLMJson } from "../utils";
@@ -15,7 +16,7 @@ const MAX_THREADS_PER_RUN = 30;
 const MAX_MESSAGES_PER_THREAD = 12;
 const LAST_RUN_SETTING_KEY = `${getActiveBotProfile()}:inboxGuardian:lastRunDate`;
 
-interface InboxThreadCandidate {
+export interface InboxThreadCandidate {
     chatId: string;
     senderName: string;
     senderUsername?: string;
@@ -25,31 +26,48 @@ interface InboxThreadCandidate {
     messages: StoredMessage[];
 }
 
-interface InboxGuardianLLMItem {
+type InboxGuardianSignalType = "request" | "commitment" | "plan_change" | "decision" | "conflict" | "emotional" | "relationship";
+
+export interface InboxGuardianLLMItem {
     chatId?: string;
-    whyOpen?: string;
+    observation?: string;
+    whyImportant?: string;
+    kiraView?: string;
     suggestedAction?: string;
+    sourceMessageIds?: number[];
+    signalType?: string;
     urgency?: "high" | "normal" | "low";
     confidence?: number;
 }
 
-interface InboxGuardianLLMResponse {
+export interface InboxGuardianLLMResponse {
     items?: InboxGuardianLLMItem[];
 }
 
-interface InboxGuardianItem {
+export interface InboxGuardianItem {
     chatId: string;
     senderName: string;
     senderUsername?: string;
     lastIncomingAt: Date;
-    whyOpen: string;
-    suggestedAction?: string;
+    observation: string;
+    whyImportant: string;
+    kiraView: string;
+    suggestedAction: string;
+    sourceMessageIds: number[];
+    signalType: InboxGuardianSignalType;
     urgency: "high" | "normal" | "low";
     confidence: number;
 }
 
 let timer: NodeJS.Timeout | undefined;
 let isRunning = false;
+let daytimeWindowStartedAt = Date.now();
+let daytimeAttemptsThisHour = 0;
+let daytimeSentThisHour = 0;
+
+// AI-budget: at most six grounded analyses and two actual messages per hour.
+const DAYTIME_MAX_ATTEMPTS_PER_HOUR = 6;
+const DAYTIME_MAX_SENT_PER_HOUR = 2;
 
 function getZonedParts(date: Date): { year: string; month: string; day: string; hour: number; minute: number } {
     const parts = new Intl.DateTimeFormat("en-CA", {
@@ -159,33 +177,50 @@ function formatThreadForPrompt(thread: InboxThreadCandidate, index: number): str
     ].join("\n");
 }
 
-function buildGuardianPrompt(threads: InboxThreadCandidate[]): string {
+function buildGuardianPrompt(
+    threads: InboxThreadCandidate[],
+    options: { daytime?: boolean; focusMessageIds?: Set<number> } = {},
+): string {
     const context = threads.map(formatThreadForPrompt).join("\n\n---\n\n");
-    return `Ты вечерний Inbox Guardian персонального Telegram-ассистента.
+    const mode = options.daytime
+        ? "Ты фильтр своевременной дневной рефлексии персонального Telegram-ассистента."
+        : "Ты вечерний Inbox Guardian персонального Telegram-ассистента.";
+    const focus = options.focusMessageIds?.size
+        ? `\nАнализируй новый фрагмент с message ID: ${[...options.focusMessageIds].join(", ")}. Каждый выбранный пункт обязан ссылаться хотя бы на один из этих ID.`
+        : "";
+    return `${mode}
 
 Владелец: ${config.ownerName}.
 Текущая дата: ${formatLocalDateTime(new Date())}, часовой пояс: ${USER_TIMEZONE}.
 
 Ниже личные диалоги за последние ${config.inboxGuardianLookbackHours} часов.
 
-Твоя задача: выбрать только те диалоги, где у владельца явно остался незакрытый вопрос, просьба, обещание или ожидаемое действие.
+Твоя задача: выбрать ${options.daytime ? "не более одного срочного или своевременного" : "максимум три действительно важных"} наблюдения. Подходят незакрытая просьба или обязательство, изменение плана, важное решение, конфликт, либо заметный эмоциональный/отношенческий сигнал.${focus}
 
 Правила:
 - Если владелец уже ответил и вопрос выглядит закрытым, НЕ включай диалог.
 - Если владелец ответил "сделаю позже", "скину завтра", "уточню", "посмотрю" и действие ещё не выполнено в видимом контексте — включи.
 - Если это просто информация, small talk, благодарность, реакция, уведомление или вопрос уже решён — НЕ включай.
+- Сам факт, что сообщение не прочитано, НЕ является причиной включения: этим занимается отдельный unread-report.
 - Если не уверен, НЕ включай. Нужны только сильно незакрытые вопросы.
 - Не выдумывай факты и не добавляй диалоги, которых нет в списке.
-- В whyOpen объясни конкретно, что осталось незакрытым.
-- В suggestedAction напиши коротко, что владельцу лучше сделать.
+- sourceMessageIds должен содержать 1-5 реальных ID сообщений из выбранного диалога.
+- signalType обязан описывать содержательный сигнал; тип "unread" запрещён.
+- observation — что именно произошло без домыслов; whyImportant — почему это важно владельцу.
+- kiraView — короткая личная позиция Киры, допускающая несогласие, но не выдающая догадку за факт.
+- suggestedAction — ровно один практичный следующий шаг.
 
 Верни только JSON:
 {
   "items": [
     {
       "chatId": "строго один из chatId выше",
-      "whyOpen": "что осталось незакрытым",
-      "suggestedAction": "короткое действие",
+      "observation": "что произошло",
+      "whyImportant": "почему это важно",
+      "kiraView": "личная позиция Киры",
+      "suggestedAction": "один следующий шаг",
+      "sourceMessageIds": [123],
+      "signalType": "request|commitment|plan_change|decision|conflict|emotional|relationship",
       "urgency": "high|normal|low",
       "confidence": 0.0
     }
@@ -197,36 +232,10 @@ function buildGuardianPrompt(threads: InboxThreadCandidate[]): string {
 ${context}`;
 }
 
-function looksActionable(text: string): boolean {
-    return /(\?|можешь|сможешь|надо|нужно|пришл|скин|ответ|жду|когда|что думаешь|подтверди|посмотри|соглас|оплат|договор|созвон|напомн|please|can you|could you|send|need|waiting)/i
-        .test(text);
-}
-
-function fallbackAnalyzeThreads(threads: InboxThreadCandidate[]): InboxGuardianItem[] {
-    return threads
-        .map((thread): InboxGuardianItem | null => {
-            const latest = thread.messages[thread.messages.length - 1];
-            if (!latest || latest.isOwn || !looksActionable(latest.text || "")) return null;
-            const item: InboxGuardianItem = {
-                chatId: thread.chatId,
-                senderName: thread.senderName,
-                lastIncomingAt: thread.lastIncomingAt,
-                whyOpen: truncate(latest.text || "Последнее сообщение похоже на вопрос или просьбу.", 180),
-                suggestedAction: "Проверить диалог и ответить, если вопрос ещё актуален.",
-                urgency: "normal" as const,
-                confidence: 0.68,
-            };
-            if (thread.senderUsername) {
-                item.senderUsername = thread.senderUsername;
-            }
-            return item;
-        })
-        .filter((item): item is InboxGuardianItem => Boolean(item));
-}
-
-function normalizeLLMItems(
+export function normalizeLLMItems(
     response: InboxGuardianLLMResponse | null,
-    threads: InboxThreadCandidate[]
+    threads: InboxThreadCandidate[],
+    options: { maxItems?: number; minConfidence?: number; requiredSourceMessageIds?: Set<number> } = {},
 ): InboxGuardianItem[] {
     const byChatId = new Map(threads.map(thread => [thread.chatId, thread]));
     const seen = new Set<string>();
@@ -238,10 +247,24 @@ function normalizeLLMItems(
         if (!thread || seen.has(chatId)) continue;
 
         const confidence = typeof raw.confidence === "number" ? raw.confidence : 0;
-        if (confidence < 0.65) continue;
+        if (confidence < (options.minConfidence ?? 0.7)) continue;
 
-        const whyOpen = truncate(String(raw.whyOpen || "").trim(), 260);
-        if (!whyOpen) continue;
+        const allowedSignalTypes: InboxGuardianSignalType[] = [
+            "request", "commitment", "plan_change", "decision", "conflict", "emotional", "relationship",
+        ];
+        if (!raw.signalType || !allowedSignalTypes.includes(raw.signalType as InboxGuardianSignalType)) continue;
+        const signalType = raw.signalType as InboxGuardianSignalType;
+
+        const validIds = new Set(thread.messages.map(message => message.id));
+        const sourceMessageIds = Array.from(new Set(raw.sourceMessageIds ?? []))
+            .filter(id => Number.isInteger(id) && validIds.has(id))
+            .slice(0, 5);
+        if (options.requiredSourceMessageIds?.size && !sourceMessageIds.some(id => options.requiredSourceMessageIds!.has(id))) continue;
+        const observation = truncate(String(raw.observation || "").trim(), 240);
+        const whyImportant = truncate(String(raw.whyImportant || "").trim(), 220);
+        const kiraView = truncate(String(raw.kiraView || "").trim(), 240);
+        const suggestedAction = truncate(String(raw.suggestedAction || "").trim(), 200);
+        if (!sourceMessageIds.length || !observation || !whyImportant || !kiraView || !suggestedAction) continue;
 
         const urgency = raw.urgency === "high" || raw.urgency === "low" ? raw.urgency : "normal";
         items.push({
@@ -249,8 +272,12 @@ function normalizeLLMItems(
             senderName: thread.senderName,
             senderUsername: thread.senderUsername,
             lastIncomingAt: thread.lastIncomingAt,
-            whyOpen,
-            suggestedAction: truncate(String(raw.suggestedAction || "").trim(), 220),
+            observation,
+            whyImportant,
+            kiraView,
+            suggestedAction,
+            sourceMessageIds,
+            signalType,
             urgency,
             confidence,
         });
@@ -262,10 +289,13 @@ function normalizeLLMItems(
         const byUrgency = urgencyRank[b.urgency] - urgencyRank[a.urgency];
         if (byUrgency !== 0) return byUrgency;
         return b.lastIncomingAt.getTime() - a.lastIncomingAt.getTime();
-    });
+    }).slice(0, options.maxItems ?? 3);
 }
 
-async function analyzeThreads(threads: InboxThreadCandidate[]): Promise<InboxGuardianItem[]> {
+async function analyzeThreads(
+    threads: InboxThreadCandidate[],
+    options: { daytime?: boolean; maxItems?: number; minConfidence?: number; requiredSourceMessageIds?: Set<number> } = {},
+): Promise<InboxGuardianItem[]> {
     if (threads.length === 0) return [];
 
     try {
@@ -273,11 +303,14 @@ async function analyzeThreads(threads: InboxThreadCandidate[]): Promise<InboxGua
             messages: [
                 {
                     role: "system",
-                    content: "Ты строгий фильтр незакрытых вопросов в личных переписках. Отвечай только валидным JSON.",
+                    content: `${getBotPersona()}\nСтиль: ${getCommunicationStyle()}\nТы строгий фильтр важных наблюдений в личных переписках. Отвечай только валидным JSON.`,
                 },
                 {
                     role: "user",
-                    content: buildGuardianPrompt(threads),
+                    content: buildGuardianPrompt(threads, {
+                        daytime: options.daytime,
+                        focusMessageIds: options.requiredSourceMessageIds,
+                    }),
                 },
             ],
             temperature: 0.2,
@@ -285,11 +318,94 @@ async function analyzeThreads(threads: InboxThreadCandidate[]): Promise<InboxGua
         });
 
         const parsed = parseLLMJson<InboxGuardianLLMResponse>(response.choices[0]?.message?.content || "");
-        return normalizeLLMItems(parsed, threads);
+        return normalizeLLMItems(parsed, threads, options);
     } catch (error) {
-        console.error("[inbox-guardian] LLM analysis failed, using fallback:", error);
-        return fallbackAnalyzeThreads(threads);
+        console.error("[inbox-guardian] LLM analysis failed; suppressing report:", error);
+        return [];
     }
+}
+
+function inProactiveQuietHours(now: Date): boolean {
+    if (!config.kiraLifeProactiveQuietHoursEnabled) return false;
+    const hour = getZonedParts(now).hour;
+    const start = config.kiraLifeProactiveQuietHourStart;
+    const end = config.kiraLifeProactiveQuietHourEnd;
+    if (start === end) return true;
+    return start < end ? hour >= start && hour < end : hour >= start || hour < end;
+}
+
+function reserveDaytimeAttempt(): boolean {
+    const now = Date.now();
+    if (now - daytimeWindowStartedAt >= 60 * 60_000) {
+        daytimeWindowStartedAt = now;
+        daytimeAttemptsThisHour = 0;
+        daytimeSentThisHour = 0;
+    }
+    if (daytimeAttemptsThisHour >= DAYTIME_MAX_ATTEMPTS_PER_HOUR || daytimeSentThisHour >= DAYTIME_MAX_SENT_PER_HOUR) return false;
+    daytimeAttemptsThisHour += 1;
+    return true;
+}
+
+export function selectDaytimeContext(
+    messages: StoredMessage[],
+    focusIds: Set<number>,
+): StoredMessage[] {
+    const textual = messages.filter(message => message.text?.trim());
+    const newest = textual.slice(0, MAX_MESSAGES_PER_THREAD);
+    const selectedIds = new Set(newest.map(message => message.id));
+    const focusedOutsideWindow = textual.filter(message => focusIds.has(message.id) && !selectedIds.has(message.id));
+
+    return [...newest, ...focusedOutsideWindow]
+        .sort((a, b) => a.date.getTime() - b.date.getTime());
+}
+
+export async function sendDaytimeReflection(
+    bot: Bot<BotContext>,
+    input: { chatId: string; currentMessageIds: number[] },
+): Promise<boolean> {
+    if (
+        getActiveBotProfile() !== "KiraMindBot"
+        || !config.daytimeReflectionEnabled
+        || inProactiveQuietHours(new Date())
+    ) return false;
+    const focusIds = new Set(input.currentMessageIds.filter(Number.isInteger));
+    if (focusIds.size === 0) return false;
+
+    const messages = selectDaytimeContext(
+        MessageStore.getInstance().getMessages(input.chatId),
+        focusIds,
+    );
+    const lastIncoming = lastWhere(messages, message => !message.isOwn);
+    if (!lastIncoming || messages.length === 0) return false;
+    if (!reserveDaytimeAttempt()) return false;
+    const lastOwn = lastWhere(messages, message => Boolean(message.isOwn));
+    const candidate: InboxThreadCandidate = {
+        chatId: input.chatId,
+        senderName: lastIncoming.senderName,
+        senderUsername: lastIncoming.senderUsername,
+        lastIncomingAt: lastIncoming.date,
+        lastOwnAt: lastOwn?.date,
+        latestAt: messages[messages.length - 1].date,
+        messages,
+    };
+    const items = await analyzeThreads([candidate], {
+        daytime: true,
+        maxItems: 1,
+        minConfidence: 0.82,
+        requiredSourceMessageIds: focusIds,
+    });
+    const item = items[0];
+    if (!item) return false;
+
+    const username = item.senderUsername ? ` (@${esc(item.senderUsername)})` : "";
+    await sendStructured(bot.api as any, await getProactiveChatId(), [
+        heading("💭 Что я заметила", 3),
+        paragraph(`<b>${esc(item.senderName)}${username}</b><br/><i>Что произошло:</i> ${esc(item.observation)}`),
+        paragraph(`<i>Почему это важно:</i> ${esc(item.whyImportant)}<br/><i>Моё мнение:</i> ${esc(item.kiraView)}<br/><i>Следующий шаг:</i> ${esc(item.suggestedAction)}`),
+    ]);
+    daytimeSentThisHour += 1;
+    console.info(`[daytime-reflection] sent grounded observation for chat ${input.chatId}`);
+    return true;
 }
 
 function buildGuardianReportBlocks(items: InboxGuardianItem[]): RichBlock[] {
@@ -309,10 +425,12 @@ function buildGuardianReportBlocks(items: InboxGuardianItem[]): RichBlock[] {
     const checkItems = items.map((item) => {
         const username = item.senderUsername ? ` (@${esc(item.senderUsername)})` : "";
         const header = `${esc(item.senderName)}${username} · ${esc(formatLocalDateTime(item.lastIncomingAt))} · ${urgencyLabel[item.urgency]}`;
-        const whyOpen = `<i>Что висит:</i> ${esc(item.whyOpen)}`;
-        const action = item.suggestedAction ? `\n<i>Что сделать:</i> ${esc(item.suggestedAction)}` : "";
+        const observation = `<i>Что вижу:</i> ${esc(item.observation)}`;
+        const importance = `\n<i>Почему важно:</i> ${esc(item.whyImportant)}`;
+        const view = `\n<i>Моё мнение:</i> ${esc(item.kiraView)}`;
+        const action = `\n<i>Что сделать:</i> ${esc(item.suggestedAction)}`;
         // checklist-пункт с чекбоксом: пользователь может мысленно отметить сделанное.
-        return { text: `<b>${header}</b>\n${whyOpen}${action}` };
+        return { text: `<b>${header}</b>\n${observation}${importance}${view}${action}` };
     });
     blocks.push(checklist(checkItems));
     blocks.push(footer("Отметь чекбоксы у того, что уже закрыл — визуально удобнее."));

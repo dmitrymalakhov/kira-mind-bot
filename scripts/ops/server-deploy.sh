@@ -156,6 +156,8 @@ esac
 deploy_stack() {
     header "Redeploy"
 
+    prepare_runtime_data || error "Не удалось подготовить instance-local runtime-data"
+
     if [ "$DEPLOY_CLEAN" = true ]; then
         info "Останавливаю стек и очищаю Docker cache без удаления volumes"
         compose down

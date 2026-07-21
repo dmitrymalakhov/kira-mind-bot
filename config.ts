@@ -96,8 +96,13 @@ interface AssistantConfig {
   kiraLifeProactiveQuietHourStart: number;
   kiraLifeProactiveQuietHourEnd: number;
   dmReportEnabled: boolean;
+  /** Возраст реально непрочитанного сообщения до попадания в отчёт. */
   dmReportIntervalMs: number;
+  /** Сколько последних Telegram-диалогов проверять на реальные unread. */
+  dmReportDialogLimit: number;
   dmReportQuietHoursEnabled: boolean;
+  /** Важные grounded-наблюдения по перепискам в течение дня. */
+  daytimeReflectionEnabled: boolean;
   /** Вечерний анализ личных сообщений: кому владелец ещё должен ответить */
   inboxGuardianEnabled: boolean;
   /** Час отправки вечерней сводки Inbox Guardian (0–23, USER_TIMEZONE) */
@@ -278,7 +283,9 @@ function assistants(activeAssistant: string): AssistantConfig {
       kiraLifeProactiveQuietHourEnd: toNumber(process.env.KIRA_PROACTIVE_QUIET_HOUR_END, 8),
       dmReportEnabled: toBoolean(process.env.DM_REPORT_ENABLED, true),
       dmReportIntervalMs: toNumber(process.env.DM_REPORT_INTERVAL_MS, 30 * 60 * 1000),
+      dmReportDialogLimit: toNumber(process.env.DM_REPORT_DIALOG_LIMIT, 120),
       dmReportQuietHoursEnabled: toBoolean(process.env.DM_REPORT_QUIET_HOURS_ENABLED, true),
+      daytimeReflectionEnabled: toBoolean(process.env.DAYTIME_REFLECTION_ENABLED, true),
       inboxGuardianEnabled: toBoolean(process.env.INBOX_GUARDIAN_ENABLED, true),
       inboxGuardianHour: toNumber(process.env.INBOX_GUARDIAN_HOUR, 21),
       inboxGuardianLookbackHours: toNumber(process.env.INBOX_GUARDIAN_LOOKBACK_HOURS, 24),
