@@ -101,9 +101,20 @@ function assertOperationalSecurity() {
   }
 }
 
+function assertRuntimeDataIsolation() {
+  for (const filename of ['docker-compose.yml', 'docker-compose.server.yml']) {
+    const content = fs.readFileSync(path.join(repoRoot, filename), 'utf8');
+    assert.match(content, /KIRA_RUNTIME_DATA_DIR=\/app\/runtime-data/);
+    assert.match(content, /\.\/runtime-data:\/app\/runtime-data/);
+  }
+  assert.match(fs.readFileSync(path.join(repoRoot, '.gitignore'), 'utf8'), /^runtime-data\/$/m);
+  assert.match(fs.readFileSync(path.join(repoRoot, '.dockerignore'), 'utf8'), /^runtime-data$/m);
+}
+
 try {
   assertNoDestructiveVolumeCleanup();
   assertOperationalSecurity();
+  assertRuntimeDataIsolation();
 
   const dockerAvailable = spawnSync('docker', ['compose', 'version'], { encoding: 'utf8' }).status === 0;
   if (!dockerAvailable) {
@@ -114,20 +125,20 @@ try {
     fs.writeFileSync(path.join(tempDir, 'personality.json'), '{}', 'utf8');
 
     const primary = render('kira-mind-bot', 7875);
-    const secondary = render('kira-wife', 7876);
+    const secondary = render('nova-mind-bot', 7876);
 
     assertInstance(primary, 'kira-mind-bot', 7875);
-    assertInstance(secondary, 'kira-wife', 7876);
+    assertInstance(secondary, 'nova-mind-bot', 7876);
     assert.notStrictEqual(primary.volumes.postgres_data.name, secondary.volumes.postgres_data.name);
     assert.notStrictEqual(primary.volumes.qdrant_storage.name, secondary.volumes.qdrant_storage.name);
     assert.notStrictEqual(primary.networks.default.name, secondary.networks.default.name);
 
-    const renamed = render('enya-mind-bot', 7877, {
+    const renamed = render('aurora-mind-bot', 7877, {
       postgres: 'kira-mind-bot_postgres_data',
       qdrant: 'kira-mind-bot_qdrant_storage',
     });
-    assert.strictEqual(renamed.name, 'enya-mind-bot');
-    assert.strictEqual(renamed.services['kira-mind-bot'].container_name, 'enya-mind-bot');
+    assert.strictEqual(renamed.name, 'aurora-mind-bot');
+    assert.strictEqual(renamed.services['kira-mind-bot'].container_name, 'aurora-mind-bot');
     assert.strictEqual(renamed.volumes.postgres_data.name, 'kira-mind-bot_postgres_data');
     assert.strictEqual(renamed.volumes.qdrant_storage.name, 'kira-mind-bot_qdrant_storage');
     console.log('multi-instance compose isolation checks passed');

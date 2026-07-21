@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 
-REPO_DIR="$TEST_DIR/enya-mind-bot"
+REPO_DIR="$TEST_DIR/aurora-mind-bot"
 FAKE_BIN="$TEST_DIR/bin"
 DOCKER_LOG="$TEST_DIR/docker.log"
 DOCKER_STATE="$TEST_DIR/docker-down"
@@ -97,16 +97,16 @@ chmod +x "$FAKE_BIN/docker"
         FAKE_DOCKER_LOG="$DOCKER_LOG" \
         FAKE_DOCKER_STATE="$DOCKER_STATE" \
         DEPLOY_LOCK_FILE="$TEST_DIR/deploy.lock" \
-        ./scripts/ops/server-deploy.sh migrate-instance enya-mind-bot
+        ./scripts/ops/server-deploy.sh migrate-instance aurora-mind-bot
 )
 
 grep -q '^TELEGRAM_BOT_TOKEN=telegram-secret$' "$REPO_DIR/.env.production"
 grep -q '^OPENAI_API_KEY=openai-secret$' "$REPO_DIR/.env.production"
-grep -q '^KIRA_INSTANCE_NAME=enya-mind-bot$' "$REPO_DIR/.env.production"
+grep -q '^KIRA_INSTANCE_NAME=aurora-mind-bot$' "$REPO_DIR/.env.production"
 grep -q '^POSTGRES_VOLUME_NAME=kira-mind-bot_postgres_data$' "$REPO_DIR/.env.production"
 grep -q '^QDRANT_VOLUME_NAME=kira-mind-bot_qdrant_storage$' "$REPO_DIR/.env.production"
 
-grep -q '^KIRA_INSTANCE_NAME=enya-mind-bot$' "$REPO_DIR/.env"
+grep -q '^KIRA_INSTANCE_NAME=aurora-mind-bot$' "$REPO_DIR/.env"
 grep -q '^POSTGRES_VOLUME_NAME=kira-mind-bot_postgres_data$' "$REPO_DIR/.env"
 grep -q '^QDRANT_VOLUME_NAME=kira-mind-bot_qdrant_storage$' "$REPO_DIR/.env"
 

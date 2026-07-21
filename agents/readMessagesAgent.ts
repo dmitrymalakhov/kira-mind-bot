@@ -1,5 +1,5 @@
 import { Api, TelegramClient } from "telegram";
-import { NewMessage } from "telegram/events";
+import { NewMessage, Raw } from "telegram/events";
 import { MessageHistory } from "../types";
 import { BotContext } from "../types";
 import { MessageClassification, ProcessingResult } from "../orchestrator";
@@ -401,7 +401,7 @@ async function processIncomingTelegramMessage(job: IncomingTelegramQueueJob<Tele
     messageStore.addMessage(String(chatId), storedMessage);
 
     if (storedMessage.text) {
-        queueForReflection(String(chatId), senderName, storedMessage.text, storedMessage.date);
+        queueForReflection(String(chatId), senderName, storedMessage.text, storedMessage.date, false, storedMessage.id);
     }
 
     devLog(`Новое сообщение от ${senderName}: ${storedMessage.text}`);
@@ -565,12 +565,18 @@ function handleOutgoingMessage(event: { message?: TelegramMessageLike; isPrivate
         messageStore.addMessage(String(chatId), storedMessage);
 
         // Добавляем в буфер рефлексии — isOwn=true сигнализирует что это наш текст
-        queueForReflection(String(chatId), ownerName, text, date, true);
+        queueForReflection(String(chatId), ownerName, text, date, true, storedMessage.id);
 
         devLog(`[outgoing] Сохранено исходящее сообщение в чат ${chatId}: ${text.slice(0, 60)}`);
     } catch (e) {
         devLog('[outgoing] Ошибка обработки исходящего сообщения:', e);
     }
+}
+
+function handleReadHistoryUpdate(update: Api.UpdateReadHistoryInbox): void {
+    const chatId = toNumberId(getTelegramPeerUserId(update.peer));
+    if (chatId === undefined) return;
+    messageStore.markReadThrough(String(chatId), Number(update.maxId));
 }
 
 async function subscribeToNewMessages(): Promise<void> {
@@ -602,6 +608,13 @@ async function subscribeToNewMessages(): Promise<void> {
             }
         },
         new NewMessage({ outgoing: true })
+    );
+
+    // Telegram рассылает этот update другим сессиям, когда владелец читает
+    // личный чат на телефоне/десктопе. Он является источником правды для DM-report.
+    telegramClient.addEventHandler(
+        (update) => handleReadHistoryUpdate(update as Api.UpdateReadHistoryInbox),
+        new Raw({ types: [Api.UpdateReadHistoryInbox] })
     );
 
     isListening = true;

@@ -8,5 +8,6 @@ _deploy
 coverage
 tmp
 tmp/**
+runtime-data
 .env
 .env.production

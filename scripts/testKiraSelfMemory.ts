@@ -176,6 +176,7 @@ async function main(): Promise<void> {
         assert.ok(events.some((event) => event.description.includes("архивные заметки")));
         assert.ok(events.some((event) => event.description.includes("цифровые архивы музея")));
         assert.ok(!events.some((event) => event.description.includes("сны данных")));
+        assert.equal((await fs.stat(memoryPath)).mode & 0o777, 0o600);
 
         await fs.writeFile(memoryPath, "{not-json", "utf-8");
         const cachedState = await getKiraSelfMemoryState();

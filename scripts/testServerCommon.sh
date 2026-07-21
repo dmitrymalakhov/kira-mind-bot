@@ -212,11 +212,11 @@ KIRA_INSTANCE_NAME=kira-second-bot
 EOF
 write_instance_storage_config \
   "$ENV_FILE" \
-  "enya-mind-bot" \
+  "aurora-mind-bot" \
   "kira-second-bot_postgres_data" \
   "kira-second-bot_qdrant_storage"
 grep -q '^DB_PASSWORD=preserved$' "$ENV_FILE"
-grep -q '^KIRA_INSTANCE_NAME=enya-mind-bot$' "$ENV_FILE"
+grep -q '^KIRA_INSTANCE_NAME=aurora-mind-bot$' "$ENV_FILE"
 grep -q '^POSTGRES_VOLUME_NAME=kira-second-bot_postgres_data$' "$ENV_FILE"
 grep -q '^QDRANT_VOLUME_NAME=kira-second-bot_qdrant_storage$' "$ENV_FILE"
 [ "$(grep -c '^KIRA_INSTANCE_NAME=' "$ENV_FILE")" -eq 1 ]
@@ -298,5 +298,43 @@ KIRA_INSTANCE_NAME="!!!"
 KIRA_INSTANCE_NAME="---"
 [ "$(resolve_instance_name)" = "kira-mind-bot" ]
 KIRA_INSTANCE_NAME="kira-second-bot"
+
+# Persistent runtime state мигрирует только в пустой instance-local каталог.
+RUNTIME_DATA_HOST_DIR="$TEST_DIR/runtime-data"
+FAKE_MODE="runtime-dist"
+docker_ps() {
+  [ "$FAKE_MODE" = "runtime-none" ] || echo "bot-id"
+}
+docker_copy() {
+  case "$FAKE_MODE:$1" in
+    runtime-dist:*:/usr/src/app/dist/data/.) printf '%s\n' "dist" > "$RUNTIME_DATA_HOST_DIR/source" ;;
+    runtime-root:*:/usr/src/app/data/.) printf '%s\n' "root" > "$RUNTIME_DATA_HOST_DIR/source" ;;
+    *) return 1 ;;
+  esac
+}
+
+prepare_runtime_data
+[ "$(cat "$RUNTIME_DATA_HOST_DIR/source")" = "dist" ]
+RUNTIME_MODE="$(stat -c '%a' "$RUNTIME_DATA_HOST_DIR" 2>/dev/null || stat -f '%Lp' "$RUNTIME_DATA_HOST_DIR")"
+[ "$RUNTIME_MODE" = "700" ]
+RUNTIME_FILE_MODE="$(stat -c '%a' "$RUNTIME_DATA_HOST_DIR/source" 2>/dev/null || stat -f '%Lp' "$RUNTIME_DATA_HOST_DIR/source")"
+[ "$RUNTIME_FILE_MODE" = "600" ]
+
+printf '%s\n' "preserved" > "$RUNTIME_DATA_HOST_DIR/source"
+FAKE_MODE="runtime-root"
+prepare_runtime_data
+[ "$(cat "$RUNTIME_DATA_HOST_DIR/source")" = "preserved" ]
+
+rm -rf "$RUNTIME_DATA_HOST_DIR"
+prepare_runtime_data
+[ "$(cat "$RUNTIME_DATA_HOST_DIR/source")" = "root" ]
+RUNTIME_FILE_MODE="$(stat -c '%a' "$RUNTIME_DATA_HOST_DIR/source" 2>/dev/null || stat -f '%Lp' "$RUNTIME_DATA_HOST_DIR/source")"
+[ "$RUNTIME_FILE_MODE" = "600" ]
+
+rm -rf "$RUNTIME_DATA_HOST_DIR"
+FAKE_MODE="runtime-none"
+prepare_runtime_data
+[ -d "$RUNTIME_DATA_HOST_DIR" ]
+[ -z "$(find "$RUNTIME_DATA_HOST_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]
 
 echo "server-common admin state migration checks passed"
