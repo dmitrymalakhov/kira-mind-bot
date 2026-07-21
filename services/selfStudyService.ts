@@ -9,6 +9,7 @@ import {
   getKiraSelfMemoryState,
   getRecentKiraSelfEvents,
   getRecentKiraSelfStudyReports,
+  isKiraSelfMemoryCorruptedError,
   KiraBiographyPatch,
   KiraInnerWorldPatch,
   KiraLifeArcPatch,
@@ -45,8 +46,14 @@ export interface RunSelfStudyOptions {
   memoryContext?: string;
 }
 
-function compactList(values: string[] | undefined, limit: number): string[] {
-  return (values ?? [])
+function compactList(values: unknown, limit: number): string[] {
+  const source = Array.isArray(values)
+    ? values
+    : typeof values === "string"
+      ? [values]
+      : [];
+
+  return source
     .map((value) => String(value).trim())
     .filter(Boolean)
     .slice(0, limit);
@@ -227,11 +234,22 @@ function fallbackPayload(): NormalizedSelfStudyPayload {
 }
 
 export async function runKiraSelfStudy(options: RunSelfStudyOptions): Promise<KiraSelfStudyReport> {
-  const [selfState, recentEvents, recentReports] = await Promise.all([
-    getKiraSelfMemoryState(),
-    getRecentKiraSelfEvents(8),
-    getRecentKiraSelfStudyReports(3),
-  ]);
+  let selfState: Awaited<ReturnType<typeof getKiraSelfMemoryState>>;
+  let recentEvents: Awaited<ReturnType<typeof getRecentKiraSelfEvents>>;
+  let recentReports: Awaited<ReturnType<typeof getRecentKiraSelfStudyReports>>;
+
+  try {
+    [selfState, recentEvents, recentReports] = await Promise.all([
+      getKiraSelfMemoryState(),
+      getRecentKiraSelfEvents(8),
+      getRecentKiraSelfStudyReports(3),
+    ]);
+  } catch (error) {
+    if (isKiraSelfMemoryCorruptedError(error)) {
+      throw error;
+    }
+    throw error;
+  }
 
   const prompt = [
     `Ассистент: ${config.characterName}. Владелец: ${config.ownerName}.`,

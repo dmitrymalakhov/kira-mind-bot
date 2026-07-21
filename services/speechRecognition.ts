@@ -2,8 +2,7 @@ import * as dotenv from "dotenv";
 import * as fs from 'fs';
 import * as path from 'path';
 import fetch from 'node-fetch';
-import openai from "../openai";
-import { resolveOpenAiModelForTaskAsync } from "../ai/modelResolver";
+import { createTranscriptionForTask } from "../ai/transcription";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -34,20 +33,7 @@ export async function convertOggToMp3(oggFilePath: string): Promise<string> {
  */
 export async function transcribeAudio(audioFilePath: string): Promise<string> {
     try {
-        // В Node.js среде OpenAI SDK принимает файловый поток
-        // Используем createReadStream для создания потока из файла
-        const audioFileStream = fs.createReadStream(audioFilePath);
-        const model = await resolveOpenAiModelForTaskAsync('transcription');
-
-        // Отправляем запрос на транскрипцию в OpenAI
-        const transcription = await openai.audio.transcriptions.create({
-            file: audioFileStream,
-            model,
-            language: "ru",
-            response_format: "text",
-        });
-
-        return transcription;
+        return await createTranscriptionForTask(audioFilePath);
     } catch (error) {
         console.error("Error transcribing audio:", error);
         throw error;

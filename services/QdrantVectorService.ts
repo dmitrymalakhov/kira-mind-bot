@@ -4,8 +4,8 @@ import { IDomainVectorService } from './interfaces/IDomainVectorService';
 import { MemoryEntry, SearchOptions, SearchResult, MemoryStats, DomainConfig, SearchStrategy, DomainStats, DomainTrend, MemoryRelation, MemoryRelationType } from '../types';
 import { PREDEFINED_DOMAINS, DOMAIN_SEARCH_THRESHOLDS } from '../constants/domains';
 import { config } from '../config';
-import openai from '../openai';
-import { resolveOpenAiModelForTaskAsync } from '../ai/modelResolver';
+import { createMemoryEmbedding } from '../ai/embedding';
+import { resolveMemoryEmbeddingConfigAsync } from '../ai/memoryEmbeddingResolver';
 import { devLog } from '../utils';
 
 export class QdrantVectorService implements IDomainVectorService {
@@ -14,6 +14,7 @@ export class QdrantVectorService implements IDomainVectorService {
     private memoryPrefix: string;
     private configCollection: string;
     private defaultSearchThreshold: number;
+    private validatedCollections = new Map<string, string>();
 
     private collectionFor(domain: string) {
         return `${this.memoryPrefix}${domain}`;
@@ -148,6 +149,7 @@ export class QdrantVectorService implements IDomainVectorService {
             subject: memory.subject ?? existingPayload?.subject,
             predicate: memory.predicate ?? existingPayload?.predicate,
             object: memory.object ?? existingPayload?.object,
+            negated: memory.negated ?? existingPayload?.negated,
             validFrom: this.serializeDate(memory.validFrom) ?? this.serializeDate(existingPayload?.validFrom),
             validTo: this.serializeDate(memory.validTo) ?? this.serializeDate(existingPayload?.validTo),
             status: memory.status ?? existingPayload?.status,
@@ -178,6 +180,7 @@ export class QdrantVectorService implements IDomainVectorService {
         if (payload.subject === undefined) delete payload.subject;
         if (payload.predicate === undefined) delete payload.predicate;
         if (payload.object === undefined) delete payload.object;
+        if (payload.negated === undefined) delete payload.negated;
         if (payload.validFrom === undefined) delete payload.validFrom;
         if (payload.validTo === undefined) delete payload.validTo;
         if (payload.status === undefined) delete payload.status;
@@ -265,6 +268,7 @@ export class QdrantVectorService implements IDomainVectorService {
             subject: payload.subject ? String(payload.subject) as any : undefined,
             predicate: payload.predicate ? String(payload.predicate) : undefined,
             object: payload.object ? String(payload.object) : undefined,
+            negated: typeof payload.negated === 'boolean' ? payload.negated : undefined,
             validFrom: payload.validFrom ? new Date(payload.validFrom) : undefined,
             validTo: payload.validTo ? new Date(payload.validTo) : undefined,
             status: payload.status ? String(payload.status) as any : undefined,
@@ -331,7 +335,7 @@ export class QdrantVectorService implements IDomainVectorService {
             .map(({ _rankScore, ...r }) => r);
     }
 
-    constructor() {
+    constructor(client?: QdrantClient) {
         console.log('🔧 Инициализация QdrantVectorService...');
 
         // Используем botUsername из конфигурации для уникальной идентификации
@@ -350,7 +354,7 @@ export class QdrantVectorService implements IDomainVectorService {
         console.log('- Config Collection:', this.configCollection);
         console.log('- Vector Search Threshold:', this.defaultSearchThreshold);
 
-        this.client = new QdrantClient({
+        this.client = client ?? new QdrantClient({
             url: process.env.QDRANT_URL || 'http://localhost:6333',
             apiKey: process.env.QDRANT_API_KEY || undefined,
         });
@@ -368,30 +372,131 @@ export class QdrantVectorService implements IDomainVectorService {
         }
     }
 
-    private async createCollectionSafely(collectionName: string, vectorSize = 1536): Promise<'created' | 'exists' | 'failed'> {
-        if (await this.checkCollectionExists(collectionName)) {
+    private normalizeDistance(distance: string | undefined): string {
+        return String(distance || 'Cosine').toLowerCase();
+    }
+
+    private extractCollectionVectorConfig(details: any): { size: number; distance: string } | null {
+        const rawVectors = details?.config?.params?.vectors;
+        if (!rawVectors) return null;
+
+        if (typeof rawVectors.size === 'number') {
+            return {
+                size: rawVectors.size,
+                distance: String(rawVectors.distance || 'Cosine'),
+            };
+        }
+
+        const defaultVector = rawVectors[''] ?? rawVectors.default;
+        if (defaultVector && typeof defaultVector.size === 'number') {
+            return {
+                size: defaultVector.size,
+                distance: String(defaultVector.distance || 'Cosine'),
+            };
+        }
+
+        return null;
+    }
+
+    private async getCollectionVectorConfig(collectionName: string): Promise<{ size: number; distance: string } | null> {
+        try {
+            const details = await this.client.getCollection(collectionName);
+            return this.extractCollectionVectorConfig(details);
+        } catch {
+            return null;
+        }
+    }
+
+    private buildCollectionMismatchError(
+        collectionName: string,
+        actual: { size: number; distance: string } | null,
+        expected: { size: number; distance: string; provider: string; model: string; profileName: string },
+    ): Error {
+        return new Error(
+            `Qdrant collection ${collectionName} несовместима с memory profile ${expected.profileName}: ` +
+            `ожидалось size=${expected.size}, distance=${expected.distance}, provider=${expected.provider}, model=${expected.model}; ` +
+            `получено size=${actual?.size ?? 'unknown'}, distance=${actual?.distance ?? 'unknown'}. ` +
+            'Пересоздайте коллекцию или выполните миграцию памяти под новый профиль.'
+        );
+    }
+
+    private buildCollectionValidationKey(expected: {
+        size: number;
+        distance: string;
+        provider: string;
+        model: string;
+        profileName: string;
+    }): string {
+        return [
+            expected.profileName,
+            expected.provider,
+            expected.model,
+            String(expected.size),
+            this.normalizeDistance(expected.distance),
+        ].join(':');
+    }
+
+    private async ensureCollectionCompatibility(collectionName: string): Promise<'created' | 'exists'> {
+        const { profileName, config: embeddingConfig } = await resolveMemoryEmbeddingConfigAsync();
+        const expected = {
+            size: embeddingConfig.outputDimension,
+            distance: embeddingConfig.distance,
+            provider: embeddingConfig.provider,
+            model: embeddingConfig.model,
+            profileName,
+        };
+        const validationKey = this.buildCollectionValidationKey(expected);
+        if (this.validatedCollections.get(collectionName) === validationKey) {
             return 'exists';
         }
+
+        if (await this.checkCollectionExists(collectionName)) {
+            const actual = await this.getCollectionVectorConfig(collectionName);
+            if (
+                !actual ||
+                actual.size !== expected.size ||
+                this.normalizeDistance(actual.distance) !== this.normalizeDistance(expected.distance)
+            ) {
+                throw this.buildCollectionMismatchError(collectionName, actual, expected);
+            }
+            this.validatedCollections.set(collectionName, validationKey);
+            return 'exists';
+        }
+
         try {
             await this.client.createCollection(collectionName, {
-                vectors: { size: vectorSize, distance: 'Cosine' },
+                vectors: { size: expected.size, distance: expected.distance },
             });
+            this.validatedCollections.set(collectionName, validationKey);
             return 'created';
         } catch (e: any) {
             if (String(e.message || '').includes('already exists')) {
+                const actual = await this.getCollectionVectorConfig(collectionName);
+                if (
+                    !actual ||
+                    actual.size !== expected.size ||
+                    this.normalizeDistance(actual.distance) !== this.normalizeDistance(expected.distance)
+                ) {
+                    throw this.buildCollectionMismatchError(collectionName, actual, expected);
+                }
+                this.validatedCollections.set(collectionName, validationKey);
                 return 'exists';
             }
-            console.error(`❌ Ошибка создания коллекции ${collectionName}:`, e);
-            return 'failed';
+            throw e;
         }
     }
 
     private async createConfigCollection() {
-        const status = await this.createCollectionSafely(this.configCollection);
-        if (status === 'created') {
-            console.log(`✅ Создана коллекция конфигураций: ${this.configCollection}`);
-        } else if (status === 'exists') {
-            console.log(`✅ Коллекция конфигураций уже существует: ${this.configCollection}`);
+        try {
+            const status = await this.ensureCollectionCompatibility(this.configCollection);
+            if (status === 'created') {
+                console.log(`✅ Создана коллекция конфигураций: ${this.configCollection}`);
+            } else {
+                console.log(`✅ Коллекция конфигураций уже существует: ${this.configCollection}`);
+            }
+        } catch (error) {
+            console.error(`❌ Коллекция конфигураций несовместима: ${this.configCollection}`, error);
+            throw error;
         }
     }
 
@@ -407,30 +512,30 @@ export class QdrantVectorService implements IDomainVectorService {
 
         for (const domainKey of Object.values(PREDEFINED_DOMAINS)) {
             const collection = this.collectionFor(domainKey);
-            const status = await this.createCollectionSafely(collection);
-            if (status === 'created') {
-                console.log(`✅ Создан домен для ${config.characterName}: ${domainKey} (${collection})`);
-            } else if (status === 'exists') {
-                console.log(`✅ Домен для ${config.characterName} уже существует: ${domainKey} (${collection})`);
-            } else {
+            try {
+                const status = await this.ensureCollectionCompatibility(collection);
+                if (status === 'created') {
+                    console.log(`✅ Создан домен для ${config.characterName}: ${domainKey} (${collection})`);
+                } else {
+                    console.log(`✅ Домен для ${config.characterName} уже существует: ${domainKey} (${collection})`);
+                }
+            } catch (error) {
+                console.error(`❌ Домен для ${config.characterName} несовместим: ${domainKey} (${collection})`, error);
                 console.log(`❌ Не удалось создать домен для ${config.characterName}: ${domainKey}`);
+                throw error;
             }
         }
     }
 
     private async embed(text: string): Promise<number[]> {
-        const model = await resolveOpenAiModelForTaskAsync('embedding');
-        const resp = await openai.embeddings.create({
-            model,
-            input: text,
-        });
-        return resp.data[0].embedding;
+        return createMemoryEmbedding(text);
     }
 
     async saveMemory(memory: Omit<MemoryEntry, 'id'>): Promise<string> {
-        const vector = await this.embed(memory.content);
         const id = uuidv4();
         const collection = this.collectionFor(memory.domain);
+        await this.ensureCollectionCompatibility(collection);
+        const vector = await this.embed(memory.content);
         const now = new Date();
         const lastAccessedAt = memory.lastAccessedAt instanceof Date ? memory.lastAccessedAt : now;
         const payload = this.buildPayload(id, memory, lastAccessedAt);
@@ -449,8 +554,9 @@ export class QdrantVectorService implements IDomainVectorService {
     }
 
     async updateMemory(memoryId: string, domain: string, memory: Omit<MemoryEntry, 'id'>): Promise<void> {
-        const vector = await this.embed(memory.content);
         const collection = this.collectionFor(domain);
+        await this.ensureCollectionCompatibility(collection);
+        const vector = await this.embed(memory.content);
         const now = new Date();
         const existingPayload = await this.fetchPayload(memoryId, domain);
         const payload = this.buildPayload(memoryId, memory, now, existingPayload);
@@ -511,9 +617,10 @@ export class QdrantVectorService implements IDomainVectorService {
     }
 
     async searchMemories(query: string, userId: string, options?: SearchOptions): Promise<SearchResult[]> {
-        const vector = await this.embed(query);
         const domain = options?.domain || 'general';
         const collection = this.collectionFor(domain);
+        await this.ensureCollectionCompatibility(collection);
+        const vector = await this.embed(query);
 
         console.log(`🔍 Поиск памяти для ${config.characterName}:`);
         console.log(`- Query: ${query.substring(0, 100)}...`);
@@ -889,6 +996,7 @@ export class QdrantVectorService implements IDomainVectorService {
                     subject: p.subject,
                     predicate: p.predicate,
                     object: p.object,
+                    negated: typeof p.negated === 'boolean' ? p.negated : undefined,
                     validFrom: p.validFrom ? new Date(p.validFrom as Date | string) : undefined,
                     validTo: p.validTo ? new Date(p.validTo as Date | string) : undefined,
                     status: p.status,
@@ -988,25 +1096,40 @@ export class QdrantVectorService implements IDomainVectorService {
         return { total, domains };
     }
 
-    async getRecentMemories(userId: string, limit = 5): Promise<MemoryEntry[]> {
+    private async collectMemories(userId: string, exhaustive: boolean): Promise<MemoryEntry[]> {
         const memories: MemoryEntry[] = [];
 
         for (const domainKey of Object.values(PREDEFINED_DOMAINS)) {
             const collection = this.collectionFor(domainKey);
-            const scroll = await this.client.scroll(collection, {
-                filter: {
-                    must: [
-                        { key: 'botId', match: { value: this.botId } },
-                        { key: 'userId', match: { value: userId } },
-                    ],
-                    must_not: this.activeMustNotFilter(),
-                },
-                limit: 1000,
-                with_payload: true,
-                with_vector: false,
-            });
+            let offset: string | number | undefined;
+            const visitedOffsets = new Set<string>();
+            do {
+                const scroll = await this.client.scroll(collection, {
+                    filter: {
+                        must: [
+                            { key: 'botId', match: { value: this.botId } },
+                            { key: 'userId', match: { value: userId } },
+                        ],
+                        must_not: this.activeMustNotFilter(),
+                    },
+                    limit: 1000,
+                    offset,
+                    with_payload: true,
+                    with_vector: false,
+                });
+                const nextOffset = scroll.next_page_offset;
+                offset = typeof nextOffset === 'string' || typeof nextOffset === 'number'
+                    ? nextOffset
+                    : undefined;
+                if (offset !== undefined) {
+                    const offsetKey = `${typeof offset}:${offset}`;
+                    if (visitedOffsets.has(offsetKey)) {
+                        throw new Error(`Qdrant pagination repeated offset for ${domainKey}`);
+                    }
+                    visitedOffsets.add(offsetKey);
+                }
 
-            for (const point of scroll.points || []) {
+                for (const point of scroll.points || []) {
                 const payload = point.payload as Partial<MemoryEntry> & { lastAccessedAt?: string } | undefined;
                 if (!payload?.content || !payload?.timestamp) continue;
                 if (this.isExpiredPayload(payload)) continue;
@@ -1065,18 +1188,27 @@ export class QdrantVectorService implements IDomainVectorService {
                     subject: payload.subject,
                     predicate: payload.predicate,
                     object: payload.object,
+                    negated: typeof payload.negated === 'boolean' ? payload.negated : undefined,
                     validFrom: payload.validFrom ? new Date(payload.validFrom as Date | string) : undefined,
                     validTo: payload.validTo ? new Date(payload.validTo as Date | string) : undefined,
                     status: payload.status,
                     confirmationCount: typeof payload.confirmationCount === 'number' ? payload.confirmationCount : undefined,
                     lastConfirmedAt: payload.lastConfirmedAt ? new Date(payload.lastConfirmedAt as Date | string) : undefined,
                 });
-            }
+                }
+            } while (exhaustive && offset !== undefined);
         }
 
         return memories
-            .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
-            .slice(0, limit);
+            .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+    }
+
+    async getRecentMemories(userId: string, limit = 5): Promise<MemoryEntry[]> {
+        return (await this.collectMemories(userId, false)).slice(0, limit);
+    }
+
+    async getAllMemories(userId: string): Promise<MemoryEntry[]> {
+        return this.collectMemories(userId, true);
     }
 
 

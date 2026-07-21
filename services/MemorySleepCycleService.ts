@@ -4,6 +4,7 @@ import { MemoryEntry } from '../types';
 import { getVectorService } from './VectorServiceFactory';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { devLog, parseLLMJson } from '../utils';
+import { isEligibleForUserSynthesis } from '../utils/userSynthesisFilter';
 
 const OPEN_LOOP_INDEX_TAG = 'sleep_open_loop_index';
 const UNCERTAINTY_INDEX_TAG = 'sleep_uncertainty_index';
@@ -38,6 +39,8 @@ function isOpenLoopCandidate(memory: MemoryEntry): boolean {
     if (memory.tags?.includes(UNCERTAINTY_INDEX_TAG)) return false;
     if (memory.tags?.includes('memory-episode') || memory.tags?.includes('memory-chapter')) return false;
     if (memory.tags?.includes('memory-schema')) return false;
+    // Индекс открытых линий строится о владельце: исключаем чужие/contact-источники.
+    if (!isEligibleForUserSynthesis(memory)) return false;
     if (memory.memoryKind && ['goal', 'open_loop', 'prospective', 'promise'].includes(memory.memoryKind)) return true;
     if (memory.status === 'planned') return true;
     if ((memory.tags ?? []).includes('temporal_scope:future_plan')) return true;
@@ -69,6 +72,8 @@ function isSyntheticOrIndex(memory: MemoryEntry): boolean {
 function isUncertaintyCandidate(memory: MemoryEntry): boolean {
     if (isSyntheticOrIndex(memory)) return false;
     if (memory.status === 'expired' || memory.status === 'superseded' || memory.status === 'done') return false;
+    // Индекс неопределённостей строится о владельце: исключаем чужие/contact-источники.
+    if (!isEligibleForUserSynthesis(memory)) return false;
 
     const confidence = memory.confidence ?? 0.6;
     const age = memoryAgeDays(memory);

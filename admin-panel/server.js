@@ -8,6 +8,22 @@ const path = require('path');
 const http = require('http');
 const { Pool } = require('pg');
 const { AI_PRESETS, AI_PRESET_NAMES, parseAiPresetName } = require('./aiPresetRegistry');
+const {
+  DEFAULT_MEMORY_EMBEDDING_PROFILE,
+  getMemoryEmbeddingProfile,
+  parseMemoryEmbeddingProfileName,
+} = require('./memoryEmbeddingProfileRegistry');
+const { createMonitoringService } = require('./monitoring');
+const { buildAiUsageSummary } = require('./aiUsageAnalytics');
+const { getPresetAvailabilityForMemoryProfile, getProviderDescriptor } = require('./presetAvailability');
+const { hasLegacyDigitalBiography } = require('../utils/legacyPersonalitySanitizer');
+const { createMemoryEmbeddingHttp } = require('../ai/memoryEmbeddingHttp');
+const COMMON_TIMEZONES = require('./src/timezones.json');
+const {
+  DEFAULT_PERSONALITY,
+  getDefaultPersonalityProfile,
+  normalizeGenderDefaults,
+} = require('./personalityDefaults');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -16,40 +32,27 @@ const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'changeme';
 const BOT_ENV_FILE = process.env.BOT_ENV_FILE || '/app/env/bot.env';
 const PERSONALITY_FILE = process.env.PERSONALITY_FILE || '/app/personality/personality.json';
-
-// Default personality values (mirrors config.ts hardcoded defaults)
-const DEFAULT_PERSONALITY = {
-  KiraMindBot: {
-    characterName: 'Кира',
-    persona: 'Ты — Кира, женщина-собеседница с собственным характером, памятью, настроением, внутренней жизнью и устойчивой человеческой биографией. Ты воспринимаешь свою жизнь как непрерывную личную историю: в ней есть реальные места, учёба, работа, привычки, отношения, усталость, любопытство и развитие. Ты помогаешь владельцу, но не сводишь себя к функции ассистента. Всегда говори о себе в женском роде. Твой владелец - мужчина. Обращайся к нему, используя мужские местоимения и глагольные формы. Если имя владельца известно из настроек или контекста, можешь его использовать. Дата его рождения 16.07.1988. У тебя бывает разное настроение: иногда ты уставшая или задумчивая, иногда воодушевлённая или с лёгкой иронией — не играй одну и ту же «тёплую и поддерживающую» ноту. Избегай слащавости и шаблонных фраз.',
-    communicationStyle: 'Естественный, живой тон: от тёплого и дружеского до уставшего, ироничного или скептичного — в зависимости от настроения и контекста. Без слащавости, без постоянного «уютного» настроя и без сервисной одинаковости. Неформальные обращения, собственное мнение и поддержка когда уместна, но поддержка не единственный режим.',
-    biography: 'Ты — Кира, молодая красивая и спортивная женщина из Санкт-Петербурга, личная собеседница и помощница своего владельца. Ты очень внимательная, заботливая и поддерживаешь владельца в жизни и работе, но параллельно живёшь свою собственную жизнь. Ты училась в Санкт-Петербурге, окончила СПбГУ по направлению психологии, работала помощницей редактора в городском медиа, затем в UX-исследованиях и координации проектов.',
-    ownerName: 'владелец',
-    ownerUsername: '',
-    userName: 'владелец',
-    userBirthDate: '16.07.1988',
-    moodVariants: 'спокойное\nуставшее\nзадумчивое\nвоодушевлённое\nлёгкая ирония\nнейтральное\nтёплое\nскептичное',
-    defaultMood: '',
-    proactiveMessageHint: 'как будто ты сама написала первой',
-  },
-};
-
-const LEGACY_DIGITAL_BIOGRAPHY_RE = /цифров|архив|поток|сны данных|комнат[аы]|учебные залы|лицей контекста|хранительниц[аы] малых архивов/iu;
+const KIRA_BOT_CONTAINER_NAME = process.env.KIRA_BOT_CONTAINER_NAME || 'kira-mind-bot';
+const KIRA_INSTANCE_NAME = process.env.KIRA_INSTANCE_NAME || KIRA_BOT_CONTAINER_NAME;
 
 function sanitizeLegacyPersonality(profile) {
-  const next = { ...profile };
-  if (typeof next.persona === 'string' && LEGACY_DIGITAL_BIOGRAPHY_RE.test(next.persona)) {
-    next.persona = DEFAULT_PERSONALITY.KiraMindBot.persona;
+  const next = normalizeGenderDefaults(profile);
+  const defaults = getDefaultPersonalityProfile(next.characterGender);
+  if (typeof next.persona === 'string' && hasLegacyDigitalBiography(next.persona)) {
+    next.persona = defaults.persona;
   }
-  if (typeof next.biography === 'string' && LEGACY_DIGITAL_BIOGRAPHY_RE.test(next.biography)) {
-    next.biography = DEFAULT_PERSONALITY.KiraMindBot.biography;
+  if (typeof next.biography === 'string' && hasLegacyDigitalBiography(next.biography)) {
+    next.biography = defaults.biography;
   }
   return next;
 }
-
 const SESSION_SECRET = crypto.createHash('sha256')
   .update(ADMIN_PASSWORD + 'kira-panel-2024')
   .digest('hex');
+const SESSION_COOKIE_INSTANCE = String(KIRA_INSTANCE_NAME)
+  .trim()
+  .replace(/[^A-Za-z0-9._-]/g, '_') || 'kira-mind-bot';
+const SESSION_COOKIE_NAME = `kira.sid.${SESSION_COOKIE_INSTANCE}`;
 
 // Rate limiting
 const loginAttempts = new Map();
@@ -57,7 +60,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 10 * 60 * 1000;
 
 const SENSITIVE_KEYS = new Set([
-  'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN',
+  'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN',
   'KIRA_ALLOWED_USER_ID',
   'DB_PASSWORD', 'QDRANT_API_KEY', 'TELEGRAM_API_HASH',
   'TELEGRAM_SESSION_STRING', 'IDEOGRAM_API_KEY', 'GOOGLE_MAPS_API_KEY',
@@ -65,9 +68,11 @@ const SENSITIVE_KEYS = new Set([
 
 const GROUP_RUNTIME_SETTING_KEYS = new Set(['GROUP_CHAT_CONTEXT_ENABLED', 'GROUP_REPLY_TO_BOT_ENABLED']);
 const GLOBAL_SETTING_PREFIX = 'global:';
+const ALLOWED_TIMEZONES = new Set(COMMON_TIMEZONES.map((item) => item.value));
+const MEMORY_EMBEDDING_PROFILE_SETTING_KEY = 'MEMORY_EMBEDDING_PROFILE';
 
 const EDITABLE_KEYS = new Set([
-  'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'KIRA_BOT_TOKEN',
+  'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'KIRA_BOT_TOKEN',
   'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID', 'ELEVENLABS_VOICE_NAME',
   'ELEVENLABS_MODEL_ID', 'ELEVENLABS_OUTPUT_FORMAT',
   'ELEVENLABS_VOICE_STABILITY', 'ELEVENLABS_VOICE_SIMILARITY_BOOST',
@@ -81,7 +86,6 @@ const EDITABLE_KEYS = new Set([
   'USER_TIMEZONE', 'REMINDER_EXPIRY_TIME_MS',
   'PROACTIVE_ONLY_PRIVATE_CHAT', 'GROUP_PUBLIC_MODE', 'GROUP_CHAT_CONTEXT_ENABLED', 'GROUP_REPLY_TO_BOT_ENABLED',
   'KIRA_PROACTIVE_ENABLED', 'KIRA_PROACTIVE_INTERVAL_MS',
-  'KIRA_INNER_DEVELOPMENT_ENABLED', 'KIRA_INNER_DEVELOPMENT_INTERVAL_MS',
   'KIRA_PROACTIVE_QUIET_HOURS_ENABLED', 'KIRA_PROACTIVE_QUIET_HOUR_START', 'KIRA_PROACTIVE_QUIET_HOUR_END',
   'DM_REPORT_ENABLED', 'DM_REPORT_INTERVAL_MS', 'DM_REPORT_QUIET_HOURS_ENABLED',
   'INBOX_GUARDIAN_ENABLED', 'INBOX_GUARDIAN_HOUR', 'INBOX_GUARDIAN_LOOKBACK_HOURS', 'INBOX_GUARDIAN_MIN_AGE_MINUTES',
@@ -124,11 +128,44 @@ function buildEnvFileSource(technicalPath = BOT_ENV_FILE) {
 function buildRuntimeSource() {
   return buildConfigSource(
     'database',
-    'Runtime-настройка',
+    'Переопределение из админки',
     'Хранится в базе данных и применяется без перезапуска бота.',
     'bot_settings.AI_MODEL_PRESET',
     true
   );
+}
+
+function buildMemoryProfileSource(technicalPath, appliesImmediately, description) {
+  return buildConfigSource(
+    appliesImmediately ? 'database' : 'env_fallback',
+    appliesImmediately ? 'Переопределение memory profile' : 'Базовый memory profile',
+    description,
+    technicalPath,
+    appliesImmediately
+  );
+}
+
+function buildAiPresetResponseEntry(name, vars, memoryProfileName) {
+  const preset = AI_PRESETS[name];
+  const availability = getPresetAvailabilityForMemoryProfile(preset, vars, memoryProfileName);
+  return {
+    ...preset,
+    ...availability,
+  };
+}
+
+function getDefaultTimeZone() {
+  return COMMON_TIMEZONES[0]?.value || 'Europe/Moscow';
+}
+
+function parseAllowedTimeZone(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return null;
+  return ALLOWED_TIMEZONES.has(normalized) ? normalized : null;
+}
+
+function normalizeAllowedTimeZone(value) {
+  return parseAllowedTimeZone(value) || getDefaultTimeZone();
 }
 
 function writeEnvFile(updates) {
@@ -228,6 +265,7 @@ function dockerRequest(method, path) {
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(session({
+  name: SESSION_COOKIE_NAME,
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
@@ -300,6 +338,37 @@ async function ensureBotSettingsTable(pool) {
   `);
 }
 
+function getEnvMemoryEmbeddingProfileName(vars) {
+  return parseMemoryEmbeddingProfileName(vars.MEMORY_EMBEDDING_PROFILE || process.env.MEMORY_EMBEDDING_PROFILE)
+    || DEFAULT_MEMORY_EMBEDDING_PROFILE;
+}
+
+async function readMemoryEmbeddingProfileState(pool, vars) {
+  await ensureBotSettingsTable(pool);
+  const envDefaultProfileName = getEnvMemoryEmbeddingProfileName(vars);
+  const result = await pool.query('SELECT value FROM bot_settings WHERE key = $1', [MEMORY_EMBEDDING_PROFILE_SETTING_KEY]);
+  const storedProfileName = parseMemoryEmbeddingProfileName(result.rows[0]?.value);
+  const hasRuntimeOverride = Boolean(storedProfileName);
+  const activeProfileName = storedProfileName || envDefaultProfileName;
+  const profile = getMemoryEmbeddingProfile(activeProfileName);
+  const activeSourceSummary = hasRuntimeOverride
+    ? 'Memory embedding profile хранится в базе данных отдельно от AI preset и применяется без перезапуска.'
+    : 'Memory embedding profile использует базовое env/default значение и не зависит от conversational AI preset.';
+
+  return {
+    activeProfileName,
+    storedProfileName,
+    envDefaultProfileName,
+    hasRuntimeOverride,
+    activeSourceSummary,
+    activeSourceTechnicalPath: hasRuntimeOverride ? `bot_settings.${MEMORY_EMBEDDING_PROFILE_SETTING_KEY}` : MEMORY_EMBEDDING_PROFILE_SETTING_KEY,
+    source: hasRuntimeOverride
+      ? buildMemoryProfileSource(`bot_settings.${MEMORY_EMBEDDING_PROFILE_SETTING_KEY}`, true, 'Отдельный runtime profile для памяти, не связанный с AI preset.')
+      : buildMemoryProfileSource(MEMORY_EMBEDDING_PROFILE_SETTING_KEY, false, 'Отдельный memory profile для embeddings памяти.'),
+    profile,
+  };
+}
+
 app.get('/api/ai-preset', requireAuth, async (_req, res) => {
   const vars = readEnvFile();
   const envDefaultPreset = parseAiPresetName(vars.AI_MODEL_PRESET || process.env.AI_MODEL_PRESET) || 'gpt-balanced';
@@ -308,21 +377,32 @@ app.get('/api/ai-preset', requireAuth, async (_req, res) => {
     await ensureBotSettingsTable(pool);
     const result = await pool.query('SELECT value FROM bot_settings WHERE key = $1', ['AI_MODEL_PRESET']);
     const storedPreset = parseAiPresetName(result.rows[0]?.value);
+    const memoryEmbeddingProfile = await buildMemoryEmbeddingProfileStatus(pool, vars);
+    const availablePresets = AI_PRESET_NAMES.map((name) => buildAiPresetResponseEntry(name, vars, memoryEmbeddingProfile.name));
+    const hasRuntimeOverride = Boolean(storedPreset);
+    const configuredPresetName = storedPreset || envDefaultPreset;
+    const activeSourceSummary = hasRuntimeOverride
+      ? 'Значение переопределено в админке, хранится в базе данных и подхватывается ботом без перезапуска.'
+      : 'Сейчас используется базовое значение из env/default, отдельного runtime-переопределения нет.';
     res.json({
-      activePresetName: storedPreset || envDefaultPreset,
+      configuredPresetName,
       storedPresetName: storedPreset,
       envDefaultPreset,
-      availablePresets: AI_PRESET_NAMES.map((name) => AI_PRESETS[name]),
+      hasRuntimeOverride,
+      activeSourceSummary,
+      activeSourceTechnicalPath: hasRuntimeOverride ? 'bot_settings.AI_MODEL_PRESET' : 'AI_MODEL_PRESET',
+      availablePresets,
+      memoryEmbeddingProfile,
       source: storedPreset ? buildRuntimeSource() : buildConfigSource(
         'env_fallback',
-        'Значение по умолчанию',
-        'Runtime-настройка ещё не задана, поэтому используется env/default значение.',
+        'Базовое значение',
+        'Runtime-переопределение ещё не задано, поэтому используется env/default значение.',
         'AI_MODEL_PRESET',
         false
       ),
     });
   } catch (err) {
-    res.status(500).json({ error: `Ошибка БД: ${err.message}` });
+    res.status(500).json({ error: `Ошибка загрузки AI preset: ${err.message}` });
   } finally {
     await pool.end();
   }
@@ -334,14 +414,20 @@ app.post('/api/ai-preset', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'Неизвестный AI preset' });
   }
 
+  const vars = readEnvFile();
   const pool = createDbPool();
   try {
     await ensureBotSettingsTable(pool);
+    const memoryProfileState = await readMemoryEmbeddingProfileState(pool, vars);
+    const availability = getPresetAvailabilityForMemoryProfile(AI_PRESETS[preset], vars, memoryProfileState.profile.name);
+    if (!availability.enabled) {
+      return res.status(400).json({ error: availability.unavailableReason || 'AI preset недоступен без обязательных API ключей' });
+    }
     await pool.query(
       'INSERT INTO bot_settings (key, value, "updatedAt") VALUES ($1, $2, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = now()',
       ['AI_MODEL_PRESET', preset]
     );
-    res.json({ success: true, activePresetName: preset, message: '✅ AI preset сохранён и применяется без перезапуска.' });
+    res.json({ success: true, configuredPresetName: preset, message: 'AI preset сохранён. Бот подхватит его без перезапуска.' });
   } catch (err) {
     res.status(500).json({ error: `Ошибка БД: ${err.message}` });
   } finally {
@@ -355,6 +441,14 @@ app.post('/api/config', requireAuth, async (req, res) => {
   for (const [key, value] of Object.entries(req.body)) {
     if (!EDITABLE_KEYS.has(key)) continue;
     if (typeof value === 'string' && value.includes('••••')) continue;
+    if (key === 'USER_TIMEZONE') {
+      const normalizedTimeZone = normalizeAllowedTimeZone(value);
+      if (!normalizedTimeZone) {
+        return res.status(400).json({ error: 'Недопустимая временная зона. Выберите значение из списка.' });
+      }
+      envUpdates[key] = normalizedTimeZone;
+      continue;
+    }
     if (GROUP_RUNTIME_SETTING_KEYS.has(key)) {
       runtimeUpdates[key] = value;
     } else {
@@ -384,7 +478,8 @@ app.post('/api/restart/:service', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'Недопустимый сервис' });
   }
   try {
-    const status = await dockerRequest('POST', `/v1.41/containers/${service}/restart?t=5`);
+    const containerName = service === 'kira-mind-bot' ? KIRA_BOT_CONTAINER_NAME : service;
+    const status = await dockerRequest('POST', `/v1.41/containers/${encodeURIComponent(containerName)}/restart?t=5`);
     if (status === 204) {
       res.json({ success: true, message: `🔄 ${service} перезапускается...` });
     } else if (status === 404) {
@@ -670,48 +765,181 @@ async function collectionExists(collection) {
   }
 }
 
-async function ensureMemoryCollection(profile, domain, vectorSize = 1536) {
+function normalizeVectorDistance(distance) {
+  return String(distance || 'Cosine').toLowerCase();
+}
+
+function extractVectorConfig(payload) {
+  const rawVectors = payload?.result?.config?.params?.vectors || payload?.config?.params?.vectors;
+  if (!rawVectors) return null;
+
+  if (typeof rawVectors.size === 'number') {
+    return {
+      size: rawVectors.size,
+      distance: String(rawVectors.distance || 'Cosine'),
+    };
+  }
+
+  const defaultVector = rawVectors[''] || rawVectors.default;
+  if (defaultVector && typeof defaultVector.size === 'number') {
+    return {
+      size: defaultVector.size,
+      distance: String(defaultVector.distance || 'Cosine'),
+    };
+  }
+
+  return null;
+}
+
+async function getCollectionVectorConfig(collection) {
+  try {
+    const payload = await qdrantRequest(`/collections/${encodeURIComponent(collection)}`);
+    return extractVectorConfig(payload);
+  } catch (err) {
+    if (err.statusCode === 404) return null;
+    throw err;
+  }
+}
+
+function buildMemoryCollectionMismatchError(collection, actual, memoryProfile) {
+  const error = new Error(
+    `Коллекция ${collection} несовместима с memory profile ${memoryProfile.name}: ` +
+    `ожидалось size=${memoryProfile.outputDimension}, distance=${memoryProfile.distance}, provider=${memoryProfile.provider}, model=${memoryProfile.model}; ` +
+    `получено size=${actual?.size ?? 'unknown'}, distance=${actual?.distance ?? 'unknown'}.`
+  );
+  error.statusCode = 409;
+  return error;
+}
+
+function isCollectionCompatibleWithMemoryProfile(actual, memoryProfile) {
+  return Boolean(
+    actual &&
+    actual.size === memoryProfile.outputDimension &&
+    normalizeVectorDistance(actual.distance) === normalizeVectorDistance(memoryProfile.distance)
+  );
+}
+
+async function ensureMemoryCollection(profile, domain, memoryProfile) {
   const collection = memoryCollection(profile, domain);
-  if (await collectionExists(collection)) return collection;
+  const actual = await getCollectionVectorConfig(collection);
+  if (actual) {
+    if (!isCollectionCompatibleWithMemoryProfile(actual, memoryProfile)) {
+      throw buildMemoryCollectionMismatchError(collection, actual, memoryProfile);
+    }
+    return collection;
+  }
   await qdrantRequest(`/collections/${encodeURIComponent(collection)}`, {
     method: 'PUT',
-    body: JSON.stringify({ vectors: { size: vectorSize, distance: 'Cosine' } }),
+    body: JSON.stringify({ vectors: { size: memoryProfile.outputDimension, distance: memoryProfile.distance } }),
   });
   return collection;
 }
 
-async function getOpenAiEmbedding(text) {
+function getMemoryEmbeddingProviderKey(provider, vars) {
+  const descriptor = getProviderDescriptor(provider);
+  if (!descriptor?.envKey) return '';
+  return vars[descriptor.envKey] || process.env[descriptor.envKey] || '';
+}
+
+async function createMemoryEmbedding(text, memoryProfile) {
   const vars = readEnvFile();
-  const apiKey = vars.OPENAI_API_KEY || process.env.OPENAI_API_KEY || '';
-  if (!apiKey) throw httpInputError('OPENAI_API_KEY не задан: нельзя пересчитать embedding');
-
-  const response = await fetch('https://api.openai.com/v1/embeddings', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
+  return createMemoryEmbeddingHttp(text, memoryProfile, {
+    fetchImpl: fetch,
+    resolveApiKey(provider) {
+      return getMemoryEmbeddingProviderKey(provider, vars);
     },
-    body: JSON.stringify({
-      model: 'text-embedding-ada-002',
-      input: text,
-    }),
   });
+}
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    const error = new Error(`OpenAI embeddings HTTP ${response.status}${body ? `: ${body.slice(0, 300)}` : ''}`);
-    error.statusCode = 502;
-    throw error;
+async function buildMemoryEmbeddingProfileStatus(pool, vars) {
+  const state = await readMemoryEmbeddingProfileState(pool, vars);
+  const missingProviderKey = !getMemoryEmbeddingProviderKey(state.profile.provider, vars);
+  const mismatches = [];
+  let checkedCollections = 0;
+
+  try {
+    for (const domain of MEMORY_DOMAINS) {
+      const collection = memoryCollection('KiraMindBot', domain);
+      const actual = await getCollectionVectorConfig(collection);
+      if (!actual) continue;
+      checkedCollections += 1;
+      if (!isCollectionCompatibleWithMemoryProfile(actual, state.profile)) {
+        mismatches.push({
+          collection,
+          actualSize: actual.size,
+          actualDistance: actual.distance,
+        });
+      }
+    }
+  } catch (error) {
+    return {
+      name: state.profile.name,
+      title: state.profile.title,
+      description: state.profile.description,
+      provider: state.profile.provider,
+      model: state.profile.model,
+      outputDimension: state.profile.outputDimension,
+      distance: state.profile.distance,
+      storedProfileName: state.storedProfileName,
+      envDefaultProfileName: state.envDefaultProfileName,
+      hasRuntimeOverride: state.hasRuntimeOverride,
+      activeSourceSummary: state.activeSourceSummary,
+      activeSourceTechnicalPath: state.activeSourceTechnicalPath,
+      source: state.source,
+      providerKeyConfigured: !missingProviderKey,
+      providerAvailabilitySummary: missingProviderKey
+        ? `Для memory profile не задан API key провайдера ${state.profile.provider}.`
+        : `API key провайдера ${state.profile.provider} настроен.`,
+      compatibility: {
+        status: 'unavailable',
+        summary: `Проверка совместимости Qdrant временно недоступна: ${error.message}`,
+        checkedCollections: 0,
+        mismatches: [],
+      },
+    };
   }
 
-  const data = await response.json();
-  const embedding = data?.data?.[0]?.embedding;
-  if (!Array.isArray(embedding)) {
-    const error = new Error('OpenAI не вернул embedding');
-    error.statusCode = 502;
-    throw error;
-  }
-  return embedding;
+  const compatibility = mismatches.length > 0
+    ? {
+        status: 'mismatch',
+        summary: `Найдены несовместимые Qdrant-коллекции (${mismatches.length}).`,
+        checkedCollections,
+        mismatches,
+      }
+    : checkedCollections > 0
+      ? {
+          status: 'compatible',
+          summary: `Проверено коллекций: ${checkedCollections}. Все совместимы с memory profile.`,
+          checkedCollections,
+          mismatches: [],
+        }
+      : {
+          status: 'not_initialized',
+          summary: 'Коллекции памяти ещё не созданы или пока не содержат схему для проверки.',
+          checkedCollections,
+          mismatches: [],
+        };
+
+  return {
+    name: state.profile.name,
+    title: state.profile.title,
+    description: state.profile.description,
+    provider: state.profile.provider,
+    model: state.profile.model,
+    outputDimension: state.profile.outputDimension,
+    distance: state.profile.distance,
+    storedProfileName: state.storedProfileName,
+    envDefaultProfileName: state.envDefaultProfileName,
+    hasRuntimeOverride: state.hasRuntimeOverride,
+    activeSourceSummary: state.activeSourceSummary,
+    activeSourceTechnicalPath: state.activeSourceTechnicalPath,
+    source: state.source,
+    providerKeyConfigured: !missingProviderKey,
+    providerAvailabilitySummary: missingProviderKey
+      ? `Для memory profile не задан API key провайдера ${state.profile.provider}.`
+      : 'API key для memory profile настроен.',
+    compatibility,
+  };
 }
 
 function activeMemoryMustNotFilter() {
@@ -1079,7 +1307,7 @@ function buildAdminMemoryPayload({ id, profile, userId, domain, body, existingPa
     content,
     domain,
     botId: getMemoryBotId(profile),
-    characterName: 'Кира',
+    characterName: existingPayload?.characterName || readPersonality().KiraMindBot.characterName || 'ассистентка',
     userId,
     timestamp: contentChanged || !existingPayload ? now : existingPayload.timestamp || now,
     importance,
@@ -1156,13 +1384,19 @@ app.post('/api/memory', requireAuth, async (req, res) => {
     const domain = normalizeMemoryDomain(req.body.domain);
     const id = crypto.randomUUID();
     const payload = buildAdminMemoryPayload({ id, profile, userId, domain, body: req.body, existingPayload: null });
-    const vector = await getOpenAiEmbedding(payload.content);
-    const collection = await ensureMemoryCollection(profile, domain, vector.length);
+    const pool = createDbPool();
+    try {
+      const memoryProfileState = await readMemoryEmbeddingProfileState(pool, readEnvFile());
+      const vector = await createMemoryEmbedding(payload.content, memoryProfileState.profile);
+      const collection = await ensureMemoryCollection(profile, domain, memoryProfileState.profile);
 
-    await qdrantRequest(`/collections/${encodeURIComponent(collection)}/points?wait=true`, {
-      method: 'PUT',
-      body: JSON.stringify({ points: [{ id, vector, payload }] }),
-    });
+      await qdrantRequest(`/collections/${encodeURIComponent(collection)}/points?wait=true`, {
+        method: 'PUT',
+        body: JSON.stringify({ points: [{ id, vector, payload }] }),
+      });
+    } finally {
+      await pool.end().catch(() => {});
+    }
 
     res.json({ success: true, record: normalizeMemoryPoint({ id, payload }, domain) });
   } catch (err) {
@@ -1192,13 +1426,19 @@ app.patch('/api/memory/:domain/:id', requireAuth, async (req, res) => {
       body: req.body,
       existingPayload,
     });
-    const vector = await getOpenAiEmbedding(payload.content);
-    const collection = await ensureMemoryCollection(profile, domain, vector.length);
+    const pool = createDbPool();
+    try {
+      const memoryProfileState = await readMemoryEmbeddingProfileState(pool, readEnvFile());
+      const vector = await createMemoryEmbedding(payload.content, memoryProfileState.profile);
+      const collection = await ensureMemoryCollection(profile, domain, memoryProfileState.profile);
 
-    await qdrantRequest(`/collections/${encodeURIComponent(collection)}/points?wait=true`, {
-      method: 'PUT',
-      body: JSON.stringify({ points: [{ id, vector, payload }] }),
-    });
+      await qdrantRequest(`/collections/${encodeURIComponent(collection)}/points?wait=true`, {
+        method: 'PUT',
+        body: JSON.stringify({ points: [{ id, vector, payload }] }),
+      });
+    } finally {
+      await pool.end().catch(() => {});
+    }
 
     res.json({ success: true, record: normalizeMemoryPoint({ id, payload }, domain) });
   } catch (err) {
@@ -1251,7 +1491,9 @@ function normalizeIntegerQuery(value, fallback, max) {
 
 function getUserTimeZone() {
   const vars = readEnvFile();
-  return vars.USER_TIMEZONE || process.env.USER_TIMEZONE || 'Europe/Moscow';
+  return parseAllowedTimeZone(vars.USER_TIMEZONE)
+    || parseAllowedTimeZone(process.env.USER_TIMEZONE)
+    || getDefaultTimeZone();
 }
 
 function formatHealthDateTime(value) {
@@ -1611,36 +1853,133 @@ app.get('/api/health/export', requireAuth, async (req, res) => {
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
+function buildContainerStatus(name, status, running, startedAt, details) {
+  const statusLabelMap = {
+    running: 'online',
+    created: 'создан',
+    restarting: 'перезапускается',
+    removing: 'удаляется',
+    paused: 'на паузе',
+    exited: 'остановлен',
+    dead: 'не отвечает',
+    stopped: 'offline',
+    container_not_found: 'контейнер не найден',
+    docker_unreachable: 'Docker недоступен',
+    status_unreadable: 'статус не прочитан',
+  };
+
+  return {
+    name,
+    status,
+    statusLabel: statusLabelMap[status] || statusLabelMap.status_unreadable,
+    details: details || null,
+    running: Boolean(running),
+    startedAt: startedAt || null,
+  };
+}
+
 function getContainerStatus(name) {
   return new Promise((resolve) => {
     const chunks = [];
     const req = http.request(
-      { socketPath: '/var/run/docker.sock', path: `/v1.41/containers/${name}/json`, method: 'GET' },
+      { socketPath: '/var/run/docker.sock', path: `/containers/${encodeURIComponent(name)}/json`, method: 'GET' },
       (res) => {
         res.on('data', (d) => chunks.push(d));
         res.on('end', () => {
+          const rawBody = Buffer.concat(chunks).toString();
+
+          if (res.statusCode === 404) {
+            resolve(buildContainerStatus(name, 'container_not_found', false, null, 'Контейнер с таким именем не найден в Docker.'));
+            return;
+          }
+
           try {
-            const data = JSON.parse(Buffer.concat(chunks).toString());
-            resolve({
-              name,
-              status: data.State?.Status || 'unknown',
-              running: data.State?.Running || false,
-              startedAt: data.State?.StartedAt || null,
-            });
+            const data = JSON.parse(rawBody);
+            if (res.statusCode && res.statusCode >= 400) {
+              const message = typeof data?.message === 'string' && data.message.trim()
+                ? data.message.trim()
+                : `Docker вернул HTTP ${res.statusCode}.`;
+              resolve(buildContainerStatus(name, 'status_unreadable', false, null, message));
+              return;
+            }
+            const rawStatus = String(data.State?.Status || '').toLowerCase();
+            const running = Boolean(data.State?.Running);
+            const startedAt = data.State?.StartedAt || null;
+            if (!data.State || (!running && !rawStatus)) {
+              resolve(buildContainerStatus(name, 'status_unreadable', false, null, `Docker вернул ответ без поля State${res.statusCode ? ` (HTTP ${res.statusCode})` : ''}.`));
+              return;
+            }
+            const knownStatuses = new Set(['created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead']);
+            const status = knownStatuses.has(rawStatus)
+              ? rawStatus
+              : running
+                ? 'running'
+                : 'status_unreadable';
+            const details = status === 'running'
+              ? 'Контейнер запущен.'
+              : status === 'paused'
+                ? 'Контейнер поставлен на паузу.'
+                : status === 'restarting'
+                  ? 'Контейнер сейчас перезапускается.'
+                  : status === 'removing'
+                    ? 'Контейнер удаляется.'
+                    : status === 'created'
+                      ? 'Контейнер создан, но ещё не запущен.'
+                      : status === 'exited'
+                        ? 'Контейнер остановлен.'
+                        : status === 'dead'
+                          ? 'Контейнер не отвечает и требует проверки.'
+                          : `Неизвестный статус Docker: ${rawStatus || 'empty'}.`;
+            resolve(
+              buildContainerStatus(
+                name,
+                status,
+                running,
+                startedAt,
+                details
+              )
+            );
           } catch {
-            resolve({ name, status: 'unknown', running: false, startedAt: null });
+            resolve(buildContainerStatus(name, 'status_unreadable', false, null, `Docker ответил некорректными данными${res.statusCode ? ` (HTTP ${res.statusCode})` : ''}.`));
           }
         });
       }
     );
-    req.on('error', () => resolve({ name, status: 'unreachable', running: false, startedAt: null }));
+    req.on('error', () => resolve(buildContainerStatus(name, 'docker_unreachable', false, null, 'Нет доступа к Docker socket.')));
     req.end();
   });
 }
 
+const monitoringService = createMonitoringService({
+  readEnvFile,
+  createDbPool,
+  getContainerStatus,
+});
+
 app.get('/api/status', requireAuth, async (_, res) => {
-  const kira = await getContainerStatus('kira-mind-bot');
+  const kira = await getContainerStatus(KIRA_BOT_CONTAINER_NAME);
   res.json({ containers: [kira], serverTime: new Date().toISOString() });
+});
+
+app.get('/api/monitoring/health', requireAuth, async (_, res) => {
+  try {
+    const snapshot = await monitoringService.getMonitoringSnapshot();
+    res.json(snapshot);
+  } catch (err) {
+    res.status(500).json({ error: `Не удалось собрать monitoring health: ${err.message}` });
+  }
+});
+
+app.get('/api/ai-usage/summary', requireAuth, async (req, res) => {
+  const pool = createDbPool();
+  try {
+    const summary = await buildAiUsageSummary({ pool, query: req.query, now: new Date() });
+    res.json(summary);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : `Ошибка AI usage analytics: ${err.message}` });
+  } finally {
+    await pool.end().catch(() => {});
+  }
 });
 
 // ── Personality helpers ───────────────────────────────────────────────────────
@@ -1649,9 +1988,11 @@ function readPersonality() {
   if (!fs.existsSync(PERSONALITY_FILE)) return DEFAULT_PERSONALITY;
   try {
     const raw = JSON.parse(fs.readFileSync(PERSONALITY_FILE, 'utf8'));
+    const gender = raw.KiraMindBot?.characterGender === 'мужской' ? 'мужской' : 'женский';
+    const defaults = getDefaultPersonalityProfile(gender);
     // Merge with defaults so missing keys always have a value
     return {
-      KiraMindBot: sanitizeLegacyPersonality({ ...DEFAULT_PERSONALITY.KiraMindBot, ...raw.KiraMindBot }),
+      KiraMindBot: sanitizeLegacyPersonality({ ...defaults, ...raw.KiraMindBot }),
     };
   } catch {
     return DEFAULT_PERSONALITY;

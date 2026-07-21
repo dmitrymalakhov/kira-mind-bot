@@ -1,0 +1,110 @@
+import type { MemoryKind, MemoryStatus, MemorySubject } from '../types';
+
+const SYNTHETIC_MEMORY_TAGS = new Set([
+    'memory-episode',
+    'memory-chapter',
+    'memory-schema',
+    'sleep_open_loop_index',
+    'sleep_uncertainty_index',
+]);
+
+const UNCONFIRMED_MEMORY_TAGS = new Set([
+    'unconfirmed',
+    'needs-clarification',
+    'evidence-only',
+    'assistant-claim-unconfirmed',
+]);
+
+const NON_USER_SUBJECT_TAGS = new Set([
+    'subject:bot',
+    'subject:system',
+    'subject:contact',
+    'subject:third_party',
+    'subject:unknown',
+]);
+
+const UNSUPPORTED_OWNER_OBLIGATION_PATTERNS = [
+    /(?:^|[^\p{L}\p{N}_])ты\s+(?:обещал[а-яё]*|собирал[а-яё]*|забыл[а-яё]*|забил[а-яё]*|не\s+(?:сделал[а-яё]*|доделал[а-яё]*|закончил[а-яё]*))(?![\p{L}\p{N}_])/iu,
+];
+
+export interface ProactiveMemoryCandidate {
+    tags?: string[];
+    memoryKind?: MemoryKind;
+    subject?: MemorySubject;
+    status?: MemoryStatus;
+    negated?: boolean;
+}
+
+export const CONVERSATION_EPISODE_TRUST = {
+    subject: 'system' as const,
+    tags: ['conversation-episode', 'subject:system'] as const,
+};
+
+export interface KiraLifeGroundingDecision {
+    safe?: boolean;
+    attributesOwnerObligation?: boolean;
+}
+
+/** Semantic-review считается успешным только при двух согласованных явных полях. */
+export function acceptsKiraLifeGroundingDecision(
+    decision: KiraLifeGroundingDecision | null | undefined,
+): boolean {
+    return decision?.safe === true && decision.attributesOwnerObligation === false;
+}
+
+/** Дешёвый high-confidence барьер; неоднозначные формулировки проверяются semantic-review. */
+export function hasUnsupportedKiraLifeOwnerClaim(message: string): boolean {
+    const normalized = message.trim();
+    if (!normalized) return false;
+    return UNSUPPORTED_OWNER_OBLIGATION_PATTERNS.some(pattern => pattern.test(normalized));
+}
+
+export function safeKiraLifeFallback(gender: string | undefined): string {
+    if (gender !== undefined && gender !== 'мужской' && gender !== 'женский') {
+        console.warn('[kira-life] Unknown eventDescriptionGender, using feminine fallback:', gender);
+    }
+    return gender === 'мужской'
+        ? 'Сегодня я поймал себя на мысли, что хочется немного выдохнуть и переключиться. Решил сохранить эту мысль здесь.'
+        : 'Сегодня я поймала себя на мысли, что хочется немного выдохнуть и переключиться. Решила сохранить эту мысль здесь.';
+}
+
+export function chooseGroundedKiraLifeMessage(
+    candidate: string | null | undefined,
+    gender: string | undefined,
+    semanticReviewPassed = true,
+): { message: string; rejectedUnsupportedClaim: boolean; usedFallback: boolean } {
+    const normalized = candidate?.trim();
+    if (!normalized || !semanticReviewPassed || hasUnsupportedKiraLifeOwnerClaim(normalized)) {
+        return {
+            message: safeKiraLifeFallback(gender),
+            rejectedUnsupportedClaim: Boolean(normalized),
+            usedFallback: true,
+        };
+    }
+    return { message: normalized, rejectedUnsupportedClaim: false, usedFallback: false };
+}
+
+/** Только подтверждённые пользовательские утверждения могут запускать memory-insight. */
+export function isEligibleMemoryInsightSource(
+    memory: ProactiveMemoryCandidate,
+    purpose: 'plan' | 'done' = 'plan',
+): boolean {
+    const tags = new Set(memory.tags ?? []);
+    if ([...SYNTHETIC_MEMORY_TAGS].some(tag => tags.has(tag))) return false;
+    if ([...UNCONFIRMED_MEMORY_TAGS].some(tag => tags.has(tag))) return false;
+    if ([...NON_USER_SUBJECT_TAGS].some(tag => tags.has(tag))) return false;
+    if (memory.memoryKind === 'episode' || memory.memoryKind === 'chapter' || memory.memoryKind === 'portrait') return false;
+    if (memory.subject && memory.subject !== 'user') return false;
+    if (memory.negated) return false;
+    if (memory.status === 'superseded' || memory.status === 'expired') return false;
+    if (purpose === 'plan' && memory.status === 'done') return false;
+    return true;
+}
+
+export function normalizeInsightSourceIndexes(indexes: unknown, planCount: number): number[] {
+    if (!Array.isArray(indexes)) return [];
+    return [...new Set(indexes
+        .map(value => Number(value))
+        .filter(value => Number.isInteger(value) && value >= 1 && value <= planCount))]
+        .sort((left, right) => left - right);
+}

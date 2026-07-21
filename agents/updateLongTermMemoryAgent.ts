@@ -3,6 +3,7 @@ import { MemorySaveMetadata, saveMemory } from '../utils/enhancedDomainMemory';
 import { devLog } from '../utils';
 import type { ExtractedFactAboutUser } from '../utils/studyChatFlow';
 import { saveContactMemoryFactOrAsk } from '../utils/contactMemory';
+import { resolveOrCreatePersonIdentity } from '../services/PersonIdentityService';
 
 const MIN_IMPORTANCE_TO_SAVE = 0.3;
 /**
@@ -171,21 +172,31 @@ export async function runUpdateLongTermMemoryAgentDetailed(
                     validFrom: fact.validFrom,
                     validTo: fact.validTo,
                     status: fact.status,
-                    predicate: fact.domain,
-                    object: fact.content,
+                    predicate: fact.predicate ?? fact.domain,
+                    object: fact.object ?? fact.content,
                 };
 
                 if (isContactFact) {
                     if ((options.askOnAmbiguous ?? true) === false && options.sourceContactId && options.sourceContactName) {
                         const memoryContent = directContactMemoryContent(options.sourceContactName, fact.content);
-                        const saved = await saveMemory(ctx, fact.domain, memoryContent, fact.importance, tags, false, {
+                        const [firstName, ...lastNameParts] = options.sourceContactName.trim().split(/\s+/);
+                        const identity = await resolveOrCreatePersonIdentity(String(ctx.from?.id ?? ''), options.sourceContactName, {
+                            id: options.sourceContactId,
+                            firstName: firstName || options.sourceContactName,
+                            lastName: lastNameParts.join(' ') || undefined,
+                            username: options.sourceContactUsername,
+                        }).catch(() => undefined);
+                        const directTags = identity
+                            ? [...new Set([...tags, `person_id:${identity.id}`])]
+                            : tags;
+                        const saved = await saveMemory(ctx, fact.domain, memoryContent, fact.importance, directTags, false, {
                             ...memoryMetadata,
                             subject: 'contact',
                             sourceContext: memoryMetadata.sourceContext ?? fact.content,
                         });
                         if (!saved) return { status: 'skipped' as const, fact };
                         devLog(`UpdateLongTermMemoryAgent: saved [contact:direct]`, memoryContent.slice(0, 60));
-                        return { status: 'saved' as const, fact: { ...fact, content: memoryContent, tags } };
+                        return { status: 'saved' as const, fact: { ...fact, content: memoryContent, tags: directTags } };
                     }
 
                     const result = await saveContactMemoryFactOrAsk(ctx, {

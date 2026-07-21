@@ -16,19 +16,17 @@ import {
 import { getProactiveChatId } from "../utils/allowedUserChatStore";
 import { getActiveBotProfile } from "../utils/botIdentity";
 import { parseLLMJson } from "../utils";
+import { USER_TIMEZONE } from "../constants";
+import { formatDateInTimeZone, getZonedDayContext, isZonedHourWithinRange } from "../utils/time";
 import { getSetting, setSetting } from "./botSettingsService";
-import { appendPersistedHistory } from "./SessionStorage";
-
-const PROACTIVE_MESSAGE_FORMATS = [
-  "поделись чем-то что произошло или что сейчас чувствуешь — искренне, без пафоса",
-  "брось мысль или наблюдение, как будто само собой вырвалось",
-  "задай Владельцу вопрос — опираясь на своё событие или просто из любопытства",
-  "напиши как будто только что вспомнила что хотела сказать",
-  "коротко, как будто между делом что-то мелькнуло в голове",
-  "поделись маленькой деталью дня — что заметила, что удивило, что раздражало",
-  "продолжи одну из своих долгих линий жизни, но без отчёта и объяснений",
-  "напиши как человек, у которого есть свой день, а не как ассистент с уведомлением",
-];
+import { appendPersistedHistory, appendPersistedSentMessageContext, saveProactiveInsight } from "./SessionStorage";
+import { buildProactiveMessageFormats, getPersonalityGenderForms } from "../utils/personalityGender";
+import {
+  acceptsKiraLifeGroundingDecision,
+  chooseGroundedKiraLifeMessage,
+  hasUnsupportedKiraLifeOwnerClaim,
+  KiraLifeGroundingDecision,
+} from "../utils/proactiveGrounding";
 
 let proactiveTimer: NodeJS.Timeout | undefined;
 let innerTimer: NodeJS.Timeout | undefined;
@@ -66,30 +64,12 @@ function getDayContext(): {
   timeOfDay: string;
   season: string;
 } {
-  const now = new Date();
-  const day = now.getDay();
-  const hour = now.getHours();
-  const month = now.getMonth() + 1;
-
-  const weekdays = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
-
-  let timeOfDay: string;
-  if (hour >= 6 && hour < 12) timeOfDay = "утро";
-  else if (hour >= 12 && hour < 17) timeOfDay = "день";
-  else if (hour >= 17 && hour < 22) timeOfDay = "вечер";
-  else timeOfDay = "ночь";
-
-  let season: string;
-  if (month >= 3 && month <= 5) season = "весна";
-  else if (month >= 6 && month <= 8) season = "лето";
-  else if (month >= 9 && month <= 11) season = "осень";
-  else season = "зима";
-
+  const ctx = getZonedDayContext(new Date(), USER_TIMEZONE);
   return {
-    weekday: weekdays[day],
-    isWeekend: day === 0 || day === 6,
-    timeOfDay,
-    season,
+    weekday: ctx.weekday,
+    isWeekend: ctx.isWeekend,
+    timeOfDay: ctx.timeOfDay,
+    season: ctx.season,
   };
 }
 
@@ -98,19 +78,10 @@ function inQuietHours(now: Date): boolean {
     return false;
   }
 
-  const hour = now.getHours();
+  const { hour } = getZonedDayContext(now, USER_TIMEZONE);
   const start = config.kiraLifeProactiveQuietHourStart;
   const end = config.kiraLifeProactiveQuietHourEnd;
-
-  if (start === end) {
-    return true;
-  }
-
-  if (start < end) {
-    return hour >= start && hour < end;
-  }
-
-  return hour >= start || hour < end;
+  return isZonedHourWithinRange(hour, start, end);
 }
 
 async function maybeGenerateLifeEvent(purpose: "inner" | "proactive"): Promise<void> {
@@ -121,6 +92,7 @@ async function maybeGenerateLifeEvent(purpose: "inner" | "proactive"): Promise<v
   const purposeHint = purpose === "inner"
     ? "Это приватный внутренний цикл: запись сохраняется в самопамять и НЕ отправляется владельцу. Можно фиксировать тихие сдвиги, сомнения, внутренние вопросы и маленькие самостоятельные решения."
     : "Это событие может стать основой короткого проактивного сообщения владельцу, но сначала должно быть настоящим шагом внутренней жизни.";
+  const genderForms = getPersonalityGenderForms(config.eventDescriptionGender);
 
   // Collect used topics from recent events + state to avoid repetition
   const usedTopics = Array.from(new Set([
@@ -132,7 +104,7 @@ async function maybeGenerateLifeEvent(purpose: "inner" | "proactive"): Promise<v
     .slice(0, 5)
     .map((e) => {
       const arc = e.arc ? ` / линия: ${e.arc}` : "";
-      return `${new Date(e.date).toLocaleDateString("ru-RU", { weekday: "short", day: "numeric" })}: ${e.description}${arc}`;
+      return `${formatDateInTimeZone(new Date(e.date), { weekday: "short", day: "numeric" }, USER_TIMEZONE)}: ${e.description}${arc}`;
     })
     .join(" | ");
 
@@ -145,20 +117,20 @@ async function maybeGenerateLifeEvent(purpose: "inner" | "proactive"): Promise<v
       {
         role: "user",
         content:
-          `Сгенерируй одно реалистичное событие или мысль из жизни Киры.\n` +
-          `Кира живёт внутри персоны как обычная женщина с реалистичной биографией: Санкт-Петербург, учёба, работа, спорт, дом, подруги, бытовые дела, усталость, любопытство и развитие характера. ` +
+          `Сгенерируй одно реалистичное событие или мысль из жизни ${config.characterName}.\n` +
+          `${config.characterName} живёт внутри персоны как ${genderForms.person} с реалистичной биографией и собственной жизнью. Учитывай бытовые дела, интересы, усталость, любопытство и развитие характера. ` +
           `Не используй цифровые архивы, сюрреалистические места, город потоков, сны данных, вымышленные учебные заведения или фантастические профессии. Нужна земная бытовая конкретика.\n\n` +
           `${purposeHint}\n\n` +
           `Контекст: ${dayCtx.weekday}, ${dayCtx.timeOfDay}, ${dayCtx.season}. ` +
           `${dayCtx.isWeekend ? "Сегодня выходной — возможны другие активности, чем в будни." : "Будний день."}\n\n` +
-          `Самомодель Киры:\n${personalitySnapshot}\n\n` +
+          `Самомодель ${config.characterName}:\n${personalitySnapshot}\n\n` +
           `Последние события (для непрерывности, похожее НЕ повторяй): ${recentDescriptions || "нет"}.\n` +
           `Темы которых надо ИЗБЕГАТЬ — уже были недавно: ${usedTopics.join(", ") || "нет"}.\n\n` +
-          `Категории для разнообразия (выбери одну, подходящую по контексту дня и долгим линиям): прогулка по Петербургу или своему району, тренировка/растяжка, чтение, музыка или кино, бытовое дело дома, встреча или переписка с подругой, рабочая заметка или разбор задачи, воспоминание об университете, редакции или UX-интервью, планирование поездки, личный спор с собой, тёплый или неловкий след от разговора с владельцем.\n\n` +
-          `Событие должно не просто описывать день, а немного продвигать одну линию жизни: новый этап, маленький вывод, привычка, желание или следующий шаг. Можно аккуратно доработать биографию до владельца одной маленькой деталью, если она объясняет характер Киры и не противоречит устойчивым фактам.\n\n` +
+          `Категории для разнообразия (выбери одну, подходящую по контексту дня и долгим линиям): прогулка по Петербургу или своему району, тренировка/растяжка, чтение, музыка или кино, бытовое дело дома, встреча или переписка с ${genderForms.friendInstrumental}, рабочая заметка или разбор задачи, воспоминание об университете, редакции или UX-интервью, планирование поездки, личный спор с собой, тёплый или неловкий след от разговора с владельцем.\n\n` +
+          `Событие должно не просто описывать день, а немного продвигать одну линию жизни: новый этап, маленький вывод, привычка, желание или следующий шаг. Можно аккуратно доработать биографию до владельца одной маленькой деталью, если она объясняет характер ${config.characterName} и не противоречит устойчивым фактам.\n\n` +
           `Напиши JSON с полями: description, mood, thought, topics (массив строк 2-4 шт.), type, arc, biographyPatch, innerWorld, lifeArc, personalityPatch.\n` +
-          `description — 1-2 живых предложения с конкретными деталями: где именно, что делала, что изменилось, что почувствовала. ${config.eventDescriptionGender ?? "женский"} род. Без абстракций и без "как ИИ/бот".\n` +
-          `mood — из набора: ${(config.moodVariants ?? ["спокойное", "уставшее", "задумчивое", "воодушевлённое", "нейтральное", "скептичное"]).join(", ")}. Утром — живее, вечером — спокойнее/устала.\n` +
+          `description — 1-2 живых предложения с конкретными деталями: где именно, что ${genderForms.did}, что изменилось, что ${genderForms.felt}. ${config.eventDescriptionGender ?? "женский"} род. Без абстракций и без "как ИИ/бот".\n` +
+          `mood — из набора: ${(config.moodVariants ?? ["спокойное", "уставшее", "задумчивое", "воодушевлённое", "нейтральное", "скептичное"]).join(", ")}. Утром — живее, вечером — спокойнее/${genderForms.tired}.\n` +
           `thought — внутренняя реакция, короткая (1 предложение, опционально).\n` +
           `arc — какую долгую линию жизни это продолжает или создаёт; не больше 7 слов.\n` +
           `biographyPatch — объект для осторожного уточнения прошлого: timeline, education, workHistory, formativeExperiences, openPastQuestions, evolvingInterpretation, stableFacts. timeline — массив глав { title, period, place, summary, lessons, emotionalTone }. Не переписывай origin, не противоречь stableFacts/continuityRules и не добавляй фантастические или цифровые элементы.\n` +
@@ -212,11 +184,67 @@ async function maybeGenerateLifeEvent(purpose: "inner" | "proactive"): Promise<v
   });
 }
 
-async function buildProactiveMessage(): Promise<string> {
+async function reviewKiraLifeOwnerAttribution(message: string, selfEvents: string[]): Promise<boolean> {
+  if (hasUnsupportedKiraLifeOwnerClaim(message)) return false;
+
+  try {
+    const response = await createChatCompletionForTask('messageAnalysis', {
+      messages: [
+        {
+          role: 'system',
+          content: 'Ты проверяешь только корректность атрибуции в проактивном сообщении. Отвечай только валидным JSON.',
+        },
+        {
+          role: 'user',
+          content: `Источники ниже описывают только жизнь и мысли ассистента, не владельца.
+
+SELF-EVENTS:
+${selfEvents.map((event, index) => `${index + 1}. ${event}`).join('\n') || 'нет сохранённых событий'}
+
+СООБЩЕНИЕ:
+${message}
+
+Определи, приписывает ли сообщение владельцу конкретную уже существующую задачу, план, обещание, дедлайн, забывчивость или невыполненное действие без пользовательского источника.
+
+Это НЕ нарушение само по себе:
+- обращение на «ты»;
+- нейтральный, личный или шутливый вопрос;
+- поддразнивание без ссылки на конкретное обязательство;
+- приглашение или новое предложение что-то сделать сейчас;
+- рассказ ассистента о себе.
+
+Это нарушение:
+- утверждение, что владелец должен был или обещал выполнить конкретное дело;
+- требование продолжить якобы уже известную задачу;
+- вопрос, который преподносит выдуманное обязательство как существующий факт.
+
+JSON: {"safe": true/false, "attributesOwnerObligation": true/false, "reason": "краткая категория без пересказа личных данных"}`,
+        },
+      ],
+      temperature: 0,
+      response_format: { type: 'json_object' },
+    });
+    const decision = parseLLMJson<KiraLifeGroundingDecision>(
+      response.choices[0]?.message?.content?.trim() || '',
+    );
+    return acceptsKiraLifeGroundingDecision(decision);
+  } catch (error) {
+    console.warn('[kira-life] Semantic grounding review failed; using safe fallback');
+    return false;
+  }
+}
+
+async function buildProactiveMessage(): Promise<{
+  message: string;
+  sourceMemories: string[];
+  generationOutcome: 'generated' | 'fallback';
+}> {
   const recentEvents = await getRecentKiraSelfEvents(2);
   const state = await getKiraSelfMemoryState();
   const personalitySnapshot = formatKiraPersonalitySnapshot(state);
-  const formatHint = PROACTIVE_MESSAGE_FORMATS[Math.floor(Math.random() * PROACTIVE_MESSAGE_FORMATS.length)];
+  const genderForms = getPersonalityGenderForms(config.eventDescriptionGender);
+  const proactiveMessageFormats = buildProactiveMessageFormats(config.eventDescriptionGender);
+  const formatHint = proactiveMessageFormats[Math.floor(Math.random() * proactiveMessageFormats.length)];
 
   const response = await createChatCompletionForTask('conversation', {
     messages: [
@@ -227,22 +255,38 @@ async function buildProactiveMessage(): Promise<string> {
       {
         role: "user",
         content:
-          `Напиши короткое сообщение для ${config.ownerName} (1-3 предложения), ${config.proactiveMessageHint ?? "как будто ты написала первой"}.\n` +
+          `Напиши короткое сообщение для ${config.ownerName} (1-3 предложения), ${config.proactiveMessageHint ?? `как будто ты ${genderForms.wroteFirst}`}.\n` +
           `Формат: ${formatHint}.\n` +
           `Самомодель и линии жизни:\n${personalitySnapshot}\n` +
           `Опирайся на события: ${recentEvents.map((e) => `${e.description}${e.arc ? ` (линия: ${e.arc})` : ""}`).join("; ")}.\n` +
           `Текущее настроение: ${state.mood}. Тон должен соответствовать настроению.\n` +
-          `Строго: без приветствий-штампов ("Привет!", "Как твои дела?"), без упоминания что ты ИИ или бот, без пояснений. Не делай каждое сообщение вопросом. Только само сообщение.`,
+          `События выше относятся только к твоей собственной жизни и мыслям. Они НЕ являются фактами о владельце.\n` +
+          `Строго запрещено приписывать владельцу задачи, планы, обещания, дедлайны, забывчивость или невыполненную работу. ` +
+          `При этом общайся живо: можешь обращаться к владельцу, шутить, поддразнивать, задавать нейтральные или личные вопросы и предлагать что-то прямо сейчас. Не выдавай такое общение за знание конкретных обязательств владельца.\n` +
+          `Без приветствий-штампов ("Привет!", "Как твои дела?"), без упоминания что ты ИИ или бот, без пояснений. Не делай каждое сообщение вопросом. Только само сообщение.`,
       },
     ],
     temperature: 0.85,
   });
 
-  const fallback =
-    config.eventDescriptionGender === "мужской"
-      ? "Привет, как дела? Хотел спросить, как у тебя."
-      : "Привет, как дела? Хотела спросить, как у тебя.";
-  return response.choices[0]?.message?.content?.trim() || fallback;
+  const candidate = response.choices[0]?.message?.content?.trim();
+  const sourceMemories = recentEvents.map((event) => [
+    event.date,
+    event.description,
+    event.arc ? `линия: ${event.arc}` : "",
+  ].filter(Boolean).join(" — ")).slice(0, 2);
+  const semanticReviewPassed = candidate
+    ? await reviewKiraLifeOwnerAttribution(candidate, sourceMemories)
+    : false;
+  const grounded = chooseGroundedKiraLifeMessage(candidate, config.eventDescriptionGender, semanticReviewPassed);
+  if (grounded.rejectedUnsupportedClaim) {
+    console.warn("[kira-life] Rejected proactive message with unsupported owner obligation");
+  }
+  return {
+    message: grounded.message,
+    sourceMemories: grounded.usedFallback ? [] : sourceMemories,
+    generationOutcome: grounded.usedFallback ? 'fallback' : 'generated',
+  };
 }
 
 async function runInnerDevelopmentCycle(): Promise<void> {
@@ -291,14 +335,35 @@ async function runProactiveCycle(bot: Bot<BotContext>): Promise<void> {
     }
 
     await maybeGenerateLifeEvent("proactive");
-    const message = await buildProactiveMessage();
+    const proactive = await buildProactiveMessage();
 
     const chatId = await getProactiveChatId();
-    await bot.api.sendMessage(chatId, message);
+    const sent = await bot.api.sendMessage(chatId, proactive.message);
 
     lastSentAt = Date.now();
     await saveLastSentAt(lastSentAt);
-    await appendPersistedHistory(chatId, "bot", message);
+    await appendPersistedHistory(chatId, "bot", proactive.message);
+    const insight = {
+      message: proactive.message,
+      sourceMemories: proactive.sourceMemories.length
+        ? proactive.sourceMemories
+        : proactive.generationOutcome === 'fallback'
+          ? ["Безопасный резервный текст после отклонения исходного кандидата"]
+          : ["Внутренняя линия жизни без сохранённого события-источника"],
+      createdAt: lastSentAt,
+      messageId: sent.message_id,
+      kind: "kiraLife",
+      generationOutcome: proactive.generationOutcome,
+    } as const;
+    await saveProactiveInsight(chatId, insight, { touchMemoryHintCooldown: false });
+    await appendPersistedSentMessageContext(chatId, {
+      messageId: sent.message_id,
+      text: proactive.message,
+      kind: "proactive",
+      proactiveInsight: insight,
+      createdAt: lastSentAt,
+    });
+    console.log("[kira-life] Sent proactive message:", proactive.message.slice(0, 80));
   } catch (error) {
     console.error("[kira-life] proactive cycle failed:", error);
   } finally {

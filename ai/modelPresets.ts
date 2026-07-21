@@ -6,7 +6,7 @@ import modelPresetRegistry from '../admin-panel/src/ai-model-presets.json';
  * Значение используется в task-aware резолвере, чтобы выбрать нужный клиент
  * и понять, требуется ли OpenAI fallback для API, которые пока не абстрагированы.
  */
-export type AiProvider = 'openai' | 'deepseek' | 'gemini';
+export type AiProvider = 'openai' | 'openrouter' | 'gemini' | 'zai';
 
 /**
  * Ключ задачи, для которой подбирается модель из preset registry.
@@ -52,8 +52,11 @@ export type AiPresetName =
     | 'gpt-max'
     | 'gpt-balanced'
     | 'gpt-lean'
-    | 'hybrid-deepseek-gpt'
-    | 'hybrid-gemini-gpt';
+    | 'hybrid-openrouter-gpt'
+    | 'hybrid-gemini-gpt'
+    | 'gemini-full'
+    | 'glm-full'
+    | 'glm-balanced';
 
 /**
  * Полная конфигурация одного AI preset-а.
@@ -65,6 +68,12 @@ export interface AiPresetConfig {
     name: AiPresetName;
     title: string;
     description: string;
+    characteristics?: {
+        quality: string;
+        cost: string;
+        stability: string;
+        gptDependency: string;
+    };
     models: Record<AiTaskKey, AiModelRef>;
 }
 
@@ -77,6 +86,11 @@ interface AiPresetRegistry {
 }
 
 const registry = modelPresetRegistry as AiPresetRegistry;
+const LEGACY_AI_PRESET_ALIASES: Readonly<Record<string, AiPresetName>> = {
+    'hybrid-deepseek-gpt': 'hybrid-openrouter-gpt',
+    'hybrid-gemini-extended': 'hybrid-gemini-gpt',
+    'gemini-direct-balanced': 'hybrid-gemini-gpt',
+};
 
 /**
  * Упорядоченный список допустимых имён preset-ов.
@@ -90,16 +104,27 @@ export const AI_PRESET_NAMES = registry.presetNames;
  */
 export const aiPresets = registry.presets;
 
+const TRUE_FULL_AI_PRESETS = new Set<AiPresetName>([
+    'gemini-full',
+    'glm-full',
+]);
+
 /** Готовый shortcut к preset-у `gpt-max`. */
 export const gptMaxPreset = aiPresets['gpt-max'];
 /** Готовый shortcut к preset-у `gpt-balanced`. */
 export const gptBalancedPreset = aiPresets['gpt-balanced'];
 /** Готовый shortcut к preset-у `gpt-lean`. */
 export const gptLeanPreset = aiPresets['gpt-lean'];
-/** Готовый shortcut к hybrid preset-у `deepseek + openai fallback`. */
-export const hybridDeepSeekGptPreset = aiPresets['hybrid-deepseek-gpt'];
+/** Готовый shortcut к hybrid preset-у `openrouter + openai fallback`. */
+export const hybridOpenRouterGptPreset = aiPresets['hybrid-openrouter-gpt'];
 /** Готовый shortcut к hybrid preset-у `gemini + openai fallback`. */
 export const hybridGeminiGptPreset = aiPresets['hybrid-gemini-gpt'];
+/** Готовый shortcut к pure Gemini preset-у. */
+export const geminiFullPreset = aiPresets['gemini-full'];
+/** Готовый shortcut к pure GLM preset-у. */
+export const glmFullPreset = aiPresets['glm-full'];
+/** Готовый shortcut к direct preset-у `zai + openai fallback for missing capabilities`. */
+export const glmBalancedPreset = aiPresets['glm-balanced'];
 
 /**
  * Валидирует произвольную строку как имя известного AI preset-а.
@@ -109,5 +134,10 @@ export const hybridGeminiGptPreset = aiPresets['hybrid-gemini-gpt'];
  */
 export function parseAiPresetName(raw: string | undefined | null): AiPresetName | null {
     if (!raw) return null;
-    return AI_PRESET_NAMES.includes(raw as AiPresetName) ? raw as AiPresetName : null;
+    const normalized = LEGACY_AI_PRESET_ALIASES[raw] ?? raw;
+    return AI_PRESET_NAMES.includes(normalized as AiPresetName) ? normalized as AiPresetName : null;
+}
+
+export function isTrueFullAiPreset(presetName: AiPresetName): boolean {
+    return TRUE_FULL_AI_PRESETS.has(presetName);
 }

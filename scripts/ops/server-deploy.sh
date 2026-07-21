@@ -18,10 +18,11 @@ show_help() {
 Usage:
   ./scripts/ops/server-deploy.sh deploy [--clean]
   ./scripts/ops/server-deploy.sh status
-  ./scripts/ops/server-deploy.sh logs [-f|--follow] [service]
+  ./scripts/ops/server-deploy.sh logs [-f|--follow] [--no-postgres] [--no-qdrant] [service]
   ./scripts/ops/server-deploy.sh pause [service]
   ./scripts/ops/server-deploy.sh restart [service]
   ./scripts/ops/server-deploy.sh stop [service]
+  ./scripts/ops/server-deploy.sh migrate-instance <new-name>
   ./scripts/ops/server-deploy.sh help
 
 Commands:
@@ -31,11 +32,15 @@ Commands:
   pause         Остановить app-сервисы или один конкретный сервис, не трогая зависимости.
   restart       Перезапустить app-сервисы или один конкретный сервис.
   stop          Остановить весь стек или один конкретный сервис без удаления volumes.
+  migrate-instance
+                Переименовать Compose project/контейнер, сохранив текущие PostgreSQL/Qdrant volumes.
   help          Показать эту справку.
 
 Options:
   --clean       Для deploy: выполнить down и безопасную Docker-очистку перед rebuild.
   -f, --follow  Для logs: следить за логами в реальном времени.
+  --no-postgres Для logs: исключить postgres из общего вывода логов.
+  --no-qdrant   Для logs: исключить qdrant из общего вывода логов.
 EOF
 }
 
@@ -43,18 +48,26 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
+COMMAND="${1:-help}"
+shift || true
+
+if [ "$COMMAND" = "help" ]; then
+    show_help
+    exit 0
+fi
+
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/server-common.sh"
 
 ensure_server_repo_root || error "Не найден серверный compose-сценарий в корне репозитория"
 resolve_compose_cmd || error "Docker Compose недоступен для текущего пользователя"
 
-COMMAND="${1:-help}"
-shift || true
-
 DEPLOY_CLEAN=false
 TARGET_SERVICE=""
 FOLLOW_LOGS=false
+EXCLUDE_POSTGRES_LOGS=false
+EXCLUDE_QDRANT_LOGS=false
+MIGRATION_TARGET_INSTANCE=""
 
 validate_service_name() {
     local service="$1"
@@ -80,6 +93,14 @@ case "$COMMAND" in
                     FOLLOW_LOGS=true
                     shift
                     ;;
+                --no-postgres)
+                    EXCLUDE_POSTGRES_LOGS=true
+                    shift
+                    ;;
+                --no-qdrant)
+                    EXCLUDE_QDRANT_LOGS=true
+                    shift
+                    ;;
                 *)
                     if [[ -n "$TARGET_SERVICE" ]]; then
                         error "Слишком много аргументов для команды logs"
@@ -96,6 +117,15 @@ case "$COMMAND" in
         fi
         TARGET_SERVICE="${1:-}"
         ;;
+    migrate-instance)
+        if [ "$#" -ne 1 ]; then
+            error "Использование: $0 migrate-instance <new-name>"
+        fi
+        MIGRATION_TARGET_INSTANCE="$1"
+        if [ "$(sanitize_instance_name "$MIGRATION_TARGET_INSTANCE")" != "$MIGRATION_TARGET_INSTANCE" ]; then
+            error "Имя инстанса должно содержать только a-z, 0-9, _ и - и начинаться с буквы или цифры"
+        fi
+        ;;
     status|help)
         if [[ $# -gt 0 ]]; then
             error "Команда $COMMAND не принимает аргументы"
@@ -106,10 +136,22 @@ case "$COMMAND" in
         ;;
 esac
 
-load_env_if_present
-ensure_admin_state
-write_compose_env
-collect_app_services
+case "$COMMAND" in
+    status|logs)
+        # Read-only команды не должны блокироваться параллельным deploy и не
+        # должны переписывать .env/state перед чтением статуса или логов.
+        ;;
+    *)
+        acquire_deploy_lock || error "Не удалось получить deploy lock"
+        load_compose_identity_if_present
+        load_env_if_present
+        ensure_admin_state
+        if [ "$COMMAND" != "migrate-instance" ]; then
+            write_compose_env
+        fi
+        collect_app_services
+        ;;
+esac
 
 deploy_stack() {
     header "Redeploy"
@@ -137,8 +179,53 @@ deploy_stack() {
     show_admin_panel_access "$(detect_host_ip)"
 }
 
+migrate_instance() {
+    local source_instance=""
+    local source_postgres_volume=""
+    local source_qdrant_volume=""
+
+    source_instance="${COMPOSE_STATE_KIRA_INSTANCE_NAME:-$(resolve_instance_name)}"
+    source_postgres_volume="${COMPOSE_STATE_POSTGRES_VOLUME_NAME:-${source_instance}_postgres_data}"
+    source_qdrant_volume="${COMPOSE_STATE_QDRANT_VOLUME_NAME:-${source_instance}_qdrant_storage}"
+    validate_volume_name "$source_postgres_volume" || error "Некорректное имя PostgreSQL volume"
+    validate_volume_name "$source_qdrant_volume" || error "Некорректное имя Qdrant volume"
+
+    if [ "$source_instance" = "$MIGRATION_TARGET_INSTANCE" ]; then
+        error "Инстанс уже называется '$MIGRATION_TARGET_INSTANCE'"
+    fi
+
+    ensure_volume_exists "$source_postgres_volume" || error "Исходный PostgreSQL storage недоступен"
+    ensure_volume_exists "$source_qdrant_volume" || error "Исходный Qdrant storage недоступен"
+    KIRA_INSTANCE_NAME="$source_instance"
+    POSTGRES_VOLUME_NAME="$source_postgres_volume"
+    QDRANT_VOLUME_NAME="$source_qdrant_volume"
+    verify_existing_storage_bindings || error "Текущие контейнеры подключены не к ожидаемому storage"
+    ensure_project_name_available "$MIGRATION_TARGET_INSTANCE" || error "Целевое имя уже занято"
+
+    header "Миграция имени инстанса"
+    info "Останавливаю project '$source_instance' без удаления volumes"
+    compose down
+
+    write_instance_storage_config \
+        "$ENV_FILE" \
+        "$MIGRATION_TARGET_INSTANCE" \
+        "$source_postgres_volume" \
+        "$source_qdrant_volume" || error "Не удалось атомарно обновить $ENV_FILE"
+
+    KIRA_INSTANCE_NAME="$MIGRATION_TARGET_INSTANCE"
+    POSTGRES_VOLUME_NAME="$source_postgres_volume"
+    QDRANT_VOLUME_NAME="$source_qdrant_volume"
+    export KIRA_INSTANCE_NAME POSTGRES_VOLUME_NAME QDRANT_VOLUME_NAME
+    write_compose_env || error "Новый Compose preflight не пройден"
+
+    success "Storage сохранён: PostgreSQL=$source_postgres_volume, Qdrant=$source_qdrant_volume"
+    deploy_stack
+}
+
 show_logs() {
     local args=(logs --tail 100)
+    local services=()
+    local service_name=""
 
     if [ "$FOLLOW_LOGS" = true ]; then
         args+=(--follow)
@@ -149,6 +236,29 @@ show_logs() {
         args+=("$TARGET_SERVICE")
         compose "${args[@]}"
         return
+    fi
+
+    if [ "$EXCLUDE_POSTGRES_LOGS" = true ] || [ "$EXCLUDE_QDRANT_LOGS" = true ]; then
+        while IFS= read -r service_name; do
+            if [ -z "$service_name" ]; then
+                continue
+            fi
+
+            if [ "$EXCLUDE_POSTGRES_LOGS" = true ] && [ "$service_name" = "postgres" ]; then
+                continue
+            fi
+
+            if [ "$EXCLUDE_QDRANT_LOGS" = true ] && [ "$service_name" = "qdrant" ]; then
+                continue
+            fi
+
+            services+=("$service_name")
+        done < <(compose config --services)
+
+        if [ "${#services[@]}" -eq 0 ]; then
+            error "Не удалось сформировать список сервисов после исключения логов"
+        fi
+        args+=("${services[@]}")
     fi
 
     compose "${args[@]}"
@@ -209,5 +319,5 @@ case "$COMMAND" in
     pause) pause_services ;;
     restart) restart_services ;;
     stop) stop_services ;;
-    help) show_help ;;
+    migrate-instance) migrate_instance ;;
 esac

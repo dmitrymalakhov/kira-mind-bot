@@ -25,7 +25,10 @@ import { getProactiveChatId } from '../utils/allowedUserChatStore';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { parseLLMJson } from '../utils';
 import { getBotPersona, getCommunicationStyle } from '../persona';
-import { appendPersistedHistory, saveProactiveInsight } from './SessionStorage';
+import { appendPersistedHistory, appendPersistedSentMessageContext, saveProactiveInsight } from './SessionStorage';
+import { USER_TIMEZONE } from '../constants';
+import { formatDateInTimeZone, getZonedDayContext, isZonedHourWithinRange } from '../utils/time';
+import { isEligibleMemoryInsightSource, normalizeInsightSourceIndexes } from '../utils/proactiveGrounding';
 
 /** Интервал проверки — берётся из конфига, дефолт 3 часа */
 const INTERVAL_MS = config.memoryInsightIntervalMs ?? 3 * 60 * 60 * 1000;
@@ -58,7 +61,7 @@ let lastSentAt = 0;
 
 interface DayContext {
     weekday: string;
-    dayOfWeek: number; // 0=вс, 1=пн, ..., 6=сб
+    dayOfWeek: number; // Monday-first: 0=пн, ..., 6=вс
     hour: number;
     isWeekend: boolean;
     daysUntilWeekend: number; // 0 если уже выходной
@@ -69,48 +72,38 @@ interface DayContext {
 
 function getDayContext(): DayContext {
     const now = new Date();
-    const day = now.getDay();
-    const hour = now.getHours();
-    const month = now.getMonth() + 1;
+    const zoned = getZonedDayContext(now, USER_TIMEZONE);
+    const isWeekend = zoned.isWeekend;
 
-    const weekdays = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
-    const isWeekend = day === 0 || day === 6;
-
-    // Дней до выходных: сб=6, вс=0
+    // Дней до субботы при Monday-first индексе: пн=0 ... пт=4
     let daysUntilWeekend = 0;
     if (!isWeekend) {
-        daysUntilWeekend = day <= 5 ? 6 - day : 0; // до субботы
+        daysUntilWeekend = 5 - zoned.weekdayIndex;
     }
-
-    let timeOfDay: string;
-    if (hour >= 6 && hour < 12) timeOfDay = 'утро';
-    else if (hour >= 12 && hour < 17) timeOfDay = 'день';
-    else if (hour >= 17 && hour < 22) timeOfDay = 'вечер';
-    else timeOfDay = 'ночь';
-
-    let season: string;
-    if (month >= 3 && month <= 5) season = 'весна';
-    else if (month >= 6 && month <= 8) season = 'лето';
-    else if (month >= 9 && month <= 11) season = 'осень';
-    else season = 'зима';
-
-    const formattedDate = now.toLocaleDateString('ru-RU', {
+    const formattedDate = formatDateInTimeZone(now, {
         weekday: 'long',
         day: 'numeric',
         month: 'long',
-    });
+    }, USER_TIMEZONE);
 
-    return { weekday: weekdays[day], dayOfWeek: day, hour, isWeekend, daysUntilWeekend, timeOfDay, season, formattedDate };
+    return {
+        weekday: zoned.weekday,
+        dayOfWeek: zoned.weekdayIndex,
+        hour: zoned.hour,
+        isWeekend,
+        daysUntilWeekend,
+        timeOfDay: zoned.timeOfDay,
+        season: zoned.season,
+        formattedDate,
+    };
 }
 
 function inQuietHours(now: Date): boolean {
     if (!config.kiraLifeProactiveQuietHoursEnabled) return false;
-    const hour = now.getHours();
+    const { hour } = getZonedDayContext(now, USER_TIMEZONE);
     const start = config.kiraLifeProactiveQuietHourStart;
     const end = config.kiraLifeProactiveQuietHourEnd;
-    if (start === end) return true;
-    if (start < end) return hour >= start && hour < end;
-    return hour >= start || hour < end;
+    return isZonedHourWithinRange(hour, start, end);
 }
 
 async function gatherRelevantMemories(userId: string): Promise<{ plans: string[]; done: string[] }> {
@@ -125,7 +118,7 @@ async function gatherRelevantMemories(userId: string): Promise<{ plans: string[]
             try {
                 const results = await svc.searchAllDomains(query, userId, 4);
                 for (const r of results) {
-                    if (r.score >= 0.55 && !planResults.has(r.id)) {
+                    if (r.score >= 0.55 && isEligibleMemoryInsightSource(r, 'plan') && !planResults.has(r.id)) {
                         planResults.set(r.id, r.content);
                     }
                 }
@@ -137,7 +130,7 @@ async function gatherRelevantMemories(userId: string): Promise<{ plans: string[]
             try {
                 const results = await svc.searchAllDomains(query, userId, 4);
                 for (const r of results) {
-                    if (r.score >= 0.55 && !doneResults.has(r.id)) {
+                    if (r.score >= 0.55 && isEligibleMemoryInsightSource(r, 'done') && !doneResults.has(r.id)) {
                         doneResults.set(r.id, r.content);
                     }
                 }
@@ -152,6 +145,7 @@ async function gatherRelevantMemories(userId: string): Promise<{ plans: string[]
         const recent = await svc.getRecentMemories(userId, 50);
         const now = new Date();
         for (const m of recent) {
+            if (!isEligibleMemoryInsightSource(m, 'plan')) continue;
             if (!m.expiresAt) continue;
             const daysLeft = (new Date(m.expiresAt).getTime() - now.getTime()) / 86_400_000;
             if (daysLeft >= 0 && daysLeft <= 30 && !planResults.has(m.id)) {
@@ -222,13 +216,21 @@ ${doneText}
 
     const text = resp.choices[0]?.message?.content?.trim() || '';
     const data = parseLLMJson<InsightDecision>(text);
+    const sourceIndexes = normalizeInsightSourceIndexes(data?.sourceIndexes, memories.plans.length);
     if (!data || !data.shouldSend || !data.message?.trim()) {
+        return { shouldSend: false, message: '' };
+    }
+    if (sourceIndexes.length === 0) {
+        console.warn('[memory-insight] Suppressed ungrounded insight: no valid sourceIndexes', {
+            suppliedIndexCount: Array.isArray(data.sourceIndexes) ? data.sourceIndexes.length : 0,
+            availablePlanCount: memories.plans.length,
+        });
         return { shouldSend: false, message: '' };
     }
     return {
         shouldSend: true,
         message: data.message.trim(),
-        sourceIndexes: Array.isArray(data.sourceIndexes) ? data.sourceIndexes : [],
+        sourceIndexes,
     };
 }
 
@@ -261,12 +263,20 @@ async function runCycle(bot: Bot<BotContext>): Promise<void> {
             .filter((memory): memory is string => Boolean(memory))
             .slice(0, 5);
         await appendPersistedHistory(chatId, 'bot', decision.message);
-        await saveProactiveInsight(chatId, {
+        const insight = {
             message: decision.message,
-            sourceMemories: sourceMemories.length ? sourceMemories : memories.plans.slice(0, 3),
+            sourceMemories,
             createdAt: Date.now(),
             messageId: sent.message_id,
             kind: 'memoryInsight',
+        } as const;
+        await saveProactiveInsight(chatId, insight);
+        await appendPersistedSentMessageContext(chatId, {
+            messageId: sent.message_id,
+            text: decision.message,
+            kind: 'proactive',
+            proactiveInsight: insight,
+            createdAt: insight.createdAt,
         });
         console.log('[memory-insight] Sent proactive insight:', decision.message.slice(0, 80));
     } catch (error) {

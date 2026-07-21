@@ -111,30 +111,73 @@ prompt_required() {
         read -r -p "  $LABEL [*]: " VAL
         [ -z "$VAL" ] && echo -e "  ${RED}Обязательное поле!${NC}"
     done
-    eval "$VAR=\"$VAL\""
+    printf -v "$VAR" '%s' "$VAL"
 }
 
 prompt_optional() {
     local VAR="$1" LABEL="$2" HINT="$3"
     [ -n "$HINT" ] && echo -e "  ${YELLOW}→ $HINT${NC}"
     read -r -p "  $LABEL (опционально): " VAL
-    eval "$VAR=\"$VAL\""
+    printf -v "$VAR" '%s' "$VAL"
 }
 
 prompt_default() {
     local VAR="$1" LABEL="$2" DEFAULT="$3"
     read -r -p "  $LABEL [$DEFAULT]: " VAL
-    eval "$VAR=\"${VAL:-$DEFAULT}\""
+    VAL="${VAL:-$DEFAULT}"
+    printf -v "$VAR" '%s' "$VAL"
+}
+
+sanitize_instance_name() {
+    local raw="${1:-kira-mind-bot}"
+    local sanitized
+
+    sanitized="$(printf '%s' "$raw" \
+        | tr '[:upper:]' '[:lower:]' \
+        | tr -cs 'a-z0-9_-' '-' \
+        | sed -E 's/^-+//; s/-+$//; s/-{2,}/-/g')"
+
+    if [[ ! "$sanitized" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+        sanitized="kira-mind-bot"
+    fi
+
+    printf '%s' "$sanitized"
+}
+
+prompt_instance_name() {
+    local default_name="kira-mind-bot"
+    local val=""
+
+    while true; do
+        echo -e "  ${YELLOW}→ Используется для Docker project/volumes. Разрешены: a-z, 0-9, _ и -.${NC}"
+        read -r -p "  Техническое имя инстанса [$default_name]: " val
+        val="$(sanitize_instance_name "${val:-$default_name}")"
+
+        if [[ "$val" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+            KIRA_INSTANCE_NAME="$val"
+            return
+        fi
+
+        echo -e "  ${RED}Имя должно начинаться с латинской буквы или цифры и содержать только a-z, 0-9, _ и -.${NC}"
+    done
 }
 
 # OpenAI
 echo -e "\n${BOLD}OpenAI${NC}"
 prompt_required OPENAI_API_KEY "OpenAI API Key" "https://platform.openai.com/api-keys"
 
+echo -e "\n${BOLD}Дополнительные AI-провайдеры${NC}"
+prompt_optional OPENROUTER_API_KEY "OpenRouter API Key" "https://openrouter.ai/keys"
+prompt_optional GEMINI_API_KEY "Gemini API Key" "https://aistudio.google.com/app/apikey"
+prompt_optional ZAI_API_KEY "Z.ai API Key" "https://z.ai/manage-apikey/apikey-list"
+
 # Telegram Bot
 echo -e "\n${BOLD}Telegram Bot${NC}"
 prompt_required KIRA_BOT_TOKEN "Токен бота" "Создать: напиши @BotFather → /newbot"
 prompt_required KIRA_ALLOWED_USER_ID "Твой Telegram User ID" "Узнать: напиши @userinfobot"
+
+echo -e "\n${BOLD}Docker-инстанс${NC}"
+prompt_instance_name
 
 # Владелец
 echo -e "\n${BOLD}Имя владельца бота${NC}"
@@ -142,7 +185,8 @@ prompt_default OWNER_NAME "Как тебя зовут (для бота)" "Пол
 
 # DB
 echo -e "\n${BOLD}База данных${NC}"
-DB_PASSWORD=$(cat /dev/urandom | LC_ALL=C tr -dc 'a-zA-Z0-9' | head -c 24)
+DB_PASSWORD="$(openssl rand -hex 16 2>/dev/null || true)"
+[ -n "$DB_PASSWORD" ] || { echo "❌ Не удалось сгенерировать пароль БД: openssl недоступен" >&2; exit 1; }
 echo -e "  ${GREEN}Пароль БД сгенерирован автоматически${NC}"
 
 # Опциональные
@@ -185,8 +229,15 @@ cat > "$ENV_FILE" << EOF
 
 OPENAI_API_KEY=${OPENAI_API_KEY}
 
+OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+GEMINI_API_KEY=${GEMINI_API_KEY}
+ZAI_API_KEY=${ZAI_API_KEY}
+
 KIRA_BOT_TOKEN=${KIRA_BOT_TOKEN}
 KIRA_ALLOWED_USER_ID=${KIRA_ALLOWED_USER_ID}
+KIRA_INSTANCE_NAME=${KIRA_INSTANCE_NAME:-kira-mind-bot}
+POSTGRES_VOLUME_NAME=${POSTGRES_VOLUME_NAME:-${KIRA_INSTANCE_NAME:-kira-mind-bot}_postgres_data}
+QDRANT_VOLUME_NAME=${QDRANT_VOLUME_NAME:-${KIRA_INSTANCE_NAME:-kira-mind-bot}_qdrant_storage}
 
 DB_HOST=postgres
 DB_PORT=5432

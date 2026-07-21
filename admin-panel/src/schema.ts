@@ -1,4 +1,5 @@
 import type { SectionDef } from './types';
+import COMMON_TIMEZONES from './timezones.json';
 
 export const CONFIG_SCHEMA: SectionDef[] = [
   {
@@ -14,16 +15,22 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         hint: 'Используется для GPT fallback, web reasoning, embeddings, vision и whisper.',
       },
       {
-        key: 'DEEPSEEK_API_KEY',
-        label: 'DeepSeek API Key',
+        key: 'OPENROUTER_API_KEY',
+        label: 'OpenRouter API Key',
         type: 'password',
-        hint: 'Нужен для пресета Hybrid DeepSeek + GPT. Применяется после рестарта процесса.',
+        hint: 'Нужен для пресета Hybrid OpenRouter + GPT. Применяется после рестарта процесса.',
       },
       {
         key: 'GEMINI_API_KEY',
         label: 'Gemini API Key',
         type: 'password',
-        hint: 'Нужен для пресета Hybrid Gemini + GPT. Применяется после рестарта процесса.',
+        hint: 'Нужен для пресетов Hybrid Gemini + GPT и Gemini Direct Balanced. Применяется после рестарта процесса.',
+      },
+      {
+        key: 'ZAI_API_KEY',
+        label: 'Z.ai API Key',
+        type: 'password',
+        hint: 'Нужен для пресета GLM Balanced и обычного Z.ai API endpoint. Применяется после рестарта процесса.',
       },
       {
         key: 'IDEOGRAM_API_KEY',
@@ -227,12 +234,20 @@ export const CONFIG_SCHEMA: SectionDef[] = [
     title: 'Общие настройки',
     icon: '⚙️',
     fields: [
-      { key: 'USER_TIMEZONE', label: 'Временная зона', type: 'text', placeholder: 'Europe/Moscow' },
+      {
+        key: 'USER_TIMEZONE',
+        label: 'Временная зона',
+        type: 'select',
+        placeholder: 'Europe/Moscow',
+        options: COMMON_TIMEZONES,
+        md: 7,
+      },
       {
         key: 'REMINDER_EXPIRY_TIME_MS',
         label: 'Срок хранения напоминаний',
         type: 'duration',
         hint: 'Через сколько времени выполненные напоминания удаляются',
+        md: 5,
       },
       {
         key: 'PROACTIVE_ONLY_PRIVATE_CHAT',

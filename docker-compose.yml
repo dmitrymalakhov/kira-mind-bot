@@ -1,4 +1,6 @@
 version: '3.8'
+name: ${KIRA_INSTANCE_NAME:-kira-mind-bot}
+
 # Ротация логов: макс. 10 МБ на файл, 3 файла (~30 МБ на сервис)
 x-logging: &default-logging
   driver: json-file
@@ -12,7 +14,6 @@ x-restart: &default-restart
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: postgres
     <<: *default-restart
     environment:
       POSTGRES_USER: ${DB_USER:-postgres}
@@ -29,11 +30,7 @@ services:
 
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: qdrant
     <<: *default-restart
-    ports:
-      - "6333:6333"
-      - "6334:6334"
     volumes:
       - qdrant_storage:/qdrant/storage
     logging: *default-logging
@@ -43,7 +40,7 @@ services:
       context: ./kira-mind-bot
       args:
         NODE_ENV: ${NODE_ENV:-production}
-    container_name: kira-mind-bot
+    container_name: ${KIRA_INSTANCE_NAME:-kira-mind-bot}
     <<: *default-restart
     env_file:
       - ./kira-mind-bot/.env.production
@@ -62,8 +59,8 @@ services:
 
   admin-panel:
     build:
-      context: ./admin-panel
-    container_name: admin-panel
+      context: .
+      dockerfile: admin-panel/Dockerfile
     <<: *default-restart
     ports:
       - "${ADMIN_PORT:-8080}:3000"
@@ -76,10 +73,15 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme}
       - BOT_ENV_FILE=/app/env/bot.env
       - PERSONALITY_FILE=/app/personality/personality.json
+      - KIRA_INSTANCE_NAME=${KIRA_INSTANCE_NAME:-kira-mind-bot}
+      - KIRA_RUNTIME_HEALTH_URL=http://kira-mind-bot:3100
+      - KIRA_BOT_CONTAINER_NAME=${KIRA_INSTANCE_NAME:-kira-mind-bot}
     logging: *default-logging
 
 volumes:
   postgres_data:
+    name: ${POSTGRES_VOLUME_NAME:-${KIRA_INSTANCE_NAME:-kira-mind-bot}_postgres_data}
     driver: local
   qdrant_storage:
+    name: ${QDRANT_VOLUME_NAME:-${KIRA_INSTANCE_NAME:-kira-mind-bot}_qdrant_storage}
     driver: local

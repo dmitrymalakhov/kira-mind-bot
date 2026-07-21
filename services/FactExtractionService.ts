@@ -92,9 +92,11 @@ export class FactExtractionService {
 
     const today = new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
     const prompt = `
-Проанализируй диалоги между пользователем и ботом. Извлеки достоверные факты ДВУХ типов:
+Проанализируй диалоги между пользователем и ботом. Извлеки достоверные факты следующих типов:
 1. Факты о самом пользователе (subject: "user")
-2. Факты о других людях/контактах, которых пользователь упоминает (subject: "contact")
+2. Факты о конкретных контактах (subject: "contact")
+3. Факты о родственниках/знакомых контакта (subject: "third_party")
+4. Факты с потерянным референтом (subject: "unknown")
 
 Сегодняшняя дата: ${today}
 
@@ -103,6 +105,7 @@ export class FactExtractionService {
 2. НЕ извлекай из предложений бота, которые пользователь не подтвердил
 3. Если пользователь ИСПРАВЛЯЕТ ошибку бота — это важный факт, сохрани с датой
 4. Информация в цитатах «[В ответ на "..." от Имя]» — это слова другого человека, не пользователя
+5. Вопросы «какая задача?», «о чём ты?», «что за ...?» и ответы с отрицанием/сомнением НЕ подтверждают утверждение бота
 
 ПРАВИЛА для фактов о КОНТАКТАХ (subject: "contact"):
 1. Извлекай факты о конкретных упомянутых людях (имя обязательно)
@@ -110,7 +113,9 @@ export class FactExtractionService {
 3. Также: инструкции "запомни об X: ...", реплаи с информацией о третьих лицах
 4. Каждый факт привязан к конкретному человеку (поле contactName обязательно)
 5. Безымянных контактов (просто "коллега", "друг" без имени) — НЕ извлекай, если имя неизвестно
-6. ВАЖНО: в contactName используй ПОЛНОЕ имя если оно известно из контекста — «Юрий Никишенко», а не просто «Юра». Если фамилия упомянута в диалоге — обязательно включи её. Это критично: у пользователя может быть несколько контактов с одним именем
+6. ВАЖНО: в contactName используй полное имя, если оно известно из контекста — «Контакт Альфа Полный», а не «Контакт Альфа». Если в диалоге есть дополнительная часть имени, обязательно включи её: у пользователя может быть несколько одноимённых контактов
+7. Родственник или знакомый контакта — subject: "third_party", а не сам контакт
+8. Если из реплики нельзя доказать субъект — subject: "unknown"; не подставляй владельца чата
 
 ПРИМЕРЫ:
 ✅ "Я уже во Вьетнаме" → subject: "user", domain: travel
@@ -145,6 +150,16 @@ ${dialogueText}
       "confidence": 0.0-1.0,
       "importance": 0.0-1.0,
       "tags": ["тег1"],
+      "evidence": "Цитата"
+    },
+    {
+      "subject": "third_party|unknown",
+      "content": "Факт о третьем лице или событие с неизвестным субъектом",
+      "domain": "work|health|family|finance|education|hobbies|travel|social|home|personal|entertainment|general",
+      "factType": "personal_info|relationship|event",
+      "confidence": 0.0-1.0,
+      "importance": 0.0-1.0,
+      "tags": ["evidence-only"],
       "evidence": "Цитата"
     }
   ]
@@ -193,7 +208,9 @@ ${dialogueText}
           extractedAt: new Date(),
           importance: f.importance ?? 0.5,
           tags: Array.isArray(f.tags) ? f.tags : [],
-          subject: f.subject === 'contact' ? 'contact' : 'user',
+          subject: ['user', 'contact', 'third_party', 'unknown'].includes(f.subject)
+            ? f.subject
+            : 'unknown',
           contactName: f.subject === 'contact' ? String(f.contactName).trim() : undefined,
         })) as ExtractedFact[];
 

@@ -26,6 +26,8 @@ import {
   TextField,
   Tooltip,
   Typography,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
@@ -37,8 +39,9 @@ import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SaveIcon from '@mui/icons-material/Save';
 import SearchIcon from '@mui/icons-material/Search';
-import { createMemory, deleteMemory, fetchMemories, updateMemory } from '../api';
+import { createMemory, deleteMemory, fetchAiPreset, fetchMemories, updateMemory } from '../api';
 import type {
+  AiPresetResponse,
   MemoryFormPayload,
   MemoryFocus,
   MemoryKind,
@@ -596,6 +599,30 @@ function MemoryRow({
           <Typography variant="body2" sx={{ maxWidth: 520 }}>
             {record.content}
           </Typography>
+          <Box sx={{ display: { xs: 'flex', md: 'none' }, gap: 0.5, flexWrap: 'wrap', mt: 0.75 }}>
+            <Chip size="small" label={DOMAIN_LABELS[record.domain] ?? record.domain} variant="outlined" sx={{ fontSize: '10px' }} />
+            <Chip size="small" label={KIND_LABELS[record.memoryKind] ?? record.memoryKind} variant="outlined" sx={{ fontSize: '10px' }} />
+            <Chip
+              size="small"
+              label={STATUS_LABELS[record.status] ?? record.status}
+              color={statusColor(record.status)}
+              variant="outlined"
+              sx={{ fontSize: '10px' }}
+            />
+            <Chip
+              size="small"
+              label={percent(record.confidence)}
+              color={confidenceColor(record.confidence)}
+              variant="outlined"
+              sx={{ fontSize: '10px' }}
+            />
+            <Chip
+              size="small"
+              label={formatDateTime(record.timestamp)}
+              variant="outlined"
+              sx={{ fontSize: '10px' }}
+            />
+          </Box>
           {!!record.tags.length && (
             <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.75 }}>
               {record.tags.slice(0, 5).map((tag) => (
@@ -607,13 +634,13 @@ function MemoryRow({
             </Box>
           )}
         </TableCell>
-        <TableCell>
+        <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
           <Chip size="small" label={DOMAIN_LABELS[record.domain] ?? record.domain} variant="outlined" sx={{ fontSize: '11px' }} />
         </TableCell>
-        <TableCell>
+        <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
           <Chip size="small" label={KIND_LABELS[record.memoryKind] ?? record.memoryKind} variant="outlined" sx={{ fontSize: '11px' }} />
         </TableCell>
-        <TableCell>
+        <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
           <Chip
             size="small"
             label={STATUS_LABELS[record.status] ?? record.status}
@@ -622,7 +649,7 @@ function MemoryRow({
             sx={{ fontSize: '11px' }}
           />
         </TableCell>
-        <TableCell>
+        <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
           <Chip
             size="small"
             label={percent(record.confidence)}
@@ -631,7 +658,7 @@ function MemoryRow({
             sx={{ fontSize: '11px' }}
           />
         </TableCell>
-        <TableCell>
+        <TableCell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
           <Typography variant="caption" color="text.secondary">
             {formatDateTime(record.timestamp)}
           </Typography>
@@ -734,6 +761,8 @@ function MemoryRow({
 }
 
 export function MemorySection({ onToast }: { onToast?: ToastFn }) {
+  const theme = useTheme();
+  const isDesktopTable = useMediaQuery(theme.breakpoints.up('md'));
   const [draft, setDraft] = useState<MemoryFilterDraft>(DEFAULT_DRAFT);
   const [query, setQuery] = useState<MemoryQuery>(() => buildQuery(DEFAULT_DRAFT));
   const [records, setRecords] = useState<MemoryRecord[]>([]);
@@ -750,6 +779,7 @@ export function MemorySection({ onToast }: { onToast?: ToastFn }) {
   const [dialogMode, setDialogMode] = useState<'create' | 'edit'>('create');
   const [editing, setEditing] = useState<MemoryRecord | null>(null);
   const [form, setForm] = useState<MemoryFormPayload>(EMPTY_FORM);
+  const [memoryProfileStatus, setMemoryProfileStatus] = useState<AiPresetResponse['memoryEmbeddingProfile'] | null>(null);
 
   const page = Math.floor((query.offset ?? 0) / (query.limit ?? draft.limit));
   const rowsPerPage = query.limit ?? draft.limit;
@@ -778,6 +808,12 @@ export function MemorySection({ onToast }: { onToast?: ToastFn }) {
       setKinds(data.kinds.length ? data.kinds : DEFAULT_KINDS);
       setStatuses(data.statuses.length ? data.statuses : DEFAULT_STATUSES);
       setFocuses(data.focuses.length ? data.focuses : DEFAULT_FOCUSES);
+      try {
+        const presetData = await fetchAiPreset();
+        setMemoryProfileStatus(presetData.memoryEmbeddingProfile);
+      } catch {
+        setMemoryProfileStatus(null);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось загрузить память');
     } finally {
@@ -889,6 +925,35 @@ export function MemorySection({ onToast }: { onToast?: ToastFn }) {
           </Button>
         </Box>
       </Box>
+
+      {memoryProfileStatus && (
+        <Alert
+          severity={
+            memoryProfileStatus.compatibility.status === 'mismatch'
+              ? 'error'
+              : memoryProfileStatus.compatibility.status === 'unavailable'
+                ? 'warning'
+                : memoryProfileStatus.providerKeyConfigured
+                  ? 'info'
+                  : 'warning'
+          }
+          variant="outlined"
+          sx={{ mb: 2 }}
+        >
+          <Typography variant="body2" sx={{ mb: 0.5 }}>
+            Память использует отдельный profile: <b>{memoryProfileStatus.title}</b> ({memoryProfileStatus.provider}:{memoryProfileStatus.model}, {memoryProfileStatus.outputDimension}d)
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+            {memoryProfileStatus.activeSourceSummary}
+          </Typography>
+          <Typography variant="body2" color={memoryProfileStatus.providerKeyConfigured ? 'text.secondary' : 'warning.main'} sx={{ mb: 0.5 }}>
+            {memoryProfileStatus.providerAvailabilitySummary}
+          </Typography>
+          <Typography variant="body2" color={memoryProfileStatus.compatibility.status === 'mismatch' ? 'error.main' : 'text.secondary'}>
+            {memoryProfileStatus.compatibility.summary}
+          </Typography>
+        </Alert>
+      )}
 
       <Paper variant="outlined" sx={{ p: 2, mb: 2, bgcolor: 'background.paper', borderRadius: 1 }}>
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr 1fr 1fr' }, gap: 1.5 }}>
@@ -1020,17 +1085,17 @@ export function MemorySection({ onToast }: { onToast?: ToastFn }) {
         </Alert>
       ) : (
         <Paper variant="outlined" sx={{ bgcolor: 'background.paper', overflow: 'hidden', borderRadius: 1 }}>
-          <TableContainer>
-            <Table size="small">
+          <TableContainer sx={{ overflowX: 'auto' }}>
+            <Table size="small" sx={{ minWidth: isDesktopTable ? 980 : 'auto' }}>
               <TableHead>
                 <TableRow>
                   <TableCell />
                   <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px' }}>Содержание</TableCell>
-                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px' }}>Домен</TableCell>
-                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px' }}>Тип</TableCell>
-                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px' }}>Статус</TableCell>
-                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px' }}>Уверенность</TableCell>
-                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px' }}>Дата</TableCell>
+                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px', display: { xs: 'none', md: 'table-cell' } }}>Домен</TableCell>
+                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px', display: { xs: 'none', md: 'table-cell' } }}>Тип</TableCell>
+                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px', display: { xs: 'none', md: 'table-cell' } }}>Статус</TableCell>
+                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px', display: { xs: 'none', md: 'table-cell' } }}>Уверенность</TableCell>
+                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary', fontSize: '12px', display: { xs: 'none', md: 'table-cell' } }}>Дата</TableCell>
                   <TableCell />
                 </TableRow>
               </TableHead>

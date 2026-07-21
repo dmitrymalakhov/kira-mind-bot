@@ -1,9 +1,12 @@
 import { Api } from 'telegram';
 import { initTelegramClient } from '../services/telegram';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
+import { getActivePresetNameAsync } from '../ai/modelResolver';
 import { config } from '../config';
 import { parseLLMJson } from '../utils';
 import type { MemoryStatus } from '../types';
+import { filterUserFactsForThirdPartyEvents } from './factAttributionFilter';
+import { containsMultipleAssertions } from './atomicAssertion';
 
 const BATCH_SIZE = 100;
 const MAX_MESSAGES = 5000;
@@ -95,6 +98,10 @@ export interface ExtractedFactAboutUser {
     subject: 'user' | 'contact';
     /** Имя собеседника (заполняется только когда subject = 'contact') */
     contactName?: string;
+    /** Один канонический предикат; не домен и не составное описание. */
+    predicate?: string;
+    /** Объект того же атомарного утверждения, согласованный с content. */
+    object?: string;
 }
 
 export type StudyChatAnalysisProgress =
@@ -252,6 +259,8 @@ function normalizeFactLike(f: any, subject: 'user' | 'contact'): ExtractedFactAb
     if (status && status !== 'active') tags.push(`status:${status}`);
     return {
         content,
+        predicate: normalizeText(f?.predicate, 100) ?? normalizeDomain(f.domain),
+        object: normalizeText(f?.object, 320) ?? content,
         subject,
         domain: normalizeDomain(f.domain),
         importance: clamp01(f.importance, 0.5),
@@ -320,7 +329,8 @@ function buildReflectionExtractionRules(ownerName: string, contactName: string):
 - временное местонахождение вида "пока в городе", если это не переезд, поездка с явными датами или важное событие;
 - одноразовое настроение/стресс из-за текущей задачи, если нет устойчивого паттерна или риска.
 
-Если сомневаешься, не извлекай факт. Для слабых одноразовых наблюдений ставь importance ниже 0.45, чтобы они не попали в память.`;
+Если сомневаешься, не извлекай факт. Для слабых одноразовых наблюдений ставь importance ниже 0.45, чтобы они не попали в память.
+Поле evidence копируй вместе с датой и именем автора исходной строки, например "[дата] ${contactName}: я работаю...". Не убирай speaker label и не заменяй его местоимением.`;
 }
 
 /** Промпт для извлечения фактов о владельце бота ("Я") */
@@ -337,6 +347,7 @@ function buildUserFactsPrompt(
     return `Переписка ${ownerName} ("Я") с ${contactName}. Период: ${periodLabel}.
 
 Твоя задача: извлечь факты ТОЛЬКО о ${ownerName}.
+Каждый элемент facts — ровно одно атомарное утверждение subject/predicate/object. Не склеивай отношения, работу, знакомство и хронологию в одну запись.
 
 Источники фактов о ${ownerName}:
 1. Строки "[дата] Я: ..." — что ${ownerName} говорит о себе напрямую
@@ -352,11 +363,13 @@ function buildUserFactsPrompt(
 - Хобби и интересы: что любит, чем занимается в свободное время
 - Финансы: траты, планы покупок, статус
 - Характер и поведение: паттерны, реакции, ценности
-- Планы и желания: куда хочет поехать, что купить, что сделать
+- Планы и желания: куда хочет поехать, что купить, что сделать — но только планы, которые ${ownerName} инициирует сам или прямо называет своими
 - Косвенные выводы: "опять не сплю" → проблемы со сном
 
 НЕ включай: факты о ${contactName} или третьих лицах.
 НЕ включай: тривиальное ("написал сообщение"), единичные оговорки без контекста.
+ВАЖНО ПРО АТРИБУЦИЮ СОБЫТИЙ: если событие/праздник/ДР/годовщина/встреча/игра/поездка инициированы собеседником или принадлежат ему (его ДР, его отпуск, его корпоратив), а ${ownerName} лишь приглашён/вписан/идёт как гость — это факт О СОБЕСЕДНИКЕ, не о ${ownerName}. Не превращай приглашение в факт о владельце.
+Пример: "${contactName}: хочу собрать встречу на свой праздник, ты как?" → это событие ${contactName}, НЕ ${ownerName}; не извлекай «у ${ownerName} личный праздник».
 Если переписка старше 6 месяцев — снижай importance для планов и временных состояний.
 Для каждого факта укажи temporalScope:
 - stable/preference/routine/relationship — устойчивое знание
@@ -383,6 +396,8 @@ JSON:
   "facts": [
     {
       "content": "Факт о ${ownerName}, одно предложение от третьего лица",
+      "predicate": "один атомарный предикат",
+      "object": "объект этого предиката",
       "domain": "work",
       "importance": 0.0-1.0,
       "confidence": 0.0-1.0,
@@ -413,6 +428,7 @@ function buildContactFactsPrompt(
     return `Переписка ${ownerName} ("Я") с ${contactName}. Период: ${periodLabel}.
 
 Твоя задача: извлечь факты ТОЛЬКО о ${contactName}.
+Каждый элемент facts — ровно одно атомарное утверждение subject/predicate/object. Не склеивай отношения, работу, знакомство и хронологию в одну запись.
 
 Источники фактов о ${contactName}:
 1. Строки "[дата] ${contactName}: ..." — что ${contactName} говорит о себе
@@ -427,9 +443,14 @@ function buildContactFactsPrompt(
 - Характер и поведение: паттерны, реакции
 - Здоровье и самочувствие
 - Отношение к ${ownerName} и ситуациям
+- События и инициативы контакта: его праздник/годовщина/встреча/игра/поездка, которые он инициирует или которые принадлежат ему (например «хочу собрать встречу на свой праздник») — это факты о ${contactName}
 
 НЕ включай: факты о ${ownerName}.
 НЕ включай: тривиальное, единичные случайные фразы без контекста.
+КРИТИЧНО ПРО СУБЪЕКТА: владелец чата ${contactName} не становится субъектом события автоматически.
+Фраза с пропущенным субъектом вроде «в понедельник будут делать операцию» — не факт о ${contactName}, если в текущем или предыдущем сообщении нет доказуемого antecedent.
+Событие про бабушку, родственника, коллегу или иное третье лицо не переписывай как событие самого ${contactName}.
+Если субъект не доказан, не извлекай contact-факт. Не дополняй evidence именем, которого не было в исходной реплике.
 Если переписка старше 6 месяцев — снижай importance для планов и временных состояний.
 Для каждого факта укажи temporalScope:
 - stable/preference/routine/relationship — устойчивое знание
@@ -456,6 +477,8 @@ JSON:
   "facts": [
     {
       "content": "Факт о ${contactName}, одно предложение от третьего лица",
+      "predicate": "один атомарный предикат",
+      "object": "объект этого предиката",
       "domain": "work",
       "importance": 0.0-1.0,
       "confidence": 0.0-1.0,
@@ -481,12 +504,17 @@ function parseFacts(text: string, subject: 'user' | 'contact'): ExtractedFactAbo
         .filter((fact) => fact.content.length >= 8);
 }
 
+interface ChunkExtractionResult {
+    facts: ExtractedFactAboutUser[];
+    partialFailure: boolean;
+}
+
 async function extractRawFactsFromChunk(
     chunk: string,
     contactName: string,
     periodLabel: string,
     options: FactExtractionOptions = {}
-): Promise<ExtractedFactAboutUser[]> {
+): Promise<ChunkExtractionResult> {
     // Два параллельных запроса — каждый про одного человека
     const [userResp, contactResp] = await Promise.allSettled([
         createChatCompletionForTask('memoryExtraction', {
@@ -527,7 +555,10 @@ async function extractRawFactsFromChunk(
         ? parseFacts(contactResp.value.choices[0]?.message?.content?.trim() || '', 'contact')
         : [];
 
-    return [...userFacts, ...contactFacts];
+    return {
+        facts: [...userFacts, ...contactFacts],
+        partialFailure: userResp.status === 'rejected' || contactResp.status === 'rejected',
+    };
 }
 
 // ─── Синтез: консолидация каждой группы отдельно ─────────────────────────────
@@ -561,10 +592,10 @@ function buildSynthesisPrompt(facts: ExtractedFactAboutUser[], personName: strin
 ${factsText}
 
 Задача:
-1. Объедини семантически похожие факты в один (наиболее точная формулировка)
+1. Дедуплицируй только варианты одного и того же subject/predicate/object. Разные предикаты никогда не объединяй.
 2. Если факт встречается в нескольких вариантах → это паттерн → повысь importance
 3. Убери тривиальные факты (importance < 0.3 без явной ценности)
-4. Формулируй конкретно от третьего лица: не "любит работу", а "работает в IT, часто задерживается"
+4. Каждая запись должна содержать ровно одно атомарное утверждение; не добавляй вторую характеристику через запятую или союз.
 5. Уточняй домен если нужно
 6. Сохраняй evidence и confidence. Если обобщаешь несколько слабых намёков в паттерн — confidence не выше 0.65.
 7. Не превращай одноразовое настроение в черту характера.
@@ -617,10 +648,15 @@ async function synthesizeGroup(
         const data = parseLLMJson<{ facts?: unknown[] }>(text);
         if (!data || !Array.isArray(data.facts)) return deduplicateExact(facts);
 
-        return data.facts
+        const synthesized = data.facts
             .filter((f: any) => f?.content && f?.domain)
             .map((f: any) => normalizeFactLike(f, subject))
             .filter((fact) => fact.content.length >= 8);
+        // При нарушении атомарности не теряем исходные проверяемые факты и не
+        // сохраняем склейку, придуманную этапом синтеза.
+        return synthesized.some(fact => containsMultipleAssertions(fact.content))
+            ? deduplicateExact(facts)
+            : synthesized;
     } catch (e) {
         console.error(`synthesizeGroup(${subject}) error:`, e);
         return deduplicateExact(facts);
@@ -629,13 +665,20 @@ async function synthesizeGroup(
 
 async function synthesizeFacts(
     rawFacts: ExtractedFactAboutUser[],
-    contactName: string
+    contactName: string,
+    options: { sequential?: boolean } = {}
 ): Promise<ExtractedFactAboutUser[]> {
     if (rawFacts.length === 0) return [];
 
     const ownerName = config.ownerName || 'пользователь';
     const userFacts = rawFacts.filter(f => f.subject === 'user');
     const contactFacts = rawFacts.filter(f => f.subject === 'contact');
+
+    if (options.sequential) {
+        const synthUser = await synthesizeGroup(userFacts, 'user', ownerName);
+        const synthContact = await synthesizeGroup(contactFacts, 'contact', contactName);
+        return [...synthUser, ...synthContact];
+    }
 
     // Оба синтеза параллельно, каждый про одного человека
     const [synthUser, synthContact] = await Promise.all([
@@ -683,13 +726,17 @@ function isTooGenericForLongTermMemory(fact: ExtractedFactAboutUser): boolean {
     const lc = fact.content.toLowerCase();
     if (fact.content.length < 14) return true;
     if (/^(пользователь|собеседник|контакт)\s+(общался|написал|спросил|ответил|обсуждал)/iu.test(lc)) return true;
-    if (/^(дмитрий|он|она|контакт)\s+(общался|написал|спросил|ответил|обсуждал)/iu.test(lc)) return true;
+    if (/^(он|она|контакт)\s+(общался|написал|спросил|ответил|обсуждал)/iu.test(lc)) return true;
     if (/переписывал[аи]сь|была переписка|в чате обсуждал/iu.test(lc) && (fact.importance ?? 0) < 0.65) return true;
     return false;
 }
 
-function deterministicQualityGate(facts: ExtractedFactAboutUser[]): ExtractedFactAboutUser[] {
-    return deduplicateExact(facts)
+function deterministicQualityGate(facts: ExtractedFactAboutUser[], contactName?: string): ExtractedFactAboutUser[] {
+    return filterUserFactsForThirdPartyEvents(
+        deduplicateExact(facts),
+        config.ownerName,
+        contactName,
+    )
         .map((fact) => {
             const confidence = clamp01(fact.confidence, 0.62);
             const warnings = [...(fact.qualityWarnings ?? [])];
@@ -714,7 +761,8 @@ function deterministicQualityGate(facts: ExtractedFactAboutUser[]): ExtractedFac
         })
         .filter((fact) => fact.importance >= 0.25)
         .filter((fact) => (fact.confidence ?? 0.62) >= 0.35)
-        .filter((fact) => !fact.qualityWarnings?.includes('too-generic'));
+        .filter((fact) => !fact.qualityWarnings?.includes('too-generic'))
+        .filter((fact) => !containsMultipleAssertions(fact.content));
 }
 
 function buildCriticPrompt(
@@ -731,6 +779,8 @@ function buildCriticPrompt(
 - drop для одноразовых технических/рабочих деталей про инструменты, ChatGPT, файлы, распознавание, портирование, обработку материалов.
 - drop для "сейчас занимается задачей", "пока находится в городе", "долго обрабатывает", если нет долгосрочного значения.
 - keep только если факт помогает будущему поведению ассистента, отражает устойчивое знание или важное событие.
+- Для subject=contact делай drop, если evidence не содержит явного имени/обращения или первого лица собеседника. Источник-чата сам по себе не доказывает субъект.
+- Фразу с пропущенным субъектом и событие про родственника нельзя переписывать как факт о владельце чата.
 - rewrite допустим, если из технической детали можно аккуратно получить устойчивое правило помощи, явно поддержанное перепиской.`
         : '';
     const factsText = facts.map((fact, index) => [
@@ -760,6 +810,7 @@ ${factsText}
 - keep: факт явно поддержан перепиской и полезен в будущем.
 - rewrite: факт поддержан, но формулировка слишком широкая/путает атрибуцию/нужна осторожность.
 - drop: факт не поддержан, слишком общий, тривиальный, пересказывает сам факт переписки, путает ${ownerName} и ${contactName}, или превращает один эпизод в черту характера.
+- КРИТИЧНО для subject=user: если факт описывает событие/праздник/ДР/годовщину/встречу/игру/поездку, проверь, ЧЕЙ это праздник/инициатива. Если инициатор и «именинник» — ${contactName}, а ${ownerName} лишь приглашён/вписан — это факт о ${contactName}, для subject=user делай drop (или rewrite в «приглашён на событие собеседника» с понижением confidence).
 - Нельзя выводить устойчивую черту из одного слабого намёка. Лучше rewrite в узкий временный факт или lower confidence.
 - Факты о планах, настроении и текущем состоянии должны иметь lower confidence, если не ясно, актуальны ли они после периода.
 - Проверяй временную природу: future_plan=status planned, past_event=status done, current_state=актуально только на момент переписки.
@@ -825,6 +876,7 @@ function applyCriticDecision(
     return {
         ...fact,
         content,
+        object: content !== fact.content ? content : fact.object,
         domain: normalizeDomain(decision.domain ?? fact.domain),
         importance: clamp01(decision.importance, fact.importance),
         confidence,
@@ -846,7 +898,7 @@ async function critiqueFactsAgainstConversation(
     periodLabel: string,
     options: FactExtractionOptions = {}
 ): Promise<ExtractedFactAboutUser[]> {
-    const gated = deterministicQualityGate(facts);
+    const gated = deterministicQualityGate(facts, contactName);
     if (gated.length === 0) return [];
 
     if (conversationText.length > MAX_CRITIC_CONTEXT_CHARS) {
@@ -884,7 +936,7 @@ async function critiqueFactsAgainstConversation(
         }
     }
 
-    return deterministicQualityGate(reviewed);
+    return deterministicQualityGate(reviewed, contactName);
 }
 
 function withTemporalDefaults(
@@ -938,7 +990,29 @@ function withTemporalDefaults(
 // ─── Публичная функция ─────────────────────────────────────────────────────────
 
 // Максимум параллельных LLM-вызовов для чанков (каждый чанк = 2 вызова)
-const CHUNK_CONCURRENCY = 4;
+const DEFAULT_CHUNK_CONCURRENCY = 4;
+const GEMINI_FULL_CHUNK_CONCURRENCY = 1;
+
+interface StudyChatExecutionMode {
+    presetName: string;
+    chunkConcurrency: number;
+    sequentialSynthesis: boolean;
+}
+
+async function resolveStudyChatExecutionMode(): Promise<StudyChatExecutionMode> {
+    const configuredGeminiConcurrency = Number(process.env.AI_STUDY_CHAT_GEMINI_CHUNK_CONCURRENCY);
+    const geminiConcurrency = Number.isFinite(configuredGeminiConcurrency) && configuredGeminiConcurrency > 0
+        ? Math.floor(configuredGeminiConcurrency)
+        : GEMINI_FULL_CHUNK_CONCURRENCY;
+
+    const presetName = await getActivePresetNameAsync();
+    const isGeminiFull = presetName === 'gemini-full';
+    return {
+        presetName,
+        chunkConcurrency: isGeminiFull ? geminiConcurrency : DEFAULT_CHUNK_CONCURRENCY,
+        sequentialSynthesis: isGeminiFull,
+    };
+}
 
 /**
  * Извлекает из текста переписки факты о пользователе (о "Я").
@@ -968,6 +1042,8 @@ export async function extractFactsAboutUserFromConversation(
     };
 
     const chunks = splitIntoChunks(conversationText);
+    const executionMode = await resolveStudyChatExecutionMode();
+    const { chunkConcurrency, sequentialSynthesis } = executionMode;
     console.log(`[studyChatFlow] Анализ переписки: ${chunks.length} чанк(ов), ${conversationText.length} символов`);
     await emitProgress({
         stage: 'chunks_ready',
@@ -980,17 +1056,17 @@ export async function extractFactsAboutUserFromConversation(
         ? `${startDate.toLocaleDateString('ru-RU')} — ${endDate.toLocaleDateString('ru-RU')}`
         : 'неизвестный период';
 
-    // Извлечение чанков батчами — не более CHUNK_CONCURRENCY параллельных пар запросов
-    const chunkResults: PromiseSettledResult<ExtractedFactAboutUser[]>[] = [];
+    // Извлечение чанков батчами — не более chunkConcurrency параллельных пар запросов
+    const chunkResults: PromiseSettledResult<ChunkExtractionResult>[] = [];
     let rawFactsCountSoFar = 0;
-    for (let i = 0; i < chunks.length; i += CHUNK_CONCURRENCY) {
-        const batch = chunks.slice(i, i + CHUNK_CONCURRENCY);
+    for (let i = 0; i < chunks.length; i += chunkConcurrency) {
+        const batch = chunks.slice(i, i + chunkConcurrency);
         const batchResults = await Promise.allSettled(
             batch.map(chunk => extractRawFactsFromChunk(chunk, contactName, periodLabel, options))
         );
         chunkResults.push(...batchResults);
         for (const result of batchResults) {
-            if (result.status === 'fulfilled') rawFactsCountSoFar += result.value.length;
+            if (result.status === 'fulfilled') rawFactsCountSoFar += result.value.facts.length;
         }
         await emitProgress({
             stage: 'batch_done',
@@ -1002,14 +1078,31 @@ export async function extractFactsAboutUserFromConversation(
 
     const rawFacts: ExtractedFactAboutUser[] = [];
     let firstChunkError: string | undefined;
+    let partiallyFailedChunks = 0;
     for (const result of chunkResults) {
         if (result.status === 'fulfilled') {
-            rawFacts.push(...result.value);
+            rawFacts.push(...result.value.facts);
+            if (result.value.partialFailure) {
+                partiallyFailedChunks += 1;
+            }
         } else {
             const reason = result.reason?.message || String(result.reason);
             if (!firstChunkError) firstChunkError = reason;
             console.error('[studyChatFlow] Ошибка чанка:', reason);
         }
+    }
+
+    const rejectedChunks = chunkResults.filter((result) => result.status === 'rejected').length;
+    const degradedChunks = rejectedChunks + partiallyFailedChunks;
+    if (degradedChunks > 0 && rawFacts.length > 0) {
+        console.warn('[studyChatFlow] degraded mode', {
+            presetName: executionMode.presetName,
+            chunkConcurrency,
+            chunksTotal: chunks.length,
+            failedChunks: rejectedChunks,
+            partiallyFailedChunks,
+            successfulChunks: chunkResults.length - rejectedChunks,
+        });
     }
 
     // Все чанки упали — пробрасываем ошибку, чтобы пользователь увидел причину
@@ -1022,7 +1115,7 @@ export async function extractFactsAboutUserFromConversation(
 
     // Синтез: консолидация + умная дедупликация
     await emitProgress({ stage: 'synthesis_start', rawFactsCount: rawFacts.length });
-    const finalFacts = await synthesizeFacts(rawFacts, contactName);
+    const finalFacts = await synthesizeFacts(rawFacts, contactName, { sequential: sequentialSynthesis });
     console.log(`[studyChatFlow] Финальных фактов после синтеза: ${finalFacts.length}`);
     await emitProgress({ stage: 'synthesis_done', factsCount: finalFacts.length });
 

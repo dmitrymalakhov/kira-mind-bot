@@ -1,10 +1,11 @@
-import { BotContext, MemoryEntry, MemoryStatus } from '../types';
+import { BotContext, ConversationTurn, MemoryEntry, MemoryStatus, MemorySubject } from '../types';
 import { getVectorService } from './VectorServiceFactory';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { devLog, parseLLMJson } from '../utils';
 import { estimateHumanMemoryMetrics, inferMemoryKind } from '../utils/enhancedDomainMemory';
 import { RecalledMemoryRef } from '../utils/multiQueryMemory';
 import { config } from '../config';
+import { containsMultipleAssertions } from '../utils/atomicAssertion';
 
 const MAX_RECALLED_FOR_RECONSOLIDATION = 6;
 const RECONSOLIDATION_TIMEOUT_MS = 4500;
@@ -19,6 +20,9 @@ interface ReconsolidationDecision {
     confidenceDelta?: number;
     status?: MemoryStatus;
     reason?: string;
+    subject?: MemorySubject;
+    predicate?: string;
+    object?: string;
 }
 
 interface ReconsolidationResponse {
@@ -94,18 +98,21 @@ ${memories}
 Действия:
 - noop: обмен не меняет это воспоминание.
 - confirm: пользователь прямо подтвердил или естественно усилил это воспоминание.
-- update: пользователь уточнил/исправил/перевел состояние в новую актуальную форму. content = новая каноническая формулировка.
+- update: пользователь уточнил ровно одно атомарное утверждение. content, subject, predicate и object описывают одну и ту же мысль.
 - supersede: воспоминание явно устарело, но новый канонический факт лучше сохранит отдельный fact extraction; пометь старое неактуальным.
 
 Правила:
 - Не выдумывай.
 - Не обновляй память из слов ассистента, если пользователь это не подтвердил.
 - Если пользователь поправил ассистента ("нет, не X, а Y") — это update.
+- Если исходная запись содержит несколько независимых утверждений, НЕ переписывай её целиком: supersede допустим только когда все утверждения опровергнуты, иначе noop; атомарные факты сохранит extraction.
+- Не добавляй хронологию («сначала», «потом»), причинность, мотивы и эмоции, которых нет в словах пользователя.
+- Для contact-факта не меняй личность по сходству имени. Если субъект поправки не доказан, noop.
 - Если план стал фактом ("я уже приехал") — это update.
 - confidenceDelta от -0.25 до +0.15.
 
 JSON:
-{"decisions":[{"index":0,"action":"noop|confirm|update|supersede","content":"только для update","confidenceDelta":0.0,"status":"active|planned|done|superseded|expired|unknown","reason":"коротко"}]}`,
+{"decisions":[{"index":0,"action":"noop|confirm|update|supersede","content":"только для update","subject":"user|contact|third_party|unknown","predicate":"атомарный предикат","object":"атомарный объект","confidenceDelta":0.0,"status":"active|planned|done|superseded|expired|unknown","reason":"коротко"}]}`,
             },
         ],
         temperature: 0,
@@ -120,7 +127,8 @@ function materializeMemoryUpdate(
     nextContent: string,
     action: ReconsolidationAction,
     confidenceDelta: number,
-    status?: MemoryStatus
+    status?: MemoryStatus,
+    assertion?: Pick<ReconsolidationDecision, 'subject' | 'predicate' | 'object'>,
 ): Omit<MemoryEntry, 'id'> {
     const now = new Date();
     const contentChanged = nextContent.trim() !== existing.content.trim();
@@ -142,13 +150,18 @@ function materializeMemoryUpdate(
         retrievalCount: existing.retrievalCount,
     });
 
+    const subject = existing.subject;
+    const synchronizedTags = (existing.tags ?? [])
+        .filter(tag => !tag.startsWith('subject:'));
+    if (subject) synchronizedTags.push(`subject:${subject}`);
+
     return {
         content: nextContent,
         domain: existing.domain,
         botId: existing.botId,
         timestamp: contentChanged ? now : existing.timestamp,
         importance: clamp01(existing.importance + (action === 'confirm' ? 0.02 : 0)),
-        tags: [...new Set([...(existing.tags ?? []), action === 'confirm' ? 'reconfirmed' : 'reconsolidated'])],
+        tags: [...new Set([...synchronizedTags, action === 'confirm' ? 'reconfirmed' : 'reconsolidated'])],
         userId: existing.userId,
         isAnchor: existing.isAnchor || undefined,
         expiresAt: action === 'supersede' ? now : existing.expiresAt,
@@ -170,9 +183,11 @@ function materializeMemoryUpdate(
         sourceMessageIds: existing.sourceMessageIds,
         sourceMemoryIds: existing.sourceMemoryIds,
         extractionMethod: existing.extractionMethod,
-        subject: existing.subject,
-        predicate: existing.predicate,
-        object: contentChanged ? nextContent : existing.object,
+        // Реконсолидация меняет предикат/объект, но не переносит факт на другого
+        // субъекта. Смена субъекта требует отдельного identity-aware extraction.
+        subject,
+        predicate: assertion?.predicate?.trim() || existing.predicate,
+        object: assertion?.object?.trim() || (contentChanged ? nextContent : existing.object),
         validFrom: existing.validFrom,
         validTo: action === 'supersede' ? now : existing.validTo,
         status: nextStatus,
@@ -187,11 +202,63 @@ function materializeMemoryUpdate(
     };
 }
 
+export function isCompositeAssertion(content: string): boolean {
+    return containsMultipleAssertions(content);
+}
+
+export function hasUnsupportedSemanticAddition(userMessage: string, nextContent: string): boolean {
+    const classes = [
+        /(?:^|[^\p{L}\p{N}])(?:сначала|потом|затем|после\s+этого|до\s+этого)(?=$|[^\p{L}\p{N}])/iu,
+        /(?:^|[^\p{L}\p{N}])(?:поэтому|из-за\s+этого|потому\s+что|вследствие)(?=$|[^\p{L}\p{N}])/iu,
+        /(?:^|[^\p{L}\p{N}])(?:пережива|тревож|боится|расстроен|мотив)[\p{L}\p{N}]*/iu,
+    ];
+    return classes.some(pattern => pattern.test(nextContent) && !pattern.test(userMessage));
+}
+
+export function hasExplicitSupersedeSignal(userMessage: string): boolean {
+    return /(?:неверн|ошиб|устарел|больше\s+не|уже\s+не|не\s+так|это\s+не|не\s+.+,?\s+а|перестал|перестала|изменил(?:ось|ась|ся))/iu.test(userMessage);
+}
+
+function normalizedAssertionPart(value: string | undefined): string {
+    return String(value || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+const PATCH_SUPPORT_STOPWORDS = new Set(['и', 'а', 'но', 'не', 'это', 'он', 'она', 'они', 'я', 'мы', 'ты', 'вы', 'его', 'ее', 'её', 'их', 'мой', 'моя', 'через', 'для', 'про', 'с', 'со', 'в', 'во', 'на', 'к', 'по', 'из']);
+
+function assertionTokens(value: string | undefined): string[] {
+    return normalizedAssertionPart(value).split(/\s+/u).filter(token => token.length > 2 && !PATCH_SUPPORT_STOPWORDS.has(token));
+}
+
+function isAtomicPatchConsistent(existing: MemoryEntry, decision: ReconsolidationDecision, content: string, userMessage: string): boolean {
+    if (!existing.subject) return false;
+    if (!decision.subject || !decision.predicate?.trim() || !decision.object?.trim()) return false;
+    if (existing.subject && decision.subject !== existing.subject) return false;
+    const normalizedObject = normalizedAssertionPart(decision.object);
+    const normalizedContent = normalizedAssertionPart(content);
+    if (!normalizedObject || !normalizedContent.includes(normalizedObject)) return false;
+    const evidenceTokens = new Set(assertionTokens(userMessage));
+    const existingTokens = new Set(assertionTokens(existing.content));
+    const changedTokens = assertionTokens(decision.object)
+        .filter(token => !existingTokens.has(token));
+    return changedTokens.length === 0 || changedTokens.every(token => evidenceTokens.has(token));
+}
+
+function isIdentitySafeForUpdate(existing: MemoryEntry, turn?: ConversationTurn): boolean {
+    if (existing.subject !== 'contact') return true;
+    const replyContactId = turn?.replyContext?.contactId ?? turn?.activePeople?.[0]?.contactId;
+    if (replyContactId != null) {
+        return (existing.tags ?? []).includes(`contact_id:${replyContactId}`);
+    }
+    const replyPersonId = turn?.replyContext?.personId ?? turn?.activePeople?.[0]?.personId;
+    return Boolean(replyPersonId && (existing.tags ?? []).includes(`person_id:${replyPersonId}`));
+}
+
 export async function reconsolidateAfterResponse(
     ctx: BotContext,
     userMessage: string,
     botResponse: string,
-    recalledMemories: RecalledMemoryRef[] | undefined
+    recalledMemories: RecalledMemoryRef[] | undefined,
+    turn?: ConversationTurn,
 ): Promise<void> {
     if (ctx.chat?.type !== 'private') return;
     if (shouldSkipExchange(userMessage, botResponse)) return;
@@ -227,6 +294,33 @@ export async function reconsolidateAfterResponse(
                     botId: config.botUsername.toLowerCase(),
                 } as MemoryEntry;
 
+                if (action === 'update' || action === 'supersede') {
+                    if (isCompositeAssertion(existingEntry.content)) {
+                        devLog('Skipped non-atomic reconsolidation update:', existing.id);
+                        continue;
+                    }
+                    if (!isIdentitySafeForUpdate(existingEntry, turn)) {
+                        devLog('Skipped reconsolidation with unverified contact identity:', existing.id);
+                        continue;
+                    }
+                }
+
+                if (action === 'supersede' && !hasExplicitSupersedeSignal(userMessage)) {
+                    devLog('Skipped supersede without explicit user correction:', existing.id);
+                    continue;
+                }
+
+                if (action === 'update') {
+                    if (hasUnsupportedSemanticAddition(userMessage, content)) {
+                        devLog('Skipped reconsolidation with unsupported semantic addition:', existing.id);
+                        continue;
+                    }
+                    if (!isAtomicPatchConsistent(existingEntry, decision, content, userMessage)) {
+                        devLog('Skipped inconsistent atomic reconsolidation patch:', existing.id);
+                        continue;
+                    }
+                }
+
                 const patch = materializeMemoryUpdate(
                     existingEntry,
                     content,
@@ -238,7 +332,8 @@ export async function reconsolidateAfterResponse(
                             : action === 'supersede'
                                 ? -0.15
                                 : 0,
-                    decision.status
+                    decision.status,
+                    decision,
                 );
 
                 await svc.updateMemory(existing.id, existing.domain, patch);

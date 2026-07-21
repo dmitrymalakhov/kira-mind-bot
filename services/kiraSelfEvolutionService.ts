@@ -7,6 +7,7 @@ import {
   formatKiraPersonalitySnapshot,
   getKiraSelfMemoryState,
   getRecentKiraSelfEvents,
+  isKiraSelfMemoryCorruptedError,
   KiraBiographyPatch,
   KiraSelfEventType,
   KiraInnerWorldPatch,
@@ -85,8 +86,14 @@ function asEventType(value: string | undefined): KiraSelfEventType {
   return value && EVENT_TYPES.has(value as KiraSelfEventType) ? value as KiraSelfEventType : "reflection";
 }
 
-function compactStringList(values: string[] | undefined, limit: number): string[] {
-  return (values ?? [])
+function compactStringList(values: unknown, limit: number): string[] {
+  const source = Array.isArray(values)
+    ? values
+    : typeof values === "string"
+      ? [values]
+      : [];
+
+  return source
     .map((value) => String(value).trim())
     .filter(Boolean)
     .slice(0, limit);
@@ -121,18 +128,19 @@ function normalizePersonalityPatch(patch: Partial<KiraSelfPersonality> | undefin
   return Object.keys(normalized).length ? normalized : undefined;
 }
 
-function hasPatch(value: object | undefined): boolean {
-  return Boolean(value && Object.keys(value).length > 0);
+function hasPatch(value: unknown): boolean {
+  return typeof value === "object" && value !== null && Object.keys(value).length > 0;
 }
 
 export async function maybeEvolveKiraSelfFromConversation(input: ConversationEvolutionInput): Promise<boolean> {
-  const selfState = await getKiraSelfMemoryState();
-  if (!shouldAnalyzeConversation(input.ownerMessage, selfState.personality.lastEvolutionAt)) {
-    return false;
-  }
+  try {
+    const selfState = await getKiraSelfMemoryState();
+    if (!shouldAnalyzeConversation(input.ownerMessage, selfState.personality.lastEvolutionAt)) {
+      return false;
+    }
 
-  const recentEvents = await getRecentKiraSelfEvents(6);
-  const prompt = [
+    const recentEvents = await getRecentKiraSelfEvents(6);
+    const prompt = [
     `Ты модуль развития самопамяти ${config.characterName}.`,
     "",
     "Кира держит реалистичную человеческую линию жизни внутри своей персоны: Санкт-Петербург, учёба, работа, обычные привычки, отношения, настроение и постепенное развитие характера.",
@@ -228,7 +236,6 @@ export async function maybeEvolveKiraSelfFromConversation(input: ConversationEvo
     }),
   ].join("\n");
 
-  try {
     const response = await createChatCompletionForTask("conversation", {
       messages: [
         {
@@ -275,6 +282,10 @@ export async function maybeEvolveKiraSelfFromConversation(input: ConversationEvo
 
     return true;
   } catch (error) {
+    if (isKiraSelfMemoryCorruptedError(error)) {
+      devLog("[kira-self-evolution] skipped because self-memory is corrupted:", error);
+      return false;
+    }
     devLog("[kira-self-evolution] failed:", error);
     return false;
   }

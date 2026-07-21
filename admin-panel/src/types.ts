@@ -12,7 +12,12 @@ export interface ConfigResponse {
   [key: string]: ConfigEntry;
 }
 
-export type FieldType = 'text' | 'password' | 'number' | 'toggle' | 'textarea' | 'duration';
+export type FieldType = 'text' | 'password' | 'number' | 'toggle' | 'textarea' | 'duration' | 'select';
+
+export interface FieldOption {
+  value: string;
+  label: string;
+}
 
 export interface FieldDef {
   key: string;
@@ -21,6 +26,9 @@ export interface FieldDef {
   required?: boolean;
   hint?: string;
   placeholder?: string;
+  options?: FieldOption[];
+  sm?: number;
+  md?: number;
 }
 
 export interface SectionDef {
@@ -43,8 +51,16 @@ export interface ConfigSourceInfo {
   appliesImmediately?: boolean;
 }
 
-export type AiProvider = 'openai' | 'deepseek' | 'gemini';
-export type AiPresetName = 'gpt-max' | 'gpt-balanced' | 'gpt-lean' | 'hybrid-deepseek-gpt' | 'hybrid-gemini-gpt';
+export type AiProvider = 'openai' | 'openrouter' | 'gemini' | 'zai';
+export type AiPresetName =
+  | 'gpt-max'
+  | 'gpt-balanced'
+  | 'gpt-lean'
+  | 'hybrid-openrouter-gpt'
+  | 'hybrid-gemini-gpt'
+  | 'gemini-full'
+  | 'glm-full'
+  | 'glm-balanced';
 
 export interface AiModelRef {
   provider: AiProvider;
@@ -55,19 +71,245 @@ export interface AiPresetConfig {
   name: AiPresetName;
   title: string;
   description: string;
+  characteristics?: {
+    quality: string;
+    cost: string;
+    stability: string;
+    gptDependency: string;
+  };
   models: Record<string, AiModelRef>;
+  enabled?: boolean;
+  unavailableReason?: string;
+}
+
+export interface MemoryEmbeddingProfileCompatibilityMismatch {
+  collection: string;
+  actualSize: number;
+  actualDistance: string;
+}
+
+export interface MemoryEmbeddingProfileCompatibility {
+  status: 'compatible' | 'mismatch' | 'not_initialized' | 'unavailable';
+  summary: string;
+  checkedCollections: number;
+  mismatches: MemoryEmbeddingProfileCompatibilityMismatch[];
+}
+
+export interface MemoryEmbeddingProfileStatus {
+  name: string;
+  title: string;
+  description: string;
+  provider: AiProvider;
+  model: string;
+  outputDimension: number;
+  distance: string;
+  storedProfileName?: string | null;
+  envDefaultProfileName: string;
+  hasRuntimeOverride: boolean;
+  activeSourceSummary: string;
+  activeSourceTechnicalPath: string;
+  source: ConfigSourceInfo;
+  providerKeyConfigured: boolean;
+  providerAvailabilitySummary: string;
+  compatibility: MemoryEmbeddingProfileCompatibility;
 }
 
 export interface AiPresetResponse {
-  activePresetName: AiPresetName;
+  configuredPresetName: AiPresetName;
   storedPresetName?: AiPresetName | null;
   envDefaultPreset: AiPresetName;
+  hasRuntimeOverride: boolean;
+  activeSourceSummary: string;
+  activeSourceTechnicalPath: string;
   availablePresets: AiPresetConfig[];
+  memoryEmbeddingProfile: MemoryEmbeddingProfileStatus;
   source: ConfigSourceInfo;
+}
+
+export type MonitoringCheckStatus = 'ok' | 'warn' | 'down' | 'disabled';
+export type MonitoringCheckCategory = 'runtime' | 'storage' | 'telegram' | 'ai';
+
+export interface MonitoringCheck {
+  key: string;
+  label: string;
+  category: MonitoringCheckCategory;
+  status: MonitoringCheckStatus;
+  summary: string;
+  details: string;
+  latencyMs?: number;
+  checkedAt: string;
+  meta?: Record<string, string | number | boolean | null | undefined>;
+}
+
+export interface MonitoringHealthResponse {
+  generatedAt: string;
+  overallStatus: 'ok' | 'degraded' | 'down';
+  checks: MonitoringCheck[];
+}
+
+export type AiUsageOperation = 'chat' | 'response' | 'embedding' | 'transcription' | 'unknown';
+
+export interface AiUsageQuery {
+  days?: string;
+  from?: string;
+  to?: string;
+  provider?: string;
+  model?: string;
+  taskKey?: string;
+  preset?: string;
+  operation?: AiUsageOperation | '';
+  success?: boolean;
+  fallbackUsed?: boolean;
+}
+
+export interface AiUsageTotals {
+  calls: number;
+  successfulCalls: number;
+  failedCalls: number;
+  fallbackCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  avgLatencyMs: number;
+  errorRate: number;
+  fallbackRate: number;
+}
+
+export interface AiUsageCoverage {
+  callsWithUsage: number;
+  callsWithoutUsage: number;
+  usageCoverageRate: number;
+}
+
+export interface AiUsageTimeseriesPoint {
+  bucketStart: string;
+  calls: number;
+  successfulCalls: number;
+  failedCalls: number;
+  fallbackCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+export interface AiUsageBreakdownRow {
+  key: string;
+  calls: number;
+  successfulCalls: number;
+  failedCalls: number;
+  fallbackCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  avgLatencyMs: number;
+}
+
+export interface AiUsageFailureRecord {
+  createdAt: string;
+  traceId?: string | null;
+  attempt?: number | null;
+  stage?: 'primary' | 'retry' | 'fallback' | null;
+  provider: string;
+  model: string;
+  taskKey: string;
+  preset: string;
+  operation: AiUsageOperation;
+  fallbackUsed: boolean;
+  errorStatus?: number | null;
+  errorCode?: string | null;
+  errorType?: string | null;
+  errorCategory?: string | null;
+  providerRequestId?: string | null;
+  retryable?: boolean | null;
+  errorMessage: string;
+}
+
+export interface AiUsageTraceAttempt {
+  id: string;
+  createdAt: string;
+  traceId: string | null;
+  taskKey: string;
+  preset: string;
+  provider: string;
+  model: string;
+  operation: AiUsageOperation;
+  success: boolean;
+  fallbackUsed: boolean;
+  attempt: number | null;
+  stage: 'primary' | 'retry' | 'fallback' | null;
+  errorStatus?: number | null;
+  errorCode?: string | null;
+  errorType?: string | null;
+  errorCategory?: string | null;
+  providerRequestId?: string | null;
+  retryable?: boolean | null;
+  errorMessage: string;
+  latencyMs?: number | null;
+}
+
+export interface AiUsageTraceChain {
+  traceKey: string;
+  traceId: string | null;
+  createdAt: string;
+  taskKey: string;
+  preset: string;
+  primaryProvider: string;
+  primaryModel: string;
+  primaryStage: 'success' | 'failed';
+  primaryError?: string;
+  primaryErrorStatus?: number | null;
+  primaryErrorCategory?: string | null;
+  retryCount: number;
+  retryStage: 'none' | 'success' | 'failed';
+  fallbackStage: 'none' | 'success' | 'failed';
+  fallbackProvider?: string;
+  fallbackModel?: string;
+  outcome: 'success' | 'recovered_fallback' | 'failed';
+  totalLatencyMs: number;
+  providerRequestIds: string[];
+  attempts: AiUsageTraceAttempt[];
+}
+
+export interface AiUsageSummaryResponse {
+  generatedAt: string;
+  filters: {
+    days?: number;
+    from?: string;
+    to?: string;
+    provider?: string;
+    model?: string;
+    taskKey?: string;
+    preset?: string;
+    operation?: AiUsageOperation;
+    success?: boolean;
+    fallbackUsed?: boolean;
+  };
+  totals: AiUsageTotals;
+  coverage: AiUsageCoverage;
+  timeseries: {
+    bucket: 'hour' | 'day';
+    points: AiUsageTimeseriesPoint[];
+  };
+  breakdowns: {
+    providers: AiUsageBreakdownRow[];
+    models: AiUsageBreakdownRow[];
+    tasks: AiUsageBreakdownRow[];
+    presets: AiUsageBreakdownRow[];
+    operations: AiUsageBreakdownRow[];
+  };
+  leaders: {
+    modelsByTokens: AiUsageBreakdownRow[];
+    modelsByCalls: AiUsageBreakdownRow[];
+    tasksByTokens: AiUsageBreakdownRow[];
+    tasksByCalls: AiUsageBreakdownRow[];
+  };
+  traceChains: AiUsageTraceChain[];
+  recentFailures: AiUsageFailureRecord[];
 }
 
 export interface PersonalityProfile {
   characterName: string;
+  characterGender: 'женский' | 'мужской';
   persona: string;
   communicationStyle: string;
   biography: string;

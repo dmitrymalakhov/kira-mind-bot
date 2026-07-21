@@ -8,6 +8,8 @@ import {
     listChatPromptWatchers,
     removeChatPromptWatcher,
     setChatPromptWatcherEnabled,
+    toTelegramChatId,
+    errorToMessage,
     type ChatPromptWatcher,
 } from "../services/chatPromptWatchers";
 
@@ -376,20 +378,6 @@ async function editOrReply(ctx: any, text: string, keyboard?: InlineKeyboard): P
         await ctx.editMessageText(text, options);
     } catch {
         await ctx.reply(text, options);
-    }
-}
-
-function toTelegramChatId(chatId: string): number | string {
-    const parsed = Number(chatId);
-    return Number.isSafeInteger(parsed) ? parsed : chatId;
-}
-
-function errorToMessage(error: unknown): string {
-    if (error instanceof Error) return error.message;
-    try {
-        return JSON.stringify(error);
-    } catch {
-        return String(error);
     }
 }
 

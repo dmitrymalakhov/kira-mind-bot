@@ -15,6 +15,8 @@ export interface ReflectionFactLike {
     confidence?: number;
     temporalScope?: ReflectionTemporalScope;
     memoryKind?: string;
+    subject?: 'user' | 'contact' | 'third_party' | 'unknown' | 'bot' | 'system';
+    evidence?: string;
 }
 
 export type ReflectionMemoryNoiseReason =
@@ -114,6 +116,48 @@ export function isReflectionFactWorthSaving(fact: ReflectionFactLike): boolean {
     }
 }
 
+export function isReflectionMemoryNoiseCandidate(fact: ReflectionFactLike): boolean {
+    return getReflectionMemoryNoiseReasons(fact).length > 0;
+}
+
+/**
+ * Reflection may analyse a private chat, but the chat owner is only the source,
+ * not the automatic subject of every event mentioned there. A contact fact must
+ * have a speaker-labelled first/second-person statement or an explicit subject
+ * at the start of the evidence clause. A mere name mention is not sufficient.
+ */
+export function isReflectionContactAttributionSupported(
+    fact: ReflectionFactLike,
+    contactName?: string,
+    ownerName = 'Я',
+): boolean {
+    if (fact.subject !== 'contact') return true;
+    const evidence = String(fact.evidence || '').trim();
+    if (!evidence) return false;
+
+    const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const normalizedContactName = String(contactName || '').trim();
+    const contactSpeaker = normalizedContactName
+        ? new RegExp(`^(?:\\[[^\\]]+\\]\\s*)?${escape(normalizedContactName)}\\s*:\\s*(.*)$`, 'iu')
+        : undefined;
+    const explicitContactSubject = normalizedContactName
+        ? new RegExp(`^(?:\\[[^\\]]+\\]\\s*)?${escape(normalizedContactName)}(?:$|[\\s,—-])`, 'iu')
+        : undefined;
+    const ownerSpeaker = new RegExp(`^(?:\\[[^\\]]+\\]\\s*)?(?:Я|${escape(ownerName)})\\s*:\\s*(.*)$`, 'iu');
+    const firstPerson = /(?:^|\s)(?:я|мне|меня|мой|моя|моё|мои|у\s+меня|со\s+мной)(?:\s|$|[,.!?])/iu;
+    const secondPerson = /(?:^|\s)(?:ты|тебе|тебя|твой|твоя|твоё|твои|у\s+тебя)(?:\s|$|[,.!?])/iu;
+
+    for (const line of evidence.split(/\r?\n/u).map(value => value.trim()).filter(Boolean)) {
+        const contactMatch = contactSpeaker?.exec(line);
+        if (contactMatch && firstPerson.test(contactMatch[1] ?? '')) return true;
+        const ownerMatch = ownerSpeaker.exec(line);
+        if (ownerMatch && secondPerson.test(ownerMatch[1] ?? '')) return true;
+        const attributableBody = contactMatch?.[1] ?? ownerMatch?.[1] ?? (!line.includes(':') ? line : '');
+        if (attributableBody && explicitContactSubject?.test(attributableBody)) return true;
+    }
+    return false;
+}
+
 export function getReflectionMemoryNoiseReasons(fact: ReflectionFactLike): ReflectionMemoryNoiseReason[] {
     if (fact.memoryKind === 'episode' || fact.tags?.includes('memory-episode')) return [];
 
@@ -122,8 +166,4 @@ export function getReflectionMemoryNoiseReasons(fact: ReflectionFactLike): Refle
     if (isReflectionOneOffActivity(fact)) reasons.push('one_off_activity');
     if (isReflectionTemporaryState(fact)) reasons.push('temporary_state');
     return reasons;
-}
-
-export function isReflectionMemoryNoiseCandidate(fact: ReflectionFactLike): boolean {
-    return getReflectionMemoryNoiseReasons(fact).length > 0;
 }

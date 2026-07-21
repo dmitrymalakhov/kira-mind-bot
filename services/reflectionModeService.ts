@@ -36,11 +36,17 @@ import { getSetting, setSetting } from './botSettingsService';
 import { devLog, parseLLMJson } from '../utils';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { getProactiveChatId } from '../utils/allowedUserChatStore';
+import { esc, heading, list, details, RichBlock, sendStructured } from '../utils/richMessage';
 import { MessageStore } from '../stores/MessageStore';
 import { getVectorService } from './VectorServiceFactory';
 import { runMemorySchemaConsolidationForUser } from './MemorySchemaConsolidationService';
 import { runMemorySleepCycleForUser } from './MemorySleepCycleService';
-import { isReflectionFactWorthSaving, isReflectionMemoryNoiseCandidate } from '../utils/reflectionMemoryFilter';
+import { appendPersistedSentMessageContext } from './SessionStorage';
+import {
+    isReflectionContactAttributionSupported,
+    isReflectionFactWorthSaving,
+    isReflectionMemoryNoiseCandidate,
+} from '../utils/reflectionMemoryFilter';
 import type { ExtractedFactAboutUser } from '../utils/studyChatFlow';
 
 // ── Настройки ─────────────────────────────────────────────────────────────────
@@ -648,8 +654,9 @@ function normalizeDomain(domain: string): string {
         : PREDEFINED_DOMAINS.GENERAL;
 }
 
-function filterReflectionFacts(facts: ExtractedFactAboutUser[]): ExtractedFactAboutUser[] {
+function filterReflectionFacts(facts: ExtractedFactAboutUser[], contactName: string): ExtractedFactAboutUser[] {
     return facts
+        .filter(fact => isReflectionContactAttributionSupported(fact, contactName, config.ownerName || 'Я'))
         .filter(fact => !isReflectionMemoryNoiseCandidate(fact))
         .filter(isReflectionFactWorthSaving)
         .map(fact => ({
@@ -664,9 +671,16 @@ function formatReflectionEpisodeContent(input: {
     chatDomain: string;
     emotion: EmotionTag;
     messages: BufferedMessage[];
+    contextMessages?: BufferedMessage[];
     startDate: Date;
     endDate: Date;
 }): string {
+    const antecedentSample = (input.contextMessages ?? [])
+        .slice(-6)
+        .map((message) => `${message.senderName}: ${message.text}`)
+        .join(' / ')
+        .replace(/\s+/g, ' ')
+        .slice(0, 500);
     const sample = input.messages
         .slice(-12)
         .map((message) => `${message.senderName}: ${message.text}`)
@@ -680,8 +694,9 @@ function formatReflectionEpisodeContent(input: {
         `Сообщений: ${input.messages.length}`,
         `Домен чата: ${input.chatDomain}`,
         `Эмоциональный фон: ${input.emotion}`,
+        antecedentSample ? `Предшествующий контекст (evidence): ${antecedentSample}` : '',
         `Кратко: ${sample || `Новый фрагмент переписки в чате "${input.chatTitle}".`}`,
-    ].join('\n');
+    ].filter(Boolean).join('\n');
 }
 
 async function saveReflectionEpisode(input: {
@@ -690,6 +705,7 @@ async function saveReflectionEpisode(input: {
     chatDomain: string;
     emotion: EmotionTag;
     messages: BufferedMessage[];
+    contextMessages?: BufferedMessage[];
     startDate: Date;
     endDate: Date;
 }): Promise<{ episodeId: string; memoryId: string } | undefined> {
@@ -724,7 +740,7 @@ async function saveReflectionEpisode(input: {
         tags: [
             REFLECTION_EPISODE_TAG,
             'memory-episode',
-            'autobiographical',
+            'conversation-evidence',
             'source:reflection',
             `source_chat:${input.chatTitle}`,
             `episode_domain:${domain}`,
@@ -740,10 +756,13 @@ async function saveReflectionEpisode(input: {
         vividness: Math.min(1, 0.38 + salience * 0.30),
         specificity: Math.min(1, 0.44 + input.messages.length * 0.006),
         sourceEpisodeId: episodeId,
-        sourceContext: `Фоновая рефлексия чата "${input.chatTitle}": ${input.startDate.toISOString()} — ${input.endDate.toISOString()}.`,
-        sourceMessageIds: sourceMessageIds(input.chatId, input.messages),
+        sourceContext: `Фоновая рефлексия чата "${input.chatTitle}": ${input.startDate.toISOString()} — ${input.endDate.toISOString()}. Предшествующих сообщений evidence: ${input.contextMessages?.length ?? 0}.`,
+        sourceMessageIds: sourceMessageIds(input.chatId, [
+            ...(input.contextMessages ?? []),
+            ...input.messages,
+        ]),
         extractionMethod: 'episode',
-        subject: 'user',
+        subject: 'unknown',
         predicate: 'reflection_episode',
         object: input.chatTitle,
         validFrom: input.startDate,
@@ -868,7 +887,7 @@ async function analyzeBatch(
             undefined,
             { mode: 'reflection' }
         );
-        const eligible = filterReflectionFacts(facts);
+        const eligible = filterReflectionFacts(facts, buf.chatTitle);
         if (facts.length !== eligible.length) {
             devLog(`[reflection] Quality filter kept ${eligible.length}/${facts.length} facts from "${buf.chatTitle}"`);
         }
@@ -886,6 +905,19 @@ async function analyzeBatch(
             setSetting(STATS_LAST_ACTIVITY_KEY, String(lastActivityAt.getTime())),
         ]).catch(() => { /* ignore */ });
 
+        // Сам эпизод — нейтральная evidence-цепочка чата и сохраняется даже,
+        // когда ни один атомарный факт нельзя безопасно приписать человеку.
+        const episode = await saveReflectionEpisode({
+            chatId,
+            chatTitle: buf.chatTitle,
+            chatDomain,
+            emotion,
+            messages: sessionToAnalyze,
+            contextMessages,
+            startDate,
+            endDate,
+        });
+
         if (eligible.length === 0) {
             devLog(`[reflection] No eligible facts from "${buf.chatTitle}"`);
             await updateYieldRate(chatId, 0);
@@ -894,15 +926,6 @@ async function analyzeBatch(
 
         // ── Шаг 5: Сохранение ────────────────────────────────────────────────
         devLog(`[reflection] Saving ${eligible.length} facts from "${buf.chatTitle}"`);
-        const episode = await saveReflectionEpisode({
-            chatId,
-            chatTitle: buf.chatTitle,
-            chatDomain,
-            emotion,
-            messages: sessionToAnalyze,
-            startDate,
-            endDate,
-        });
         const chatNumericId = Number(chatId);
         const update = await runUpdateLongTermMemoryAgentDetailed(
             ctx,
@@ -914,8 +937,8 @@ async function analyzeBatch(
                 source: 'reflection',
                 sourceContactName: buf.chatTitle,
                 sourceContactId: Number.isFinite(chatNumericId) ? chatNumericId : undefined,
-                sourceContext: `Фоновая рефлексия чата "${buf.chatTitle}": ${startDate.toISOString()} — ${endDate.toISOString()}.`,
-                sourceMessageIds: sourceMessageIds(chatId, sessionToAnalyze),
+                sourceContext: `Фоновая рефлексия чата "${buf.chatTitle}": ${startDate.toISOString()} — ${endDate.toISOString()}. Контекст для разрешения референтов: ${contextMessages.length} сообщений.`,
+                sourceMessageIds: sourceMessageIds(chatId, [...contextMessages, ...sessionToAnalyze]),
                 sourceEpisodeId: episode?.episodeId,
                 sourceMemoryIds: episode ? [episode.memoryId] : undefined,
                 askOnAmbiguous: false,
@@ -950,11 +973,6 @@ async function analyzeBatch(
         // ── Шаг 6: Уведомление владельца ─────────────────────────────────────
         const proactiveChatId = await getProactiveChatId();
         if (proactiveChatId && savedCount > 0) {
-            const factLines = update.savedFacts
-                .slice(0, 5)
-                .map(f => `• ${f.content}`)
-                .join('\n');
-            const more = update.savedFacts.length > 5 ? `\n…и ещё ${update.savedFacts.length - 5}` : '';
             const emotionSuffix: Record<string, string> = {
                 stress: ' ⚠️ (стресс)',
                 conflict: ' ⚠️ (конфликт)',
@@ -963,10 +981,38 @@ async function analyzeBatch(
                 joy: ' 🎉 (радость)',
             };
             const emotionNote = emotion !== 'neutral' ? (emotionSuffix[emotion] ?? '') : '';
-            await bot.api.sendMessage(
-                proactiveChatId,
-                `🧠 Рефлексия: нашла ${savedCount} факт(ов) в переписке с «${buf.chatTitle}»${emotionNote}\n${factLines}${more}`
-            );
+            const factItems = update.savedFacts.slice(0, 5).map(f => esc(f.content));
+            const more = update.savedFacts.length > 5 ? `…и ещё ${update.savedFacts.length - 5}` : '';
+            const moreBlock = more ? [({ type: "footer", text: more } as RichBlock)] : [];
+
+            const factBlocks: RichBlock[] = [list(factItems), ...moreBlock];
+
+            const blocks: RichBlock[] = [
+                heading(`🧠 ${savedCount} факт(ов) · «${esc(buf.chatTitle)}»${esc(emotionNote)}`, 3),
+            ];
+            // При 4+ фактах сворачиваем список, чтобы не захламлять чат.
+            if (update.savedFacts.length > 3) {
+                blocks.push(details('Сохранённые факты', factBlocks));
+            } else {
+                blocks.push(...factBlocks);
+            }
+
+            const sent = await sendStructured(bot.api as any, proactiveChatId, blocks) as { message_id?: number } | undefined;
+            if (sent?.message_id) {
+                const plainContext = [
+                    `🧠 ${savedCount} факт(ов) · «${buf.chatTitle}»${emotionNote}`,
+                    ...update.savedFacts.slice(0, 5).map(fact => `• ${fact.content}`),
+                ].join('\n');
+                await appendPersistedSentMessageContext(Number(proactiveChatId), {
+                    messageId: sent.message_id,
+                    text: plainContext,
+                    kind: 'memory_card',
+                    contactId: Number.isFinite(chatNumericId) ? chatNumericId : undefined,
+                    contactName: buf.chatTitle,
+                    memoryIds: episode ? [episode.memoryId] : undefined,
+                    createdAt: Date.now(),
+                }).catch(error => devLog('[reflection] Failed to persist rich-card context', error));
+            }
         }
     } catch (e) {
         console.error(`[reflection] Error analyzing batch from "${buf.chatTitle}":`, e);

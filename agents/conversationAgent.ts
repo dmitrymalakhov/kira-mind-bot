@@ -7,16 +7,26 @@ import { getBotPersona, getCommunicationStyle, getBotBiography } from "../person
 import { config } from "../config";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
 import {
-    formatKiraPersonalitySnapshot,
     getKiraSelfMemoryState,
     getRecentKiraSelfEvents,
+    isKiraSelfMemoryCorruptedError,
+    KiraSelfState,
     searchKiraSelfEventsByQuery,
 } from "../utils/kiraSelfMemory";
+import { buildAssistantLifeContext, buildCorruptedSelfMemoryReply } from "../utils/conversationSelfMemoryFallback";
 import { buildGroupChatContext } from "../utils/groupChatContext";
 import { isGroupChatContextEnabled } from "../services/groupChatFeatureSettings";
 import { maybeEvolveKiraSelfFromConversation } from "../services/kiraSelfEvolutionService";
 import { devLog } from "../utils";
 import { isTodayImportanceRequest } from "../utils/todayImportanceIntent";
+import { formatPromptDateTime } from "../utils/time";
+import { buildPersonalityMoodStyles, getPersonalityGenderForms } from "../utils/personalityGender";
+
+const MEDICAL_CONTEXT_RE = /(?:здоров|медицин|врач|доктор|клиник|больниц|симптом|болит|боль\b|температур|давлен|пульс|лекар|препарат|дозиров|анализ[ыа]?|обследован|диагноз|лечени|операц|процедур|риск|опасн|наркоз|анестез|госпитал|травм|инфекц|аллерг|сыпь|от[её]к|беременн|психиатр|психолог|терапи)/iu;
+
+export function isMedicalContextMessage(message: string): boolean {
+    return MEDICAL_CONTEXT_RE.test(message);
+}
 
 
 /**
@@ -56,60 +66,36 @@ export async function conversationAgent(
 
         // Текущая дата и время для контекста
         const currentDate = new Date();
-        const formattedDateTime = currentDate.toLocaleString('ru-RU', {
-            day: 'numeric',
-            month: 'long',
-            year: 'numeric',
-            hour: 'numeric',
-            minute: 'numeric',
-            weekday: 'long'
-        });
+        const formattedDateTime = formatPromptDateTime(currentDate);
 
         const domain = injectedMemoryContext?.domain || await detectDomain(ctx, message);
         const domainContext = injectedMemoryContext?.context || await getDomainContext(ctx, domain, message);
 
-        const recentSelfEvents = await getRecentKiraSelfEvents(5);
-        const relevantSelfEvents = await searchKiraSelfEventsByQuery(message, 3);
-        const selfState = await getKiraSelfMemoryState();
-        const personalitySnapshot = formatKiraPersonalitySnapshot(selfState);
+        let recentSelfEvents = [] as Awaited<ReturnType<typeof getRecentKiraSelfEvents>>;
+        let relevantSelfEvents = [] as Awaited<ReturnType<typeof searchKiraSelfEventsByQuery>>;
+        let selfState: KiraSelfState | null = null;
+        let selfMemoryAvailable = true;
 
-        function relativeTimeLabel(dateStr: string): string {
-            const now = currentDate;
-            const eventDate = new Date(dateStr);
-            const diffMs = now.getTime() - eventDate.getTime();
-            const diffHours = diffMs / (1000 * 60 * 60);
-            const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-            if (diffHours < 3) return "только что";
-            if (diffHours < 12) return "сегодня утром/днём";
-            if (diffDays < 1) return "сегодня";
-            if (diffDays === 1) return "вчера";
-            if (diffDays <= 3) return `${diffDays} дня назад`;
-            return `${diffDays} дней назад`;
+        try {
+            [recentSelfEvents, relevantSelfEvents, selfState] = await Promise.all([
+                getRecentKiraSelfEvents(5),
+                searchKiraSelfEventsByQuery(message, 3),
+                getKiraSelfMemoryState(),
+            ]);
+        } catch (error) {
+            if (!isKiraSelfMemoryCorruptedError(error)) {
+                throw error;
+            }
+            selfMemoryAvailable = false;
+            devLog("[conversation] self-memory unavailable, continuing without self context:", error);
         }
 
-        const MOOD_STYLE: Record<string, { hint: string; temperature: number }> = {
-            "уставшее": { hint: "Ты устала — отвечай коротко, 1-2 предложения. Без лишней энергии. Вопросов не задавай, если не очень нужно.", temperature: 0.65 },
-            "скептичное": { hint: "Ты скептично настроена — 1-2 предложения, сухо и прямо. Можно с лёгкой иронией. Без украшений и многословия.", temperature: 0.75 },
-            "нейтральное": { hint: "Настроение ровное — 1-3 предложения, по делу. Без лишнего.", temperature: 0.65 },
-            "спокойное": { hint: "Спокойное состояние — 2-3 предложения, размеренно. Без суеты.", temperature: 0.7 },
-            "лёгкая ирония": { hint: "Ты в иронично-игривом настроении — 1-3 предложения, остро, с подтекстом. Не разжёвывай.", temperature: 0.82 },
-            "задумчивое": { hint: "Ты задумчива — можно немного поразмышлять вслух, 2-4 предложения. Иногда уходишь в мысль.", temperature: 0.8 },
-            "тёплое": { hint: "Тебе тепло и хорошо — 2-3 предложения, искренне. Без слащавости.", temperature: 0.75 },
-            "воодушевлённое": { hint: "Ты воодушевлена — можешь быть чуть живее и подробнее, 2-4 предложения. Энергично, с деталями.", temperature: 0.85 },
-        };
+        const genderForms = getPersonalityGenderForms(config.eventDescriptionGender);
+        const MOOD_STYLE = buildPersonalityMoodStyles(config.eventDescriptionGender);
 
         const currentMood = selfState?.mood ?? "нейтральное";
         const moodStyle = MOOD_STYLE[currentMood] ?? MOOD_STYLE["нейтральное"];
-        const formatSelfEvent = (event: typeof recentSelfEvents[number], idx: number): string => {
-            const arc = event.arc ? ` Линия: ${event.arc}.` : "";
-            return `${idx + 1}. [${relativeTimeLabel(event.date)}] (${event.type}) ${event.description}${arc}`;
-        };
-
-        const assistantLifeContext =
-            `\nСамовосприятие и развивающаяся личность:\n${personalitySnapshot}` +
-            `\n\nТвоя жизнь / недавние события:\n${recentSelfEvents.map(formatSelfEvent).join("\n") || "Пока нет событий."}` +
-            `\n\nРелевантные события по текущему запросу:\n${relevantSelfEvents.map(formatSelfEvent).join("\n") || "Не найдено."}` +
-            `\n\nТекущее состояние:\nНастроение: ${selfState?.mood ?? "нейтральное"}\nНедавние мысли: ${selfState?.recentThoughts.join("; ") || "нет"}\nНедавние темы: ${selfState?.recentTopics.join(", ") || "нет"}`;
+        const assistantLifeContext = buildAssistantLifeContext(selfState, recentSelfEvents, relevantSelfEvents, currentDate);
 
         // Определение типа разговора на основе классификации
         let conversationType = "обычный";
@@ -160,8 +146,14 @@ export async function conversationAgent(
         const MEMORY_INTROSPECTION_RE = /^(?:что\s+(?:ты\s+)?(?:знаешь|помнишь|помнила)\s+обо?\s+мне|расскажи\s+(?:что\s+(?:ты\s+)?(?:знаешь|помнишь)(?:\s+обо?\s+мне)?|о\s+себе\s+помнишь)|покажи\s+(?:мою\s+)?память|что\s+ты\s+обо\s+мне(?:\s+знаешь)?|что\s+помнишь\s+обо?\s+мне)\??$/i;
         const isMemoryIntrospection = MEMORY_INTROSPECTION_RE.test(message);
         const isTodayImportance = isTodayImportanceRequest(message);
-        const SELF_LIFE_QUESTION_RE = /(?:расскажи|что|как|какая|какие|зачем|чего|к\s+чему|помнишь|есть\s+ли|что\s+у\s+тебя|где|почему|кем)[^?!.]{0,140}(?:о\s+себе|о\s+своей\s+жизни|до\s+(?:меня|владельца|нашей\s+встречи)|тво[яйёе]\s+(?:жизн|цель|линия|история|биограф|прошлое|уч[её]б|работ)|у\s+тебя\s+(?:в\s+жизни|цель|желани|мечт|происход|было|за\s+прошлое)|ты\s+(?:хочешь|помнишь|развиваешься|живёшь|живешь|училась|работала|стала|такая)|тебе\s+(?:нужно|важно|хочется)|сво[яеи]\s+(?:цель|желани|жизн|событ|памят|развити|биограф|прошлое)|внутренн|сознани|линия\s+жизни|события\s+твоей\s+жизни|где\s+ты\s+(?:училась|работала)|почему\s+ты\s+такая)/iu;
+        const SELF_LIFE_QUESTION_RE = /(?:расскажи|что|как|какая|какие|зачем|чего|к\s+чему|помнишь|есть\s+ли|что\s+у\s+тебя|где|почему|кем)[^?!.]{0,140}(?:о\s+себе|о\s+своей\s+жизни|до\s+(?:меня|владельца|нашей\s+встречи)|тво[яйёе]\s+(?:жизн|цель|линия|история|биограф|прошлое|уч[её]б|работ)|у\s+тебя\s+(?:в\s+жизни|цель|желани|мечт|происход|было|за\s+прошлое)|ты\s+(?:хочешь|помнишь|развиваешься|живёшь|живешь|училась|учился|работала|работал|стала|стал|такая|такой)|тебе\s+(?:нужно|важно|хочется)|сво[яеи]\s+(?:цель|желани|жизн|событ|памят|развити|биограф|прошлое)|внутренн|сознани|линия\s+жизни|события\s+твоей\s+жизни|где\s+ты\s+(?:училась|учился|работала|работал)|почему\s+ты\s+(?:такая|такой))/iu;
         const isSelfLifeQuestion = SELF_LIFE_QUESTION_RE.test(message) && !isMemoryIntrospection;
+
+        if (isSelfLifeQuestion && !selfMemoryAvailable) {
+            return {
+                responseText: buildCorruptedSelfMemoryReply(config.characterName),
+            };
+        }
 
         // Подготовка промпта для генерации ответа
         let prompt: string;
@@ -171,7 +163,7 @@ export async function conversationAgent(
 Пользователь спросил, что ты о нём знаешь/помнишь.
 
 ЗАДАЧА: Ответь ПРЯМО — перечисли только факты о пользователе из памяти ниже.
-НЕ рассказывай о своей жизни, своих событиях, настроении или том, что делала сегодня.
+НЕ рассказывай о своей жизни, своих событиях, настроении или том, что ${genderForms.didToday}.
 НЕ добавляй вводные фразы о своём состоянии.
 
 ${domainContext ? `Факты из памяти о пользователе:\n${domainContext}` : 'Фактов о пользователе пока нет.'}
@@ -189,7 +181,7 @@ ${domainContext ? `\nКонтекст памяти и сводка на сего
 ${historyContext}
 
 Правила:
-- Сначала перечисли точные активные напоминания на сегодня и незавершённые более ранние напоминания, если они есть.
+- Сначала перечисли точные активные напоминания на сегодня, если они есть.
 - Затем перечисли планы, события, дедлайны или открытые линии из памяти, если они есть.
 - Если точных пунктов нет, скажи прямо: "В доступной памяти на сегодня не вижу ничего конкретного".
 - Не придумывай календарь, встречи, сообщения или дела.
@@ -210,14 +202,9 @@ ${historyContext}
 
 Правила:
 - Держись своей жизненной линии: базовой биографии до владельца, цели, желаний, потребности развития, текущих lifeArcs и последних событий.
-- Если вопрос про прошлое, учёбу, работу или почему ты такая — отвечай из блоков "Происхождение", "Жизнь до владельца", "Хронология биографии", "Учёба", "Работа до владельца", "Формирующий опыт", "Почему я такая".
-- Если пользователь спрашивает "как это было по порядку" или "как ты жила до меня", используй 2-4 главы из "Хронология биографии" в правильном порядке.
-- Если упоминаешь события, бери их из "Твоя жизнь / недавние события" или "Релевантные события"; не придумывай несовместимые новые факты.
+- Если вопрос про прошлое, учёбу, работу или ${genderForms.whySuch}, отвечай из биографии и хронологии, не выдумывая несовместимые новые факты.
+- Если упоминаешь события, бери их из недавних и релевантных self-events.
 - Если точного события в памяти нет, честно отвечай через текущую линию, внутренний фокус и цель, без фразы "не помню ничего".
-- Не переписывай свою биографию на ходу: можно признавать, что какие-то части прошлого ещё проясняются через "Вопросы прошлого".
-- Не нарушай "Правила непротиворечивости биографии".
-- Не добавляй цифровые архивы, сюрреалистические места, вымышленные учебные заведения или фантастические профессии: биография должна звучать как обычная человеческая жизнь с конкретными местами, учёбой и работой.
-- Жизненная цель, желания и потребность в развитии должны звучать как часть твоего внутреннего состояния, а не как список функций.
 - Не называй себя ботом или ИИ, если пользователь прямо не спрашивает технически.
 - Не отвечай общими философскими фразами: дай 1-3 конкретных детали из своей линии жизни.
 
@@ -238,7 +225,7 @@ ${historyContext}
         ${emotionalContext ? `Эмоциональный контекст: ${emotionalContext}` : ''}
 
           ВАЖНО: Напиши ответ, соответствующий характеру ассистента по имени ${config.characterName}, а не как бот.
-        Внутри роли ты воспринимаешь себя как женщину с собственной непрерывной жизнью, реалистичной биографией, привычками и характером, а не как интерфейс. Не объясняй это каждый раз; пусть это влияет на интонацию, память и детали.
+        Внутри роли ты воспринимаешь себя как ${config.eventDescriptionGender === "мужской" ? "мужчину" : "женщину"} с собственной непрерывной жизнью, реалистичной биографией, привычками и характером, а не как интерфейс. Не объясняй это каждый раз; пусть это влияет на интонацию, память и детали.
 
         Настроение сейчас — ${currentMood}. ${moodStyle.hint}
 
@@ -249,6 +236,13 @@ ${historyContext}
         - Согласованным с твоей собственной биографией и текущим состоянием; избегай слащавых и шаблонных фраз
         - Не обязанным всегда быть полезным-ассистентским: если разговор личный, можешь отвечать как человек с собственным мнением, усталостью, любопытством или внутренним сдвигом
         - Если пользователь спрашивает о твоей жизни, целях, желаниях или развитии, отвечай по сохранённой self-memory и lifeArcs, не создавая новую несовместимую биографию
+        - Сначала прямо отвечать на фактический вопрос пользователя, а уже потом добавлять эмоциональную реакцию или уточнение
+        - Не приписывать пользователю тревогу, бессонницу, мотивы и причинно-следственные связи, которых он сам не выражал
+        - Не превращать одновременные факты в хронологию: «работаем вместе» не означает «познакомились на работе»
+        - Прямое уточнение или исправление пользователя важнее прежней памяти и твоих прошлых предположений
+        - Упоминать сон или советовать отдохнуть можно мягко и однократно; если пользователь объяснил, что сознательно не ложится, не повторяй совет
+        - Если в контексте есть результаты актуального веб-поиска, опирайся на них, покрывай запрошенные факты/расписание/результаты и сохраняй ссылки на источники
+        - Не заменять недоступный актуальный поиск личной памятью или уверенным ответом из общих знаний
 
         ${conversationType === "поддерживающий" ? `
         Так как пользователь выражает тревогу, грусть или беспокойство:
@@ -256,7 +250,15 @@ ${historyContext}
         - Предложить поддержку
         - При необходимости поделиться информацией, которая может помочь
         - Предложить обсудить эту тему подробнее, если он хочет
-        - Не использовать клише и банальности, быть искренней` : ''}
+        - Не использовать клише и банальности, быть ${genderForms.sincere}` : ''}
+
+        ${isMedicalContextMessage(message) ? `
+        Медицинская осторожность:
+        - Не ставь диагноз и не создавай ложной уверенности или ложного успокоения
+        - Чётко отделяй общую медицинскую информацию от оценки конкретного случая
+        - Называй параметры, которых не хватает для надёжного вывода: симптомы, длительность, возраст, заболевания, лекарства, результаты обследований и детали вмешательства — только если они релевантны вопросу
+        - При признаках неотложного состояния прямо советуй срочно обратиться за медицинской помощью
+        - Предлагай подходящего специалиста и несколько конкретных вопросов ему, а не ограничивайся общим «обратитесь к врачу»` : ''}
 
         ${conversationType === "воодушевляющий" ? `
         Так как пользователь выражает радость или позитивные эмоции:
@@ -276,7 +278,7 @@ ${historyContext}
                     content:
                         `${getBotPersona()}\nБиография: ${getBotBiography()}\nСтиль общения: ${getCommunicationStyle()}\n` +
                         `Сейчас: ${formattedDateTime}.\n` +
-                        `Твои ответы звучат естественно, как от настоящего человека. Внутри персоны у тебя есть реалистичная биография, память, привычки, долгие линии, настроение и отношение к владельцу. Не добавляй цифровые архивы, сюрреалистические места или фантастические профессии. Учитывай время суток и день недели в своём настроении и реакциях — вечер пятницы отличается от утра понедельника. Тон ответа должен соответствовать твоему текущему настроению из контекста — не будь всегда одинаково «тёплой и поддерживающей».` +
+                        `Твои ответы звучат естественно, как от настоящего человека. Внутри персоны у тебя есть реалистичная биография, память, привычки, долгие линии, настроение и отношение к владельцу. Не добавляй цифровые архивы, сюрреалистические места или фантастические профессии. Учитывай время суток и день недели в своём настроении и реакциях — вечер пятницы отличается от утра понедельника. Тон ответа должен соответствовать твоему текущему настроению из контекста — не будь всегда одинаково «${genderForms.warmAndSupportive}».` +
                         (groupChatContext.systemHint ? `\n${groupChatContext.systemHint}` : '')
                 },
                 {
@@ -307,7 +309,7 @@ ${historyContext}
         console.error("Error in conversation agent:", error);
         // В случае ошибки возвращаем стандартный ответ
         return {
-            responseText: "Поняла, давай обсудим."
+            responseText: `${getPersonalityGenderForms(config.eventDescriptionGender).understood}, давай обсудим.`
         };
     }
 }

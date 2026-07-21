@@ -2,6 +2,7 @@ import type { BotContext } from '../types';
 import type { MessageHistory } from '../types';
 import type { ProcessingResult, MessageClassification } from '../orchestrator';
 import type { Plan, PlanStep } from './types';
+import { canContinueAfterWebSearchFailure } from './webSearchFailurePolicy';
 import { fetchAgentMemoryContext, buildMemoryContextBlock } from '../utils/agentMemoryContext';
 import { conversationAgent } from '../agents/conversationAgent';
 import { reminderAgent } from '../agents/reminderAgent';
@@ -24,6 +25,10 @@ import { devLog, parseLLMJson } from '../utils';
 import { buildQuickChoiceKeyboard } from '../utils/quickChoice';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { applyReminderEditInput } from '../utils/reminderEditor';
+import { syncReminderMemoryMutation } from '../services/ReminderMemorySync';
+import { USER_TIMEZONE } from '../constants';
+import { addZonedDays, formatPromptDateTime, getZonedDateKey } from '../utils/time';
+import { isSilentInternalKnowledgePipeline, SILENT_STEPS } from './progressPolicy';
 
 /**
  * Ищет напоминание по текстовому запросу и отменяет его.
@@ -72,6 +77,9 @@ async function cancelReminderByQuery(
     if (ctx.session?.reminders) {
         ctx.session.reminders = ctx.session.reminders.filter((r) => r.id !== reminder.id);
     }
+    await syncReminderMemoryMutation(ctx, reminder, reminder, 'cancel').catch((e) =>
+        console.error('[ORCH] cancelReminderByQuery memory sync failed:', e)
+    );
 
     devLog('Executor: cancelled reminder by query', query, '->', reminder.id);
     console.log('[ORCH] cancelReminderByQuery: cancelled', reminder.id, '| text:', (reminder.displayText || reminder.text).slice(0, 60));
@@ -121,7 +129,7 @@ async function updateReminderByQuery(
         };
     }
 
-    const editResult = await applyReminderEditInput(best.reminder, message);
+    const editResult = await applyReminderEditInput(ctx, best.reminder, message);
     if (!editResult.ok || !editResult.reminder) {
         return { responseText: editResult.responseText };
     }
@@ -146,19 +154,18 @@ function filterByPeriod(
 ) {
     if (!period) return reminders;
     const now = new Date();
+    const todayKey = getZonedDateKey(now, USER_TIMEZONE);
+    const tomorrowKey = getZonedDateKey(addZonedDays(now, 1, USER_TIMEZONE), USER_TIMEZONE);
     return reminders.filter((r) => {
         const d = new Date(r.dueDate);
         if (period === 'today') {
-            return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+            return getZonedDateKey(d, USER_TIMEZONE) === todayKey;
         }
         if (period === 'tomorrow') {
-            const tomorrow = new Date(now);
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            return d.getFullYear() === tomorrow.getFullYear() && d.getMonth() === tomorrow.getMonth() && d.getDate() === tomorrow.getDate();
+            return getZonedDateKey(d, USER_TIMEZONE) === tomorrowKey;
         }
         if (period === 'week') {
-            const weekLater = new Date(now);
-            weekLater.setDate(weekLater.getDate() + 7);
+            const weekLater = addZonedDays(now, 7, USER_TIMEZONE);
             return d >= now && d <= weekLater;
         }
         return true;
@@ -188,6 +195,9 @@ async function cancelAllReminders(
         if (ctx.session?.reminders) {
             ctx.session.reminders = ctx.session.reminders.filter((s) => s.id !== r.id);
         }
+        await syncReminderMemoryMutation(ctx, r, r, 'cancel').catch((e) =>
+            console.error('[ORCH] cancelAllReminders memory sync failed:', e)
+        );
     }
 
     const label = period === 'today' ? ' на сегодня' : period === 'tomorrow' ? ' на завтра' : period === 'week' ? ' за неделю' : '';
@@ -222,7 +232,7 @@ async function updateAllReminders(
             messages: [
                 {
                     role: 'system',
-                    content: `Текущая дата и время: ${now.toLocaleString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: 'numeric', weekday: 'long' })}.
+                    content: `Текущая дата и время: ${formatPromptDateTime(now, USER_TIMEZONE)} (${USER_TIMEZONE}).
 Пользователь хочет перенести ВСЕ напоминания. Определи: это сдвиг на фиксированный интервал ("через X часов", "на неделю вперёд") или конкретное новое время ("на завтра в 9", "на пятницу в 10")?
 Верни JSON: {"shiftMinutes": число минут сдвига или null, "newDueDate": "ISO 8601 конкретного времени или null"}`,
                 },
@@ -247,6 +257,7 @@ async function updateAllReminders(
     }
 
     for (const r of targets) {
+        const previousReminder = { ...r, dueDate: new Date(r.dueDate) };
         const updated = { ...r };
         if (shiftMinutes) {
             updated.dueDate = new Date(new Date(r.dueDate).getTime() + shiftMinutes * 60 * 1000);
@@ -260,6 +271,9 @@ async function updateAllReminders(
             if (idx >= 0) ctx.session.reminders[idx] = updated;
         }
         await ReminderRepository.update(updated).catch(() => {});
+        await syncReminderMemoryMutation(ctx, previousReminder, updated, 'postpone').catch((e) =>
+            console.error('[ORCH] updateAllReminders memory sync failed:', e)
+        );
     }
 
     const label = period === 'today' ? ' на сегодня' : period === 'tomorrow' ? ' на завтра' : period === 'week' ? ' за неделю' : '';
@@ -334,9 +348,6 @@ const STEP_LABELS: Record<string, string> = {
     health: '🩺 Открываю дневник здоровья…',
 };
 
-/** Шаги, которые не видны пользователю (нет полезного действия для отображения) */
-const SILENT_STEPS = new Set(['memory', 'resolveContact']);
-
 export interface ExecutePlanParams {
     ctx: BotContext;
     plan: Plan;
@@ -402,10 +413,11 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
     /** Видимые (не-silent) шаги плана — только по ним показываем прогресс */
     const visibleSteps = steps.filter((s) => !SILENT_STEPS.has(s.agentId));
     const isMultiStepPlan = visibleSteps.length > 1;
+    const isInternalKnowledgePipeline = isSilentInternalKnowledgePipeline(steps);
 
     /** Отправить пользователю уведомление о прогрессе (только для многошаговых планов) */
     const notifyProgress = async (stepAgentId: string) => {
-        if (!isMultiStepPlan) return;
+        if (!isMultiStepPlan || isInternalKnowledgePipeline) return;
         const label = STEP_LABELS[stepAgentId];
         if (!label) return;
         try {
@@ -453,10 +465,28 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
                 const webRes = await safeStep('webSearch', () => webSearchAgent(
                     message, isForwarded, forwardFrom, messageHistory, enrichedContextFromMemory || ''
                 ));
-                if (webRes === null) {
-                    // Поиск недоступен — продолжаем план без результатов поиска
+                if (webRes === null || !webRes.webSearchSucceeded) {
+                    // Безопасно продолжаем только к conversation: action-шаги
+                    // могут зависеть от отсутствующих данных поиска.
                     console.warn('[ORCH] webSearch failed, continuing without search context');
                     enrichedContextFromMemory += '\n[Поиск временно недоступен]\n';
+                    if (!nextStep) {
+                        if (webRes) {
+                            webRes.botReaction = classification.details?.botReaction;
+                            return webRes;
+                        }
+                        return {
+                            responseText: 'Поиск сейчас временно недоступен. Попробуй ещё раз чуть позже.',
+                            botReaction: classification.details?.botReaction,
+                        };
+                    }
+                    if (!canContinueAfterWebSearchFailure(nextStep)) {
+                        console.warn('[ORCH] dependent step blocked after webSearch failure:', nextStep.agentId);
+                        return {
+                            responseText: 'Поиск временно недоступен, поэтому я не стала выполнять зависящее от него действие. Попробуй ещё раз чуть позже.',
+                            botReaction: classification.details?.botReaction,
+                        };
+                    }
                     break;
                 }
                 const passToNext = nextStep && (step.params?.asContext === true || hasMoreSteps(i));

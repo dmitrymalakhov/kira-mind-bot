@@ -4,6 +4,7 @@ import { BotContext } from '../types';
 import { USER_TIMEZONE } from '../constants';
 import { ReminderRegistry } from '../stores/ReminderRegistry';
 import { targetChatHumanLabel } from './reminderTargetNotification';
+import { esc, heading, list, paragraph, blockquote, RichBlock } from './richMessage';
 
 /**
  * Возвращает активные напоминания для текущего чата.
@@ -16,19 +17,28 @@ export function getActiveReminders(ctx: BotContext): Reminder[] {
     return ReminderRegistry.getInstance().getActiveByChatId(chatId);
 }
 
+export interface RichCard {
+    blocks: RichBlock[];
+    keyboard: InlineKeyboard;
+}
+
 /**
- * Строит текст и клавиатуру пикера чатов с активными напоминаниями.
+ * Строит блоки и клавиатуру пикера чатов с активными напоминаниями.
  */
 export function buildChatPicker(
     chats: Array<{ chatId: number; title: string; count: number }>
-): { text: string; keyboard: InlineKeyboard } {
-    const lines = chats.map(c => `· ${c.title}: ${c.count} напом.`);
-    const text = `📋 Активные напоминания по чатам:\n\n${lines.join('\n')}\n\nВыбери чат:`;
+): RichCard {
+    const items = chats.map(c => `${esc(c.title)} — <b>${c.count}</b> напом.`);
+    const blocks: RichBlock[] = [
+        heading('📋 Активные напоминания по чатам', 3),
+        list(items),
+        paragraph('Выбери чат:'),
+    ];
     const keyboard = new InlineKeyboard();
     for (const c of chats) {
         keyboard.text(`${c.title} (${c.count})`, `reminder_chat_${c.chatId}`).row();
     }
-    return { text, keyboard };
+    return { blocks, keyboard };
 }
 
 const DAY_NAMES = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
@@ -61,28 +71,15 @@ function statusLabel(status?: ReminderStatus): string {
     }
 }
 
-function targetNotificationLabel(reminder: Reminder): string {
-    if (!reminder.targetChat) return '';
-    const target = targetChatHumanLabel(reminder.targetChat);
-    switch (reminder.targetChatNotifyStatus) {
-        case 'enabled':
-            return `\n📨 Адресат: ${target} (оповестить)`;
-        case 'disabled':
-            return `\n📨 Адресат: ${target} (только тебе)`;
-        default:
-            return `\n📨 Адресат: ${target} (ждёт выбора)`;
-    }
-}
-
 /**
- * Собирает текст и клавиатуру одной карточки напоминания.
+ * Собирает блоки и клавиатуру одной карточки напоминания.
  * showBackToChats=true добавляет кнопку «↩️ К чатам» (для кросс-чатового просмотра из приватного).
  */
 export function buildReminderCard(
     reminders: Reminder[],
     index: number,
     showBackToChats = false
-): { text: string; keyboard: InlineKeyboard } {
+): RichCard {
     const r = reminders[index];
     const total = reminders.length;
     const num = index + 1;
@@ -96,13 +93,16 @@ export function buildReminderCard(
     });
 
     const body = r.displayText || r.text;
-    const recLine = r.recurrence ? `\n${recurrenceLabel(r.recurrence)}` : '';
-    const targetLine = targetNotificationLabel(r);
-    const text =
-        `📋 Напоминание ${num} из ${total}\n\n` +
-        `${body}\n\n` +
-        `🗓 ${dueTime}\n` +
-        `📌 ${statusLabel(r.status)}${recLine}${targetLine}`;
+    const metaItems: string[] = [`🗓 ${esc(dueTime)}`, `📌 ${statusLabel(r.status)}`];
+    if (r.recurrence) metaItems.push(recurrenceLabel(r.recurrence));
+    const target = targetChatHumanLabelSafe(r);
+    if (target) metaItems.push(`📨 ${target}`);
+
+    const blocks: RichBlock[] = [
+        heading(`📋 Напоминание ${num} из ${total}`, 3),
+        blockquote(esc(body)),
+        list(metaItems),
+    ];
 
     const prevCb = index > 0       ? `reminders_nav_${index - 1}` : 'reminders_nav_noop';
     const nextCb = index < total-1 ? `reminders_nav_${index + 1}` : 'reminders_nav_noop';
@@ -127,7 +127,22 @@ export function buildReminderCard(
         keyboard.row().text('↩️ К чатам', 'reminder_chat_back');
     }
 
-    return { text, keyboard };
+    return { blocks, keyboard };
+}
+
+/**
+ * Безопасная (экранированная) версия targetChatHumanLabel для rich-вывода.
+ * Возвращает пустую строку, если адресата нет.
+ */
+function targetChatHumanLabelSafe(reminder: Reminder): string {
+    if (!reminder.targetChat) return '';
+    const target = targetChatHumanLabel(reminder.targetChat);
+    const suffix = reminder.targetChatNotifyStatus === 'enabled'
+        ? ' (оповестить)'
+        : reminder.targetChatNotifyStatus === 'disabled'
+            ? ' (только тебе)'
+            : ' (ждёт выбора)';
+    return `${esc(target)}${suffix}`;
 }
 
 /**
@@ -151,13 +166,13 @@ export function buildPostponeKeyboard(reminderId: string): InlineKeyboard {
 }
 
 /**
- * Текст и клавиатура для отображения всех напоминаний списком.
+ * Блоки и клавиатура для отображения всех напоминаний списком.
  */
 export function buildRemindersList(
     reminders: Reminder[],
     returnIndex = 0
-): { text: string; keyboard: InlineKeyboard } {
-    const lines = reminders.map((r, i) => {
+): RichCard {
+    const items = reminders.map((r, i) => {
         const dueTime = new Date(r.dueDate).toLocaleString('ru-RU', {
             timeZone: USER_TIMEZONE,
             day: 'numeric',
@@ -165,13 +180,17 @@ export function buildRemindersList(
             hour: 'numeric',
             minute: 'numeric',
         });
-        const body = r.displayText || r.text;
-        const recPart = r.recurrence ? ` · ${recurrenceLabel(r.recurrence)}` : '';
-        const targetPart = r.targetChat ? ` · 📨 ${targetChatHumanLabel(r.targetChat)}` : '';
-        return `${i + 1}. ${body}\n   🗓 ${dueTime} · 📌 ${statusLabel(r.status)}${recPart}${targetPart}`;
+        const metaParts = [`🗓 ${esc(dueTime)}`, `📌 ${statusLabel(r.status)}`];
+        if (r.recurrence) metaParts.push(recurrenceLabel(r.recurrence));
+        if (r.targetChat) metaParts.push(`📨 ${esc(targetChatHumanLabel(r.targetChat))}`);
+        const meta = metaParts.join(' · ');
+        return `<b>${i + 1}.</b> ${esc(r.displayText || r.text)}\n${meta}`;
     });
-    const text = `📋 Все напоминания (${reminders.length}):\n\n${lines.join('\n\n')}`;
+    const blocks: RichBlock[] = [
+        heading(`📋 Все напоминания (${reminders.length})`, 3),
+        list(items),
+    ];
     const safeReturnIndex = Math.max(0, Math.min(returnIndex, reminders.length - 1));
     const keyboard = new InlineKeyboard().text('◀️ К карточкам', `reminders_nav_${safeReturnIndex}`);
-    return { text, keyboard };
+    return { blocks, keyboard };
 }

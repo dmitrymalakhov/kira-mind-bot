@@ -6,6 +6,7 @@ import { devLog, processReminderTime } from "../utils";
 import { ChatCompletionContentPart } from "openai/resources/chat";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
+import { formatPromptDateTime } from "../utils/time";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -54,14 +55,7 @@ export async function imageAgent(
 
         // Текущая дата и время для контекста
         const currentDate = new Date();
-        const formattedDateTime = currentDate.toLocaleString('ru-RU', {
-            day: 'numeric',
-            month: 'long',
-            year: 'numeric',
-            hour: 'numeric',
-            minute: 'numeric',
-            weekday: 'long'
-        });
+        const formattedDateTime = formatPromptDateTime(currentDate);
 
         // Проверяем, имеем ли мы дело с группой изображений
         const isGroupOfImages = additionalImages && additionalImages.length > 0;

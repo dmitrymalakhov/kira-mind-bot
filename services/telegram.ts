@@ -1,5 +1,7 @@
 import { Api, TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions";
+import { Raw } from "telegram/events";
+import { UpdateConnectionState } from "telegram/network";
 import { ContactsStore } from "../stores/ContactsStore";
 import { MessageTracker } from "../MessageTracker";
 import { devLog } from "../utils";
@@ -20,51 +22,415 @@ export function setBotApi(api: GrammyApi): void {
 const messageTimers = new Map<number, NodeJS.Timeout>();
 
 let telegramClient: TelegramClient | null = null;
+let telegramClientInitPromise: Promise<TelegramClient | undefined> | null = null;
+let preloadContactsPromise: Promise<void> | null = null;
+let telegramClientLastError: string | null = null;
+let telegramClientLastErrorAt: string | null = null;
+let telegramClientLastReadyAt: string | null = null;
+let telegramClientInitStartedAt: string | null = null;
+const TELEGRAM_RECONNECT_WAIT_TIMEOUT_MS = 5000;
+
+interface TelegramUserClientCredentials {
+    apiId: number;
+    apiHash: string;
+    sessionString: string;
+}
+
+interface TelegramClientInitOptions {
+    preloadContacts?: boolean;
+    silent?: boolean;
+}
+
+interface PreloadContactsOptions {
+    client?: TelegramClient;
+    silent?: boolean;
+}
+
+type TelegramHealthStatus = 'ok' | 'warn' | 'down' | 'disabled';
+
+interface TelegramClientDiagnosticState {
+    connected?: boolean;
+    session?: {
+        dcId?: number;
+    };
+    _sender?: {
+        // Рабочий флаг reconnect в GramJS 2.26.22 (меняется в connect()/reconnect()).
+        // Приватные поля `_reconnecting`/`_disconnected` — мёртвые (никогда не меняются после конструктора), их читать нельзя.
+        isReconnecting?: boolean;
+        _connection?: {
+            _ip?: string;
+            _port?: number;
+            _dcId?: number;
+        };
+    };
+}
+
+export interface TelegramUserClientHealth {
+    status: TelegramHealthStatus;
+    summary: string;
+    details: string;
+    checkedAt: string;
+    configured: boolean;
+    connected: boolean;
+    authorized: boolean;
+    reconnecting: boolean;
+    dc: number | null;
+    endpoint: string | null;
+    error: string | null;
+    lastReadyAt: string | null;
+    lastErrorAt: string | null;
+}
+
+function resolveTelegramHealthState(
+    connected: boolean,
+    authorized: boolean,
+    reconnecting: boolean
+): { status: TelegramHealthStatus; summary: string; details: string } {
+    if (reconnecting) {
+        return {
+            status: 'warn',
+            summary: 'Telegram user-client подключён, но находится в reconnect-состоянии.',
+            details: 'Клиент держит reconnect-loop и ещё не восстановил стабильное соединение.',
+        };
+    }
+
+    if (connected && authorized) {
+        return {
+            status: 'ok',
+            summary: 'Telegram user-client подключён и авторизован.',
+            details: 'Клиент прошёл connect() и isUserAuthorized().',
+        };
+    }
+
+    if (authorized) {
+        return {
+            status: 'warn',
+            summary: 'Telegram user-client авторизован, но соединение сейчас не активно.',
+            details: 'Сессия валидна, но transport-соединение ещё не восстановилось.',
+        };
+    }
+
+    return {
+        status: 'down',
+        summary: 'Telegram user-client не готов к работе.',
+        details: 'Клиент не подтвердил готовность.',
+    };
+}
+
+function getTelegramUserClientCredentials(): TelegramUserClientCredentials | null {
+    const rawApiId = process.env.TELEGRAM_API_ID?.trim();
+    const apiHash = process.env.TELEGRAM_API_HASH?.trim();
+    const sessionString = process.env.TELEGRAM_SESSION_STRING?.trim();
+
+    if (!rawApiId || !apiHash || !sessionString) {
+        return null;
+    }
+
+    const apiId = Number(rawApiId);
+    if (!Number.isFinite(apiId)) {
+        return null;
+    }
+
+    return {
+        apiId,
+        apiHash,
+        sessionString,
+    };
+}
+
+function rememberTelegramClientError(error: unknown): void {
+    telegramClientLastError = error instanceof Error ? error.message : String(error);
+    telegramClientLastErrorAt = new Date().toISOString();
+}
+
+function clearTelegramClientError(): void {
+    telegramClientLastError = null;
+    telegramClientLastErrorAt = null;
+}
+
+function logTelegramClientMessage(message: string, error?: unknown, silent: boolean = false): void {
+    if (silent) {
+        return;
+    }
+
+    if (error !== undefined) {
+        console.error(message, error);
+        return;
+    }
+
+    console.error(message);
+}
+
+/**
+ * Честная проверка transport-соединения клиента.
+ *
+ * Геттер `client.connected` в GramJS 2.26.22 возвращает `sender.isConnected()` → `_userConnected`
+ * (рабочий флаг, меняется при connect/disconnect). Комбинировать с `!client.disconnected` нельзя:
+ * `client.disconnected` опирается на `sender._disconnected`, которое инициализируется `true` и
+ * никогда не меняется — поэтому `connected && !disconnected` всегда `false`.
+ */
+function isTelegramClientConnected(client: TelegramClient | null): boolean {
+    return Boolean(client?.connected);
+}
+
+function buildTelegramClientDiagnostics(client: TelegramClient | null): {
+    connected: boolean;
+    reconnecting: boolean;
+    dc: number | null;
+    endpoint: string | null;
+} {
+    if (!client) {
+        return {
+            connected: false,
+            reconnecting: false,
+            dc: null,
+            endpoint: null,
+        };
+    }
+
+    const diagnosticClient = client as TelegramClient & TelegramClientDiagnosticState;
+    const sender = diagnosticClient._sender;
+    const connection = sender?._connection;
+    const dc = connection?._dcId ?? diagnosticClient.session?.dcId ?? null;
+    const endpoint = connection?._ip && connection?._port
+        ? `${connection._ip}:${connection._port}`
+        : null;
+
+    return {
+        connected: isTelegramClientConnected(client),
+        reconnecting: Boolean(sender?.isReconnecting),
+        dc: typeof dc === 'number' ? dc : null,
+        endpoint,
+    };
+}
+
+function createTelegramClient(credentials: TelegramUserClientCredentials): TelegramClient {
+    return new TelegramClient(
+        new StringSession(credentials.sessionString),
+        credentials.apiId,
+        credentials.apiHash,
+        {
+            connectionRetries: 5,
+            useWSS: true,
+        }
+    );
+}
+
+async function disconnectTelegramClientSafely(client: TelegramClient): Promise<void> {
+    try {
+        await client.disconnect();
+    } catch {
+        // ignore cleanup errors
+    }
+}
+
+async function waitForTelegramClientReady(
+    client: TelegramClient,
+    timeoutMs = TELEGRAM_RECONNECT_WAIT_TIMEOUT_MS,
+): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const diagnostics = buildTelegramClientDiagnostics(client);
+        if (diagnostics.connected && !diagnostics.reconnecting) return true;
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    }
+
+    const diagnostics = buildTelegramClientDiagnostics(client);
+    return diagnostics.connected && !diagnostics.reconnecting;
+}
+
+async function connectAndAuthorizeTelegramClient(
+    client: TelegramClient,
+    options: { timeoutMs?: number } = {}
+): Promise<boolean> {
+    const initPromise = (async () => {
+        await client.connect();
+        return client.isUserAuthorized();
+    })();
+
+    if (!options.timeoutMs) {
+        return initPromise;
+    }
+
+    return new Promise<boolean>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`TIMEOUT after ${options.timeoutMs}ms`)), options.timeoutMs);
+
+        initPromise.then(
+            (authorized) => {
+                clearTimeout(timer);
+                resolve(authorized);
+            },
+            (error: unknown) => {
+                clearTimeout(timer);
+                reject(error);
+            }
+        );
+    });
+}
+
+/**
+ * Подписывается на события соединения GramJS и логирует изменения transport-состояния.
+ *
+ * GramJS эмитит `UpdateConnectionState` через внутренний updateCallback (connect/disconnect/reconnect).
+ * Раньше приложение вообще не логировало эти события, что затрудняло диагностику «вечного warn» в мониторинге.
+ * Здесь используется `console.*` напрямую, а не logTelegramClientMessage, т.к. последняя молчит при silent=true.
+ *
+ * Успешное `connected`-событие само по себе не логируем: GramJS может эмитить его
+ * регулярно (внутренние ping-и, update-ы). Восстановление выводится только после
+ * предшествующего `disconnected/broken`, когда это действительно диагностически важно.
+ */
+function attachTelegramConnectionStateLogger(client: TelegramClient): void {
+    let lastState: number | null = null;
+    let transportProblemObserved = false;
+    client.addEventHandler((update: unknown) => {
+        if (!(update instanceof UpdateConnectionState)) {
+            return;
+        }
+        if (lastState === update.state) {
+            return;
+        }
+        lastState = update.state;
+        if (update.state === UpdateConnectionState.connected) {
+            // Нормальный connected-сигнал GramJS не является событием для
+            // production-лога: он может приходить после служебных transport
+            // update-ов и повторяться при создании нового клиента. Сообщаем о
+            // восстановлении только если перед этим реально видели проблему.
+            if (transportProblemObserved) {
+                console.info("[Telegram user-client] Соединение восстановлено после сбоя transport.");
+                transportProblemObserved = false;
+            }
+        } else if (update.state === UpdateConnectionState.disconnected) {
+            transportProblemObserved = true;
+            console.warn("[Telegram user-client] Соединение разорвано, ожидаем reconnect.");
+        } else if (update.state === UpdateConnectionState.broken) {
+            transportProblemObserved = true;
+            console.warn("[Telegram user-client] Transport-соединение broken.");
+        }
+    }, new Raw({ types: [UpdateConnectionState] }));
+}
 
 /**
  * Инициализирует и устанавливает соединение с клиентом Telegram
  * @returns Подключенный клиент Telegram или undefined при ошибке
  */
-export async function initTelegramClient(): Promise<TelegramClient | undefined> {
-    try {
-        if (telegramClient) {
+export async function initTelegramClient(options: TelegramClientInitOptions = {}): Promise<TelegramClient | undefined> {
+    const { preloadContacts = true, silent = false } = options;
+
+    if (telegramClient) {
+        let diagnostics = buildTelegramClientDiagnostics(telegramClient);
+        // Не заменяем клиент, пока GramJS сам выполняет reconnect. В этот момент
+        // `connected` может быть false, но transport ещё жив и должен завершить
+        // собственный reconnect-loop. Пересоздание клиента здесь порождает
+        // повторные обработчики и поток одинаковых `Соединение восстановлено`.
+        if (!diagnostics.connected) {
+            if (diagnostics.reconnecting) {
+                if (!await waitForTelegramClientReady(telegramClient)) return undefined;
+                if (preloadContacts) {
+                    await preloadContactsList({ client: telegramClient, silent });
+                }
+                return telegramClient;
+            }
+            // Между connected=false и установкой isReconnecting GramJS есть
+            // короткое окно. Ждём его, чтобы не вызвать connect() поверх
+            // reconnect-loop, который только что стартовал.
+            if (await waitForTelegramClientReady(telegramClient, 500)) {
+                if (preloadContacts) {
+                    await preloadContactsList({ client: telegramClient, silent });
+                }
+                return telegramClient;
+            }
+            diagnostics = buildTelegramClientDiagnostics(telegramClient);
+            if (diagnostics.reconnecting) {
+                if (!await waitForTelegramClientReady(telegramClient)) return undefined;
+                if (preloadContacts) {
+                    await preloadContactsList({ client: telegramClient, silent });
+                }
+                return telegramClient;
+            }
+        }
+        if (diagnostics.reconnecting) {
+            if (!await waitForTelegramClientReady(telegramClient)) return undefined;
+            if (preloadContacts) {
+                await preloadContactsList({ client: telegramClient, silent });
+            }
             return telegramClient;
         }
-
-        // Проверка наличия учетных данных в .env
-        const apiId = process.env.TELEGRAM_API_ID;
-        const apiHash = process.env.TELEGRAM_API_HASH;
-        const sessionString = process.env.TELEGRAM_SESSION_STRING;
-
-        if (!apiId || !apiHash || !sessionString) {
-            console.error("Для подключения к аккаунту Telegram необходимо настроить учетные данные в файле .env (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION_STRING)");
-            return;
-        }
-
-        telegramClient = new TelegramClient(
-            new StringSession(sessionString),
-            parseInt(apiId),
-            apiHash,
-            {
-                connectionRetries: 5,
-                useWSS: true
+        if (diagnostics.connected && !diagnostics.reconnecting) {
+            const authorized = await telegramClient.isUserAuthorized().catch(() => false);
+            if (authorized) {
+                if (preloadContacts) {
+                    await preloadContactsList({ client: telegramClient, silent });
+                }
+                return telegramClient;
             }
-        );
+            await disconnectTelegramClientSafely(telegramClient);
+            telegramClient = null;
+        }
+    }
 
-        await telegramClient.connect();
+    if (telegramClientInitPromise) {
+        const client = await telegramClientInitPromise;
+        if (client && preloadContacts) {
+            await preloadContactsList({ client, silent });
+        }
+        return client;
+    }
 
-        if (!await telegramClient.isUserAuthorized()) {
-            console.error("Пользователь не авторизован в Telegram");
-            return;
+    telegramClientInitStartedAt = new Date().toISOString();
+    telegramClientInitPromise = (async () => {
+        const credentials = getTelegramUserClientCredentials();
+        if (!credentials) {
+            logTelegramClientMessage(
+                "Для подключения к аккаунту Telegram необходимо настроить учетные данные в файле .env (TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION_STRING)",
+                undefined,
+                silent
+            );
+            return undefined;
         }
 
-        // После успешного подключения предзагружаем список контактов
-        await preloadContactsList();
+        const client = telegramClient ?? createTelegramClient(credentials);
+        const shouldCleanupClient = telegramClient == null;
 
-        return telegramClient;
-    } catch (error) {
-        console.error("Ошибка при подключении к аккаунту Telegram:", error);
-        return undefined;
+        try {
+            if (!await connectAndAuthorizeTelegramClient(client)) {
+                rememberTelegramClientError("Пользователь не авторизован в Telegram");
+                logTelegramClientMessage("Пользователь не авторизован в Telegram", undefined, silent);
+                if (shouldCleanupClient) {
+                    await disconnectTelegramClientSafely(client);
+                }
+                telegramClient = null;
+                return undefined;
+            }
+
+            telegramClient = client;
+            clearTelegramClientError();
+            telegramClientLastReadyAt = new Date().toISOString();
+            // Подписываемся на события соединения только для свежесозданного клиента,
+            // чтобы не дублировать обработчики при повторных вызовах initTelegramClient.
+            if (shouldCleanupClient) {
+                attachTelegramConnectionStateLogger(client);
+            }
+            return telegramClient;
+        } catch (error) {
+            rememberTelegramClientError(error);
+            if (shouldCleanupClient) {
+                await disconnectTelegramClientSafely(client);
+            }
+            telegramClient = null;
+            logTelegramClientMessage("Ошибка при подключении к аккаунту Telegram:", error, silent);
+            return undefined;
+        }
+    })();
+
+    try {
+        const client = await telegramClientInitPromise;
+        if (client && preloadContacts) {
+            await preloadContactsList({ client, silent });
+        }
+        return client;
+    } finally {
+        telegramClientInitPromise = null;
+        telegramClientInitStartedAt = null;
     }
 }
 
@@ -480,23 +846,183 @@ export function cancelScheduledMessage(messageId: number): boolean {
 /**
  * Предзагружает список контактов в хранилище при инициализации клиента
  */
-export async function preloadContactsList(): Promise<void> {
+export async function preloadContactsList(options: PreloadContactsOptions = {}): Promise<void> {
+    const { client: providedClient, silent = false } = options;
+    const client = providedClient ?? telegramClient;
+
+    if (!client) {
+        logTelegramClientMessage("Клиент Telegram не инициализирован или не авторизован", undefined, silent);
+        return;
+    }
+
+    if (preloadContactsPromise) {
+        await preloadContactsPromise;
+        return;
+    }
+
+    preloadContactsPromise = (async () => {
+        try {
+            if (!await client.isUserAuthorized()) {
+                logTelegramClientMessage("Клиент Telegram не инициализирован или не авторизован", undefined, silent);
+                return;
+            }
+
+            const contactsStore = ContactsStore.getInstance();
+            const syncedCount = await contactsStore.syncContactsFromTelegram(client);
+            devLog(`Предзагружено ${syncedCount} контактов в хранилище`);
+        } catch (error) {
+            rememberTelegramClientError(error);
+            logTelegramClientMessage("Ошибка при предзагрузке списка контактов:", error, silent);
+        }
+    })();
+
     try {
-        if (!telegramClient || !await telegramClient.isUserAuthorized()) {
-            console.error("Клиент Telegram не инициализирован или не авторизован");
-            return;
+        await preloadContactsPromise;
+    } finally {
+        preloadContactsPromise = null;
+    }
+}
+
+export async function getTelegramUserClientHealth(): Promise<TelegramUserClientHealth> {
+    const checkedAt = new Date().toISOString();
+    const credentials = getTelegramUserClientCredentials();
+    let diagnosticClient: TelegramClient | null = null;
+
+    if (!credentials) {
+        return {
+            status: 'disabled',
+            summary: 'Проверка user-client отключена: TELEGRAM_* настроены не полностью.',
+            details: 'Нужны TELEGRAM_API_ID, TELEGRAM_API_HASH и TELEGRAM_SESSION_STRING.',
+            checkedAt,
+            configured: false,
+            connected: false,
+            authorized: false,
+            reconnecting: false,
+            dc: null,
+            endpoint: null,
+            error: null,
+            lastReadyAt: telegramClientLastReadyAt,
+            lastErrorAt: telegramClientLastErrorAt,
+        };
+    }
+
+    const currentDiagnostics = buildTelegramClientDiagnostics(telegramClient);
+
+    if (currentDiagnostics.reconnecting) {
+        return {
+            status: 'warn',
+            summary: 'Telegram user-client сейчас переподключается.',
+            details: telegramClientLastError || 'Клиент держит reconnect-loop, но ещё не считается окончательно упавшим.',
+            checkedAt,
+            configured: true,
+            connected: currentDiagnostics.connected,
+            authorized: true,
+            reconnecting: true,
+            dc: currentDiagnostics.dc,
+            endpoint: currentDiagnostics.endpoint,
+            error: telegramClientLastError,
+            lastReadyAt: telegramClientLastReadyAt,
+            lastErrorAt: telegramClientLastErrorAt,
+        };
+    }
+
+    if (telegramClientInitPromise) {
+        return {
+            status: 'warn',
+            summary: 'Telegram user-client ещё инициализируется.',
+            details: telegramClientLastError || 'Общая инициализация клиента уже запущена и ещё не завершилась.',
+            checkedAt,
+            configured: true,
+            connected: currentDiagnostics.connected,
+            authorized: currentDiagnostics.connected,
+            reconnecting: currentDiagnostics.reconnecting,
+            dc: currentDiagnostics.dc,
+            endpoint: currentDiagnostics.endpoint,
+            error: telegramClientLastError,
+            lastReadyAt: telegramClientLastReadyAt,
+            lastErrorAt: telegramClientLastErrorAt ?? telegramClientInitStartedAt,
+        };
+    }
+
+    try {
+        if (telegramClient) {
+            const connected = isTelegramClientConnected(telegramClient);
+            const authorized = await telegramClient.isUserAuthorized();
+            const diagnostics = buildTelegramClientDiagnostics(telegramClient);
+            const health = resolveTelegramHealthState(connected, authorized, diagnostics.reconnecting);
+
+            return {
+                status: health.status,
+                summary: health.summary,
+                details: telegramClientLastError || health.details,
+                checkedAt,
+                configured: true,
+                connected,
+                authorized,
+                reconnecting: diagnostics.reconnecting,
+                dc: diagnostics.dc,
+                endpoint: diagnostics.endpoint,
+                error: telegramClientLastError,
+                lastReadyAt: telegramClientLastReadyAt,
+                lastErrorAt: telegramClientLastErrorAt,
+            };
         }
 
-        // Получаем хранилище контактов
-        const contactsStore = ContactsStore.getInstance();
+        diagnosticClient = createTelegramClient(credentials);
+        const authorized = await connectAndAuthorizeTelegramClient(
+            diagnosticClient,
+            { timeoutMs: 5000 }
+        );
+        const connected = isTelegramClientConnected(diagnosticClient);
+        const diagnostics = buildTelegramClientDiagnostics(diagnosticClient);
+        const health = resolveTelegramHealthState(connected, authorized, diagnostics.reconnecting);
 
-        // Синхронизируем контакты
-        const syncedCount = await contactsStore.syncContactsFromTelegram(telegramClient);
-        devLog(`Предзагружено ${syncedCount} контактов в хранилище`);
-
+        return {
+            status: health.status,
+            summary: health.summary,
+            details: telegramClientLastError || health.details,
+            checkedAt,
+            configured: true,
+            connected,
+            authorized,
+            reconnecting: diagnostics.reconnecting,
+            dc: diagnostics.dc,
+            endpoint: diagnostics.endpoint,
+            error: telegramClientLastError,
+            lastReadyAt: telegramClientLastReadyAt,
+            lastErrorAt: telegramClientLastErrorAt,
+        };
     } catch (error) {
-        console.error("Ошибка при предзагрузке списка контактов:", error);
+        rememberTelegramClientError(error);
+        return {
+            status: currentDiagnostics.connected ? 'warn' : 'down',
+            summary: currentDiagnostics.connected
+                ? 'Telegram user-client отвечает нестабильно.'
+                : 'Telegram user-client не отвечает.',
+            details: toErrorMessage(error),
+            checkedAt,
+            configured: true,
+            connected: currentDiagnostics.connected,
+            authorized: currentDiagnostics.connected,
+            reconnecting: currentDiagnostics.reconnecting,
+            dc: currentDiagnostics.dc,
+            endpoint: currentDiagnostics.endpoint,
+            error: telegramClientLastError,
+            lastReadyAt: telegramClientLastReadyAt,
+            lastErrorAt: telegramClientLastErrorAt,
+        };
+    } finally {
+        if (diagnosticClient) {
+            await disconnectTelegramClientSafely(diagnosticClient);
+        }
     }
+}
+
+function toErrorMessage(error: unknown): string {
+    if (error instanceof Error && error.message) {
+        return error.message;
+    }
+    return String(error || 'Неизвестная ошибка');
 }
 
 /**
@@ -552,4 +1078,5 @@ export function cleanupOldScheduledMessages(): void {
 }
 
 // Настраиваем периодическую очистку старых сообщений
-setInterval(cleanupOldScheduledMessages, 24 * 60 * 60 * 1000); // Каждые 24 часа
+const scheduledMessagesCleanupInterval = setInterval(cleanupOldScheduledMessages, 24 * 60 * 60 * 1000); // Каждые 24 часа
+scheduledMessagesCleanupInterval.unref();

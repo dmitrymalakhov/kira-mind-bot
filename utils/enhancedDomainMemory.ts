@@ -25,11 +25,13 @@ export interface MemorySaveMetadata {
     sourceContext?: string;
     sourceMessageIds?: string[];
     sourceMemoryIds?: string[];
+    reminderId?: string;
     extractionMethod?: MemoryExtractionMethod;
     confidence?: number;
     subject?: MemorySubject;
     predicate?: string;
     object?: string;
+    negated?: boolean;
     validFrom?: Date;
     validTo?: Date;
     status?: MemoryStatus;
@@ -37,6 +39,12 @@ export interface MemorySaveMetadata {
     strength?: number;
     vividness?: number;
     specificity?: number;
+}
+
+export const REMINDER_SOURCE_TAG_PREFIX = 'source_reminder:';
+
+export function buildReminderSourceTag(reminderId: string): string {
+    return `${REMINDER_SOURCE_TAG_PREFIX}${reminderId}`;
 }
 
 // Нижний порог для поиска устаревших планировочных фактов при смене состояния
@@ -233,12 +241,28 @@ function contactIdFromTags(tags: string[] | undefined): string | null {
     return tag ? String(tag).replace('contact_id:', '').trim() : null;
 }
 
+function personIdFromTags(tags: string[] | undefined): string | null {
+    const tag = (tags ?? []).find(t => String(t).startsWith('person_id:'));
+    return tag ? String(tag).slice('person_id:'.length).trim() : null;
+}
+
+function subjectFromTags(tags: string[] | undefined): string | null {
+    const tag = (tags ?? []).find(t => String(t).startsWith('subject:'));
+    return tag ? String(tag).slice('subject:'.length).trim() : null;
+}
+
 function contactNamesFromTags(tags: string[] | undefined): Set<string> {
     const names = new Set<string>();
     for (const tag of tags ?? []) {
         const value = String(tag);
-        if (value.startsWith('contact:') || value.startsWith('contact_name:') || value.startsWith('contact_alias:')) {
-            names.add(value.replace(/^contact(_name|_alias)?:/, '').trim().toLowerCase());
+        if (value.startsWith('contact:') || value.startsWith('contact_name:') || value.startsWith('contact_alias:') || value.startsWith('contact_username:')) {
+            names.add(
+                value
+                    .replace(/^contact(_name|_alias)?:/, '')
+                    .replace(/^contact_username:/, '')
+                    .trim()
+                    .toLowerCase()
+            );
         }
     }
     return names;
@@ -247,6 +271,7 @@ function contactNamesFromTags(tags: string[] | undefined): Set<string> {
 function hasStableContactIdentity(tags: string[] | undefined): boolean {
     return (tags ?? []).some(t =>
         String(t).startsWith('contact_id:') ||
+        String(t).startsWith('contact_username:') ||
         String(t).startsWith('contact_key:')
     );
 }
@@ -264,6 +289,7 @@ function isContactLikeMemory(memory: Pick<MemoryEntry, 'content' | 'tags'>): boo
             String(t).startsWith('contact_name:') ||
             String(t).startsWith('contact_alias:') ||
             String(t).startsWith('contact_id:') ||
+            String(t).startsWith('contact_username:') ||
             String(t).startsWith('contact_key:')
         );
 }
@@ -304,6 +330,7 @@ function normalizeMemoryTags(tags: string[]): string[] {
         tag.startsWith('contact_name:') ||
         tag.startsWith('contact_alias:') ||
         tag.startsWith('contact_id:') ||
+        tag.startsWith('contact_username:') ||
         tag.startsWith('contact_key:')
     );
     if (isContact) {
@@ -356,14 +383,22 @@ function chooseDedupContent(existingContent: string, newContent: string): string
 }
 
 function isSameContactScope(newTags: string[], existingTags: string[] | undefined): boolean {
+    const newSubject = subjectFromTags(newTags);
+    const existingSubject = subjectFromTags(existingTags);
+    if (newSubject && existingSubject && newSubject !== existingSubject) return false;
+
+    const newPersonId = personIdFromTags(newTags);
+    const existingPersonId = personIdFromTags(existingTags);
+    if (newPersonId && existingPersonId) return newPersonId === existingPersonId;
+
     const newContactId = contactIdFromTags(newTags);
     const existingContactId = contactIdFromTags(existingTags);
     if (newContactId && existingContactId) return newContactId === existingContactId;
 
     const newNames = contactNamesFromTags(newTags);
     const existingNames = contactNamesFromTags(existingTags);
-    const newHasContactScope = Boolean(newContactId) || newNames.size > 0;
-    const existingHasContactScope = Boolean(existingContactId) || existingNames.size > 0;
+    const newHasContactScope = Boolean(newPersonId || newContactId) || newNames.size > 0;
+    const existingHasContactScope = Boolean(existingPersonId || existingContactId) || existingNames.size > 0;
     if (newHasContactScope !== existingHasContactScope) return false;
     if (!newHasContactScope && !existingHasContactScope) return true;
 
@@ -371,6 +406,7 @@ function isSameContactScope(newTags: string[], existingTags: string[] | undefine
     const existingHasStableIdentity = hasStableContactIdentity(existingTags);
     if (newHasStableIdentity !== existingHasStableIdentity) return false;
     if ((newContactId || existingContactId) && newContactId !== existingContactId) return false;
+    if ((newPersonId || existingPersonId) && !(newContactId && newContactId === existingContactId)) return false;
 
     if (newNames.size > 0 && existingNames.size > 0) {
         for (const name of newNames) {
@@ -380,6 +416,10 @@ function isSameContactScope(newTags: string[], existingTags: string[] | undefine
     }
 
     return true;
+}
+
+export function areMemoryIdentityScopesCompatible(newTags: string[], existingTags: string[] | undefined): boolean {
+    return isSameContactScope(newTags, existingTags);
 }
 
 // Категории состояний для расширенного поиска противоречий.
@@ -801,6 +841,15 @@ export async function saveMemory(
         domain = normalizedDomain;
         content = normalizedContent;
         tags = normalizeMemoryTags(tags);
+        if (metadata.subject) {
+            tags = [...new Set([
+                ...tags.filter(tag => !tag.startsWith('subject:')),
+                `subject:${metadata.subject}`,
+            ])];
+        }
+        if (metadata.reminderId?.trim()) {
+            tags = normalizeMemoryTags([...tags, buildReminderSourceTag(metadata.reminderId.trim())]);
+        }
 
         const incomingConfidence = clamp01(
             typeof metadata.confidence === 'number' && Number.isFinite(metadata.confidence)
@@ -839,6 +888,7 @@ export async function saveMemory(
         if (dedupCandidate) {
             const existing = dedupCandidate;
             const canonicalContent = chooseDedupContent(existing.content, content);
+            const canonicalUsesIncoming = canonicalFactText(canonicalContent) === canonicalFactText(content);
             const independentConfirmation = isIndependentConfirmation(existing, metadata);
             // Каждое подтверждение повышает достоверность, но слабые фоновые
             // извлечения не должны резко укреплять сомнительный факт.
@@ -902,9 +952,10 @@ export async function saveMemory(
                 sourceMessageIds: mergeSourceMessageIds(existing.sourceMessageIds, metadata.sourceMessageIds),
                 sourceMemoryIds: mergeSourceMemoryIds(existing.sourceMemoryIds, metadata.sourceMemoryIds),
                 extractionMethod: metadata.extractionMethod ?? existing.extractionMethod,
-                subject: metadata.subject ?? existing.subject,
-                predicate: metadata.predicate ?? existing.predicate,
-                object: metadata.object ?? existing.object,
+                subject: canonicalUsesIncoming ? (metadata.subject ?? existing.subject) : existing.subject,
+                predicate: canonicalUsesIncoming ? (metadata.predicate ?? existing.predicate) : existing.predicate,
+                object: canonicalUsesIncoming ? (metadata.object ?? existing.object) : existing.object,
+                negated: canonicalUsesIncoming ? (metadata.negated ?? existing.negated) : existing.negated,
                 validFrom: metadata.validFrom ?? existing.validFrom,
                 validTo: metadata.validTo ?? existing.validTo,
                 status: metadata.status ?? existing.status ?? inferMemoryStatus(canonicalContent),
@@ -957,7 +1008,7 @@ export async function saveMemory(
             }
         }
 
-        let mergedCount = 0;
+        const conflictsToSupersede: SearchResult[] = [];
         for (const candidate of related) {
             // Пропускаем то, что уже обработано порогом дедупликации
             if (candidate.score >= dedupThreshold) continue;
@@ -969,101 +1020,14 @@ export async function saveMemory(
                 new: content.slice(0, 60),
             });
 
-            if ((check.verdict === 'contradicts' || check.verdict === 'updates') && check.mergedContent) {
-                const existingConfidence = candidate.confidence ?? 0.6;
-                const newVersion = {
-                    content: candidate.content,
-                    timestamp: candidate.timestamp,
-                    confidence: existingConfidence,
-                };
-                const previousVersions = [
-                    newVersion,
-                    ...((candidate as any).previousVersions ?? []),
-                ].slice(0, 10);
-
-                if (mergedCount === 0) {
-                    // Первый конфликт: полное слияние — становится каноническим текущим состоянием
-                    // - contradicts: "работал в Сбере, затем уволился" (история сохранена)
-                    // - updates:     "переехал из Москвы в Питер" (актуальное состояние)
-                    const mergeTag = check.verdict === 'contradicts' ? 'contradicts-merged' : 'updated';
-                    const mergedConfidence = check.verdict === 'contradicts'
-                        ? Math.max(0.3, Math.min(existingConfidence, incomingConfidence) - 0.15)
-                        : Math.max(existingConfidence, incomingConfidence * 0.9);
-                    const candidateImportance = calibratedImportanceForEvidence(
-                        candidate.importance ?? 0.5,
-                        candidate.tags ?? [],
-                        candidate.confidence ?? 0.6
-                    );
-                    const mergedImportance = Math.max(importance, candidateImportance);
-                    let mergedTags = [...new Set([...(tags || []), ...(candidate.tags || []), mergeTag])];
-                    if (candidateImportance < (candidate.importance ?? 0.5)) {
-                        mergedTags = [...new Set([...mergedTags, 'importance-capped'])];
-                    }
-                    const keepCandidateAnchor = Boolean(candidate.isAnchor || candidate.tags?.includes('anchor')) &&
-                        canKeepRequestedAnchor(mergedTags, mergedConfidence);
-                    const memoryKind = inferMemoryKind(check.mergedContent, mergedTags, metadata);
-                    const status = metadata.status ?? inferMemoryStatus(check.mergedContent);
-                    const metrics = estimateHumanMemoryMetrics({
-                        content: check.mergedContent,
-                        importance: mergedImportance,
-                        confidence: mergedConfidence,
-                        tags: mergedTags,
-                        isAnchor: isAnchor || keepCandidateAnchor,
-                        emotionalTag: candidate.emotionalTag,
-                        memoryKind,
-                        status,
-                        retrievalCount: candidate.retrievalCount,
-                    });
-
-                    await svc.updateMemory(candidate.id, candidate.domain, {
-                        content: check.mergedContent,
-                        domain: candidate.domain,
-                        timestamp: new Date(),
-                        importance: mergedImportance,
-                        tags: mergedTags,
-                        userId: String(userId),
-                        botId,
-                        isAnchor: isAnchor || keepCandidateAnchor || undefined,
-                        confidence: mergedConfidence,
-                        memoryKind,
-                        strength: metadata.strength ?? metrics.strength,
-                        vividness: metadata.vividness ?? metrics.vividness,
-                        specificity: metadata.specificity ?? metrics.specificity,
-                        previousVersions,
-                        status,
-                    });
-                    devLog(`🔄 Факт объединён [${check.verdict}]:`, check.mergedContent.slice(0, 60));
-                } else {
-                    // Последующие конфликты: устаревший планировочный факт — истекает немедленно,
-                    // чтобы не дублировать merged-контент в нескольких записях.
-                    await svc.updateMemory(candidate.id, candidate.domain, {
-                        content: candidate.content,
-                        domain: candidate.domain,
-                        timestamp: candidate.timestamp,
-                        importance: candidate.importance,
-                        tags: [...new Set([...(candidate.tags || []), 'planning-superseded'])],
-                        userId: String(userId),
-                        botId,
-                        expiresAt: new Date(),
-                        confidence: Math.max(0.3, existingConfidence - 0.1),
-                        memoryKind: candidate.memoryKind ?? inferMemoryKind(candidate.content, candidate.tags ?? []),
-                        strength: candidate.strength,
-                        vividness: candidate.vividness,
-                        specificity: candidate.specificity,
-                        previousVersions,
-                        status: 'superseded',
-                    });
-                    devLog(`⏰ Дополнительный планировочный факт истёк:`, candidate.content.slice(0, 60));
-                }
-                mergedCount++;
+            if (check.verdict === 'contradicts' || check.verdict === 'updates') {
+                // Никогда не принимаем сгенерированный mergedContent как новый факт:
+                // он может добавить хронологию или склеить несколько предикатов.
+                // Старые записи закрываем только после успешного сохранения новой,
+                // чтобы сбой записи не уничтожил последнее известное состояние.
+                conflictsToSupersede.push(candidate);
             }
             // 'complements' — продолжаем, сохраним оба
-        }
-
-        if (mergedCount > 0) {
-            lastSaveError = null;
-            if (ctx.session) delete ctx.session.lastFactSaveError;
-            return true; // Новый факт поглощён существующими записями
         }
 
         // ── Шаг 3: Эмоциональная маркировка (только для значимых фактов) ────
@@ -1128,12 +1092,42 @@ export async function saveMemory(
             subject: metadata.subject ?? (tags.includes('subject:contact') ? 'contact' : 'user'),
             predicate: metadata.predicate,
             object: metadata.object,
+            negated: metadata.negated,
             validFrom: metadata.validFrom,
             validTo: metadata.validTo,
             status,
             confirmationCount: 1,
             lastConfirmedAt: now,
         });
+        if (conflictsToSupersede.length > 0) {
+            const supersedeResults = await Promise.allSettled(conflictsToSupersede.map(candidate => {
+                const existingConfidence = candidate.confidence ?? 0.6;
+                const previousVersions = [{
+                    content: candidate.content,
+                    timestamp: candidate.timestamp,
+                    confidence: existingConfidence,
+                }, ...((candidate as any).previousVersions ?? [])].slice(0, 10);
+                return svc.updateMemory(candidate.id, candidate.domain, {
+                    content: candidate.content,
+                    domain: candidate.domain,
+                    timestamp: candidate.timestamp,
+                    importance: candidate.importance,
+                    tags: [...new Set([...(candidate.tags || []), 'superseded-by-atomic-update'])],
+                    userId: String(userId),
+                    botId,
+                    expiresAt: now,
+                    confidence: Math.max(0.3, existingConfidence - 0.1),
+                    memoryKind: candidate.memoryKind ?? inferMemoryKind(candidate.content, candidate.tags ?? []),
+                    strength: candidate.strength,
+                    vividness: candidate.vividness,
+                    specificity: candidate.specificity,
+                    previousVersions,
+                    status: 'superseded',
+                });
+            }));
+            const failed = supersedeResults.filter(item => item.status === 'rejected').length;
+            if (failed > 0) console.error(`Не удалось закрыть ${failed} конфликтующих фактов после атомарного обновления.`);
+        }
         devLog('✅ Факт успешно сохранён с ID:', result);
 
         // ── Шаг 5: Строим граф связей (fire & forget) ────────────────────────
@@ -1204,7 +1198,11 @@ function inferRelation(
     if (allTags.has('memory-episode') || /эпизод памяти/.test(lc)) {
         return { type: 'same_episode', weight: Math.max(0.65, score), cue: 'same episode/context' };
     }
-    if ([...allTags].some(tag => String(tag).startsWith('contact:') || String(tag).startsWith('contact_id:'))) {
+    if ([...allTags].some(tag =>
+        String(tag).startsWith('contact:') ||
+        String(tag).startsWith('contact_id:') ||
+        String(tag).startsWith('contact_username:')
+    )) {
         return { type: 'person_link', weight: Math.max(0.64, score), cue: 'same contact/entity' };
     }
     if (/планир|собира|хоч|цель|нужно|надо|шаг|сделать|дедлайн/.test(lc)) {

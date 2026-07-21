@@ -1,0 +1,35 @@
+{
+  "gemini": {
+    "gemini-embedding-2": {
+      "supportsEmbedding": true,
+      "supportsChatCompletions": false,
+      "supportsResponsesApi": false,
+      "supportsVision": false,
+      "supportsFunctionCalling": false
+    },
+    "gemini-3.5-flash": {
+      "supportsTranscription": true
+    }
+  },
+  "zai": {
+    "glm-asr-2512": {
+      "supportsChatCompletions": false,
+      "supportsResponsesApi": false,
+      "supportsTranscription": true,
+      "supportsVision": false,
+      "supportsFunctionCalling": false,
+      "supportsThinkingMode": false,
+      "supportsReasoningEffort": false,
+      "supportsPromptCaching": false
+    },
+    "glm-5v-turbo": {
+      "supportsVision": true
+    },
+    "glm-4.6v": {
+      "supportsVision": true
+    },
+    "glm-4.5v": {
+      "supportsVision": true
+    }
+  }
+}

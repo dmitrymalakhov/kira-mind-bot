@@ -1,5 +1,4 @@
-import { getActiveAiPresetName, getCachedAiPresetName, getEnvAiPresetName } from '../services/aiRuntimeConfigService';
-import { getFallbackModel } from './fallbackModels';
+import { getActiveAiPresetName, getEnvAiPresetName, refreshActiveAiPresetName } from '../services/aiRuntimeConfigService';
 import {
     aiPresets,
     type AiModelRef,
@@ -30,10 +29,10 @@ export async function resolveModelForTaskAsync(taskKey: AiTaskKey): Promise<{ pr
     };
 }
 
-export async function resolveOpenAiModelForTaskAsync(taskKey: AiTaskKey): Promise<string> {
-    const presetName = getCachedAiPresetName();
-    const modelRef = aiPresets[presetName].models[taskKey];
-    return modelRef.provider === 'openai'
-        ? modelRef.model
-        : getFallbackModel(taskKey).model;
+export async function resolveModelForTaskFreshAsync(taskKey: AiTaskKey): Promise<{ presetName: AiPresetName; modelRef: AiModelRef }> {
+    const presetName = await refreshActiveAiPresetName();
+    return {
+        presetName,
+        modelRef: aiPresets[presetName].models[taskKey],
+    };
 }

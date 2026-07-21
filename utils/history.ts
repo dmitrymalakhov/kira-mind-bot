@@ -1,11 +1,12 @@
 import { EnhancedSessionData, updateDialogueContext } from "../services/dialogueSummarizer";
-import { BotContext } from "../types";
+import { BotContext, ConversationTurn } from "../types";
 import { factAnalysisManager } from './factAnalysisTimer';
 import { devLog } from "../utils";
 import { quickFactCheck, extractExplicitRememberFact } from './enhancedFactExtraction';
 import { saveMemory } from './enhancedDomainMemory';
 import { rememberFact } from './domainMemory';
-import { saveContactMemoryFactOrAsk } from './contactMemory';
+import { normalizeContactLookupValue, saveContactMemoryFactOrAsk } from './contactMemory';
+import { containsMultipleAssertions } from './atomicAssertion';
 
 const MAX_HISTORY_LENGTH = 10;
 /** Время жизни факта в short-term буфере (мс) */
@@ -33,7 +34,12 @@ function shouldSkipFactExtractionForBrowserTask(ctx: BotContext, content: string
         .test(content);
 }
 
-export async function addToHistory(ctx: BotContext, role: string, content: string) {
+export async function addToHistory(
+    ctx: BotContext,
+    role: string,
+    content: string,
+    options: { turn?: ConversationTurn } = {},
+) {
     ctx.session.messageHistory.unshift({
         role,
         content,
@@ -64,7 +70,8 @@ export async function addToHistory(ctx: BotContext, role: string, content: strin
                 // Явная просьба «Запомни, что …» — сохраняем в векторную БД (долговременная память)
                 // Используем только текст инструкции (без reply-префикса), чтобы регексы корректно сработали
                 const explicitFact = extractExplicitRememberFact(userInstruction);
-                if (explicitFact) {
+                const explicitRequiresExtraction = Boolean(explicitFact && containsMultipleAssertions(explicitFact.content));
+                if (explicitFact && !explicitRequiresExtraction) {
                     if (explicitFact.contactName) {
                         const factContent = repliedText ?? explicitFact.content;
                         devLog(`Explicit remember (contact): resolving identity before save: "${factContent}"`);
@@ -80,6 +87,9 @@ export async function addToHistory(ctx: BotContext, role: string, content: strin
                                 sourceMessageIds,
                                 extractionMethod: 'explicit',
                                 subject: 'contact',
+                                predicate: explicitFact.domain || 'stated_fact',
+                                object: factContent,
+                                negated: /(?:^|\s)не\s/iu.test(factContent),
                             },
                         });
                     } else {
@@ -89,6 +99,9 @@ export async function addToHistory(ctx: BotContext, role: string, content: strin
                             sourceMessageIds,
                             extractionMethod: 'explicit',
                             subject: 'user',
+                            predicate: explicitFact.domain || 'stated_fact',
+                            object: explicitFact.content,
+                            negated: /(?:^|\s)не\s/iu.test(explicitFact.content),
                         });
                         if (saved) {
                             rememberFact(ctx, explicitFact.domain, explicitFact.content);
@@ -98,17 +111,71 @@ export async function addToHistory(ctx: BotContext, role: string, content: strin
                 }
 
                 // Дополнительно проверяем через LLM (пропускаем, если уже сохранили по явной просьбе)
-                const quickFacts = explicitFact ? [] : await quickFactCheck(content);
+                const contextualContactName = options.turn?.activePeople?.find(person => person.contactName && !person.contactId && !person.personId)?.contactName;
+                const quickFacts = explicitRequiresExtraction
+                    ? await quickFactCheck(explicitFact!.content, contextualContactName)
+                    : explicitFact ? [] : await quickFactCheck(userInstruction, contextualContactName);
                 if (quickFacts.length > 0) {
                     devLog(`Quick fact check found ${quickFacts.length} facts, saving immediately`);
                     // Сохраняем контент quick-фактов в session, чтобы delayed analysis мог их пропустить
                     if (!ctx.session.quickFactContents) ctx.session.quickFactContents = [];
                     for (const fact of quickFacts) {
+                        if (fact.subject === 'unknown' || fact.subject === 'third_party') continue;
+                        if (fact.subject === 'contact') {
+                            const activeIdentity = options.turn?.replyContext?.contactId
+                                ? {
+                                    contactId: options.turn.replyContext.contactId,
+                                    contactName: options.turn.replyContext.contactName,
+                                }
+                                : options.turn?.activePeople?.[0];
+                            const effectiveContactName = fact.contactName || activeIdentity?.contactName || (
+                                activeIdentity?.contactId ? `contact-${activeIdentity.contactId}` : undefined
+                            );
+                            if (!effectiveContactName) {
+                                devLog('Quick contact fact skipped: identity is not explicit or reply-resolved');
+                                continue;
+                            }
+                            const resolvedContactId = activeIdentity?.contactId && (
+                                (!fact.contactName && Boolean(effectiveContactName)) ||
+                                (Boolean(activeIdentity.contactName) && normalizeContactLookupValue(fact.contactName ?? '') === normalizeContactLookupValue(activeIdentity.contactName ?? ''))
+                            )
+                                ? activeIdentity.contactId
+                                : undefined;
+                            const result = await saveContactMemoryFactOrAsk(ctx, {
+                                contactName: effectiveContactName,
+                                content: fact.content,
+                                domain: fact.domain,
+                                importance: fact.importance,
+                                tags: fact.tags,
+                                memoryMetadata: {
+                                    sourceContext: content,
+                                    sourceMessageIds,
+                                    extractionMethod: 'quick',
+                                    subject: 'contact',
+                                    predicate: fact.predicate,
+                                    object: fact.object,
+                                    negated: fact.negated,
+                                },
+                            }, {
+                                askOnAmbiguous: false,
+                                resolvedContactId,
+                            });
+                            if (result.status === 'saved') {
+                                const savedContent = result.content ?? fact.content;
+                                pushRecentFact(ctx, savedContent);
+                                ctx.session.quickFactContents.push(savedContent);
+                            }
+                            continue;
+                        }
+                        if (fact.subject !== 'user') continue;
                         const saved = await saveMemory(ctx, fact.domain, fact.content, fact.importance, fact.tags, false, {
                             sourceContext: content,
                             sourceMessageIds,
                             extractionMethod: 'quick',
                             subject: 'user',
+                            predicate: fact.predicate,
+                            object: fact.object,
+                            negated: fact.negated,
                         });
                         if (saved) {
                             rememberFact(ctx, fact.domain, fact.content);

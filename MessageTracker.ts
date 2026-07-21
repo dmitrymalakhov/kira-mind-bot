@@ -113,9 +113,10 @@ export class MessageTracker {
 // Настраиваем периодическую очистку старых отслеживаемых сообщений
 export function setupMessageTrackerCleanup(): void {
     // Очищаем устаревшие сообщения каждые 6 часов
-    setInterval(() => {
+    const cleanupInterval = setInterval(() => {
         MessageTracker.getInstance().cleanupOldMessages(24);
     }, 6 * 60 * 60 * 1000);
+    cleanupInterval.unref();
 }
 
 // Инициализируем очистку

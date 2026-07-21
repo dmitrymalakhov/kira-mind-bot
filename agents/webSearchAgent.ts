@@ -3,11 +3,30 @@ import { ProcessingResult } from "../orchestrator";
 import { devLog, processMarkdownLinks } from "../utils";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { createResponseForTask } from "../ai/responseCompletion";
+import { formatDateInTimeZone } from "../utils/time";
+import { buildSafeAiErrorLog } from "../ai/errorDiagnostics";
+import { USER_TIMEZONE } from "../constants";
 
 interface WebSearchResult {
     success: boolean;
     results?: string;
     error?: string;
+}
+
+export interface WebSearchProcessingResult extends ProcessingResult {
+    webSearchSucceeded: boolean;
+}
+
+const WEB_SEARCH_UNAVAILABLE_MESSAGE = "Поиск сейчас временно недоступен. Попробуйте ещё раз чуть позже.";
+
+export function buildWebSearchSystemPrompt(): string {
+    return `${getBotPersona()} Стиль общения: ${getCommunicationStyle()} Текущая дата: ${formatDateInTimeZone(new Date(), { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' })}. Часовой пояс пользователя: ${USER_TIMEZONE}. При работе с информацией: - Подбирай наиболее полезную информацию. - Предупреждай, когда данные могут быть устаревшими или неточными. - Обобщай сведения из нескольких источников. Если информация не найдена, сообщи об этом и предложи альтернативы. Используй историю сообщений для контекста.
+
+Если запрос про афишу, расписание, ближайшие игры, квизы, мероприятия, билеты, запись или регистрацию: ищи актуальные официальные страницы и страницы агрегаторов, укажи ближайшие даты/время/места/стоимость и прямые ссылки на регистрацию, если они доступны. Не подменяй такой запрос поиском заведений на карте. В конце коротко предложи следующий шаг: помочь выбрать игру или открыть запись/регистрацию, но не утверждай, что пользователь уже записан без явной просьбы и подтверждения.
+
+Для любого запроса об актуальном внешнем мире сначала определи все запрошенные аспекты: текущее состояние, последние изменения, даты и расписание, результаты, цены и наличие, правила и ограничения, должности или источники. Покрой каждый релевантный аспект, а не только первый найденный факт. Предпочитай первичные и официальные источники, сверяй дату публикации с датой самого события и сохраняй прямые ссылки.
+
+Все зависящие от времени данные — матчи, мероприятия, транспорт, эфиры, релизы, дедлайны и часы работы — приводи к часовому поясу ${USER_TIMEZONE} и явно его подписывай. Проверенные факты отделяй от расписания, результатов и собственных выводов. Личную память используй только для персонализации запроса, но никогда не вместо актуальных внешних данных.`;
 }
 
 export async function webSearchAgent(
@@ -16,7 +35,7 @@ export async function webSearchAgent(
     forwardFrom: string = "",
     messageHistory: MessageHistory[] = [],
     memoryContext: string = ""
-): Promise<ProcessingResult> {
+): Promise<WebSearchProcessingResult> {
     try {
         let historyContext = "";
         if (messageHistory.length > 0) {
@@ -32,30 +51,28 @@ export async function webSearchAgent(
         if (searchResponse.success && searchResponse.results) {
             devLog("Web search successful. Returning results.");
             return {
-                responseText: searchResponse.results
+                responseText: searchResponse.results,
+                webSearchSucceeded: true,
             };
         } else {
-            console.error("Web search failed:", searchResponse.error);
-
-            const errorMessage = `Не удалось получить результаты поиска${searchResponse.error ? `: ${searchResponse.error}` : ""}. Попробуйте сформулировать запрос иначе.`;
-
             return {
-                responseText: errorMessage
+                responseText: WEB_SEARCH_UNAVAILABLE_MESSAGE,
+                webSearchSucceeded: false,
             };
         }
     } catch (error) {
-        console.error("Error in webSearchAgent:", error);
+        console.error("Unexpected webSearchAgent failure:", buildSafeAiErrorLog(error));
 
         const errorMessage = "Произошла ошибка при поиске информации. Попробуйте позже.";
         return {
-            responseText: errorMessage
+            responseText: errorMessage,
+            webSearchSucceeded: false,
         };
     }
 }
 
 /**
- * Альтернативная реализация веб-поиска с использованием API OpenAI
- * Реализует поиск через модель gpt-4o с доступом к интернету
+ * Выполняет provider-aware веб-поиск через task routing активного AI preset-а.
  * @param query Поисковый запрос
  * @returns Результаты поиска или информация об ошибке
  */
@@ -68,9 +85,7 @@ async function performWebSearch(query: string): Promise<WebSearchResult> {
                     content: [
                         {
                             type: "input_text",
-                            text: `${getBotPersona()} Стиль общения: ${getCommunicationStyle()} Текущая дата: ${new Date().toLocaleString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' })}. При работе с информацией: - Подбирай наиболее полезную информацию. - Предупреждай, когда данные могут быть устаревшими или неточными. - Обобщай сведения из нескольких источников. Если информация не найдена, сообщи об этом и предложи альтернативы. Используй историю сообщений для контекста.
-
-Если запрос про афишу, расписание, ближайшие игры, квизы, мероприятия, билеты, запись или регистрацию: ищи актуальные официальные страницы и страницы агрегаторов, укажи ближайшие даты/время/места/стоимость и прямые ссылки на регистрацию, если они доступны. Не подменяй такой запрос поиском заведений на карте. В конце коротко предложи следующий шаг: помочь выбрать игру или открыть запись/регистрацию, но не утверждай, что пользователь уже записан без явной просьбы и подтверждения.`,
+                            text: buildWebSearchSystemPrompt(),
                         },
                     ],
                 },
@@ -119,10 +134,10 @@ async function performWebSearch(query: string): Promise<WebSearchResult> {
             };
         }
     } catch (error: any) {
-        console.error("Error during web search with OpenAI:", error);
+        console.error("Web search providers failed:", buildSafeAiErrorLog(error));
         return {
             success: false,
-            error: `Произошла ошибка при выполнении поиска${error && error.message ? `: ${error.message}` : ""}.`,
+            error: "provider_unavailable",
         };
     }
 }
