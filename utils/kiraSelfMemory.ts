@@ -2,6 +2,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { config } from "../config";
 import { getActiveBotProfile } from "./botIdentity";
+import { RUNTIME_DATA_DIR } from "./runtimeData";
 const { hasLegacyDigitalBiography } = require("./legacyPersonalitySanitizer");
 
 export type KiraSelfEventType = "mood" | "activity" | "thought" | "event" | "relationship" | "reflection";
@@ -190,7 +191,7 @@ export function isKiraSelfMemoryCorruptedError(error: unknown): error is KiraSel
     (typeof error === "object" && error !== null && (error as { name?: string }).name === "KiraSelfMemoryCorruptedError");
 }
 
-const DATA_DIR = path.join(__dirname, "..", "data");
+const DATA_DIR = RUNTIME_DATA_DIR;
 const PROFILE = getActiveBotProfile();
 const MEMORY_PATH = process.env.KIRA_SELF_MEMORY_PATH?.trim() || path.join(DATA_DIR, `${PROFILE}-self-memory.json`);
 const DEFAULT_DATE = new Date(0).toISOString();
@@ -652,7 +653,7 @@ async function getCurrentMemoryData(): Promise<KiraSelfMemoryData> {
 async function saveMemoryAtomically(data: KiraSelfMemoryData): Promise<void> {
   await ensureDataDir();
   const tempPath = `${MEMORY_PATH}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tempPath, JSON.stringify(data, null, 2), "utf-8");
+  await fs.writeFile(tempPath, JSON.stringify(data, null, 2), { encoding: "utf-8", mode: 0o600 });
   await fs.rename(tempPath, MEMORY_PATH);
 }
 

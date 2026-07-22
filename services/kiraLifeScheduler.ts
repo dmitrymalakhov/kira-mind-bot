@@ -34,6 +34,7 @@ let isProactiveRunning = false;
 let isInnerRunning = false;
 let lastSentAt = 0;
 let lastInnerDevelopmentAt = 0;
+const PROACTIVE_CHECK_INTERVAL_MS = 15 * 60 * 1000;
 
 const LAST_SENT_SETTING_KEY = `${getActiveBotProfile()}:kiraLife:lastSentAt`;
 const LAST_INNER_DEVELOPMENT_SETTING_KEY = `${getActiveBotProfile()}:kiraLife:lastInnerDevelopmentAt`;
@@ -396,7 +397,7 @@ export function startKiraLifeScheduler(bot: Bot<BotContext>): void {
   if (config.kiraLifeProactiveEnabled) {
     proactiveTimer = setInterval(() => {
       runProactiveCycle(bot);
-    }, config.kiraLifeProactiveIntervalMs);
+    }, Math.min(config.kiraLifeProactiveIntervalMs, PROACTIVE_CHECK_INTERVAL_MS));
 
     setTimeout(() => {
       runProactiveCycle(bot);
