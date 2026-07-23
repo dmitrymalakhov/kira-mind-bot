@@ -14,7 +14,11 @@ import {
 import { saveRemindersFromResult } from "../handlers/shared";
 import { computeFollowingRecurringRun, formatRecurringSchedule } from "../utils/recurringTaskSchedule";
 import { splitRecurringResultText } from "../utils/recurringTaskResult";
-import { buildRecurringKnowledgeSourceText } from "../utils/recurringTaskPrompt";
+import {
+    buildRecurringKnowledgeSourceText,
+    isExplicitReminderRequest,
+    normalizeRecurringExecutionPrompt,
+} from "../utils/recurringTaskPrompt";
 import { esc, footer, heading, paragraph, sendStructured } from "../utils/richMessage";
 
 const POLL_INTERVAL_MS = 30_000;
@@ -198,9 +202,10 @@ export async function executeRecurringTask(
     heartbeat.unref?.();
     try {
         const ctx = await buildBackgroundContext(bot, task);
+        const executionPrompt = normalizeRecurringExecutionPrompt(task.prompt);
         const result = await processMessage(
             ctx,
-            task.prompt,
+            executionPrompt,
             false,
             "",
             (task.contextHistory ?? []).map((item) => ({
@@ -209,10 +214,15 @@ export async function executeRecurringTask(
             })),
             undefined,
             {
-                turn: { userText: task.prompt },
-                knowledgeSourceText: buildRecurringKnowledgeSourceText(task.prompt),
+                turn: { userText: executionPrompt },
+                knowledgeSourceText: buildRecurringKnowledgeSourceText(executionPrompt),
+                recurringTaskRun: true,
+                suppressProgress: true,
             },
         );
+        if (result.reminderCreated && !isExplicitReminderRequest(executionPrompt)) {
+            throw new Error("Вложенное напоминание заблокировано внутри регулярной задачи.");
+        }
         await mergePersistedBackgroundContinuation(task.chatId, ctx.session, startedAt);
         await saveRemindersFromResult(ctx, result);
         await sendRecurringResult(bot, task, result);
@@ -290,5 +300,8 @@ export function startRecurringTaskScheduler(bot: Bot<BotContext>): void {
     void poll(bot);
     timer = setInterval(() => void poll(bot), POLL_INTERVAL_MS);
     timer.unref?.();
-    console.log("✅ Планировщик регулярных задач запущен");
+    console.log(
+        `✅ Планировщик регулярных задач запущен ` +
+        `(instance=${process.env.KIRA_INSTANCE_NAME || "unknown"})`,
+    );
 }

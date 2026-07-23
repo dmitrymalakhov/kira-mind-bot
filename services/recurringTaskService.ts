@@ -18,10 +18,11 @@ import { editStructured } from "../utils/richMessage";
 import { getActiveBotProfile } from "../utils/botIdentity";
 import { InlineKeyboard } from "grammy";
 import { editReplyMarkupIfChanged } from "../utils/telegramMessageEdit";
+import { normalizeRecurringExecutionPrompt } from "../utils/recurringTaskPrompt";
 
 const EDIT_TTL_MS = 10 * 60 * 1000;
 const CREATION_ACTION_RE = /(?:присыла(?:й|йте|ть)|отправля(?:й|йте|ть)|запуска(?:й|йте|ть)|выполня(?:й|йте|ть)|дела(?:й|йте|ть)|повторя(?:й|йте|ть)|повтори(?:те)?|поставь(?:те)?|ставь(?:те)?|добавь(?:те)?|запланируй(?:те)?|назначь(?:те)?)/iu;
-const INLINE_CREATION_ACTION_RE = /(?:присыла(?:й|йте|ть)|отправля(?:й|йте|ть)|получать|находи(?:те|ть)?|ищи(?:те|ть)?|проверя(?:й|йте|ть)|собира(?:й|йте|ть)|готовь(?:те)?|подготавлива(?:й|йте|ть)|запуска(?:й|йте|ть)|выполня(?:й|йте|ть)|дела(?:й|йте|ть)|повторя(?:й|йте|ть))/iu;
+const INLINE_CREATION_ACTION_RE = /(?:присыла(?:й|йте|ть)|отправля(?:й|йте|ть)|получать|находи(?:те|ть)?|ищи(?:те|ть)?|проверя(?:й|йте|ть)|собира(?:й|йте|ть)|готовь(?:те)?|подготавлива(?:й|йте|ть)|рассказыва(?:й|йте|ть)|показыва(?:й|йте|ть)|генериру(?:й|йте|ть)|рису(?:й|йте|ть)|анализиру(?:й|йте|ть)|пиши(?:те)?|запуска(?:й|йте|ть)|выполня(?:й|йте|ть)|дела(?:й|йте|ть)|повторя(?:й|йте|ть))/iu;
 const INLINE_REMINDER_RE = /(?:^|[\s,;:])(?:напомни|напоминай|не\s+дай\s+забыть|не\s+забудь|создай\s+напоминание)(?=$|[\s,.!?;:])/iu;
 const REFERENCE_ONLY_RE = /^(?:это|его|так|этот\s+запрос|эту\s+задач[уи]|предыдущ(?:ий|ее|ую)\s+(?:запрос|сообщение|задач[уи])|то\s+же\s+самое|такое|этот\s+результат)[.!?]*$/iu;
 const CREATION_PREAMBLE_RE = /^(?:(?:я|сразу|хочу|прошу|попрошу|давай|пожалуйста|можешь|нужно|надо)(?:\s+|$))+$/iu;
@@ -95,6 +96,12 @@ function buildInlineExecutionPrompt(action: string, taskText: string): string {
     if (/^собира/iu.test(action)) return `Собери ${taskText}`;
     if (/^(?:готов|подготавлива)/iu.test(action)) return `Подготовь ${taskText}`;
     if (/^(?:присыла|отправля|получ)/iu.test(action)) return `Подготовь ${taskText}`;
+    if (/^рассказыва/iu.test(action)) return `Расскажи ${taskText}`;
+    if (/^показыва/iu.test(action)) return `Покажи ${taskText}`;
+    if (/^генериру/iu.test(action)) return `Сгенерируй ${taskText}`;
+    if (/^рису/iu.test(action)) return `Нарисуй ${taskText}`;
+    if (/^анализиру/iu.test(action)) return `Проанализируй ${taskText}`;
+    if (/^пиши/iu.test(action)) return `Напиши ${taskText}`;
     return `Выполни задачу: ${taskText}`;
 }
 
@@ -139,10 +146,11 @@ export function parseInlineRecurringTaskCreation(
     );
     if (!hasInlineTaskContent(taskText) || REFERENCE_ONLY_RE.test(taskText)) return undefined;
 
-    return {
-        prompt: useActionExtraction && actionMatch
+    const prompt = useActionExtraction && actionMatch
             ? buildInlineExecutionPrompt(actionMatch[0], taskText)
-            : taskText,
+            : taskText;
+    return {
+        prompt: normalizeRecurringExecutionPrompt(prompt),
         parsedSchedule,
     };
 }
@@ -289,6 +297,10 @@ export function parseRecurringTaskManagement(
 
 export async function sendRecurringTasksMenu(ctx: BotContext, requestedIndex = 0): Promise<void> {
     const tasks = await RecurringTaskRepository.listByChatId(ctx.chat!.id);
+    console.info(
+        `[recurring-task] event=list instance=${process.env.KIRA_INSTANCE_NAME || "unknown"} ` +
+        `profile=${getActiveBotProfile()} count=${tasks.length}`,
+    );
     const { blocks, keyboard } = buildRecurringTaskCard(tasks, requestedIndex);
     await sendStructuredBlocks(ctx, ctx.chat!.id, blocks, { replyMarkup: keyboard });
 }

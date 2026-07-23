@@ -361,6 +361,8 @@ export interface ExecutePlanParams {
     enrichedContextFromMemory?: string;
     /** Исходный запрос просил ответить голосом. */
     voiceReplyRequested?: boolean;
+    /** Не показывать промежуточные статусы для фонового выполнения. */
+    suppressProgress?: boolean;
 }
 
 /**
@@ -381,6 +383,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
         lastLocation,
         enrichedContextFromMemory: passedContext,
         voiceReplyRequested,
+        suppressProgress,
     } = params;
 
     const steps = plan.steps;
@@ -417,7 +420,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
 
     /** Отправить пользователю уведомление о прогрессе (только для многошаговых планов) */
     const notifyProgress = async (stepAgentId: string) => {
-        if (!isMultiStepPlan || isInternalKnowledgePipeline) return;
+        if (suppressProgress || !isMultiStepPlan || isInternalKnowledgePipeline) return;
         const label = STEP_LABELS[stepAgentId];
         if (!label) return;
         try {

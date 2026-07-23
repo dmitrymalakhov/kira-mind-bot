@@ -17,7 +17,12 @@ import {
     parseRecurringTaskEdit,
 } from "../services/recurringTaskService";
 import { splitRecurringResultText } from "../utils/recurringTaskResult";
-import { buildRecurringKnowledgeSourceText } from "../utils/recurringTaskPrompt";
+import {
+    buildRecurringKnowledgeSourceText,
+    guardRecurringTaskClassification,
+    guardRecurringTaskPlan,
+    normalizeRecurringExecutionPrompt,
+} from "../utils/recurringTaskPrompt";
 import { esc } from "../utils/richMessage";
 import { decideKnowledgeSource } from "../utils/knowledgeSource";
 
@@ -165,9 +170,21 @@ test("keeps arbitrary scheduled requests for the ordinary bot pipeline", () => {
         TIMEZONE,
         NOW,
     );
-    assert.equal(conversation?.prompt, "рассказывай мне анекдот");
+    assert.equal(conversation?.prompt, "Расскажи анекдот");
     assert.equal(conversation?.parsedSchedule.schedule.type, "daily");
     assert.equal(conversation?.parsedSchedule.schedule.hour, 10);
+
+    const intervalConversation = parseInlineRecurringTaskCreation(
+        "Рассказывай мне анекдот найденный в интернете каждые 10 минут",
+        TIMEZONE,
+        NOW,
+    );
+    assert.equal(
+        intervalConversation?.prompt,
+        "Расскажи анекдот найденный в интернете",
+    );
+    assert.equal(intervalConversation?.parsedSchedule.schedule.type, "interval");
+    assert.equal(intervalConversation?.parsedSchedule.schedule.intervalMinutes, 10);
 
     const currentQuestion = parseInlineRecurringTaskCreation(
         "Какой курс доллара? Каждый будний день в 18:00",
@@ -185,7 +202,7 @@ test("keeps arbitrary scheduled requests for the ordinary bot pipeline", () => {
         TIMEZONE,
         NOW,
     );
-    assert.equal(image?.prompt, "Генерируй картинку с котом");
+    assert.equal(image?.prompt, "Сгенерируй картинку с котом");
     assert.equal(image?.parsedSchedule.schedule.type, "weekly");
     assert.deepEqual(image?.parsedSchedule.schedule.daysOfWeek, [1]);
 
@@ -207,6 +224,66 @@ test("keeps arbitrary scheduled requests for the ordinary bot pipeline", () => {
     assert.equal(
         substantiveReference?.prompt,
         "объясняй, что это значит на новом примере",
+    );
+});
+
+test("normalizes recurring wording and blocks only implicit nested reminders", () => {
+    assert.equal(
+        normalizeRecurringExecutionPrompt("Рассказывай мне интересный факт"),
+        "Расскажи мне интересный факт",
+    );
+    assert.equal(
+        normalizeRecurringExecutionPrompt("Присылай мне короткую сводку"),
+        "Подготовь мне короткую сводку",
+    );
+
+    const implicit = guardRecurringTaskClassification({
+        intent: "НАПОМИНАНИЕ",
+        confidenceLevel: "ВЫСОКИЙ",
+        intentScores: [
+            { intent: "НАПОМИНАНИЕ", score: 0.82 },
+            { intent: "ВЕБ_ПОИСК", score: 0.76 },
+        ],
+        subIntents: [{ intent: "НАПОМИНАНИЕ" }],
+        details: {
+            reminderAction: "create",
+            knowledgeSource: "external_current",
+            requestedFacets: ["facts", "sources"],
+        },
+    }, "Расскажи найденный в интернете факт", true);
+    assert.equal(implicit.adjusted, true);
+    assert.equal(implicit.classification.intent, "ВЕБ_ПОИСК");
+    assert.equal(implicit.classification.subIntents, undefined);
+    assert.equal(implicit.classification.details.reminderAction, undefined);
+    assert.equal(
+        implicit.classification.intentScores?.some((candidate) => candidate.intent === "НАПОМИНАНИЕ"),
+        false,
+    );
+    assert.deepEqual(
+        guardRecurringTaskPlan({
+            steps: [{ agentId: "webSearch" }, { agentId: "reminder" }],
+        }, "Расскажи найденный в интернете факт"),
+        {
+            adjusted: true,
+            plan: {
+                steps: [{ agentId: "webSearch" }, { agentId: "conversation" }],
+            },
+        },
+    );
+
+    const explicit = {
+        intent: "НАПОМИНАНИЕ" as const,
+        confidenceLevel: "ВЫСОКИЙ" as const,
+        details: { reminderAction: "create" as const },
+    };
+    assert.deepEqual(
+        guardRecurringTaskClassification(explicit, "Создай напоминание позвонить врачу", false),
+        { classification: explicit, adjusted: false },
+    );
+    const explicitPlan = { steps: [{ agentId: "reminder" as const }] };
+    assert.deepEqual(
+        guardRecurringTaskPlan(explicitPlan, "Создай напоминание позвонить врачу"),
+        { plan: explicitPlan, adjusted: false },
     );
 });
 
