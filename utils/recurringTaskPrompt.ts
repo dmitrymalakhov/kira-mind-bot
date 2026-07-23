@@ -1,5 +1,5 @@
 import type { MessageClassification } from "../orchestrator";
-import type { Plan } from "../orchestration/types";
+import type { Plan, PlanStep } from "../orchestration/types";
 
 const EXPLICIT_REMINDER_REQUEST_RE =
     /(?:^|\s)(?:напомни|напоминай|не\s+дай\s+забыть|не\s+забудь|(?:создай|поставь|добавь)(?:\s+\S+){0,3}\s+напоминание)(?=\s|$|[,.!?;:])/iu;
@@ -39,40 +39,59 @@ export function guardRecurringTaskClassification(
     prompt: string,
     requiresWeb: boolean,
 ): { classification: MessageClassification; adjusted: boolean } {
-    if (isExplicitReminderRequest(prompt)) {
-        return { classification, adjusted: false };
-    }
-
-    const filteredSubIntents = classification.subIntents?.filter(
-        (subIntent) => subIntent.intent !== "НАПОМИНАНИЕ",
-    );
+    const explicitReminder = isExplicitReminderRequest(prompt);
+    const filteredSubIntents = explicitReminder
+        ? classification.subIntents
+        : classification.subIntents?.filter(
+            (subIntent) => subIntent.intent !== "НАПОМИНАНИЕ",
+        );
     const removedReminderSubIntent =
         filteredSubIntents?.length !== classification.subIntents?.length;
-    const replacedPrimaryReminder = classification.intent === "НАПОМИНАНИЕ";
-    if (!removedReminderSubIntent && !replacedPrimaryReminder) {
-        return { classification, adjusted: false };
-    }
-
+    const replacedPrimaryReminder =
+        !explicitReminder && classification.intent === "НАПОМИНАНИЕ";
+    const allowedScores = explicitReminder
+        ? classification.intentScores ?? []
+        : classification.intentScores?.filter(
+            (candidate) => candidate.intent !== "НАПОМИНАНИЕ",
+        ) ?? [];
+    const removedReminderScore =
+        !explicitReminder &&
+        allowedScores.length !== (classification.intentScores?.length ?? 0);
+    const rankedIntent = allowedScores.find(
+        (candidate) => candidate.intent !== "НЕОПРЕДЕЛЕНО",
+    )?.intent;
+    const resolvedUnknownIntent = classification.intent === "НЕОПРЕДЕЛЕНО";
     const intent: MessageClassification["intent"] = replacedPrimaryReminder
         ? requiresWeb ? "ВЕБ_ПОИСК" : "РАЗГОВОР"
-        : classification.intent;
+        : resolvedUnknownIntent
+            ? rankedIntent ?? (requiresWeb ? "ВЕБ_ПОИСК" : "РАЗГОВОР")
+            : classification.intent;
     const details = { ...classification.details };
-    delete details.reminderAction;
-    delete details.reminderBatchPeriod;
-    delete details.reminderCancelQuery;
-    delete details.reminderUpdateQuery;
-    delete details.reminderUpdateNewTime;
-    delete details.reminderUpdateNewText;
-    const remainingScores = classification.intentScores?.filter(
-        (candidate) => candidate.intent !== "НАПОМИНАНИЕ",
-    ) ?? [];
-    const intentScores = remainingScores.some((candidate) => candidate.intent === intent)
-        ? remainingScores
+    if (!explicitReminder) {
+        delete details.reminderAction;
+        delete details.reminderBatchPeriod;
+        delete details.reminderCancelQuery;
+        delete details.reminderUpdateQuery;
+        delete details.reminderUpdateNewTime;
+        delete details.reminderUpdateNewText;
+    }
+    const intentScores = allowedScores.some((candidate) => candidate.intent === intent)
+        ? allowedScores
         : [{
             intent,
             score: 1,
-            reason: "Регулярный запуск уже задаёт расписание и не должен создавать вложенное напоминание.",
-        }, ...remainingScores];
+            reason: "Фоновый запуск выбирает наиболее подходящий вариант без дополнительного вопроса.",
+        }, ...allowedScores];
+    const adjusted =
+        removedReminderSubIntent ||
+        removedReminderScore ||
+        replacedPrimaryReminder ||
+        resolvedUnknownIntent ||
+        classification.confidenceLevel !== "ВЫСОКИЙ" ||
+        Boolean(classification.ambiguityReason) ||
+        Boolean(classification.clarificationQuestion);
+
+    if (!adjusted) return { classification, adjusted: false };
 
     return {
         adjusted: true,
@@ -89,13 +108,47 @@ export function guardRecurringTaskClassification(
     };
 }
 
+function fallbackRecurringSteps(classification: MessageClassification): PlanStep[] {
+    switch (classification.intent) {
+        case "НАПОМИНАНИЕ":
+            return [{ agentId: "reminder" }];
+        case "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ":
+            return [{ agentId: "imageGeneration" }];
+        case "КАРТЫ_ЛОКАЦИИ":
+            return [{ agentId: "maps" }];
+        case "ПРОВЕРКА_СООБЩЕНИЙ":
+            return [{ agentId: "readMessages" }];
+        case "ВЕБ_ПОИСК":
+            return [{ agentId: "webSearch" }, { agentId: "conversation" }];
+        case "ОТПРАВКА_СООБЩЕНИЯ":
+            return [{ agentId: "sendMessage" }];
+        case "ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ":
+            return [{ agentId: "negotiateOnBehalf" }];
+        case "ВОЗМОЖНОСТИ_БОТА":
+            return [{ agentId: "capabilities" }];
+        case "САМОИЗУЧЕНИЕ":
+            return [{ agentId: "selfStudy" }];
+        case "БРАУЗЕР_ЗАДАЧА":
+            return [{ agentId: "browserTask" }];
+        case "ЗДОРОВЬЕ":
+            return [{ agentId: "health" }];
+        case "РАЗГОВОР":
+        case "НЕОПРЕДЕЛЕНО":
+        default:
+            return [{ agentId: "conversation" }];
+    }
+}
+
 export function guardRecurringTaskPlan(
     plan: Plan,
     prompt: string,
+    classification: MessageClassification,
 ): { plan: Plan; adjusted: boolean } {
-    if (isExplicitReminderRequest(prompt)) return { plan, adjusted: false };
-
-    const filteredSteps = plan.steps.filter((step) => step.agentId !== "reminder");
+    const explicitReminder = isExplicitReminderRequest(prompt);
+    const filteredSteps = plan.steps.filter((step) =>
+        step.agentId !== "unclearIntent" &&
+        (explicitReminder || step.agentId !== "reminder")
+    );
     if (filteredSteps.length === plan.steps.length) return { plan, adjusted: false };
 
     const onlyContextSteps = filteredSteps.every((step) =>
@@ -103,13 +156,17 @@ export function guardRecurringTaskPlan(
         step.agentId === "memory" ||
         step.agentId === "webSearch"
     );
+    const fallbackSteps = fallbackRecurringSteps(classification);
+    const missingFallbackSteps = fallbackSteps.filter((fallbackStep) =>
+        !filteredSteps.some((step) => step.agentId === fallbackStep.agentId)
+    );
     return {
         adjusted: true,
         plan: {
             steps: [
                 ...filteredSteps,
                 ...(filteredSteps.length === 0 || onlyContextSteps
-                    ? [{ agentId: "conversation" as const }]
+                    ? missingFallbackSteps
                     : []),
             ],
         },

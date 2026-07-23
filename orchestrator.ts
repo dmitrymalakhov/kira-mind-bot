@@ -1025,19 +1025,6 @@ export async function processMessage(
             );
         }
 
-        if (options.recurringTaskRun) {
-            const guarded = guardRecurringTaskClassification(
-                classification,
-                originalMessage,
-                knowledgeDecision.requiresWeb,
-            );
-            classification = guarded.classification;
-            if (guarded.adjusted) {
-                deterministicOverrideApplied = true;
-                devLog("Recurring task guard removed an implicit reminder intent");
-            }
-        }
-
         if (BROWSER_CONTINUATION_RE.test(message)) {
             classification = { ...classification, intent: "БРАУЗЕР_ЗАДАЧА", confidenceLevel: "ВЫСОКИЙ" };
             deterministicOverrideApplied = true;
@@ -1177,7 +1164,22 @@ export async function processMessage(
             classification = { ...classification, intent: "РАЗГОВОР", confidenceLevel: "СРЕДНИЙ" };
         }
 
-        const intentAmbiguity = deterministicOverrideApplied ? null : detectIntentAmbiguity(classification);
+        if (options.recurringTaskRun) {
+            const guarded = guardRecurringTaskClassification(
+                classification,
+                originalMessage,
+                knowledgeDecision.requiresWeb,
+            );
+            classification = guarded.classification;
+            if (guarded.adjusted) {
+                devLog("Recurring task guard resolved background intent without clarification");
+            }
+        }
+
+        const intentAmbiguity =
+            options.recurringTaskRun || deterministicOverrideApplied
+                ? null
+                : detectIntentAmbiguity(classification);
         if (intentAmbiguity) {
             const { top, runnerUp, delta } = intentAmbiguity;
             classification = {
@@ -1206,10 +1208,10 @@ export async function processMessage(
             messageHistory: messageHistory.map((m) => ({ role: m.role, content: m.content })),
         });
         if (options.recurringTaskRun) {
-            const guarded = guardRecurringTaskPlan(plan, originalMessage);
+            const guarded = guardRecurringTaskPlan(plan, originalMessage, classification);
             plan = guarded.plan;
             if (guarded.adjusted) {
-                devLog("Recurring task guard removed an implicit reminder plan step");
+                devLog("Recurring task guard removed an interactive or implicit reminder plan step");
             }
         }
         const stepIds = plan.steps.map((s) => s.agentId);

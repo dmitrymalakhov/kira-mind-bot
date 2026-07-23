@@ -262,7 +262,7 @@ test("normalizes recurring wording and blocks only implicit nested reminders", (
     assert.deepEqual(
         guardRecurringTaskPlan({
             steps: [{ agentId: "webSearch" }, { agentId: "reminder" }],
-        }, "Расскажи найденный в интернете факт"),
+        }, "Расскажи найденный в интернете факт", implicit.classification),
         {
             adjusted: true,
             plan: {
@@ -282,8 +282,68 @@ test("normalizes recurring wording and blocks only implicit nested reminders", (
     );
     const explicitPlan = { steps: [{ agentId: "reminder" as const }] };
     assert.deepEqual(
-        guardRecurringTaskPlan(explicitPlan, "Создай напоминание позвонить врачу"),
+        guardRecurringTaskPlan(
+            explicitPlan,
+            "Создай напоминание позвонить врачу",
+            explicit,
+        ),
         { plan: explicitPlan, adjusted: false },
+    );
+});
+
+test("recurring runs resolve close intents and never return an interactive clarification", () => {
+    const ambiguous = guardRecurringTaskClassification({
+        intent: "ВЕБ_ПОИСК",
+        confidenceLevel: "СРЕДНИЙ",
+        intentScores: [
+            { intent: "ВЕБ_ПОИСК", score: 0.74 },
+            { intent: "РАЗГОВОР", score: 0.71 },
+        ],
+        ambiguityReason: "Можно либо найти анекдот, либо придумать его.",
+        clarificationQuestion: "Искать в интернете или просто рассказать?",
+        details: {
+            knowledgeSource: "external_current",
+            requestedFacets: ["facts", "sources"],
+        },
+    }, "Расскажи анекдот найденный в интернете про Штирлица", true);
+
+    assert.equal(ambiguous.adjusted, true);
+    assert.equal(ambiguous.classification.intent, "ВЕБ_ПОИСК");
+    assert.equal(ambiguous.classification.confidenceLevel, "ВЫСОКИЙ");
+    assert.equal(ambiguous.classification.ambiguityReason, undefined);
+    assert.equal(ambiguous.classification.clarificationQuestion, undefined);
+    assert.deepEqual(
+        guardRecurringTaskPlan({
+            steps: [{ agentId: "webSearch" }, { agentId: "unclearIntent" }],
+        }, "Расскажи анекдот найденный в интернете про Штирлица", ambiguous.classification),
+        {
+            adjusted: true,
+            plan: {
+                steps: [{ agentId: "webSearch" }, { agentId: "conversation" }],
+            },
+        },
+    );
+
+    const unknownImage = guardRecurringTaskClassification({
+        intent: "НЕОПРЕДЕЛЕНО",
+        confidenceLevel: "НИЗКИЙ",
+        intentScores: [
+            { intent: "НЕОПРЕДЕЛЕНО", score: 0.7 },
+            { intent: "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ", score: 0.68 },
+        ],
+        details: {},
+    }, "Нарисуй кота", false);
+    assert.equal(unknownImage.classification.intent, "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ");
+    assert.deepEqual(
+        guardRecurringTaskPlan(
+            { steps: [{ agentId: "unclearIntent" }] },
+            "Нарисуй кота",
+            unknownImage.classification,
+        ),
+        {
+            adjusted: true,
+            plan: { steps: [{ agentId: "imageGeneration" }] },
+        },
     );
 });
 
