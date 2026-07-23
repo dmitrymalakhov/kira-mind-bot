@@ -50,14 +50,9 @@ export function DurationInput({ label, hint, valueMs, onChange }: Props) {
 
   return (
     <Box sx={{ width: '100%' }}>
-      <Typography
-        variant="caption"
-        sx={{ display: 'block', mb: 0.75, color: 'text.secondary', fontWeight: 500 }}
-      >
-        {label}
-      </Typography>
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start', width: '100%' }}>
         <TextField
+          label={label}
           value={amount}
           onChange={(e) => {
             setAmount(e.target.value);
@@ -84,11 +79,13 @@ export function DurationInput({ label, hint, valueMs, onChange }: Props) {
           </Select>
         </FormControl>
       </Box>
-      {hint && (
-        <Typography variant="caption" color="text.disabled" sx={{ mt: 0.5, display: 'block', fontSize: '11px' }}>
-          {hint}
-        </Typography>
-      )}
+      <Typography
+        variant="caption"
+        color="text.disabled"
+        sx={{ mt: 0.5, px: 1.75, display: 'block', minHeight: '16px', fontSize: '11px', lineHeight: 1.35 }}
+      >
+        {hint || '\u00a0'}
+      </Typography>
     </Box>
   );
 }

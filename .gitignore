@@ -28,3 +28,7 @@ docker-compose.override.yml
 
 # Personality settings — edited via admin panel, must not be overwritten by git
 personality.json
+
+# Local production backups
+backups/
+runtime-data/

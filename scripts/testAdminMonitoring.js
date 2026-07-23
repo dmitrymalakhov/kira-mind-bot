@@ -148,7 +148,7 @@ async function testSnapshotStatuses() {
 async function testCustomBotContainerName() {
   let requestedContainerName = null;
   const service = createMonitoringService({
-    env: { KIRA_BOT_CONTAINER_NAME: 'kira-wife' },
+    env: { KIRA_BOT_CONTAINER_NAME: 'nova-mind-bot' },
     readEnvFile: () => ({}),
     createDbPool: () => ({ async query() {}, async end() {} }),
     getContainerStatus: async (name) => {
@@ -164,7 +164,7 @@ async function testCustomBotContainerName() {
   });
 
   const check = await service.checkKiraContainerHealth();
-  assert.strictEqual(requestedContainerName, 'kira-wife');
+  assert.strictEqual(requestedContainerName, 'nova-mind-bot');
   assert.strictEqual(check.status, 'ok');
 }
 

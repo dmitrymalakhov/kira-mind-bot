@@ -48,8 +48,10 @@ services:
       - NODE_ENV=${NODE_ENV:-production}
       - ASSISTANT_PROFILE=KiraMindBot
       - PERSONALITY_FILE=/app/personality/personality.json
+      - KIRA_RUNTIME_DATA_DIR=/app/runtime-data
     volumes:
       - ./personality.json:/app/personality/personality.json:ro
+      - ./runtime-data:/app/runtime-data
     depends_on:
       postgres:
         condition: service_healthy

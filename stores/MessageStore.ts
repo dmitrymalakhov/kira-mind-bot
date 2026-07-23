@@ -131,6 +131,21 @@ export class MessageStore {
         }
     }
 
+    /** Отмечает входящие прочитанными по Telegram readInboxMaxId. */
+    markReadThrough(chatId: string, maxMessageId: number): void {
+        const messages = this.messages.get(chatId);
+        if (!messages || !Number.isFinite(maxMessageId)) return;
+
+        let changed = false;
+        for (const message of messages) {
+            if (!message.isOwn && message.id <= maxMessageId && !message.isRead) {
+                message.isRead = true;
+                changed = true;
+            }
+        }
+        if (changed) this.updateUnreadMessagesFlag();
+    }
+
     // Отметка всех сообщений как прочитанных
     markAllAsRead(): void {
         let hasChanged = false;

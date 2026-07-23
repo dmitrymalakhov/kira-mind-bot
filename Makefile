@@ -17,7 +17,8 @@ acquire_deploy_lock && \
 load_compose_identity_if_present && \
 load_env_if_present && \
 ensure_admin_state && \
-write_compose_env
+write_compose_env && \
+prepare_runtime_data
 endef
 
 help:
@@ -155,7 +156,7 @@ stop:
 	./scripts/ops/server-deploy.sh stop
 
 migrate-instance:
-	@test -n "$(NEW_INSTANCE)" || { echo 'Укажите NEW_INSTANCE, например: make migrate-instance NEW_INSTANCE=enya-mind-bot'; exit 1; }
+	@test -n "$(NEW_INSTANCE)" || { echo 'Укажите NEW_INSTANCE, например: make migrate-instance NEW_INSTANCE=aurora-mind-bot'; exit 1; }
 	./scripts/ops/server-deploy.sh migrate-instance "$(NEW_INSTANCE)"
 
 admin-up:

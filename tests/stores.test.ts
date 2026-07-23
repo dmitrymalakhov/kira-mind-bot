@@ -73,6 +73,29 @@ describe("MessageStore", () => {
         assert.equal(store.hasUnreadMessages(), false);
     });
 
+    test("marks incoming messages as read through Telegram maxId", () => {
+        store.addMessage("chat", storedMessage({ id: 3 }));
+        store.addMessage("chat", storedMessage({ id: 4, isOwn: true }));
+        store.addMessage("chat", storedMessage({ id: 5 }));
+
+        store.markReadThrough("chat", 4);
+
+        const byId = new Map(store.getMessages("chat").map(({ id, isRead }) => [id, isRead]));
+        assert.equal(byId.get(3), true);
+        assert.equal(byId.get(4), false);
+        assert.equal(byId.get(5), false);
+    });
+
+    test("keeps equal Telegram message IDs isolated by chat", () => {
+        store.addMessage("a", storedMessage({ id: 7 }));
+        store.addMessage("b", storedMessage({ id: 7 }));
+        store.markReadThrough("a", 7);
+
+        assert.equal(store.getMessages("a")[0].isRead, true);
+        assert.equal(store.getMessages("b")[0].isRead, false);
+        assert.equal(store.hasUnreadMessages(), true);
+    });
+
     test("marks every message as read", () => {
         store.addMessage("a", storedMessage({ id: 1 }));
         store.addMessage("b", storedMessage({ id: 2 }));

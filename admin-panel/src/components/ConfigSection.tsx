@@ -4,7 +4,7 @@ import {
   CardContent,
   CardHeader,
   Button,
-  Grid,
+  Box,
   CircularProgress,
   Divider,
   FormControlLabel,
@@ -152,23 +152,36 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
         />
         <CardContent>
           {regularFields.length > 0 && (
-            <Grid container spacing={2} sx={{ mb: toggleFields.length > 0 ? 0 : undefined }}>
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(12, minmax(0, 1fr))' },
+                columnGap: 2,
+                rowGap: 2,
+                alignItems: 'start',
+                mb: toggleFields.length > 0 ? 0 : undefined,
+              }}
+            >
               {regularFields.map((field) => (
-                <Grid
-                  item
+                <Box
                   key={field.key}
-                  xs={12}
-                  sm={field.sm ?? (field.type === 'textarea' ? 12 : 6)}
-                  md={field.md ?? (field.type === 'textarea' ? 12 : 6)}
+                  sx={{
+                    minWidth: 0,
+                    gridColumn: {
+                      xs: '1 / -1',
+                      sm: `span ${field.sm ?? (field.type === 'textarea' ? 12 : 6)}`,
+                      md: `span ${field.md ?? (field.type === 'textarea' ? 12 : 6)}`,
+                    },
+                  }}
                 >
                   <FieldInput
                     field={field}
                     value={localValues[field.key] ?? ''}
                     onChange={handleChange}
                   />
-                </Grid>
+                </Box>
               ))}
-            </Grid>
+            </Box>
           )}
 
           {toggleFields.length > 0 && regularFields.length > 0 && (

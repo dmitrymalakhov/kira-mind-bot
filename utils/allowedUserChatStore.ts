@@ -1,13 +1,14 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import { config } from "../config";
+import { RUNTIME_DATA_DIR } from "./runtimeData";
 
 interface AllowedUserChatData {
   chatId?: number;
   updatedAt?: string;
 }
 
-const DATA_DIR = path.join(__dirname, "..", "data");
+const DATA_DIR = RUNTIME_DATA_DIR;
 const FILE_PATH = path.join(DATA_DIR, "allowed-user-chat.json");
 
 async function ensureDir(): Promise<void> {
@@ -35,8 +36,9 @@ export async function saveAllowedUserChatId(chatId: number): Promise<void> {
   await fs.writeFile(
     FILE_PATH,
     JSON.stringify({ chatId, updatedAt: new Date().toISOString() }, null, 2),
-    "utf-8"
+    { encoding: "utf-8", mode: 0o600 }
   );
+  await fs.chmod(FILE_PATH, 0o600);
 }
 
 export async function getAllowedUserChatId(): Promise<number | undefined> {

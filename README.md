@@ -77,7 +77,7 @@ make deploy-clean
 | `make pause` | Остановить только `kira-mind-bot` и `admin-panel` |
 | `make restart` | Перезапустить app-сервисы |
 | `make stop` | Остановить весь стек |
-| `make migrate-instance NEW_INSTANCE=enya-mind-bot` | Переименовать project и контейнер, сохранив текущие volumes |
+| `make migrate-instance NEW_INSTANCE=aurora-mind-bot` | Переименовать project и контейнер, сохранив текущие volumes |
 | `make help` | Показать все доступные цели |
 
 `make` нужен только как shortcut на хосте. Docker-контейнерам он не нужен.
@@ -145,13 +145,15 @@ make deploy-clean
 
 Если задать `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` и `TELEGRAM_SESSION_STRING`, бот получает доступ к вашему Telegram-аккаунту через пользовательскую сессию.
 
-- показывает непрочитанные сообщения и делает сводку входящих;
+- напоминает только о реально непрочитанных личных сообщениях после заданной выдержки времени;
 - анализирует личные и групповые переписки;
 - строит профиль контакта и сохраняет найденные факты в память;
 - готовит черновики и отправляет сообщения после подтверждения;
 - планирует отложенную отправку;
 - может вести переговоры от вашего имени;
 - фоново изучает личные переписки, если режим включён.
+
+Фоновые сообщения разделены по назначению. DM Report дословно объединяет только подтверждённые Telegram непрочитанные и не добавляет AI-комментарий. В течение дня reflection может пропустить одно своевременное наблюдение с мнением Киры, если новый фрагмент содержит важную просьбу, изменение плана, конфликт или отношенческий сигнал. Вечерний Inbox Guardian собирает до трёх оставшихся важных хвостов. Техническое извлечение фактов работает молча и не присылает карточки «сохранено N фактов».
 
 Примеры:
 
@@ -356,7 +358,7 @@ make remote-deploy-all SERVER_IP=<ip>
 Для отдельного удалённого инстанса задайте уникальный `KIRA_INSTANCE_NAME` в его локальном `.env.production`. Основной инстанс сохраняет исторический каталог `/root/source`, а дополнительные инстансы разворачиваются в `/opt/docker/<KIRA_INSTANCE_NAME>`. Если старая установка в `/root/source` ещё не содержит `KIRA_INSTANCE_NAME`, remote-deploy сохраняет её прежний Compose project `source` и volumes `source_postgres_data` / `source_qdrant_storage`, а не создаёт новый пустой storage. Каталог можно указать явно:
 
 ```bash
-make remote-deploy-all SERVER_IP=<ip> REMOTE_DIR=/opt/docker/kira-wife
+make remote-deploy-all SERVER_IP=<ip> REMOTE_DIR=/opt/docker/nova-mind-bot
 ```
 
 Remote-deploy использует те же проверки project ownership, working-directory ownership, storage volumes и свободного admin-порта, что и прямой запуск на VPS. Из соображений безопасности разрешены только legacy-каталог `/root/source` и прямые дочерние каталоги `/opt/docker/<instance>`: корень, системные каталоги и пути с `.` / `..` отклоняются до отправки архива. Если каталог уже принадлежит другому Compose project, deploy останавливается до запуска контейнеров и требует явной миграции.
@@ -528,6 +530,8 @@ make remote-deploy-admin SERVER_IP=<ip>
 
 Каждый инстанс должен находиться в отдельной папке и иметь отдельные `.env.production`, `personality.json`, Telegram bot token, PostgreSQL, Qdrant и админку. PostgreSQL и Qdrant наружу не публикуются: одинаковые внутренние адреса `postgres:5432` и `qdrant:6333` относятся к разным изолированным Docker-сетям.
 
+Файловое состояние каждого инстанса хранится в локальной папке `runtime-data/`, смонтированной как `/app/runtime-data`. Там находятся self-memory, watermark индексатора, chat ID и дедупликация DM Report. Папка не входит в Git, Docker image и deployment-архив. При первом deploy в пустую папку preflight однократно переносит legacy-состояние из старого контейнера (`/usr/src/app/dist/data` для server build или `/usr/src/app/data` для remote build); дальнейшие распаковки её не очищают.
+
 Из-за разных сетей DNS-имя `postgres` во втором боте указывает только на PostgreSQL второго Compose project, а `qdrant` — только на его Qdrant. По умолчанию физические данные лежат в volumes с именем инстанса. При безопасном переименовании project storage может сохранить прежние физические имена через `POSTGRES_VOLUME_NAME` и `QDRANT_VOLUME_NAME`; preflight проверяет именно эти ожидаемые volumes.
 
 Перед каждой серверной Compose-операцией preflight сверяет volumes уже существующих контейнеров с ожидаемыми storage names. При несовпадении deploy останавливается до запуска контейнеров, чтобы бот не стартовал на пустой или чужой базе. Операционные команды не используют `volume prune`, `docker volume rm` или `compose down -v`.
@@ -539,16 +543,16 @@ Install/deploy одного инстанса не выполняет глоба�
 Если папку существующего инстанса переименовали, перенесённая вместе с ней compose `.env` сохраняет прежнюю identity и не даёт следующему deploy создать пустые volumes по новому имени каталога. Чтобы осознанно переименовать project и bot-контейнер, но оставить PostgreSQL и Qdrant на месте, после переименования папки выполните:
 
 ```bash
-cd /opt/docker/enya-mind-bot
-make migrate-instance NEW_INSTANCE=enya-mind-bot
+cd /opt/docker/aurora-mind-bot
+make migrate-instance NEW_INSTANCE=aurora-mind-bot
 ```
 
-Команда проверяет наличие обоих прежних volumes и отсутствие конфликта целевого project, останавливает старый stack обычным `compose down` без `-v`, атомарно сохраняет новое имя вместе со storage aliases в `.env.production` и поднимает stack заново. Например, контейнер станет `enya-mind-bot`, а данные продолжат храниться в `kira-mind-bot_postgres_data` и `kira-mind-bot_qdrant_storage`. Физическое переименование Docker volumes не требуется и Docker его напрямую не поддерживает.
+Команда проверяет наличие обоих прежних volumes и отсутствие конфликта целевого project, останавливает старый stack обычным `compose down` без `-v`, атомарно сохраняет новое имя вместе со storage aliases в `.env.production` и поднимает stack заново. Например, контейнер станет `aurora-mind-bot`, а данные продолжат храниться в `kira-mind-bot_postgres_data` и `kira-mind-bot_qdrant_storage`. Физическое переименование Docker volumes не требуется и Docker его напрямую не поддерживает.
 
 Соответствующая явная конфигурация выглядит так:
 
 ```env
-KIRA_INSTANCE_NAME=enya-mind-bot
+KIRA_INSTANCE_NAME=aurora-mind-bot
 POSTGRES_VOLUME_NAME=kira-mind-bot_postgres_data
 QDRANT_VOLUME_NAME=kira-mind-bot_qdrant_storage
 ```
@@ -557,16 +561,16 @@ QDRANT_VOLUME_NAME=kira-mind-bot_qdrant_storage
 
 ```bash
 cd /opt/docker
-git clone https://github.com/okurilo/kira-mind-bot.git kira-wife
-cd kira-wife
+git clone https://github.com/okurilo/kira-mind-bot.git nova-mind-bot
+cd nova-mind-bot
 make install-server
 ```
 
-Установщик предложит `kira-wife` как имя инстанса по имени папки и автоматически выберет свободный порт админки. Для полной явности значения можно задать в `.env.production`:
+Установщик предложит `nova-mind-bot` как имя инстанса по имени папки и автоматически выберет свободный порт админки. Для полной явности значения можно задать в `.env.production`:
 
 ```env
-# /opt/docker/kira-wife/.env.production
-KIRA_INSTANCE_NAME=kira-wife
+# /opt/docker/nova-mind-bot/.env.production
+KIRA_INSTANCE_NAME=nova-mind-bot
 ```
 
 `ADMIN_PORT` хранится в локальном `.kira-admin-state`. Если порт не задан при первом запуске, выбирается свободный порт из диапазона `7000–8999`; после выбора он остаётся стабильным. Админки доступны по одному IP сервера, но на разных портах, например `http://server-ip:7875` и `http://server-ip:7876`.
@@ -575,11 +579,11 @@ KIRA_INSTANCE_NAME=kira-wife
 
 | Ресурс | Основной бот | Второй бот |
 |---|---|---|
-| Каталог | `/opt/docker/kira-mind-bot` | `/opt/docker/kira-wife` |
-| Compose project / bot container | `kira-mind-bot` | `kira-wife` |
-| PostgreSQL volume | `kira-mind-bot_postgres_data` | `kira-wife_postgres_data` |
-| Qdrant volume | `kira-mind-bot_qdrant_storage` | `kira-wife_qdrant_storage` |
-| Docker network | `kira-mind-bot_default` | `kira-wife_default` |
+| Каталог | `/opt/docker/kira-mind-bot` | `/opt/docker/nova-mind-bot` |
+| Compose project / bot container | `kira-mind-bot` | `nova-mind-bot` |
+| PostgreSQL volume | `kira-mind-bot_postgres_data` | `nova-mind-bot_postgres_data` |
+| Qdrant volume | `kira-mind-bot_qdrant_storage` | `nova-mind-bot_qdrant_storage` |
+| Docker network | `kira-mind-bot_default` | `nova-mind-bot_default` |
 | Админка | `server-ip:7875` | отдельный свободный порт |
 
 Не копируйте из основного каталога файлы `.env`, `.kira-admin-state`, `personality.json` и `.env.production` для создания независимого второго бота: перенесённая `.env` намеренно сохраняет identity исходного storage. Для переименования существующего инстанса используйте `migrate-instance`, а для новой независимой копии выполните обычный install с новым `KIRA_INSTANCE_NAME`. Если новое имя совпадает с project name, уже запущенным из другой папки, скрипт остановит запуск до обращения к Compose. Если у нового инстанса занят admin-порт и ещё нет собственного state-файла, будет выбран другой свободный порт.
@@ -604,7 +608,12 @@ KIRA_INSTANCE_NAME=kira-wife
 | `KIRA_PROACTIVE_INTERVAL_MS` | Интервал проактивных сообщений |
 | `KIRA_INNER_DEVELOPMENT_ENABLED` | Автономное внутреннее развитие без отправки сообщений |
 | `KIRA_INNER_DEVELOPMENT_INTERVAL_MS` | Интервал автономного развития self-memory |
-| `DM_REPORT_ENABLED` | Периодические отчёты о входящих |
+| `KIRA_RUNTIME_DATA_DIR` | Постоянное файловое runtime-хранилище; в Compose всегда `/app/runtime-data` |
+| `KIRA_SELF_MEMORY_PATH` | Необязательный более приоритетный путь только для self-memory |
+| `DM_REPORT_ENABLED` | Напоминания о подтверждённых Telegram непрочитанных |
+| `DM_REPORT_INTERVAL_MS` | Через сколько времени непрочитанное попадёт в DM Report; по умолчанию 30 минут |
+| `DM_REPORT_DIALOG_LIMIT` | Сколько последних личных диалогов сверять с Telegram; по умолчанию 120, сверка раз в 5 минут |
+| `DAYTIME_REFLECTION_ENABLED` | Разрешить Кире присылать в течение дня важные наблюдения, привязанные к реальным сообщениям |
 | `MEMORY_INSIGHT_ENABLED` | Проактивные инсайты из памяти |
 | `MEMORY_CONSOLIDATION_ENABLED` | Фоновая консолидация памяти |
 | `PERSONAL_CHAT_MEMORY_ENABLED` | Фоновое изучение личных переписок |
@@ -642,6 +651,7 @@ Admin panel хранит секреты и управляет контейнер
 Резервная копия инстанса должна включать:
 
 - `.env.production`, `.kira-admin-state` и `personality.json`;
+- папку `runtime-data/` текущего инстанса;
 - логический дамп PostgreSQL, созданный штатным `pg_dump`;
 - snapshot коллекций Qdrant, созданный через snapshot API Qdrant;
 - имя инстанса и версию кода или git commit, на которых сделана копия.

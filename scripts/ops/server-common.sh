@@ -11,6 +11,7 @@ DEFAULT_KIRA_INSTANCE_NAME="${DEFAULT_KIRA_INSTANCE_NAME:-${PWD##*/}}"
 COMPOSE_CMD=()
 DOCKER_CMD=()
 DEPLOY_LOCK_FILE="${DEPLOY_LOCK_FILE:-/tmp/kira-mind-bot-deploy.lock}"
+RUNTIME_DATA_HOST_DIR="${RUNTIME_DATA_HOST_DIR:-runtime-data}"
 
 sanitize_instance_name() {
     local raw="${1:-kira-mind-bot}"
@@ -114,6 +115,10 @@ docker_inspect() {
     "${DOCKER_CMD[@]}" inspect "$@"
 }
 
+docker_copy() {
+    "${DOCKER_CMD[@]}" cp "$@"
+}
+
 docker_volume_inspect() {
     "${DOCKER_CMD[@]}" volume inspect "$@"
 }
@@ -150,6 +155,38 @@ ensure_server_repo_root() {
     [ -f "$SERVER_COMPOSE_FILE" ] || return 1
     [ -f "package.json" ] || return 1
     [ -d "admin-panel" ] || return 1
+}
+
+runtime_data_has_files() {
+    [ -d "$RUNTIME_DATA_HOST_DIR" ] &&
+        find "$RUNTIME_DATA_HOST_DIR" -mindepth 1 -maxdepth 1 -print -quit | grep -q .
+}
+
+prepare_runtime_data() {
+    local container_id=""
+    local legacy_path=""
+
+    mkdir -p "$RUNTIME_DATA_HOST_DIR" || return 1
+    chmod 700 "$RUNTIME_DATA_HOST_DIR" || return 1
+    runtime_data_has_files && return 0
+    [ "${#DOCKER_CMD[@]}" -gt 0 ] || return 0
+
+    container_id="$(docker_ps -aq \
+        --filter "label=com.docker.compose.project=$(resolve_instance_name)" \
+        --filter "label=com.docker.compose.service=kira-mind-bot" | head -1)"
+    [ -n "$container_id" ] || return 0
+
+    # Direct/server build запускает dist/index.js, remote build раскладывает
+    # dist/* в корень. Переносим первый реально существующий legacy-каталог.
+    for legacy_path in /usr/src/app/dist/data /usr/src/app/data; do
+        if docker_copy "$container_id:$legacy_path/." "$RUNTIME_DATA_HOST_DIR/" 2>/dev/null && runtime_data_has_files; then
+            echo "Runtime state перенесён из $legacy_path в $RUNTIME_DATA_HOST_DIR." >&2
+            chmod 700 "$RUNTIME_DATA_HOST_DIR" || return 1
+            find "$RUNTIME_DATA_HOST_DIR" -type f -exec chmod 600 {} + || return 1
+            return 0
+        fi
+    done
+    return 0
 }
 
 load_key_value_file() {

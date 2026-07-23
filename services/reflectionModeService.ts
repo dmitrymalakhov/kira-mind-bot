@@ -35,19 +35,17 @@ import { searchAllDomainsMemories } from '../utils/enhancedDomainMemory';
 import { getSetting, setSetting } from './botSettingsService';
 import { devLog, parseLLMJson } from '../utils';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
-import { getProactiveChatId } from '../utils/allowedUserChatStore';
-import { esc, heading, list, details, RichBlock, sendStructured } from '../utils/richMessage';
 import { MessageStore } from '../stores/MessageStore';
 import { getVectorService } from './VectorServiceFactory';
 import { runMemorySchemaConsolidationForUser } from './MemorySchemaConsolidationService';
 import { runMemorySleepCycleForUser } from './MemorySleepCycleService';
-import { appendPersistedSentMessageContext } from './SessionStorage';
 import {
     isReflectionContactAttributionSupported,
     isReflectionFactWorthSaving,
     isReflectionMemoryNoiseCandidate,
 } from '../utils/reflectionMemoryFilter';
 import type { ExtractedFactAboutUser } from '../utils/studyChatFlow';
+import { sendDaytimeReflection } from './inboxGuardianScheduler';
 
 // ── Настройки ─────────────────────────────────────────────────────────────────
 
@@ -84,6 +82,7 @@ const TRIAGE_COOLDOWN_MS = 2 * 60 * 1000; // 2 минуты
 // ── Типы ─────────────────────────────────────────────────────────────────────
 
 interface BufferedMessage {
+    messageId?: number;
     /** Имя отправителя или "Я" для исходящих */
     senderName: string;
     text: string;
@@ -210,7 +209,8 @@ export function queueMessage(
     senderName: string,
     text: string,
     date: Date,
-    isOwn = false
+    isOwn = false,
+    messageId?: number,
 ): void {
     if (!enabled) return;
     if (botChatIds.has(chatId)) return;
@@ -243,7 +243,7 @@ export function queueMessage(
     // Имя чата берём от собеседника, не от себя
     if (!isOwn) buf.chatTitle = senderName;
     buf.lastMessageAt = date;
-    buf.messages.push({ senderName: isOwn ? (config.ownerName || 'Я') : senderName, text: trimmed, date, isOwn });
+    buf.messages.push({ senderName: isOwn ? (config.ownerName || 'Я') : senderName, text: trimmed, date, isOwn, messageId });
 
     // Асинхронный LLM-triage жизненных событий (fire-and-forget, дебаунс 2 мин)
     scheduleAsyncTriage(chatId, senderName, trimmed);
@@ -276,8 +276,8 @@ async function triageForHighPriority(chatId: string, senderName: string, text: s
 
     const prompt = `Сообщение от "${senderName}": "${text}"
 
-Является ли это жизненно важным событием, требующим немедленного запоминания?
-Примеры ДА: увольнение, переезд, свадьба, развод, беременность, смерть близкого, серьёзный диагноз, операция, крупная покупка, оффер на работу, повышение.
+Требует ли это своевременной рефлексии в ближайшие минуты?
+Примеры ДА: увольнение, переезд, свадьба, развод, серьёзный диагноз, конкретная просьба со сроком, изменение договорённости, конфликт или сильный отношенческий сигнал.
 Примеры НЕТ: обычный разговор, планы на вечер, мелкие новости, реакции.
 
 JSON: {"urgent": true/false}`;
@@ -512,6 +512,7 @@ function getContextMessages(chatId: string, beforeDate: Date): BufferedMessage[]
             text: m.text,
             date: m.date,
             isOwn: !!m.isOwn,
+            messageId: m.id,
         }));
 }
 
@@ -635,7 +636,9 @@ function makeFakeCtx(): BotContext {
 
 function sourceMessageIds(chatId: string, messages: BufferedMessage[]): string[] {
     return messages
-        .map((message, index) => `reflection:${chatId}:${message.date.getTime()}:${index}`)
+        .map((message, index) => message.messageId != null
+            ? `${chatId}:${message.messageId}`
+            : `reflection:${chatId}:${message.date.getTime()}:${index}`)
         .slice(-80);
 }
 
@@ -801,12 +804,19 @@ async function analyzeBatch(
         }
 
         devLog(`[reflection] ${newMessages.length} new msgs (${allMessages.length - newMessages.length} filtered) from "${buf.chatTitle}"`);
-
         // ── Шаг 1.5: Sub-session splitting — берём только последнюю сессию ─
         // Если в буфере накопилось несколько разговорных сессий (разрывы ≥ 1ч),
         // анализируем только самую последнюю завершённую сессию.
         const sessions = splitIntoSessions(newMessages);
         const sessionToAnalyze = sessions[sessions.length - 1];
+        const emitDaytimeReflection = async (): Promise<void> => {
+            const currentMessageIds = sessionToAnalyze
+                .map(message => message.messageId)
+                .filter((id): id is number => Number.isInteger(id));
+            await sendDaytimeReflection(bot, { chatId, currentMessageIds }).catch(error => {
+                console.error(`[daytime-reflection] failed for "${buf.chatTitle}":`, error);
+            });
+        };
         if (sessions.length > 1) {
             devLog(`[reflection] ${sessions.length} sub-sessions detected, analyzing latest (${sessionToAnalyze.length} msgs)`);
         }
@@ -821,6 +831,7 @@ async function analyzeBatch(
             await saveLastAnalyzedMessageAt(chatId, lastMsgDate);
             buf.lastAnalyzedMessageAt = lastMsgDate;
             await updateYieldRate(chatId, 0);
+            await emitDaytimeReflection();
             return;
         }
 
@@ -896,6 +907,7 @@ async function analyzeBatch(
         const lastMsgDate = newMessages[newMessages.length - 1].date;
         await saveLastAnalyzedMessageAt(chatId, lastMsgDate);
         buf.lastAnalyzedMessageAt = lastMsgDate;
+        await emitDaytimeReflection();
 
         // Fix 5: Обновляем кумулятивную статистику
         totalAnalyses++;
@@ -970,50 +982,8 @@ async function analyzeBatch(
             ]).catch(() => { /* best-effort */ });
         }
 
-        // ── Шаг 6: Уведомление владельца ─────────────────────────────────────
-        const proactiveChatId = await getProactiveChatId();
-        if (proactiveChatId && savedCount > 0) {
-            const emotionSuffix: Record<string, string> = {
-                stress: ' ⚠️ (стресс)',
-                conflict: ' ⚠️ (конфликт)',
-                grief: ' 💙 (горе)',
-                anxiety: ' ⚠️ (тревога)',
-                joy: ' 🎉 (радость)',
-            };
-            const emotionNote = emotion !== 'neutral' ? (emotionSuffix[emotion] ?? '') : '';
-            const factItems = update.savedFacts.slice(0, 5).map(f => esc(f.content));
-            const more = update.savedFacts.length > 5 ? `…и ещё ${update.savedFacts.length - 5}` : '';
-            const moreBlock = more ? [({ type: "footer", text: more } as RichBlock)] : [];
-
-            const factBlocks: RichBlock[] = [list(factItems), ...moreBlock];
-
-            const blocks: RichBlock[] = [
-                heading(`🧠 ${savedCount} факт(ов) · «${esc(buf.chatTitle)}»${esc(emotionNote)}`, 3),
-            ];
-            // При 4+ фактах сворачиваем список, чтобы не захламлять чат.
-            if (update.savedFacts.length > 3) {
-                blocks.push(details('Сохранённые факты', factBlocks));
-            } else {
-                blocks.push(...factBlocks);
-            }
-
-            const sent = await sendStructured(bot.api as any, proactiveChatId, blocks) as { message_id?: number } | undefined;
-            if (sent?.message_id) {
-                const plainContext = [
-                    `🧠 ${savedCount} факт(ов) · «${buf.chatTitle}»${emotionNote}`,
-                    ...update.savedFacts.slice(0, 5).map(fact => `• ${fact.content}`),
-                ].join('\n');
-                await appendPersistedSentMessageContext(Number(proactiveChatId), {
-                    messageId: sent.message_id,
-                    text: plainContext,
-                    kind: 'memory_card',
-                    contactId: Number.isFinite(chatNumericId) ? chatNumericId : undefined,
-                    contactName: buf.chatTitle,
-                    memoryIds: episode ? [episode.memoryId] : undefined,
-                    createdAt: Date.now(),
-                }).catch(error => devLog('[reflection] Failed to persist rich-card context', error));
-            }
-        }
+        // Reflection наполняет память молча. Пользовательская интерпретация
+        // переписок формируется отдельно вечерним Inbox Guardian.
     } catch (e) {
         console.error(`[reflection] Error analyzing batch from "${buf.chatTitle}":`, e);
     }

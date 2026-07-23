@@ -176,6 +176,7 @@ ssh root@${SERVER_IP} << EOF
   load_env_if_present
   ensure_admin_state
   write_compose_env
+  prepare_runtime_data || { echo "❌ Не удалось подготовить instance-local runtime-data"; exit 1; }
 
     # personality.json — создаём из шаблона только при первом деплое, никогда не перезаписываем
   if [ ! -f "$REMOTE_DIR/personality.json" ]; then
