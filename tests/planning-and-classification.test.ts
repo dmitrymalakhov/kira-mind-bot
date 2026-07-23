@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { createPlan } from "../orchestration/planner";
+import { createPlan, postProcessPlan } from "../orchestration/planner";
 import { llmCache, LLM_CACHE_TTL } from "../utils/llmCache";
 import {
     getReflectionMemoryNoiseReasons,
@@ -42,6 +42,29 @@ describe("deterministic planner routes", () => {
 
     test("keeps today's agenda in conversation retrieval flow", async () => {
         assert.deepEqual(await createPlan(input("Что важного у меня сегодня?", "РАЗГОВОР")), {
+            steps: [{ agentId: "conversation" }],
+        });
+    });
+
+    test("does not let the planner replace a clear conversation with clarification", async () => {
+        assert.deepEqual(await createPlan({
+            message: "давай подробнее",
+            classification: {
+                intent: "РАЗГОВОР",
+                confidenceLevel: "ВЫСОКИЙ",
+                details: {},
+            },
+        }), {
+            steps: [{ agentId: "conversation" }],
+        });
+
+        assert.deepEqual(postProcessPlan({
+            steps: [{ agentId: "unclearIntent" }, { agentId: "conversation" }],
+        }, {
+            intent: "РАЗГОВОР",
+            confidenceLevel: "ВЫСОКИЙ",
+            details: {},
+        }), {
             steps: [{ agentId: "conversation" }],
         });
     });

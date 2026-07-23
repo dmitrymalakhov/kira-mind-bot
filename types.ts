@@ -134,6 +134,22 @@ export interface SessionData {
         createdAt: number;
         expiresAt: number;
     };
+    /** Ожидание текстовой правки для регулярной фоновой задачи. */
+    pendingRecurringTaskEdit?: {
+        taskId: string;
+        createdAt: number;
+        expiresAt: number;
+    };
+    /** Последний завершённый пользовательский запрос, который можно поставить на повтор. */
+    lastSchedulableRequest?: {
+        text: string;
+        messageId: number;
+        contextHistory?: Array<{
+            role: string;
+            content: string;
+        }>;
+        createdAt: number;
+    };
     /** Ожидающее подтверждения предложение создать напоминание (TTL 5 минут) */
     pendingImplicitReminder?: {
         originalMessage: string;

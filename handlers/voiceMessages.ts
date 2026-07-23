@@ -14,6 +14,7 @@ import {
     sendResultToUser,
     checkLastFactSaveError,
 } from "./shared";
+import { handleRecurringTaskText } from "../services/recurringTaskService";
 
 // ── Регистрация обработчика голосовых сообщений ─────────────
 
@@ -29,6 +30,10 @@ export function registerVoiceMessageHandler(bot: Bot<BotContext>): void {
             if (isReply && replyToContent) {
                 voiceMessage = `[В ответ на "${replyToContent}" от ${replyToSender}]: ${voiceMessage}`;
             }
+            const recurringContextHistory = ctx.session.messageHistory
+                .slice(0, 8)
+                .reverse()
+                .map(({ role, content }) => ({ role, content: content.slice(0, 2_000) }));
             await addToHistory(ctx, 'user', voiceMessage);
 
             const voice = ctx.message.voice;
@@ -73,6 +78,18 @@ export function registerVoiceMessageHandler(bot: Bot<BotContext>): void {
                         );
 
                         try {
+                            if (await handleRecurringTaskText(ctx, transcribedText, {
+                                messageId: ctx.message.message_id,
+                                contextHistory: recurringContextHistory,
+                            })) {
+                                await ctx.api.editMessageText(
+                                    ctx.chat.id,
+                                    processingMsg.message_id,
+                                    `Я распознала голосовую команду:\n\n"${transcribedText}"`,
+                                ).catch(() => {});
+                                if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+                                return;
+                            }
                             const voiceReplyRequested = wantsVoiceReply(transcribedText);
                             const textForProcessing = voiceReplyRequested
                                 ? stripVoiceReplyDirective(transcribedText)
@@ -93,6 +110,12 @@ export function registerVoiceMessageHandler(bot: Bot<BotContext>): void {
 
                             // Единая отправка результата вместо дублированного if/else
                             await sendResultToUser(ctx, result, voiceReplyRequested);
+                            ctx.session.lastSchedulableRequest = {
+                                text: textForProcessing,
+                                messageId: ctx.message.message_id,
+                                contextHistory: recurringContextHistory,
+                                createdAt: Date.now(),
+                            };
 
                             await checkLastFactSaveError(ctx);
                         } catch (processingError) {

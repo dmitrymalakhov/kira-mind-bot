@@ -24,6 +24,8 @@ import { hasActiveBrowserRunForContext } from "./agents/browserAgent";
 import { looksLikeBrowserTaskCancellation, looksLikeNegatedBookingRequest } from "./utils/browserTaskCancellation";
 import { isTodayImportanceRequest } from "./utils/todayImportanceIntent";
 import { applyKnowledgeSourceDecision, buildKnowledgeSourcePrompt, decideKnowledgeSource, shouldInterruptPendingContactMemory } from "./utils/knowledgeSource";
+import { decideContextualFollowUp } from "./utils/contextualFollowUp";
+import { buildClassificationCacheKey } from "./utils/classificationCache";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -723,9 +725,9 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
         }
         `;
 
-        // Кэш с учётом списка групп (разные пользователи = разные группы)
-        const groupsCacheKey = knownChatGroups?.map(g => g.name).sort().join('|') ?? '';
-        const cacheKey = `classify:${message.slice(0, 200)}:${groupsCacheKey.slice(0, 60)}`;
+        // Короткие реплики зависят от предыдущих ходов, поэтому история входит
+        // в ключ кэша и не может переиспользовать чужую контекстную классификацию.
+        const cacheKey = buildClassificationCacheKey(message, messageHistory, knownChatGroups ?? []);
         const cached = llmCache.get<MessageClassification>(cacheKey);
         if (cached) {
             devLog('classifyMessage: cache hit');
@@ -790,7 +792,12 @@ export async function processMessage(
     forwardFrom: string = "",
     messageHistory: MessageHistory[] = [],
     lastLocation?: { latitude: number; longitude: number; address?: string; },
-    options: { voiceReplyRequested?: boolean; turn?: ConversationTurn } = {}
+    options: {
+        voiceReplyRequested?: boolean;
+        turn?: ConversationTurn;
+        /** Отдельный текст только для выбора источника знаний; не считается словами пользователя. */
+        knowledgeSourceText?: string;
+    } = {}
 ): Promise<ProcessingResult> {
     try {
         const originalMessage = options.turn?.userText ?? message;
@@ -798,7 +805,11 @@ export async function processMessage(
         const forwardContext = options.turn?.forwardContext;
         const internalBrowserContinuation = BROWSER_CONTINUATION_RE.test(message);
         const routingMessage = internalBrowserContinuation ? message : originalMessage;
-        const knowledgeDecision = decideKnowledgeSource(originalMessage, replyContext, options.turn?.currentTopic);
+        const knowledgeDecision = decideKnowledgeSource(
+            options.knowledgeSourceText ?? originalMessage,
+            replyContext,
+            options.turn?.currentTopic,
+        );
         const proactiveExplanation = buildProactiveInsightExplanation(ctx, originalMessage, replyContext);
         if (proactiveExplanation) return proactiveExplanation;
 
@@ -959,11 +970,39 @@ export async function processMessage(
             !BROWSER_CONTINUATION_RE.test(message) && !explicitRemember
                 ? buildExplicitReminderClassification(message)
                 : null;
+        const contextualFollowUp = !deterministicReminderClassification && !explicitRemember
+            ? decideContextualFollowUp(originalMessage, messageHistory)
+            : null;
+        const deterministicContextualClassification: MessageClassification | null = contextualFollowUp
+            ? {
+                intent: contextualFollowUp.intent,
+                confidenceLevel: "ВЫСОКИЙ",
+                intentScores: [{
+                    intent: contextualFollowUp.intent,
+                    score: 1,
+                    reason: contextualFollowUp.reason,
+                }],
+                details: {
+                    knowledgeSource: contextualFollowUp.knowledgeSource,
+                    requestedFacets: contextualFollowUp.requestedFacets,
+                },
+            }
+            : null;
         let classification = deterministicReminderClassification
+            ?? deterministicContextualClassification
             ?? await classifyMessage(originalMessage, isForwarded, forwardFrom, messageHistory, knownChatGroups);
-        let deterministicOverrideApplied = Boolean(deterministicReminderClassification);
+        let deterministicOverrideApplied = Boolean(
+            deterministicReminderClassification || deterministicContextualClassification
+        );
         if (deterministicReminderClassification) {
             devLog("Explicit reminder fast-path: routing to НАПОМИНАНИЕ");
+        }
+        if (deterministicContextualClassification) {
+            devLog(
+                "Contextual follow-up fast-path:",
+                deterministicContextualClassification.intent,
+                contextualFollowUp?.reason,
+            );
         }
 
         if (knowledgeDecision.requiresWeb && !isBrowserTaskLike && !explicitRemember) {

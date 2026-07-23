@@ -26,6 +26,7 @@ import { startMorningDigestScheduler } from "./services/morningDigestScheduler";
 import { startChatGroupTracker } from "./services/chatGroupTracker";
 import { startChatPromptWatchPolling } from "./services/chatPromptWatchers";
 import { startInboxGuardianScheduler } from "./services/inboxGuardianScheduler";
+import { startRecurringTaskScheduler } from "./services/recurringTaskScheduler";
 import { initReflectionMode } from "./services/reflectionModeService";
 import { REACTIONS_ENABLED, ALLOWED_REACTIONS } from "./handlers/shared";
 
@@ -122,6 +123,7 @@ async function startBot() {
         startReflectionModeScheduler(bot);
         startMorningDigestScheduler(bot);
         startInboxGuardianScheduler(bot);
+        startRecurringTaskScheduler(bot);
         startChatGroupTracker(bot);
         startChatPromptWatchPolling(bot.api);
         await bot.api.setMyCommands(getTelegramMenuCommands());

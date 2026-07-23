@@ -12,6 +12,9 @@ import type {
   MemoryResponse,
   MonitoringHealthResponse,
   PersonalityConfig,
+  RecurringTaskRecord,
+  RecurringTaskSchedule,
+  RecurringTaskStatus,
 } from './types';
 
 export const AUTH_REQUIRED_EVENT = 'kira:auth-required';
@@ -209,4 +212,43 @@ export async function deleteMemory(domain: string, id: string, query: Partial<Pi
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(body.error || 'Failed to delete memory');
   return body as { success: boolean };
+}
+
+export async function fetchRecurringTasks(): Promise<RecurringTaskRecord[]> {
+  const r = await apiFetch('/api/recurring-tasks');
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || 'Failed to load recurring tasks');
+  return body as RecurringTaskRecord[];
+}
+
+export async function updateRecurringTask(
+  id: string,
+  patch: Partial<{
+    title: string;
+    prompt: string;
+    schedule: RecurringTaskSchedule;
+    timezone: string;
+    status: RecurringTaskStatus;
+  }>,
+): Promise<RecurringTaskRecord> {
+  const r = await apiFetch(`/api/recurring-tasks/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || 'Failed to update recurring task');
+  return body.task as RecurringTaskRecord;
+}
+
+export async function runRecurringTask(id: string): Promise<void> {
+  const r = await apiFetch(`/api/recurring-tasks/${encodeURIComponent(id)}/run`, { method: 'POST' });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || 'Failed to run recurring task');
+}
+
+export async function deleteRecurringTask(id: string): Promise<void> {
+  const r = await apiFetch(`/api/recurring-tasks/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || 'Failed to delete recurring task');
 }

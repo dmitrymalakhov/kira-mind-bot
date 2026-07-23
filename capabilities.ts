@@ -45,6 +45,14 @@ export const BOT_COMMANDS: BotCommandDescription[] = [
         showInTelegramMenu: true,
     },
     {
+        command: "tasks",
+        description: "Регулярные фоновые задачи",
+        scope: "owner",
+        usage: "/tasks",
+        examples: ["/tasks"],
+        showInTelegramMenu: true,
+    },
+    {
         command: "reflection",
         description: "Режим рефлексии и накопления знаний",
         scope: "owner",
@@ -296,6 +304,19 @@ export const BOT_CAPABILITIES: BotCapabilityDescription[] = [
             "Отмени все напоминания на сегодня",
         ],
         commands: ["/reminders"],
+        ownerOnly: true,
+    },
+    {
+        id: "recurring-tasks",
+        title: "Регулярные фоновые задачи",
+        category: "Планирование",
+        summary: "Ставит предыдущий запрос на повторный запуск по расписанию и присылает каждый новый результат.",
+        examples: [
+            "Найди свежие новости про космос",
+            "Теперь присылай это каждое утро",
+            "Какие у меня регулярные задачи?",
+        ],
+        commands: ["/tasks"],
         ownerOnly: true,
     },
     {

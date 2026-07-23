@@ -34,6 +34,8 @@ interface PersistedSession {
     pendingContactLookup?: SessionData['pendingContactLookup'];
     pendingPostpone?: SessionData['pendingPostpone'];
     pendingReminderEdit?: SessionData['pendingReminderEdit'];
+    pendingRecurringTaskEdit?: SessionData['pendingRecurringTaskEdit'];
+    lastSchedulableRequest?: SessionData['lastSchedulableRequest'];
     pendingBrowserTask?: SessionData['pendingBrowserTask'];
     pendingHealthLog?: SessionData['pendingHealthLog'];
     pendingHealthDiscomfort?: SessionData['pendingHealthDiscomfort'];
@@ -238,6 +240,12 @@ function extract(data: SessionData): PersistedSession {
         pendingReminderEdit: data.pendingReminderEdit && data.pendingReminderEdit.expiresAt > now
             ? data.pendingReminderEdit
             : undefined,
+        pendingRecurringTaskEdit: data.pendingRecurringTaskEdit && data.pendingRecurringTaskEdit.expiresAt > now
+            ? data.pendingRecurringTaskEdit
+            : undefined,
+        lastSchedulableRequest: data.lastSchedulableRequest && now - data.lastSchedulableRequest.createdAt <= 7 * 24 * 60 * 60 * 1000
+            ? data.lastSchedulableRequest
+            : undefined,
         pendingBrowserTask: data.pendingBrowserTask && data.pendingBrowserTask.expiresAt > now
             ? data.pendingBrowserTask
             : undefined,
@@ -282,6 +290,8 @@ function merge(initial: SessionData, persisted: PersistedSession): SessionData {
         pendingContactLookup: persisted.pendingContactLookup ?? initial.pendingContactLookup,
         pendingPostpone: persisted.pendingPostpone ?? initial.pendingPostpone,
         pendingReminderEdit: persisted.pendingReminderEdit ?? initial.pendingReminderEdit,
+        pendingRecurringTaskEdit: persisted.pendingRecurringTaskEdit ?? initial.pendingRecurringTaskEdit,
+        lastSchedulableRequest: persisted.lastSchedulableRequest ?? initial.lastSchedulableRequest,
         pendingBrowserTask: persisted.pendingBrowserTask ?? initial.pendingBrowserTask,
         pendingHealthLog: persisted.pendingHealthLog ?? initial.pendingHealthLog,
         pendingHealthDiscomfort: persisted.pendingHealthDiscomfort ?? initial.pendingHealthDiscomfort,
@@ -408,6 +418,12 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
             }
             if (persisted.pendingReminderEdit?.expiresAt && persisted.pendingReminderEdit.expiresAt <= now) {
                 persisted.pendingReminderEdit = undefined;
+            }
+            if (persisted.pendingRecurringTaskEdit?.expiresAt && persisted.pendingRecurringTaskEdit.expiresAt <= now) {
+                persisted.pendingRecurringTaskEdit = undefined;
+            }
+            if (persisted.lastSchedulableRequest && now - persisted.lastSchedulableRequest.createdAt > 7 * 24 * 60 * 60 * 1000) {
+                persisted.lastSchedulableRequest = undefined;
             }
             if (persisted.pendingBrowserTask?.expiresAt && persisted.pendingBrowserTask.expiresAt <= now) {
                 persisted.pendingBrowserTask = undefined;
@@ -652,6 +668,95 @@ export async function appendPersistedHistory(
     } catch (e) {
         console.error('[SessionStorage] append history failed:', e);
     }
+}
+
+/**
+ * Атомарно подмешивает только новые continuation-state, созданные фоновым
+ * выполнением. Так recurring task не перезаписывает живую Telegram-сессию,
+ * но пользователь может ответить на уточнение browser/health-flow.
+ */
+export async function mergePersistedBackgroundContinuation(
+    chatId: number,
+    data: SessionData,
+    startedAt: number,
+): Promise<void> {
+    const isFresh = (value: { createdAt?: number } | undefined): boolean =>
+        Boolean(value?.createdAt && value.createdAt >= startedAt - 1_000);
+    const quickChoices = data.pendingQuickChoices
+        ? Object.fromEntries(
+            Object.entries(data.pendingQuickChoices).filter(([, value]) => value.createdAt >= startedAt - 1_000),
+        )
+        : undefined;
+    const patch: Partial<PersistedSession> = {
+        pendingBrowserTask: isFresh(data.pendingBrowserTask) ? data.pendingBrowserTask : undefined,
+        pendingHealthLog: isFresh(data.pendingHealthLog) ? data.pendingHealthLog : undefined,
+        pendingHealthDiscomfort: isFresh(data.pendingHealthDiscomfort) ? data.pendingHealthDiscomfort : undefined,
+        lastBrowserTask: isFresh(data.lastBrowserTask) ? data.lastBrowserTask : undefined,
+        studyChatRequest: isFresh(data.studyChatRequest) ? data.studyChatRequest : undefined,
+        chatAnalysisPeriodRequest: isFresh(data.chatAnalysisPeriodRequest) ? data.chatAnalysisPeriodRequest : undefined,
+        pendingQuickChoices: quickChoices && Object.keys(quickChoices).length > 0 ? quickChoices : undefined,
+    };
+    const serializablePatch = Object.fromEntries(
+        Object.entries(patch).filter(([, value]) => value !== undefined),
+    );
+    if (Object.keys(serializablePatch).length === 0) return;
+
+    const repo = AppDataSource.getRepository(SessionEntity);
+    const key = scopedBotKey(chatId);
+    const mergePatch = (persisted: Partial<PersistedSession>): Partial<PersistedSession> => {
+        const next = { ...persisted } as Record<string, unknown>;
+        const now = Date.now();
+        for (const [field, value] of Object.entries(serializablePatch)) {
+            if (field === "pendingQuickChoices") {
+                next[field] = {
+                    ...(isJsonObject(next[field]) ? next[field] : {}),
+                    ...(isJsonObject(value) ? value : {}),
+                };
+                continue;
+            }
+            const existing = isJsonObject(next[field]) ? next[field] : undefined;
+            const existingCreatedAt = Number(existing?.createdAt ?? 0);
+            const incoming = isJsonObject(value)
+                ? value as Record<string, unknown>
+                : undefined;
+            const incomingCreatedAt = Number(incoming?.createdAt ?? 0);
+            if (field === "lastBrowserTask") {
+                if (incomingCreatedAt >= existingCreatedAt) next[field] = value;
+                continue;
+            }
+            const existingExpiresAt = Number(existing?.expiresAt ?? 0);
+            if (existing && (existingCreatedAt >= startedAt - 1_000 || existingExpiresAt > now)) {
+                continue;
+            }
+            next[field] = value;
+        }
+        return next as Partial<PersistedSession>;
+    };
+
+    if (repo.manager?.transaction) {
+        await repo.manager.transaction(async manager => {
+            await manager.query(`
+                INSERT INTO bot_sessions (key, data)
+                VALUES ($1, '{}'::jsonb)
+                ON CONFLICT (key) DO NOTHING
+            `, [key]);
+            const transactionRepo = manager.getRepository(SessionEntity);
+            const row = await transactionRepo.findOne({
+                where: { key },
+                lock: { mode: "pessimistic_write" },
+            });
+            const persisted = row ? parsePersistedSession(row.data) : {};
+            await transactionRepo.upsert({
+                key,
+                data: mergePatch(persisted) as unknown as Record<string, any>,
+            }, ["key"]);
+        });
+        return;
+    }
+
+    const row = await repo.findOne({ where: { key } });
+    const persisted = row ? parsePersistedSession(row.data) : {};
+    await repo.upsert({ key, data: mergePatch(persisted) as unknown as Record<string, any> }, ["key"]);
 }
 
 export async function saveProactiveInsight(

@@ -40,6 +40,7 @@ import {
     removeTargetNotificationButtons,
     targetChatHumanLabel,
 } from "../utils/reminderTargetNotification";
+import { handleRecurringTaskCallback } from "../services/recurringTaskService";
 
 const EVENING_POSTPONE_HOUR = 19;
 
@@ -264,6 +265,10 @@ export function registerCallback(bot: Bot<BotContext>): void {
     bot.on("callback_query:data", async (ctx, next) => {
         try {
             const callbackData = ctx.callbackQuery.data;
+
+            if (await handleRecurringTaskCallback(ctx, callbackData)) {
+                return;
+            }
 
             if (await handleContactMemoryCallback(ctx, callbackData)) {
                 return;

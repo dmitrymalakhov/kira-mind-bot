@@ -36,9 +36,35 @@ async function main(): Promise<void> {
         assert.doesNotMatch(failed.responseText, /secret_provider_payload|gemini-test-request/);
 
         responseModule.createResponseForTask = async () => ({ output_text: 'Найден безопасный результат' });
-        const succeeded = await webSearchAgent('найди свежие новости');
+        const succeeded = await webSearchAgent('найди актуальную погоду');
         assert.strictEqual(succeeded.webSearchSucceeded, true);
         assert.strictEqual(succeeded.responseText, 'Найден безопасный результат');
+
+        let newsAttempt = 0;
+        responseModule.createResponseForTask = async () => {
+            newsAttempt += 1;
+            if (newsAttempt === 1) {
+                return { output_text: 'Собрала свежую подборку. Если хочешь, могу прислать её подробнее.' };
+            }
+            return {
+                output_text: [
+                    '1. Первая конкретная новость от 23 июля с объяснением события и последствий.',
+                    'Источник: https://example.com/news-1',
+                    '',
+                    '2. Вторая конкретная новость от 23 июля с объяснением события и последствий.',
+                    'Источник: https://example.com/news-2',
+                    '',
+                    '3. Третья конкретная новость от 23 июля с объяснением события и последствий.',
+                    'Источник: https://example.com/news-3',
+                    '',
+                    'Короткий вывод: события относятся к разным блокам повестки и требуют отдельного наблюдения.',
+                ].join('\n'),
+            };
+        };
+        const retriedNews = await webSearchAgent('найди свежие новости и сделай новостную сводку');
+        assert.strictEqual(newsAttempt, 2);
+        assert.strictEqual(retriedNews.webSearchSucceeded, true);
+        assert.match(retriedNews.responseText, /Первая конкретная новость/);
     } finally {
         responseModule.createResponseForTask = originalCreateResponse;
         console.error = consoleError;

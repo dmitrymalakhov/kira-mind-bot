@@ -55,8 +55,23 @@ export function postProcessPlan(plan: Plan, classification: PlanningInput['class
         return { steps: [{ agentId: 'unclearIntent' }] };
     }
 
+    if (plan.steps.some(step => step.agentId === 'unclearIntent')) {
+        const withoutContradictoryClarification = plan.steps.filter(step => step.agentId !== 'unclearIntent');
+        plan = withoutContradictoryClarification.length > 0
+            ? { steps: withoutContradictoryClarification }
+            : fallbackPlan(intent, '');
+    }
+
     if (intent === 'САМОИЗУЧЕНИЕ') {
         return { steps: [{ agentId: 'selfStudy' }] };
+    }
+
+    if (
+        intent === 'РАЗГОВОР' &&
+        classification.confidenceLevel === 'ВЫСОКИЙ' &&
+        !classification.subIntents?.length
+    ) {
+        return { steps: [{ agentId: 'conversation' }] };
     }
 
     if (classification.details?.knowledgeSource === 'external_current') {
@@ -118,6 +133,14 @@ export async function createPlan(input: PlanningInput): Promise<Plan> {
 
     if (intent === 'САМОИЗУЧЕНИЕ') {
         return { steps: [{ agentId: 'selfStudy' }] };
+    }
+
+    if (
+        intent === 'РАЗГОВОР' &&
+        classification.confidenceLevel === 'ВЫСОКИЙ' &&
+        !classification.subIntents?.length
+    ) {
+        return { steps: [{ agentId: 'conversation' }] };
     }
 
     if (

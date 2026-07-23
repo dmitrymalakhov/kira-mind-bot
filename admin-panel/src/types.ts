@@ -322,6 +322,42 @@ export interface PersonalityProfile {
   proactiveMessageHint: string;
 }
 
+export type RecurringTaskStatus = 'active' | 'paused';
+
+export interface RecurringTaskSchedule {
+  type: 'interval' | 'daily' | 'weekly' | 'monthly';
+  intervalMinutes?: number;
+  interval?: number;
+  hour?: number;
+  minute?: number;
+  daysOfWeek?: number[];
+  dayOfMonth?: number;
+  anchorDate: string;
+}
+
+export interface RecurringTaskRecord {
+  id: string;
+  chatId: string;
+  chatType: 'private' | 'group' | 'supergroup';
+  chatTitle?: string | null;
+  userId: string;
+  title: string;
+  prompt: string;
+  schedule: RecurringTaskSchedule;
+  timezone: string;
+  status: RecurringTaskStatus;
+  nextRunAt: string;
+  lastRunAt?: string | null;
+  lastCompletedAt?: string | null;
+  lockedAt?: string | null;
+  lastResult?: string | null;
+  lastError?: string | null;
+  consecutiveFailures: number;
+  runCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface PersonalityConfig {
   KiraMindBot: PersonalityProfile;
 }

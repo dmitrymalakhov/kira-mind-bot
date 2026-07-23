@@ -33,6 +33,7 @@ import {
     ProactiveHintCandidate,
 } from "../utils/proactiveMemory";
 import { decideKnowledgeSource } from "../utils/knowledgeSource";
+import { handleRecurringTaskText } from "../services/recurringTaskService";
 import {
     MEMORY_HEARS_RE,
     MEMORY_DELETE_RE,
@@ -386,6 +387,10 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
             };
             // Reply-контекст не склеиваем с новой репликой: delayed extraction и
             // summaries должны видеть только слова пользователя.
+            const recurringContextHistory = ctx.session.messageHistory
+                .slice(0, 8)
+                .reverse()
+                .map(({ role, content }) => ({ role, content: content.slice(0, 2_000) }));
             await addToHistory(ctx, 'user', message, { turn });
             if (pendingGap) ctx.session.pendingMemoryGap = undefined;
 
@@ -476,6 +481,13 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
                             );
                             await ctx.reply(parsed.responseText);
                         }
+                        return;
+                    }
+
+                    if (await handleRecurringTaskText(ctx, message, {
+                        messageId: ctx.message.message_id,
+                        contextHistory: recurringContextHistory,
+                    })) {
                         return;
                     }
 
@@ -581,6 +593,12 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
 
                     // Единая отправка результата вместо дублированного if/else
                     const sentResult = await sendResultToUser(ctx, result, voiceReplyRequested);
+                    ctx.session.lastSchedulableRequest = {
+                        text: pendingBrowserTask?.originalTask ?? message,
+                        messageId: ctx.message.message_id,
+                        contextHistory: recurringContextHistory,
+                        createdAt: Date.now(),
+                    };
                     if (identityGapCandidate && sentResult?.message_id) {
                         commitMemoryGapCandidate(ctx, identityGapCandidate, sentResult.message_id);
                         storeSentMessageContext(ctx, sentResult.message_id, result.responseText, {

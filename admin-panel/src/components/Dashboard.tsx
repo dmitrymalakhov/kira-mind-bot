@@ -48,6 +48,7 @@ import { ChatsSection } from './ChatsSection';
 import { HealthSection } from './HealthSection';
 import { MemorySection } from './MemorySection';
 import { MonitoringSection } from './MonitoringSection';
+import { RecurringTasksSection } from './RecurringTasksSection';
 import { saveConfig, fetchConfig, logout, restartService } from '../api';
 import type { ConfigResponse, Toast } from '../types';
 
@@ -92,6 +93,7 @@ const SIDEBAR_TABS: SidebarTabItem[] = [
   { id: 3, label: 'Здоровье', caption: 'Дневник и выгрузки', icon: <LocalHospitalIcon fontSize="small" /> },
   { id: 4, label: 'Память', caption: 'Факты и индексы', icon: <MemoryIcon fontSize="small" /> },
   { id: 5, label: 'Мониторинг', caption: 'Зависимости и API', icon: <MonitorHeartIcon fontSize="small" /> },
+  { id: 6, label: 'Задачи', caption: 'Регулярные запуски', icon: <EventRepeatIcon fontSize="small" /> },
 ];
 
 const TAB_META: Record<number, { title: string; caption: string }> = {
@@ -118,6 +120,10 @@ const TAB_META: Record<number, { title: string; caption: string }> = {
   5: {
     title: 'Мониторинг зависимостей',
     caption: 'Live health checks для контейнера, хранилищ, Telegram и AI-провайдеров',
+  },
+  6: {
+    title: 'Регулярные задачи',
+    caption: 'Повторный запуск запросов по расписанию и доставка результатов в Telegram',
   },
 };
 
@@ -184,6 +190,13 @@ const SIDEBAR_INTRO_CARDS: Record<number, SidebarIntroCard[]> = {
       icon: <MonitorHeartIcon fontSize="small" />,
       label: 'Мониторинг',
       caption: 'Состояние внешних API и runtime-зависимостей',
+    },
+  ],
+  6: [
+    {
+      icon: <EventRepeatIcon fontSize="small" />,
+      label: 'Задачи',
+      caption: 'Расписание, пауза, ручной запуск и редактирование',
     },
   ],
 };
@@ -754,7 +767,7 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
           flexGrow: 1,
           minWidth: 0,
           p: { xs: 1.5, sm: 2, md: 2.5 },
-          maxWidth: activeTab === 3 || activeTab === 4 || activeTab === 5 ? 1240 : 980,
+          maxWidth: activeTab === 3 || activeTab === 4 || activeTab === 5 || activeTab === 6 ? 1240 : 980,
           width: '100%',
           mx: isMobile ? 'auto' : 0,
         }}
@@ -896,6 +909,9 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
 
         {/* Monitoring tab */}
         {activeTab === 5 && <MonitoringSection />}
+
+        {/* Recurring tasks tab */}
+        {activeTab === 6 && <RecurringTasksSection />}
       </Box>
       </Box>
 

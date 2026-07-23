@@ -24,6 +24,10 @@ const {
   getDefaultPersonalityProfile,
   normalizeGenderDefaults,
 } = require('./personalityDefaults');
+const {
+  normalizeRecurringSchedule,
+  computeNextRecurringRun,
+} = require('./recurringTasks');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -590,6 +594,142 @@ app.patch('/api/chats/:chatId/public-mode', requireAuth, async (req, res) => {
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ error: 'Чат не найден' });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: `Ошибка БД: ${err.message}` });
+  } finally {
+    await pool.end();
+  }
+});
+
+// ── Recurring tasks ───────────────────────────────────────────────────────────
+
+const RECURRING_TASK_PROFILE = process.env.ASSISTANT_PROFILE || 'KiraMindBot';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+app.get('/api/recurring-tasks', requireAuth, async (_req, res) => {
+  const pool = createDbPool();
+  try {
+    const result = await pool.query(
+      `SELECT id, "chatId", "chatType", "chatTitle", "userId", title, prompt, schedule, timezone, status,
+              "nextRunAt", "lastRunAt", "lastCompletedAt", "lockedAt", "lastResult", "lastError",
+              "consecutiveFailures", "runCount", "createdAt", "updatedAt"
+       FROM recurring_tasks
+       WHERE profile = $1
+       ORDER BY "createdAt" DESC`,
+      [RECURRING_TASK_PROFILE]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: `Ошибка БД: ${err.message}` });
+  } finally {
+    await pool.end();
+  }
+});
+
+app.patch('/api/recurring-tasks/:id', requireAuth, async (req, res) => {
+  const { id } = req.params;
+  if (!UUID_RE.test(id)) return res.status(400).json({ error: 'Некорректный ID задачи' });
+  const pool = createDbPool();
+  try {
+    const existing = await pool.query(
+      'SELECT * FROM recurring_tasks WHERE id = $1 AND profile = $2',
+      [id, RECURRING_TASK_PROFILE]
+    );
+    if (existing.rowCount === 0) return res.status(404).json({ error: 'Задача не найдена' });
+    const task = existing.rows[0];
+    if (task.lockedAt && Date.now() - new Date(task.lockedAt).getTime() < 30 * 60 * 1000) {
+      return res.status(409).json({ error: 'Задача сейчас выполняется. Дождитесь завершения перед редактированием.' });
+    }
+    const timezone = typeof req.body.timezone === 'string' && req.body.timezone.trim()
+      ? req.body.timezone.trim()
+      : task.timezone;
+    const schedule = req.body.schedule
+      ? normalizeRecurringSchedule(req.body.schedule, timezone)
+      : task.schedule;
+    const status = req.body.status === 'paused' || req.body.status === 'active'
+      ? req.body.status
+      : task.status;
+    const title = typeof req.body.title === 'string' ? req.body.title.trim().slice(0, 200) : task.title;
+    const prompt = typeof req.body.prompt === 'string' ? req.body.prompt.trim().slice(0, 20000) : task.prompt;
+    const contextHistory = prompt !== task.prompt ? [] : task.contextHistory;
+    if (!title || !prompt) return res.status(400).json({ error: 'Название и запрос не могут быть пустыми' });
+    const scheduleChanged = Boolean(req.body.schedule || req.body.timezone);
+    const needsFreshNextRun = scheduleChanged || (task.status === 'paused' && status === 'active' && new Date(task.nextRunAt) <= new Date());
+    const nextRunAt = needsFreshNextRun
+      ? computeNextRecurringRun(schedule, timezone)
+      : task.nextRunAt;
+
+    const updated = await pool.query(
+      `UPDATE recurring_tasks
+       SET title = $1, prompt = $2, schedule = $3::jsonb, timezone = $4,
+           status = $5, "nextRunAt" = $6, "contextHistory" = $7::jsonb, "updatedAt" = NOW()
+       WHERE id = $8 AND profile = $9
+         AND ("lockedAt" IS NULL OR "lockedAt" <= NOW() - INTERVAL '30 minutes')
+       RETURNING *`,
+      [title, prompt, JSON.stringify(schedule), timezone, status, nextRunAt, JSON.stringify(contextHistory || []), id, RECURRING_TASK_PROFILE]
+    );
+    if (updated.rowCount === 0) {
+      return res.status(409).json({ error: 'Задача начала выполняться до сохранения изменений. Повторите после завершения.' });
+    }
+    res.json({ success: true, task: updated.rows[0] });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  } finally {
+    await pool.end();
+  }
+});
+
+app.post('/api/recurring-tasks/:id/run', requireAuth, async (req, res) => {
+  const { id } = req.params;
+  if (!UUID_RE.test(id)) return res.status(400).json({ error: 'Некорректный ID задачи' });
+  const pool = createDbPool();
+  try {
+    const result = await pool.query(
+      `UPDATE recurring_tasks
+       SET status = 'active', "nextRunAt" = NOW(), "lockedAt" = NULL, "updatedAt" = NOW()
+       WHERE id = $1 AND profile = $2
+         AND ("lockedAt" IS NULL OR "lockedAt" <= NOW() - INTERVAL '30 minutes')
+       RETURNING id`,
+      [id, RECURRING_TASK_PROFILE]
+    );
+    if (result.rowCount === 0) {
+      const exists = await pool.query(
+        'SELECT 1 FROM recurring_tasks WHERE id = $1 AND profile = $2',
+        [id, RECURRING_TASK_PROFILE]
+      );
+      return res.status(exists.rowCount ? 409 : 404).json({
+        error: exists.rowCount ? 'Задача уже выполняется' : 'Задача не найдена',
+      });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: `Ошибка БД: ${err.message}` });
+  } finally {
+    await pool.end();
+  }
+});
+
+app.delete('/api/recurring-tasks/:id', requireAuth, async (req, res) => {
+  const { id } = req.params;
+  if (!UUID_RE.test(id)) return res.status(400).json({ error: 'Некорректный ID задачи' });
+  const pool = createDbPool();
+  try {
+    const result = await pool.query(
+      `DELETE FROM recurring_tasks
+       WHERE id = $1 AND profile = $2
+         AND ("lockedAt" IS NULL OR "lockedAt" <= NOW() - INTERVAL '30 minutes')`,
+      [id, RECURRING_TASK_PROFILE]
+    );
+    if (result.rowCount === 0) {
+      const exists = await pool.query(
+        'SELECT 1 FROM recurring_tasks WHERE id = $1 AND profile = $2',
+        [id, RECURRING_TASK_PROFILE]
+      );
+      return res.status(exists.rowCount ? 409 : 404).json({
+        error: exists.rowCount ? 'Задача сейчас выполняется. Удалите её после завершения.' : 'Задача не найдена',
+      });
     }
     res.json({ success: true });
   } catch (err) {

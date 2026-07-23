@@ -28,6 +28,7 @@ import {
 } from "../services/groupChatFeatureSettings";
 import { isStatusCommandArg, parseBooleanCommandArg } from "../utils/booleanCommandArg";
 import { buildHelpOverviewBlocks, buildHelpTopicBlocks } from "../utils/helpMessage";
+import { sendRecurringTasksMenu } from "../services/recurringTaskService";
 
 
 function parseCommandArgument(text: string | undefined, command: string): string {
@@ -44,6 +45,9 @@ export function registerCommandHandlers(bot: Bot<BotContext>) {
     registerChatPromptWatchCommands(bot);
     registerChatGroupCommands(bot);
     registerHealthCommands(bot);
+    bot.command("tasks", async (ctx) => {
+        await sendRecurringTasksMenu(ctx);
+    });
     bot.command("telegram_reset", async (ctx) => {
     try {
         // Вызываем функцию сброса сообщений

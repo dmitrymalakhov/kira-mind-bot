@@ -6,7 +6,7 @@ import { canContinueAfterWebSearchFailure } from './webSearchFailurePolicy';
 import { fetchAgentMemoryContext, buildMemoryContextBlock } from '../utils/agentMemoryContext';
 import { conversationAgent } from '../agents/conversationAgent';
 import { reminderAgent } from '../agents/reminderAgent';
-import { webSearchAgent } from '../agents/webSearchAgent';
+import { selectNewsDigestResponse, webSearchAgent } from '../agents/webSearchAgent';
 import { readMessagesAgent } from '../agents/readMessagesAgent';
 import { sendMessagesAgent } from '../agents/sendMessagesAgent';
 import { negotiateOnBehalfAgent } from '../agents/negotiateOnBehalfAgent';
@@ -430,6 +430,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
 
     /** Накопленные результаты terminal-шагов в составном плане (multi-intent). */
     const collectedResults: ProcessingResult[] = [];
+    let latestWebSearchText = '';
 
     for (let i = 0; i < steps.length; i++) {
         const step = steps[i];
@@ -491,6 +492,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
                 }
                 const passToNext = nextStep && (step.params?.asContext === true || hasMoreSteps(i));
                 if (passToNext) {
+                    latestWebSearchText = webRes.responseText;
                     enrichedContextFromMemory += '\nДополнительный контекст из поиска в интернете:\n' + webRes.responseText + '\n\n';
                 } else {
                     webRes.botReaction = classification.details?.botReaction;
@@ -509,6 +511,17 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
                     ctx, message, isForwarded, forwardFrom, messageHistory, classification, sharedMemoryContext
                 ));
                 if (conv === null) return { responseText: 'Не смогла сформировать ответ. Попробуй ещё раз 🙏', botReaction: classification.details?.botReaction };
+                if (latestWebSearchText) {
+                    const requestContext = [
+                        ...messageHistory.slice(-6).map(item => item.content),
+                        message,
+                    ].join('\n');
+                    conv.responseText = selectNewsDigestResponse(
+                        requestContext,
+                        latestWebSearchText,
+                        conv.responseText,
+                    );
+                }
                 conv.botReaction = classification.details?.botReaction;
                 if (collectedResults.length > 0) {
                     collectedResults.push(conv);
