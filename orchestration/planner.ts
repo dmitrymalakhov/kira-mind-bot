@@ -66,6 +66,10 @@ export function postProcessPlan(plan: Plan, classification: PlanningInput['class
         return { steps: [{ agentId: 'selfStudy' }] };
     }
 
+    if (intent === 'ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ') {
+        return { steps: [{ agentId: 'imageGeneration' }] };
+    }
+
     if (
         intent === 'РАЗГОВОР' &&
         classification.confidenceLevel === 'ВЫСОКИЙ' &&
@@ -133,6 +137,10 @@ export async function createPlan(input: PlanningInput): Promise<Plan> {
 
     if (intent === 'САМОИЗУЧЕНИЕ') {
         return { steps: [{ agentId: 'selfStudy' }] };
+    }
+
+    if (intent === 'ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ') {
+        return { steps: [{ agentId: 'imageGeneration' }] };
     }
 
     if (

@@ -30,6 +30,7 @@ import {
     guardRecurringTaskClassification,
     guardRecurringTaskPlan,
 } from "./utils/recurringTaskPrompt";
+import { isAssistantSelfPhotoRequest } from "./utils/assistantSelfPhoto";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -574,6 +575,9 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
            изображение, картинку, фото и т.п. Используются фразы "нарисуй", "создай изображение",
            "сгенерируй картинку", "нарисуй мне", и подобные. Если в сообщении описывается
            визуальная сцена, которую нужно создать - это ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ.
+           Просьба ассистенту прислать собственное фото или селфи — например, «скинь фотку, где ты
+           сейчас», «пришли своё селфи», «покажи, как ты сейчас выглядишь» — тоже всегда
+           ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ, а не РАЗГОВОР.
            
         4. КАРТЫ_ЛОКАЦИИ - пользователь запрашивает информацию о местоположении, маршрутах,
            адресах, поиске физических мест на карте. Используются фразы типа "как добраться", "найди на карте",
@@ -978,7 +982,27 @@ export async function processMessage(
             !BROWSER_CONTINUATION_RE.test(message) && !explicitRemember
                 ? buildExplicitReminderClassification(message)
                 : null;
-        const contextualFollowUp = !deterministicReminderClassification && !explicitRemember
+        const deterministicSelfPhotoClassification: MessageClassification | null =
+            !deterministicReminderClassification &&
+            !BROWSER_CONTINUATION_RE.test(message) &&
+            !explicitRemember &&
+            isAssistantSelfPhotoRequest(originalMessage)
+                ? {
+                    intent: "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ",
+                    confidenceLevel: "ВЫСОКИЙ",
+                    intentScores: [{
+                        intent: "ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ",
+                        score: 1,
+                        reason: "Пользователь просит ассистента прислать собственное фото.",
+                    }],
+                    details: {
+                        imageDescription: originalMessage,
+                        knowledgeSource: "assistant_self",
+                        requestedFacets: [],
+                    },
+                }
+                : null;
+        const contextualFollowUp = !deterministicReminderClassification && !deterministicSelfPhotoClassification && !explicitRemember
             ? decideContextualFollowUp(originalMessage, messageHistory)
             : null;
         const deterministicContextualClassification: MessageClassification | null = contextualFollowUp
@@ -997,13 +1021,19 @@ export async function processMessage(
             }
             : null;
         let classification = deterministicReminderClassification
+            ?? deterministicSelfPhotoClassification
             ?? deterministicContextualClassification
             ?? await classifyMessage(originalMessage, isForwarded, forwardFrom, messageHistory, knownChatGroups);
         let deterministicOverrideApplied = Boolean(
-            deterministicReminderClassification || deterministicContextualClassification
+            deterministicReminderClassification ||
+            deterministicSelfPhotoClassification ||
+            deterministicContextualClassification
         );
         if (deterministicReminderClassification) {
             devLog("Explicit reminder fast-path: routing to НАПОМИНАНИЕ");
+        }
+        if (deterministicSelfPhotoClassification) {
+            devLog("Assistant self-photo fast-path: routing to ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ");
         }
         if (deterministicContextualClassification) {
             devLog(

@@ -33,6 +33,7 @@ const SUITES = {
         "testContextKnowledgeRouting.ts",
     ],
     interaction: [
+        "testAssistantSelfPhoto.ts",
         "testVoiceReply.ts",
         "testRussianSpeechNumbers.ts",
         "testSpeechTextPreparation.ts",
@@ -73,6 +74,7 @@ const SUITES = {
         "testProactiveMemoryEvidence.ts",
         "testProactiveGrounding.ts",
         "testContextKnowledgeRouting.ts",
+        "testAssistantSelfPhoto.ts",
         "testIncomingTelegramQueue.ts",
         "testTelegramMessageEdit.ts",
         "testChatPromptWatchers.ts",

@@ -3,9 +3,20 @@ import * as dotenv from "dotenv";
 import { MessageHistory } from "../types";
 import { ProcessingResult } from "../orchestrator";
 import { devLog } from "../utils";
-import { getBotPersona, getCommunicationStyle } from "../persona";
+import { getBotPersona, getCommunicationStyle, getBotBiography } from "../persona";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { formatPromptDateTime } from "../utils/time";
+import { config } from "../config";
+import {
+    getKiraSelfMemoryState,
+    getRecentKiraSelfEvents,
+    searchKiraSelfEventsByQuery,
+} from "../utils/kiraSelfMemory";
+import { buildAssistantLifeContext } from "../utils/conversationSelfMemoryFallback";
+import {
+    buildAssistantSelfPhotoPromptBrief,
+    isAssistantSelfPhotoRequest,
+} from "../utils/assistantSelfPhoto";
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -107,6 +118,8 @@ export async function imageGenerationAgent(
     memoryContext: string = ""
 ): Promise<ProcessingResult> {
     try {
+        const isSelfPhotoRequest = isAssistantSelfPhotoRequest(message);
+
         // Подготовка истории сообщений для контекста
         let historyContext = "";
         if (messageHistory.length > 0) {
@@ -120,9 +133,37 @@ export async function imageGenerationAgent(
         const currentDate = new Date();
         const formattedDateTime = formatPromptDateTime(currentDate);
 
-        // Используем OpenAI для улучшения и уточнения промпта для генерации изображения
+        let selfLifeContext = "";
+        if (isSelfPhotoRequest) {
+            try {
+                const [selfState, recentSelfEvents, relevantSelfEvents] = await Promise.all([
+                    getKiraSelfMemoryState(),
+                    getRecentKiraSelfEvents(5),
+                    searchKiraSelfEventsByQuery(message, 3),
+                ]);
+                selfLifeContext = buildAssistantLifeContext(
+                    selfState,
+                    recentSelfEvents,
+                    relevantSelfEvents,
+                    currentDate,
+                );
+            } catch (error) {
+                devLog("[imageGeneration] self-memory unavailable, using stable biography:", error);
+            }
+        }
 
-        const promptOptimizationQuery = `
+        // Используем conversational LLM для улучшения и уточнения промпта генерации.
+        const promptOptimizationQuery = isSelfPhotoRequest
+            ? buildAssistantSelfPhotoPromptBrief({
+                message,
+                characterName: config.characterName,
+                characterGender: config.eventDescriptionGender === "мужской" ? "мужской" : "женский",
+                persona: getBotPersona(),
+                biography: getBotBiography(),
+                selfLifeContext,
+                formattedDateTime,
+            })
+            : `
         Текущая дата и время: ${formattedDateTime}
         
         Пользователь прислал следующий запрос на генерацию изображения${isForwarded ? `, пересланный от ${forwardFrom}` : ""}:
@@ -146,7 +187,9 @@ export async function imageGenerationAgent(
             messages: [
                 {
                     role: "system",
-                    content: `${getBotPersona()} Стиль общения: ${getCommunicationStyle()} Ты - эксперт по составлению промптов для генерации изображений. Твоя задача - создать оптимальный промпт для Ideogram AI, который точно отразит запрос пользователя и даст наилучший результат. Ты превращаешь простые запросы в детальные описания на английском языке.`
+                    content: isSelfPhotoRequest
+                        ? `${getBotPersona()}\nБиография: ${getBotBiography()}\nСтиль общения: ${getCommunicationStyle()}\nТы переводишь личный контекст ${config.characterName} в точный английский промпт для Ideogram AI. Сохраняй одну и ту же внешность из биографии и визуально продолжай текущую жизненную ситуацию персонажа.`
+                        : `${getBotPersona()} Стиль общения: ${getCommunicationStyle()} Ты - эксперт по составлению промптов для генерации изображений. Твоя задача - создать оптимальный промпт для Ideogram AI, который точно отразит запрос пользователя и даст наилучший результат. Ты превращаешь простые запросы в детальные описания на английском языке.`
                 },
                 {
                     role: "user",
@@ -165,14 +208,18 @@ export async function imageGenerationAgent(
 
         if (!imageUrl) {
             return {
-                responseText: "Я попыталась сгенерировать изображение по твоему запросу, но, к сожалению, возникла техническая проблема. Пожалуйста, попробуй сформулировать запрос иначе или попробуй позже. 🎨",
+                responseText: isSelfPhotoRequest
+                    ? "Не получилось сейчас отправить фото — генерация сорвалась. Попробуй попросить ещё раз чуть позже."
+                    : "Я попыталась сгенерировать изображение по твоему запросу, но, к сожалению, возникла техническая проблема. Пожалуйста, попробуй сформулировать запрос иначе или попробуй позже. 🎨",
                 imageGenerated: false
             };
         }
 
         // Успешно сгенерировали изображение
         return {
-            responseText: "Вот изображение, которое я создала по твоему запросу ✨ Надеюсь, оно тебе понравится!",
+            responseText: isSelfPhotoRequest
+                ? "Вот, это я сейчас 🙂"
+                : "Вот изображение, которое я создала по твоему запросу ✨ Надеюсь, оно тебе понравится!",
             imageGenerated: true,
             generatedImageUrl: imageUrl
         };
@@ -182,7 +229,9 @@ export async function imageGenerationAgent(
 
         // В случае ошибки возвращаем сообщение об ошибке
         return {
-            responseText: "Я очень хотела создать для тебя изображение, но, к сожалению, произошла ошибка. Можем попробовать еще раз с другим описанием или позже? 🖼️",
+            responseText: isAssistantSelfPhotoRequest(message)
+                ? "Фото сейчас не получилось отправить. Давай попробуем ещё раз чуть позже."
+                : "Я очень хотела создать для тебя изображение, но, к сожалению, произошла ошибка. Можем попробовать еще раз с другим описанием или позже? 🖼️",
             imageGenerated: false
         };
     }
