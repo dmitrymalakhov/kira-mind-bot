@@ -11,6 +11,7 @@ import { buildDefaultTargetReminderMessage } from "./utils/reminderTargetNotific
 import { createOrRefreshReminderMemoryForUserId } from "./services/ReminderMemorySync";
 import { config } from "./config";
 import { esc, blockquote, RichBlock, sendStructured, editStructured } from "./utils/richMessage";
+import { getNextReminderOccurrence } from "./utils/reminderRecurrence";
 export { ReminderStatus, ReminderTargetChat, ReminderTargetNotificationStatus, RecurrenceRule };
 
 // Расширенный интерфейс для напоминания с поддержкой статусов
@@ -38,44 +39,9 @@ export interface Reminder {
     postponeCount?: number;
 }
 
-/**
- * Вычисляет дату следующего повторения на основе правила
- */
-function getNextOccurrence(fromDate: Date, rule: RecurrenceRule): Date {
-    const next = new Date(fromDate);
-    switch (rule.type) {
-        case 'hourly':
-            next.setHours(next.getHours() + rule.interval);
-            break;
-        case 'daily':
-            next.setDate(next.getDate() + rule.interval);
-            break;
-        case 'weekly':
-            if (rule.daysOfWeek && rule.daysOfWeek.length > 0) {
-                const sorted = [...rule.daysOfWeek].sort((a, b) => a - b);
-                const cur = fromDate.getDay();
-                const nextDay = sorted.find(d => d > cur);
-                if (nextDay !== undefined) {
-                    next.setDate(next.getDate() + (nextDay - cur));
-                } else {
-                    next.setDate(next.getDate() + 7 - cur + sorted[0]);
-                }
-            } else {
-                next.setDate(next.getDate() + 7 * rule.interval);
-            }
-            break;
-        case 'monthly':
-            next.setMonth(next.getMonth() + rule.interval);
-            break;
-        case 'yearly':
-            next.setFullYear(next.getFullYear() + rule.interval);
-            break;
-    }
-    return next;
-}
-
 // Хранилище таймеров для напоминаний
 const remindersTimers = new Map<string, NodeJS.Timeout>();
+const remindersBeingSent = new Set<string>();
 
 // Глобальная ссылка на бот — для reschedule из executor без передачи bot через все слои
 let _botRef: Bot<BotContext> | null = null;
@@ -228,6 +194,12 @@ export async function resolveTargetChat(target: ReminderTargetChat): Promise<{ c
  * @param reminder Объект напоминания
  */
 async function sendReminder(bot: Bot<BotContext>, reminder: Reminder): Promise<void> {
+    if (remindersBeingSent.has(reminder.id)) {
+        logReminderEvent("duplicate_send_suppressed", reminder);
+        return;
+    }
+    remindersBeingSent.add(reminder.id);
+
     try {
         // Используем готовый текст для отображения, если есть
         let messageText = reminder.displayText;
@@ -319,35 +291,48 @@ async function sendReminder(bot: Bot<BotContext>, reminder: Reminder): Promise<v
         reminder.status = ReminderStatus.Sent;
 
         // Сохраняем обновлённый статус в БД
-        ReminderRepository.update(reminder).catch(e => console.error('[reminder] DB update failed on send:', e));
+        await ReminderRepository.update(reminder);
 
         // Устанавливаем таймер для проверки истечения срока напоминания
         scheduleExpiryCheck(bot, reminder);
 
         // Если задано повторение — сразу создаём и планируем следующее
         if (reminder.recurrence) {
-            const nextDue = getNextOccurrence(new Date(reminder.dueDate), reminder.recurrence);
-            const nextReminder: Reminder = {
-                ...reminder,
-                id: `${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`,
-                dueDate: nextDue,
-                status: ReminderStatus.Pending,
-                messageId: undefined,
-                remindAgainAt: undefined,
-                createdAt: new Date(),
-            };
-            ReminderRegistry.getInstance().add(nextReminder);
-            ReminderRepository.save(nextReminder).catch(e => console.error('[reminder] DB save failed on recurrence:', e));
-            scheduleReminder(bot, nextReminder);
-            createOrRefreshReminderMemoryForUserId(String(config.allowedUserId), nextReminder)
-                .catch((e) => console.error('[reminder] memory sync failed on recurrence:', e));
-            logReminderEvent("scheduled_next_recurrence", nextReminder);
+            const nextDue = getNextReminderOccurrence(
+                new Date(reminder.dueDate),
+                reminder.recurrence,
+                new Date(),
+            );
+            if (!nextDue) {
+                console.error(
+                    `[reminder] invalid recurrence suppressed id=${reminder.id} `
+                    + `type=${reminder.recurrence.type} interval=${reminder.recurrence.interval}`,
+                );
+            } else {
+                const nextReminder: Reminder = {
+                    ...reminder,
+                    id: `${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`,
+                    dueDate: nextDue,
+                    status: ReminderStatus.Pending,
+                    messageId: undefined,
+                    remindAgainAt: undefined,
+                    createdAt: new Date(),
+                };
+                await ReminderRepository.save(nextReminder);
+                ReminderRegistry.getInstance().add(nextReminder);
+                scheduleReminder(bot, nextReminder);
+                createOrRefreshReminderMemoryForUserId(String(config.allowedUserId), nextReminder)
+                    .catch((e) => console.error('[reminder] memory sync failed on recurrence:', e));
+                logReminderEvent("scheduled_next_recurrence", nextReminder);
+            }
         }
 
         devLog(`Reminder sent: "${reminder.text}" with message ID ${reminder.messageId}` + (targetLabel ? ` (also in "${targetLabel}")` : ""));
         logReminderEvent("sent", reminder);
     } catch (error) {
         console.error("Error sending reminder:", error);
+    } finally {
+        remindersBeingSent.delete(reminder.id);
     }
 }
 
