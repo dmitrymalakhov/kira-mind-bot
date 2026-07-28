@@ -89,7 +89,7 @@ const EDITABLE_KEYS = new Set([
   'GOOGLE_MAPS_API_KEY', 'IDEOGRAM_API_KEY',
   'USER_TIMEZONE', 'REMINDER_EXPIRY_TIME_MS',
   'PROACTIVE_ONLY_PRIVATE_CHAT', 'GROUP_PUBLIC_MODE', 'GROUP_CHAT_CONTEXT_ENABLED', 'GROUP_REPLY_TO_BOT_ENABLED',
-  'KIRA_PROACTIVE_ENABLED', 'KIRA_PROACTIVE_INTERVAL_MS',
+  'KIRA_PROACTIVE_ENABLED', 'KIRA_PROACTIVE_INTERVAL_MS', 'KIRA_LIFE_WEB_GROUNDING_ENABLED',
   'KIRA_PROACTIVE_QUIET_HOURS_ENABLED', 'KIRA_PROACTIVE_QUIET_HOUR_START', 'KIRA_PROACTIVE_QUIET_HOUR_END',
   'DM_REPORT_ENABLED', 'DM_REPORT_INTERVAL_MS', 'DM_REPORT_DIALOG_LIMIT', 'DM_REPORT_QUIET_HOURS_ENABLED',
   'DAYTIME_REFLECTION_ENABLED',
@@ -100,6 +100,9 @@ const EDITABLE_KEYS = new Set([
   'PERSONAL_CHAT_MEMORY_MAX_CHATS_PER_RUN', 'PERSONAL_CHAT_MEMORY_MAX_MESSAGES_PER_CHAT',
   'PERSONAL_CHAT_MEMORY_MIN_NEW_MESSAGES', 'PERSONAL_CHAT_MEMORY_DIALOG_LIMIT',
 ]);
+const SYSTEM_DEFAULT_CONFIG = {
+  KIRA_LIFE_WEB_GROUNDING_ENABLED: 'true',
+};
 
 // ── Env file helpers ──────────────────────────────────────────────────────────
 
@@ -323,6 +326,11 @@ app.get('/api/config', requireAuth, async (req, res) => {
       result[key] = { value: value.slice(0, 4) + '••••', masked: true };
     } else {
       result[key] = { value, masked: false };
+    }
+  }
+  for (const [key, value] of Object.entries(SYSTEM_DEFAULT_CONFIG)) {
+    if (!(key in result)) {
+      result[key] = { value, masked: false, source: 'system_default' };
     }
   }
 

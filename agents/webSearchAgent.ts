@@ -7,7 +7,7 @@ import { formatDateInTimeZone } from "../utils/time";
 import { buildSafeAiErrorLog } from "../ai/errorDiagnostics";
 import { USER_TIMEZONE } from "../constants";
 
-interface WebSearchResult {
+export interface WebSearchResult {
     success: boolean;
     results?: string;
     error?: string;
@@ -149,7 +149,7 @@ export async function webSearchAgent(
  * @param query Поисковый запрос
  * @returns Результаты поиска или информация об ошибке
  */
-async function performWebSearch(query: string): Promise<WebSearchResult> {
+export async function performWebSearch(query: string): Promise<WebSearchResult> {
     try {
         const requestSearch = (searchQuery: string) => createResponseForTask('webSearchReasoning', {
             input: [

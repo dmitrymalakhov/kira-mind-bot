@@ -308,6 +308,7 @@ async function testPerMessageProactiveProvenanceSurvivesRestart() {
         const firstInsight = {
             message: 'Первое синтетическое сообщение внутренней жизни',
             sourceMemories: ['Первое синтетическое self-event'],
+            webSources: ['https://culture.example/synthetic-event'],
             createdAt,
             messageId: 171,
             kind: 'kiraLife' as const,
@@ -336,6 +337,10 @@ async function testPerMessageProactiveProvenanceSurvivesRestart() {
         assert.deepStrictEqual(
             restored?.sentMessageContexts?.[171]?.proactiveInsight?.sourceMemories,
             ['Первое синтетическое self-event'],
+        );
+        assert.deepStrictEqual(
+            restored?.sentMessageContexts?.[171]?.proactiveInsight?.webSources,
+            ['https://culture.example/synthetic-event'],
         );
     });
 }

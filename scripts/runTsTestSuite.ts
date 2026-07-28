@@ -10,6 +10,7 @@ const SUITES = {
         "testAiUsageLogging.ts",
         "testGeminiConcurrency.ts",
         "testWebSearchFailureFlow.ts",
+        "testKiraLifeWebGrounding.ts",
     ],
     memory: [
         "testQdrantMemoryProfileCompatibility.ts",
@@ -51,6 +52,7 @@ const SUITES = {
         "testAiUsageLogging.ts",
         "testGeminiConcurrency.ts",
         "testWebSearchFailureFlow.ts",
+        "testKiraLifeWebGrounding.ts",
         "testQdrantMemoryProfileCompatibility.ts",
         "testSessionStorage.ts",
         "testVoiceReply.ts",

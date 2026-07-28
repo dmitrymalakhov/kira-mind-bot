@@ -286,6 +286,12 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         hint: 'Ограничивает только самостоятельные сообщения Киры, а не ответы на ваши сообщения',
       },
       {
+        key: 'KIRA_LIFE_WEB_GROUNDING_ENABLED',
+        label: 'Проверять детали событий через веб-поиск',
+        type: 'toggle',
+        hint: 'Находит любую релевантную деталь реального мира по текущей жизненной линии, биографии и интересам Киры',
+      },
+      {
         key: 'KIRA_PROACTIVE_QUIET_HOURS_ENABLED',
         label: 'Тихие часы для личных сообщений и рефлексии',
         type: 'toggle',

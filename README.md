@@ -606,6 +606,7 @@ KIRA_INSTANCE_NAME=nova-mind-bot
 | `REMINDER_EXPIRY_TIME_MS` | Сколько хранить выполненные напоминания |
 | `KIRA_PROACTIVE_ENABLED` | Может ли бот писать первым |
 | `KIRA_PROACTIVE_INTERVAL_MS` | Интервал проактивных сообщений |
+| `KIRA_LIFE_WEB_GROUNDING_ENABLED` | Подкреплять события Kira Life любыми релевантными фактами реального мира из веб-поиска; по умолчанию `true` |
 | `KIRA_INNER_DEVELOPMENT_ENABLED` | Автономное внутреннее развитие без отправки сообщений |
 | `KIRA_INNER_DEVELOPMENT_INTERVAL_MS` | Интервал автономного развития self-memory |
 | `KIRA_RUNTIME_DATA_DIR` | Постоянное файловое runtime-хранилище; в Compose всегда `/app/runtime-data` |

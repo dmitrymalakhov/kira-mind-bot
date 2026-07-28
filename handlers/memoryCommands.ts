@@ -228,6 +228,9 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
         const sources = insight.sourceMemories.length > 0
             ? insight.sourceMemories.map((memory, index) => `${index + 1}. ${memory}`).join('\n\n')
             : 'Источник не сохранён.';
+        const webSources = Array.isArray(insight.webSources) && insight.webSources.length > 0
+            ? insight.webSources.map((source, index) => `${index + 1}. ${source}`).join('\n')
+            : undefined;
 
         await ctx.reply([
             `🧭 Последняя проактивная подсказка (${insight.kind}, ${createdAt}):`,
@@ -236,6 +239,7 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
             '',
             'Источники, на которых она была основана:',
             sources,
+            ...(webSources ? ['', 'Внешние веб-источники:', webSources] : []),
             '',
             'Если источник выглядит лишним, попробуй /memory_search по точной фразе из источника.',
         ].join('\n'));

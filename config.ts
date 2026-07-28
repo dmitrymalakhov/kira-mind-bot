@@ -88,6 +88,8 @@ interface AssistantConfig {
   userGender: "male" | "female";
   kiraLifeProactiveEnabled: boolean;
   kiraLifeProactiveIntervalMs: number;
+  /** Подкреплять проактивные события любыми релевантными фактами реального мира. */
+  kiraLifeWebGroundingEnabled: boolean;
   /** Автономное внутреннее развитие без отправки сообщений владельцу */
   kiraLifeInnerDevelopmentEnabled: boolean;
   /** Интервал автономного внутреннего развития в мс */
@@ -276,6 +278,7 @@ function assistants(activeAssistant: string): AssistantConfig {
       userGender: "male",
       kiraLifeProactiveEnabled: toBoolean(process.env.KIRA_PROACTIVE_ENABLED, true),
       kiraLifeProactiveIntervalMs: toNumber(process.env.KIRA_PROACTIVE_INTERVAL_MS, 1000 * 60 * 60 * 24),
+      kiraLifeWebGroundingEnabled: toBoolean(process.env.KIRA_LIFE_WEB_GROUNDING_ENABLED, true),
       kiraLifeInnerDevelopmentEnabled: toBoolean(process.env.KIRA_INNER_DEVELOPMENT_ENABLED, true),
       kiraLifeInnerDevelopmentIntervalMs: toNumber(process.env.KIRA_INNER_DEVELOPMENT_INTERVAL_MS, 3 * 60 * 60 * 1000),
       kiraLifeProactiveQuietHoursEnabled: toBoolean(process.env.KIRA_PROACTIVE_QUIET_HOURS_ENABLED, true),

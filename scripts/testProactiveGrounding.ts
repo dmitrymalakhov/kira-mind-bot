@@ -145,6 +145,13 @@ assert.match(explanation, /не из твоей памяти/iu);
 assert.match(explanation, /моя ошибка/iu);
 assert.doesNotMatch(explanation, /приписала|связала|написала/iu);
 
+const webGroundedExplanation = buildProactiveSourceExplanation({
+    ...insight,
+    webSources: ['https://culture.example/synthetic-event'],
+});
+assert.match(webGroundedExplanation, /проверены по веб-источникам/iu);
+assert.match(webGroundedExplanation, /https:\/\/culture\.example\/synthetic-event/iu);
+
 const fallbackExplanation = buildProactiveSourceExplanation({
     ...insight,
     message: 'Синтетический резервный текст',

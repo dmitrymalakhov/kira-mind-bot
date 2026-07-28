@@ -67,6 +67,12 @@ export function buildProactiveSourceExplanation(
         .slice(0, 5)
         .map((source, index) => `${index + 1}. ${source}`)
         .join('\n');
+    const webSources = Array.isArray(insight.webSources)
+        ? insight.webSources
+            .slice(0, 5)
+            .map((source, index) => `${index + 1}. ${source}`)
+            .join('\n')
+        : '';
 
     if (insight.kind === 'kiraLife') {
         if (insight.generationOutcome === 'fallback') {
@@ -84,6 +90,9 @@ export function buildProactiveSourceExplanation(
             `Сообщение: «${insight.message}»`,
             '',
             `События, на которых оно строилось:\n${sources}`,
+            ...(webSources
+                ? ['', `Актуальные детали были проверены по веб-источникам:\n${webSources}`]
+                : []),
             '',
             'Если в сообщении появилась задача, обещание или дедлайн, которых ты не называла, это моя ошибка: такого вывода из этих событий делать было нельзя.',
         ].join('\n');

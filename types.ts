@@ -364,6 +364,8 @@ export interface MessageHistory {
 export interface ProactiveInsightContext {
     message: string;
     sourceMemories: string[];
+    /** Актуальные внешние источники, использованные Kira Life для земной детали события. */
+    webSources?: string[];
     createdAt: number;
     messageId?: number;
     kind: 'memoryInsight' | 'contextHint' | 'kiraLife';
