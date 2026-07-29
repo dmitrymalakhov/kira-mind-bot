@@ -21,6 +21,7 @@ import {
     getActiveReminders,
 } from "../utils/reminderCard";
 import { renderFallbackHtml } from "../utils/richMessage";
+import { selectPersonalityGenderText } from "../utils/personalityGender";
 
 const registry = ReminderRegistry.getInstance();
 const addedIds: string[] = [];
@@ -139,11 +140,22 @@ describe("target reminder notifications", () => {
     });
 
     test("appends a specific prompt for one target", () => {
-        const result = appendTargetNotificationPrompt("Готово", [
-            { id: "1", targetChat: { type: "group", groupName: "Команда" } },
-        ]);
-        assert.match(result, /Я нашла адресата: чат «Команда»/);
-        assert.match(result, /Оповестить адресата/);
+        const reminders = [
+            { id: "1", targetChat: { type: "group" as const, groupName: "Команда" } },
+        ];
+        const femaleResult = appendTargetNotificationPrompt(
+            "Готово",
+            reminders,
+            (feminine, masculine) => selectPersonalityGenderText("женский", feminine, masculine),
+        );
+        const maleResult = appendTargetNotificationPrompt(
+            "Готово",
+            reminders,
+            (feminine, masculine) => selectPersonalityGenderText("мужской", feminine, masculine),
+        );
+        assert.match(femaleResult, /Я нашла адресата: чат «Команда»/);
+        assert.match(maleResult, /Я нашёл адресата: чат «Команда»/);
+        assert.match(maleResult, /Оповестить адресата/);
     });
 
     test("appends a plural prompt for several targets", () => {

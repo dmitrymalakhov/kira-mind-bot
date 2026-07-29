@@ -3,6 +3,7 @@ import { BotContext } from "../types";
 import { processMessage } from "../orchestrator";
 import { addToHistory } from "../utils/history";
 import { saveRemindersFromResult } from "./shared";
+import { getBotGenderedText } from "../persona";
 
 // ── Обобщённый обработчик для документов и аудиофайлов ──────
 
@@ -62,8 +63,9 @@ export function registerMediaMessageHandler(bot: Bot<BotContext>): void {
             await handleCaptionedMedia(
                 ctx,
                 `Документ: ${fileName}`,
-                `Я получила твой документ "${fileName}"`,
-                `Я получила твой документ "${fileName}". К сожалению, я пока не могу полностью анализировать содержимое документов, но могу помочь тебе с составлением ответа или напоминанием, связанным с этим документом.\n\nЧем я могу помочь тебе с этим документом? 📄`
+                getBotGenderedText(`Я получила твой документ "${fileName}"`, `Я получил твой документ "${fileName}"`),
+                getBotGenderedText(`Я получила твой документ "${fileName}".`, `Я получил твой документ "${fileName}".`) +
+                    " К сожалению, я пока не могу полностью анализировать содержимое документов, но могу помочь тебе с составлением ответа или напоминанием, связанным с этим документом.\n\nЧем я могу помочь тебе с этим документом? 📄"
             );
         } catch (error) {
             console.error("Ошибка при обработке документа:", error);
@@ -76,8 +78,9 @@ export function registerMediaMessageHandler(bot: Bot<BotContext>): void {
             await handleCaptionedMedia(
                 ctx,
                 "аудиофайл",
-                "Я получила твой аудиофайл",
-                `Я получила твой аудиофайл. К сожалению, я пока не могу анализировать аудио, но могу помочь тебе с напоминанием или другими задачами, связанными с этим сообщением.\n\nЧем я могу тебе помочь? 🎵`
+                getBotGenderedText("Я получила твой аудиофайл", "Я получил твой аудиофайл"),
+                getBotGenderedText("Я получила твой аудиофайл.", "Я получил твой аудиофайл.") +
+                    " К сожалению, я пока не могу анализировать аудио, но могу помочь тебе с напоминанием или другими задачами, связанными с этим сообщением.\n\nЧем я могу тебе помочь? 🎵"
             );
         } catch (error) {
             console.error("Ошибка при обработке аудио:", error);

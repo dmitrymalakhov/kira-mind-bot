@@ -41,6 +41,7 @@ import {
     targetChatHumanLabel,
 } from "../utils/reminderTargetNotification";
 import { handleRecurringTaskCallback } from "../services/recurringTaskService";
+import { getBotGenderedText } from "../persona";
 
 const EVENING_POSTPONE_HOUR = 19;
 
@@ -174,7 +175,8 @@ async function saveRemindersFromResult(ctx: BotContext, bot: Bot<BotContext>, re
                         ? `группу «${(details.targetChat as any).groupName}»`
                         : `контакт «${(details.targetChat as any).contactQuery}»`;
                     ctx.reply(
-                        `⚠️ Не нашла ${what}. Напоминание сохранено, но проверь правильность названия — иначе оно не дойдёт до адресата.`
+                        getBotGenderedText(`⚠️ Не нашла ${what}.`, `⚠️ Не нашёл ${what}.`) +
+                        " Напоминание сохранено, но проверь правильность названия — иначе оно не дойдёт до адресата."
                     ).catch(() => {});
                 }
             }).catch(() => {});
@@ -791,7 +793,10 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     } catch (voiceError) {
                         console.error("[chat-analysis-voice] failed to generate or send voice:", voiceError);
                         await sendMessage(ctx, result.responseText, result.keyboard ? { reply_markup: result.keyboard } : {});
-                        await ctx.reply("Не смогла отправить голосом, поэтому оставила текстом.").catch(() => {});
+                        await ctx.reply(getBotGenderedText(
+                            "Не смогла отправить голосом, поэтому оставила текстом.",
+                            "Не смог отправить голосом, поэтому оставил текстом.",
+                        )).catch(() => {});
                     }
                     return;
                 }

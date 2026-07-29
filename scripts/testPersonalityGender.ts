@@ -6,6 +6,7 @@ import {
     buildPersonalityMoodStyles,
     buildProactiveMessageFormats,
     getPersonalityGenderForms,
+    selectPersonalityGenderText,
 } from "../utils/personalityGender";
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "kira-personality-gender-"));
@@ -33,6 +34,18 @@ try {
     assert.match(config.biography, /мужчин|помощник/u);
     assert.doesNotMatch(config.biography, /женщин|помощница/u);
     assert.equal(config.proactiveMessageHint, "как будто ты сам написал первым");
+    const { getBotGenderedText } = require("../persona") as typeof import("../persona");
+
+    assert.equal(selectPersonalityGenderText("женский", "создала", "создал"), "создала");
+    assert.equal(selectPersonalityGenderText("мужской", "нашла", "нашёл"), "нашёл");
+    assert.equal(selectPersonalityGenderText(undefined, "сохранила", "сохранил"), "сохранила");
+    assert.equal(getBotGenderedText("получила медиа", "получил медиа"), "получил медиа");
+    assert.equal(getBotGenderedText("не смогла", "не смог"), "не смог");
+    const { parseRecurringTaskEdit } = require("../services/recurringTaskService") as typeof import("../services/recurringTaskService");
+    assert.match(
+        parseRecurringTaskEdit("расписание: неизвестно когда", "Europe/Moscow").scheduleError ?? "",
+        /^Не понял новое расписание/u,
+    );
 
     const malePromptLanguage = JSON.stringify({
         forms: getPersonalityGenderForms("мужской"),

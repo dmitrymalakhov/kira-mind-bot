@@ -23,6 +23,7 @@ import { cancelReminder, rescheduleReminder } from '../reminder';
 import { ReminderRepository } from '../services/ReminderRepository';
 import { devLog, parseLLMJson } from '../utils';
 import { buildQuickChoiceKeyboard } from '../utils/quickChoice';
+import { getBotGenderedText } from '../persona';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { applyReminderEditInput } from '../utils/reminderEditor';
 import { syncReminderMemoryMutation } from '../services/ReminderMemorySync';
@@ -67,7 +68,10 @@ async function cancelReminderByQuery(
     if (!best) {
         const list = active.map((r, i) => `${i + 1}. ${r.displayText || r.text}`).join('\n');
         return {
-            responseText: `Не нашла напоминание по запросу «${query}». Активные напоминания:\n${list}`,
+            responseText: getBotGenderedText(
+                `Не нашла напоминание по запросу «${query}».`,
+                `Не нашёл напоминание по запросу «${query}».`,
+            ) + ` Активные напоминания:\n${list}`,
         };
     }
 
@@ -125,7 +129,10 @@ async function updateReminderByQuery(
     if (!best) {
         const list = active.map((r, i) => `${i + 1}. ${r.displayText || r.text}`).join('\n');
         return {
-            responseText: `Не нашла напоминание по запросу «${query}». Активные напоминания:\n${list}`,
+            responseText: getBotGenderedText(
+                `Не нашла напоминание по запросу «${query}».`,
+                `Не нашёл напоминание по запросу «${query}».`,
+            ) + ` Активные напоминания:\n${list}`,
         };
     }
 
@@ -253,7 +260,12 @@ async function updateAllReminders(
     }
 
     if (!shiftMinutes && !newDueDate) {
-        return { responseText: 'Не смогла распознать новое время. Уточни, например: «перенеси все на завтра в 9» или «сдвинь все на 2 часа вперёд».' };
+        return {
+            responseText: getBotGenderedText(
+                "Не смогла распознать новое время.",
+                "Не смог распознать новое время.",
+            ) + " Уточни, например: «перенеси все на завтра в 9» или «сдвинь все на 2 часа вперёд».",
+        };
     }
 
     for (const r of targets) {
@@ -487,7 +499,10 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
                     if (!canContinueAfterWebSearchFailure(nextStep)) {
                         console.warn('[ORCH] dependent step blocked after webSearch failure:', nextStep.agentId);
                         return {
-                            responseText: 'Поиск временно недоступен, поэтому я не стала выполнять зависящее от него действие. Попробуй ещё раз чуть позже.',
+                            responseText: getBotGenderedText(
+                                "Поиск временно недоступен, поэтому я не стала выполнять зависящее от него действие.",
+                                "Поиск временно недоступен, поэтому я не стал выполнять зависящее от него действие.",
+                            ) + " Попробуй ещё раз чуть позже.",
                             botReaction: classification.details?.botReaction,
                         };
                     }
@@ -513,7 +528,10 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
                 const conv = await safeStep('conversation', () => conversationAgent(
                     ctx, message, isForwarded, forwardFrom, messageHistory, classification, sharedMemoryContext
                 ));
-                if (conv === null) return { responseText: 'Не смогла сформировать ответ. Попробуй ещё раз 🙏', botReaction: classification.details?.botReaction };
+                if (conv === null) return {
+                    responseText: getBotGenderedText("Не смогла сформировать ответ.", "Не смог сформировать ответ.") + " Попробуй ещё раз 🙏",
+                    botReaction: classification.details?.botReaction,
+                };
                 if (latestWebSearchText) {
                     const requestContext = [
                         ...messageHistory.slice(-6).map(item => item.content),
@@ -657,7 +675,10 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
                 const unclearRes = await safeStep('unclearIntent', () => unclearIntentAgent(
                     message, isForwarded, forwardFrom, messageHistory, classification, enrichedContextFromMemory || ''
                 ));
-                if (unclearRes === null) return { responseText: 'Не смогла уточнить запрос. Попробуй сформулировать иначе 🙏', botReaction: classification.details?.botReaction };
+                if (unclearRes === null) return {
+                    responseText: getBotGenderedText("Не смогла уточнить запрос.", "Не смог уточнить запрос.") + " Попробуй сформулировать иначе 🙏",
+                    botReaction: classification.details?.botReaction,
+                };
                 const keyboard = buildQuickChoiceKeyboard(ctx, message, unclearRes.responseText, classification);
                 if (keyboard) unclearRes.keyboard = keyboard;
                 unclearRes.botReaction = classification.details?.botReaction;

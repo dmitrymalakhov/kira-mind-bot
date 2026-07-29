@@ -7,6 +7,7 @@ import { MemorySaveMetadata, saveMemory } from './enhancedDomainMemory';
 import { rememberFact } from './domainMemory';
 import { devLog } from '../utils';
 import { resolveOrCreatePersonIdentity } from '../services/PersonIdentityService';
+import { getBotGenderedText } from '../persona';
 
 const PENDING_CONTACT_MEMORY_TTL_MS = 10 * 60 * 1000;
 const RECENT_FACT_TTL_MS = 10 * 60 * 1000;
@@ -684,9 +685,10 @@ export async function saveContactMemoryFactOrAsk(
             memoryMetadata: fact.memoryMetadata,
         }],
     };
-    await ctx.reply(
-        `Не буду сохранять факт про «${contactName}» без уточнения: укажи фамилию или username, чтобы я не смешала разных людей.`
-    );
+    await ctx.reply(getBotGenderedText(
+        `Не буду сохранять факт про «${contactName}» без уточнения: укажи фамилию или username, чтобы я не смешала разных людей.`,
+        `Не буду сохранять факт про «${contactName}» без уточнения: укажи фамилию или username, чтобы я не смешал разных людей.`,
+    ));
     return { status: 'pending' };
 }
 
@@ -734,7 +736,8 @@ export async function handleContactMemoryCallback(ctx: BotContext, callbackData:
             return true;
         }
         await ctx.answerCallbackQuery({ text: retryContact ? 'Сохранено в память' : 'Сохранено как новый человек' });
-        await ctx.editMessageText(`Сохранила факты:\n${result.savedContents.join('\n')}`);
+        await ctx.editMessageText(getBotGenderedText("Сохранила факты:", "Сохранил факты:") +
+            `\n${result.savedContents.join('\n')}`);
         return true;
     }
 
@@ -761,8 +764,11 @@ export async function handleContactMemoryCallback(ctx: BotContext, callbackData:
         return true;
     }
     ctx.session.pendingContactMemory = undefined;
-    await ctx.answerCallbackQuery({ text: 'Сохранила в память' });
-    await ctx.editMessageText(`Сохранила как факты о ${contactDisplayName(contact)}:\n\n${result.savedContents.join('\n')}`);
+    await ctx.answerCallbackQuery({ text: getBotGenderedText("Сохранила в память", "Сохранил в память") });
+    await ctx.editMessageText(getBotGenderedText(
+        `Сохранила как факты о ${contactDisplayName(contact)}:`,
+        `Сохранил как факты о ${contactDisplayName(contact)}:`,
+    ) + `\n\n${result.savedContents.join('\n')}`);
     devLog('Contact memory disambiguated via callback:', result.savedContents);
     return true;
 }
@@ -792,7 +798,8 @@ export async function handlePendingContactMemoryText(ctx: BotContext, message: s
             return `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}. Попробуй ещё раз позже.`;
         }
         ctx.session.pendingContactMemory = undefined;
-        return `Сохранила оставшиеся факты:\n${result.savedContents.join('\n')}`;
+        return getBotGenderedText("Сохранила оставшиеся факты:", "Сохранил оставшиеся факты:") +
+            `\n${result.savedContents.join('\n')}`;
     }
 
     const candidates = pending.candidateIds
@@ -808,7 +815,10 @@ export async function handlePendingContactMemoryText(ctx: BotContext, message: s
             return `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}. Напиши «повтори».`;
         }
         ctx.session.pendingContactMemory = undefined;
-        return `Сохранила как факты о ${contactDisplayName(narrowed[0])}:\n${result.savedContents.join('\n')}`;
+        return getBotGenderedText(
+            `Сохранила как факты о ${contactDisplayName(narrowed[0])}:`,
+            `Сохранил как факты о ${contactDisplayName(narrowed[0])}:`,
+        ) + `\n${result.savedContents.join('\n')}`;
     }
 
     const resolution = resolveContactIdentity(text);
@@ -822,12 +832,16 @@ export async function handlePendingContactMemoryText(ctx: BotContext, message: s
             return `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}. Напиши «повтори».`;
         }
         ctx.session.pendingContactMemory = undefined;
-        return `Сохранила как факты о ${resolution.displayName}:\n${result.savedContents.join('\n')}`;
+        return getBotGenderedText(
+            `Сохранила как факты о ${resolution.displayName}:`,
+            `Сохранил как факты о ${resolution.displayName}:`,
+        ) + `\n${result.savedContents.join('\n')}`;
     }
 
     if (resolution.status === 'ambiguous') {
         await askContactClarification(ctx, { ...pending, contactName: text }, resolution.candidates, pending);
-        return 'Нашла несколько вариантов, выбери нужный контакт кнопкой.';
+        return getBotGenderedText("Нашла несколько вариантов", "Нашёл несколько вариантов") +
+            ", выбери нужный контакт кнопкой.";
     }
 
     return 'Мне всё ещё не хватает идентификатора контакта. Напиши имя с фамилией или username.';

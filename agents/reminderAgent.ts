@@ -2,7 +2,7 @@ import * as dotenv from "dotenv";
 import { MessageHistory } from "../types";
 import { ProcessingResult } from "../orchestrator";
 import { devLog, processReminderTime } from "../utils";
-import { getBotPersona, getCommunicationStyle } from "../persona";
+import { getBotGenderedText, getBotPersona, getCommunicationStyle } from "../persona";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { USER_TIMEZONE } from "../constants";
 import type { ReminderTargetChat, RecurrenceRule } from "../reminder";
@@ -30,7 +30,10 @@ interface MultiReminderAnalysis {
 
 function buildFallbackResponse(): ProcessingResult {
     return {
-        responseText: "Я пыталась создать напоминание, но не смогла точно определить, о чем и когда вам напомнить. Можете, пожалуйста, сформулировать вашу просьбу более конкретно? Например: \"Напомни мне завтра в 15:00 о встрече\". 🙏",
+        responseText: getBotGenderedText(
+            "Я пыталась создать напоминание, но не смогла точно определить, о чем и когда вам напомнить.",
+            "Я пытался создать напоминание, но не смог точно определить, о чем и когда вам напомнить.",
+        ) + " Можете, пожалуйста, сформулировать вашу просьбу более конкретно? Например: \"Напомни мне завтра в 15:00 о встрече\". 🙏",
         reminderCreated: false
     };
 }
@@ -341,8 +344,13 @@ export async function reminderAgent(
                 : new Date(processReminderTime(r.reminderTime));
             const displayTime = formatReminderDueDate(due, userTimezone);
             if (detailsList[idx]?.targetChat) {
-                const recurrenceSuffix = detailsList[idx].recurrence ? " Повторение учла." : "";
-                return `✅ Создала напоминание для тебя: ${r.reminderText} — ${displayTime}.${recurrenceSuffix}`;
+                const recurrenceSuffix = detailsList[idx].recurrence
+                    ? getBotGenderedText(" Повторение учла.", " Повторение учёл.")
+                    : "";
+                return getBotGenderedText(
+                    `✅ Создала напоминание для тебя: ${r.reminderText} — ${displayTime}.${recurrenceSuffix}`,
+                    `✅ Создал напоминание для тебя: ${r.reminderText} — ${displayTime}.${recurrenceSuffix}`,
+                );
             }
             if (noTemporalReference) {
                 return `✅ Напомню: ${r.reminderText} — ${displayTime}.`;

@@ -4,7 +4,7 @@ import { MessageHistory } from "../types";
 import { MessageClassification, ProcessingResult } from "../orchestrator";
 import { devLog, processReminderTime } from "../utils";
 import { ChatCompletionContentPart } from "openai/resources/chat";
-import { getBotPersona, getCommunicationStyle } from "../persona";
+import { getBotGenderedText, getBotPersona, getCommunicationStyle } from "../persona";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { formatPromptDateTime } from "../utils/time";
 
@@ -222,8 +222,14 @@ export async function imageAgent(
         console.error(`Error in image${additionalImages && additionalImages.length > 0 ? " group" : ""} agent:`, error);
         // В случае ошибки возвращаем запасной ответ
         const errorMessage = additionalImages && additionalImages.length > 0
-            ? "Я получила твои изображения. К сожалению, не смогла их полностью проанализировать из-за технической ошибки. Можешь рассказать, что на них изображено или чем я могу помочь? 🙏"
-            : "Я получила твое изображение. К сожалению, не смогла его полностью проанализировать из-за технической ошибки. Можешь рассказать, что на нем изображено или чем я могу помочь? 🙏";
+            ? getBotGenderedText(
+                "Я получила твои изображения. К сожалению, не смогла их полностью проанализировать из-за технической ошибки.",
+                "Я получил твои изображения. К сожалению, не смог их полностью проанализировать из-за технической ошибки.",
+            ) + " Можешь рассказать, что на них изображено или чем я могу помочь? 🙏"
+            : getBotGenderedText(
+                "Я получила твое изображение. К сожалению, не смогла его полностью проанализировать из-за технической ошибки.",
+                "Я получил твое изображение. К сожалению, не смог его полностью проанализировать из-за технической ошибки.",
+            ) + " Можешь рассказать, что на нем изображено или чем я могу помочь? 🙏";
 
         return {
             responseText: errorMessage
