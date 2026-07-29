@@ -47,6 +47,16 @@ try {
         /^Не понял новое расписание/u,
     );
 
+    const projectRoot = path.resolve(__dirname, "..");
+    const reminderEditorSource = fs.readFileSync(path.join(projectRoot, "utils/reminderEditor.ts"), "utf8");
+    const studyChatSource = fs.readFileSync(path.join(projectRoot, "utils/studyChatPipeline.ts"), "utf8");
+    const commandsSource = fs.readFileSync(path.join(projectRoot, "handlers/commands.ts"), "utf8");
+    assert.match(reminderEditorSource, /getBotGenderedText\([\s\S]{0,120}"Не увидел изменений\."/u);
+    assert.match(studyChatSource, /загрузил \$\{fetchResult\.messageCount\} сообщений/u);
+    assert.match(studyChatSource, /Изучил переписку[\s\S]{0,300}Запомнил \$\{savedCount\}/u);
+    assert.match(studyChatSource, /Ничего не сохранил: \$\{reason\}/u);
+    assert.match(commandsSource, /getBotGenderedText\([\s\S]{0,120}"📝 Вот что я запомнил из нашего общения:"/u);
+
     const malePromptLanguage = JSON.stringify({
         forms: getPersonalityGenderForms("мужской"),
         moods: buildPersonalityMoodStyles("мужской"),

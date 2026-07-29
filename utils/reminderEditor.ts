@@ -196,8 +196,10 @@ export async function applyReminderEditInput(ctx: BotContext, reminder: Reminder
     if (!changedTime && !changedText) {
         return {
             ok: false,
-            responseText:
-                "Не увидела изменений. Можно написать так: «перенеси на пятницу в 10» или «текст: оплатить счёт».",
+            responseText: getBotGenderedText(
+                "Не увидела изменений.",
+                "Не увидел изменений.",
+            ) + " Можно написать так: «перенеси на пятницу в 10» или «текст: оплатить счёт».",
         };
     }
 

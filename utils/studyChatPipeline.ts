@@ -5,6 +5,7 @@ import { runAnalyzeConversationAgent } from '../agents/analyzeConversationAgent'
 import { runUpdateLongTermMemoryAgentDetailed } from '../agents/updateLongTermMemoryAgent';
 import { saveOrUpdatePortrait } from '../services/PsychologicalPortraitService';
 import { notifyUser } from '../utils';
+import { getBotGenderedText } from '../persona';
 import type {
     ExtractedFactAboutUser,
     StudyChatAnalysisProgress,
@@ -37,7 +38,9 @@ function buildNotSavedReason(
     pendingCount: number,
     errorsCount: number
 ): string {
-    if (facts.length === 0) return 'не нашла новых однозначных фактов';
+    if (facts.length === 0) {
+        return getBotGenderedText('не нашла новых однозначных фактов', 'не нашёл новых однозначных фактов');
+    }
     if (eligibleCount === 0) return 'найденное оказалось слишком ситуативным или слабым для долговременной памяти';
     if (pendingCount > 0) return 'для части фактов нужно уточнить контакт';
     if (errorsCount > 0 && savedCount === 0) return 'сохранение в память завершилось с ошибкой';
@@ -80,7 +83,10 @@ export async function studyChatAndSaveFacts(
     if ('error' in fetchResult) {
         return { responseText: fetchResult.error, savedCount: 0 };
     }
-    await notifyUser(ctx, `📨 Этап 1/5: загрузила ${fetchResult.messageCount} сообщений. Готовлю текст переписки к анализу.`);
+    await notifyUser(ctx, getBotGenderedText(
+        `📨 Этап 1/5: загрузила ${fetchResult.messageCount} сообщений.`,
+        `📨 Этап 1/5: загрузил ${fetchResult.messageCount} сообщений.`,
+    ) + ' Готовлю текст переписки к анализу.');
 
     // Шаг 2: агент анализа переписки
     await notifyUser(ctx, `🔍 Этап 2/5: ищу факты в ${fetchResult.messageCount} сообщениях…`);
@@ -90,7 +96,10 @@ export async function studyChatAndSaveFacts(
             if (progress.stage === 'chunks_ready') {
                 await notifyUser(
                     ctx,
-                    `🧩 Этап 2/5: разделила переписку на ${progress.chunksTotal} ${formatPartWord(progress.chunksTotal)} для LLM-анализа.`
+                    getBotGenderedText(
+                        `🧩 Этап 2/5: разделила переписку на ${progress.chunksTotal} ${formatPartWord(progress.chunksTotal)} для LLM-анализа.`,
+                        `🧩 Этап 2/5: разделил переписку на ${progress.chunksTotal} ${formatPartWord(progress.chunksTotal)} для LLM-анализа.`,
+                    )
                 );
                 return;
             }
@@ -98,7 +107,10 @@ export async function studyChatAndSaveFacts(
             if (progress.stage === 'batch_done') {
                 await notifyUser(
                     ctx,
-                    `🔎 Этап 2/5: проанализировала ${progress.chunksDone}/${progress.chunksTotal} ${formatPartWord(progress.chunksTotal)}, пока нашла ${progress.rawFactsCount} кандидат(ов) в факты.`
+                    getBotGenderedText(
+                        `🔎 Этап 2/5: проанализировала ${progress.chunksDone}/${progress.chunksTotal} ${formatPartWord(progress.chunksTotal)}, пока нашла ${progress.rawFactsCount} кандидат(ов) в факты.`,
+                        `🔎 Этап 2/5: проанализировал ${progress.chunksDone}/${progress.chunksTotal} ${formatPartWord(progress.chunksTotal)}, пока нашёл ${progress.rawFactsCount} кандидат(ов) в факты.`,
+                    )
                 );
                 return;
             }
@@ -161,7 +173,10 @@ export async function studyChatAndSaveFacts(
     }
     const savedCount = updateResult.savedCount;
     if (facts.length > 0) {
-        await notifyUser(ctx, `💾 Этап 4/5: сохранение завершено, запомнила ${savedCount} из ${facts.length} факт(ов).`);
+        await notifyUser(ctx, getBotGenderedText(
+            `💾 Этап 4/5: сохранение завершено, запомнила ${savedCount} из ${facts.length} факт(ов).`,
+            `💾 Этап 4/5: сохранение завершено, запомнил ${savedCount} из ${facts.length} факт(ов).`,
+        ));
     } else {
         await notifyUser(ctx, `💾 Этап 4/5: сохранять нечего — новых фактов не найдено.`);
     }
@@ -189,7 +204,10 @@ export async function studyChatAndSaveFacts(
         const contactFacts = updateResult.savedFacts.filter(f => f.subject === 'contact');
 
         const parts: string[] = [
-            `Изучила переписку с ${displayName} за ${periodLabel} (${fetchResult.messageCount} сообщений). Нашла ${facts.length} факт(ов): о тебе — ${foundUserFacts.length}, о ${displayName} — ${foundContactFacts.length}. Запомнила ${savedCount}: о тебе — ${userFacts.length}, о ${displayName} — ${contactFacts.length}.`,
+            getBotGenderedText(
+                `Изучила переписку с ${displayName} за ${periodLabel} (${fetchResult.messageCount} сообщений). Нашла ${facts.length} факт(ов): о тебе — ${foundUserFacts.length}, о ${displayName} — ${foundContactFacts.length}. Запомнила ${savedCount}: о тебе — ${userFacts.length}, о ${displayName} — ${contactFacts.length}.`,
+                `Изучил переписку с ${displayName} за ${periodLabel} (${fetchResult.messageCount} сообщений). Нашёл ${facts.length} факт(ов): о тебе — ${foundUserFacts.length}, о ${displayName} — ${foundContactFacts.length}. Запомнил ${savedCount}: о тебе — ${userFacts.length}, о ${displayName} — ${contactFacts.length}.`,
+            ),
         ];
         if (userFacts.length > 0) {
             parts.push(`\nО тебе:\n${formatFactList(userFacts)}`);
@@ -206,7 +224,10 @@ export async function studyChatAndSaveFacts(
                 updateResult.pendingFacts.length,
                 updateResult.errors.length
             );
-            parts.push(`\nНе сохранила ${notSavedCount} факт(ов): ${reason}.`);
+            parts.push('\n' + getBotGenderedText(
+                `Не сохранила ${notSavedCount} факт(ов): ${reason}.`,
+                `Не сохранил ${notSavedCount} факт(ов): ${reason}.`,
+            ));
         }
         if (portraitUpdated) {
             parts.push(`\n🧠 Психологический портрет ${displayName} обновлён.`);
@@ -221,7 +242,10 @@ export async function studyChatAndSaveFacts(
             updateResult.pendingFacts.length,
             updateResult.errors.length
         );
-        responseText = `Переписку с ${displayName} за ${periodLabel} прочитала (${fetchResult.messageCount} сообщений). Нашла ${facts.length} факт(ов): о тебе — ${foundUserFacts.length}, о ${displayName} — ${foundContactFacts.length}. Ничего не сохранила: ${reason}.${portraitNote}`;
+        responseText = getBotGenderedText(
+            `Переписку с ${displayName} за ${periodLabel} прочитала (${fetchResult.messageCount} сообщений). Нашла ${facts.length} факт(ов): о тебе — ${foundUserFacts.length}, о ${displayName} — ${foundContactFacts.length}. Ничего не сохранила: ${reason}.`,
+            `Переписку с ${displayName} за ${periodLabel} прочитал (${fetchResult.messageCount} сообщений). Нашёл ${facts.length} факт(ов): о тебе — ${foundUserFacts.length}, о ${displayName} — ${foundContactFacts.length}. Ничего не сохранил: ${reason}.`,
+        ) + portraitNote;
     }
 
     return { responseText, savedCount };
