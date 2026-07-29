@@ -19,6 +19,7 @@ import { MAX_SENT_MESSAGE_CONTEXTS, persistSessionNow } from "../services/Sessio
 import { getTelegramVoiceReadinessIssue, withTelegramVoiceFile } from "../services/elevenLabsTts";
 import { addTargetNotificationButtons, appendTargetNotificationPrompt, buildDefaultTargetReminderMessage } from "../utils/reminderTargetNotification";
 import { createOrRefreshReminderMemory } from "../services/ReminderMemorySync";
+import { getBotGenderedText } from "../persona";
 
 // ── Константы ──────────────────────────────────────────────
 
@@ -157,7 +158,10 @@ export async function replyProcessingResult(ctx: BotContext, result: ProcessingR
         } catch (voiceError) {
             console.error("[voice-reply] failed to generate or send voice:", voiceError);
             const sent = await replyAndStore(ctx, result.responseText);
-            await ctx.reply("Не смогла отправить голосом, поэтому оставила текстом.");
+            await ctx.reply(getBotGenderedText(
+                "Не смогла отправить голосом, поэтому оставила текстом.",
+                "Не смог отправить голосом, поэтому оставил текстом.",
+            ));
             return sent;
         }
     }
@@ -228,7 +232,8 @@ export async function saveRemindersFromResult(ctx: BotContext, result: Processin
                         ? `группу «${(details.targetChat as any).groupName}»`
                         : `контакт «${(details.targetChat as any).contactQuery}»`;
                     ctx.reply(
-                        `⚠️ Не нашла ${what}. Напоминание сохранено, но проверь правильность названия — иначе оно не дойдёт до адресата.`
+                        getBotGenderedText(`⚠️ Не нашла ${what}.`, `⚠️ Не нашёл ${what}.`) +
+                        " Напоминание сохранено, но проверь правильность названия — иначе оно не дойдёт до адресата."
                     ).catch(() => {});
                 }
             }).catch(() => {});

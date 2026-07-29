@@ -3,6 +3,7 @@ import { BotContext } from "../types";
 import { GoogleMapsService } from "../services/googleMaps";
 import { devLog } from "../utils";
 import { addToHistory } from "../utils/history";
+import { getBotGenderedText } from "../persona";
 
 // ── Регистрация обработчика геолокации ─────────────────────
 
@@ -31,12 +32,16 @@ export function registerLocationMessageHandler(bot: Bot<BotContext>): void {
                 if (geocodingResult && geocodingResult.formatted_address) {
                     ctx.session.lastLocation.address = geocodingResult.formatted_address;
 
-                    const responseText = `Я получила твою геолокацию! 📍\n\nТы находишься по адресу: ${geocodingResult.formatted_address}\n\nТеперь ты можешь спросить меня о местах поблизости, например:\n- Найди кафе рядом\n- Где ближайшая аптека?\n- Покажи рестораны в радиусе 1 км`;
+                    const responseText = getBotGenderedText("Я получила твою геолокацию!", "Я получил твою геолокацию!") +
+                        ` 📍\n\nТы находишься по адресу: ${geocodingResult.formatted_address}\n\nТеперь ты можешь спросить меня о местах поблизости, например:\n- Найди кафе рядом\n- Где ближайшая аптека?\n- Покажи рестораны в радиусе 1 км`;
 
                     await addToHistory(ctx, 'bot', responseText);
                     await ctx.reply(responseText);
                 } else {
-                    const responseText = `Я получила твою геолокацию (${latitude}, ${longitude})! 📍\n\nТеперь ты можешь спросить меня о местах поблизости, например:\n- Найди кафе рядом\n- Где ближайшая аптека?\n- Покажи рестораны в радиусе 1 км`;
+                    const responseText = getBotGenderedText(
+                        `Я получила твою геолокацию (${latitude}, ${longitude})!`,
+                        `Я получил твою геолокацию (${latitude}, ${longitude})!`,
+                    ) + ` 📍\n\nТеперь ты можешь спросить меня о местах поблизости, например:\n- Найди кафе рядом\n- Где ближайшая аптека?\n- Покажи рестораны в радиусе 1 км`;
 
                     await addToHistory(ctx, 'bot', responseText);
                     await ctx.reply(responseText);
@@ -44,7 +49,8 @@ export function registerLocationMessageHandler(bot: Bot<BotContext>): void {
             } catch (geocodingError) {
                 console.error("Ошибка при геокодировании:", geocodingError);
 
-                const responseText = `Я получила твою геолокацию! 📍\n\nКоординаты: ${latitude}, ${longitude}\n\nТеперь ты можешь спросить меня о местах поблизости, например:\n- Найди кафе рядом\n- Где ближайшая аптека?\n- Покажи рестораны в радиусе 1 км`;
+                const responseText = getBotGenderedText("Я получила твою геолокацию!", "Я получил твою геолокацию!") +
+                    ` 📍\n\nКоординаты: ${latitude}, ${longitude}\n\nТеперь ты можешь спросить меня о местах поблизости, например:\n- Найди кафе рядом\n- Где ближайшая аптека?\n- Покажи рестораны в радиусе 1 км`;
 
                 await addToHistory(ctx, 'bot', responseText);
                 await ctx.reply(responseText);

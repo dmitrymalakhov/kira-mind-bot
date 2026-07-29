@@ -25,6 +25,7 @@ import { looksLikeBrowserTaskCancellation, looksLikeNegatedBookingRequest } from
 import { isTodayImportanceRequest } from "./utils/todayImportanceIntent";
 import { applyKnowledgeSourceDecision, buildKnowledgeSourcePrompt, decideKnowledgeSource, shouldInterruptPendingContactMemory } from "./utils/knowledgeSource";
 import { decideContextualFollowUp } from "./utils/contextualFollowUp";
+import { getBotGenderedText } from "./persona";
 import { buildClassificationCacheKey } from "./utils/classificationCache";
 import {
     guardRecurringTaskClassification,
@@ -1333,7 +1334,10 @@ export async function processImage(
         console.error("Error processing image:", error);
         // В случае ошибки возвращаем простой ответ
         return {
-            responseText: "Я получила твое изображение, но возникла проблема при обработке. Можешь рассказать, что на нем и чем я могу помочь? 🖼️"
+            responseText: getBotGenderedText(
+                "Я получила твое изображение, но возникла проблема при обработке.",
+                "Я получил твое изображение, но возникла проблема при обработке.",
+            ) + " Можешь рассказать, что на нем и чем я могу помочь? 🖼️"
         };
     }
 }
@@ -1388,7 +1392,10 @@ export async function processImageGroup(
 
         if (imageBuffers.length === 0) {
             return {
-                responseText: "Я не смогла получить изображения для анализа. Можешь отправить их заново?"
+                responseText: getBotGenderedText(
+                    "Я не смогла получить изображения для анализа.",
+                    "Я не смог получить изображения для анализа.",
+                ) + " Можешь отправить их заново?"
             };
         }
 
@@ -1401,7 +1408,10 @@ export async function processImageGroup(
         console.error("Error processing image group:", error);
         // В случае ошибки возвращаем простой ответ
         return {
-            responseText: "Я получила твои изображения, но возникла проблема при обработке. Можешь рассказать, что на них и чем я могу помочь? 🖼️"
+            responseText: getBotGenderedText(
+                "Я получила твои изображения, но возникла проблема при обработке.",
+                "Я получил твои изображения, но возникла проблема при обработке.",
+            ) + " Можешь рассказать, что на них и чем я могу помочь? 🖼️"
         };
     }
 }

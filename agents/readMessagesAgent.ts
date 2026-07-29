@@ -15,7 +15,7 @@ import {
     type NegotiationSession,
 } from "../stores/NegotiationStore";
 import { config } from "../config";
-import { getBotPersona, getCommunicationStyle } from "../persona";
+import { getBotGenderedText, getBotPersona, getCommunicationStyle } from "../persona";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { sendMessage as sendTelegramMessage } from "../services/telegram";
 import { InlineKeyboard } from "grammy";
@@ -1012,7 +1012,10 @@ async function studyGroupChatAndSaveFacts(
 
     const group = await searchGroupByTitle(client, groupName);
     if (!group) {
-        return `Не нашла групповой чат с названием «${groupName}». Проверь название — оно должно совпадать с тем, что в списке диалогов.`;
+        return getBotGenderedText(
+            `Не нашла групповой чат с названием «${groupName}».`,
+            `Не нашёл групповой чат с названием «${groupName}».`,
+        ) + " Проверь название — оно должно совпадать с тем, что в списке диалогов.";
     }
 
     const { startDate, endDate } = getChatAnalysisDateRange(period);
@@ -1058,9 +1061,15 @@ async function studyGroupChatAndSaveFacts(
                         : savedCount < 5
                             ? 'важных факта'
                             : 'важных фактов';
-                    return `${analysisText} Я ещё сохранила ${savedCount} ${factLabel} в память.`;
+                    return `${analysisText} ` + getBotGenderedText(
+                        `Я ещё сохранила ${savedCount} ${factLabel} в память.`,
+                        `Я ещё сохранил ${savedCount} ${factLabel} в память.`,
+                    );
                 }
-                return `${analysisText}\n\n💾 Сохранила ${savedCount} факт(ов) в долговременную память.`;
+                return `${analysisText}\n\n` + getBotGenderedText(
+                    `💾 Сохранила ${savedCount} факт(ов) в долговременную память.`,
+                    `💾 Сохранил ${savedCount} факт(ов) в долговременную память.`,
+                );
             }
         } catch (e) {
             console.error('[studyGroupChatAndSaveFacts] save facts error:', e);
@@ -1086,7 +1095,10 @@ async function analyzeGroupChatMessages(
 
     const group = await searchGroupByTitle(client, groupName);
     if (!group) {
-        return `Не нашла групповой чат с названием «${groupName}». Проверь название — оно должно совпадать с тем, что в списке диалогов.`;
+        return getBotGenderedText(
+            `Не нашла групповой чат с названием «${groupName}».`,
+            `Не нашёл групповой чат с названием «${groupName}».`,
+        ) + " Проверь название — оно должно совпадать с тем, что в списке диалогов.";
     }
 
     const { startDate, endDate } = getChatAnalysisDateRange(period);
@@ -1438,7 +1450,10 @@ export async function readMessagesAgent(
                     ? " Проверь, что в памяти сохранён факт (например: «Запомни, моя жена — Юля») и что это имя есть в контактах."
                     : " Можно сохранить в память, кто это (например: «Запомни, моя жена — Юля»), или указать имя из контактов.";
                 return {
-                    responseText: `Не нашла контакт «${nameToSearch}» в списке контактов.${hint}`
+                    responseText: getBotGenderedText(
+                        `Не нашла контакт «${nameToSearch}» в списке контактов.`,
+                        `Не нашёл контакт «${nameToSearch}» в списке контактов.`,
+                    ) + hint
                 };
             }
             const contact = contacts[0];

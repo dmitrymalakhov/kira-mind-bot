@@ -15,6 +15,7 @@ import {
     checkLastFactSaveError,
 } from "./shared";
 import { handleRecurringTaskText } from "../services/recurringTaskService";
+import { getBotGenderedText } from "../persona";
 
 // ── Регистрация обработчика голосовых сообщений ─────────────
 
@@ -74,7 +75,10 @@ export function registerVoiceMessageHandler(bot: Bot<BotContext>): void {
                         await ctx.api.editMessageText(
                             ctx.chat.id,
                             processingMsg.message_id,
-                            `Я распознала твое голосовое сообщение:\n\n"${transcribedText}"\n\nОбрабатываю...`
+                            getBotGenderedText(
+                                `Я распознала твое голосовое сообщение:\n\n"${transcribedText}"\n\nОбрабатываю...`,
+                                `Я распознал твое голосовое сообщение:\n\n"${transcribedText}"\n\nОбрабатываю...`,
+                            )
                         );
 
                         try {
@@ -85,7 +89,10 @@ export function registerVoiceMessageHandler(bot: Bot<BotContext>): void {
                                 await ctx.api.editMessageText(
                                     ctx.chat.id,
                                     processingMsg.message_id,
-                                    `Я распознала голосовую команду:\n\n"${transcribedText}"`,
+                                    getBotGenderedText(
+                                        `Я распознала голосовую команду:\n\n"${transcribedText}"`,
+                                        `Я распознал голосовую команду:\n\n"${transcribedText}"`,
+                                    ),
                                 ).catch(() => {});
                                 if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
                                 return;
@@ -120,10 +127,16 @@ export function registerVoiceMessageHandler(bot: Bot<BotContext>): void {
                             await checkLastFactSaveError(ctx);
                         } catch (processingError) {
                             console.error("Ошибка при обработке распознанного текста:", processingError);
-                            await ctx.reply(`Я распознала твое сообщение как: "${transcribedText}", но возникла ошибка при его обработке. Можешь отправить текстом?`);
+                            await ctx.reply(getBotGenderedText(
+                                `Я распознала твое сообщение как: "${transcribedText}",`,
+                                `Я распознал твое сообщение как: "${transcribedText}",`,
+                            ) + " но возникла ошибка при его обработке. Можешь отправить текстом?");
                         }
                     } else {
-                        const noTextResponse = "Я получила твое голосовое сообщение, но не смогла разобрать, что ты говоришь. Можешь повторить погромче или прислать текстовое сообщение? 🙏";
+                        const noTextResponse = getBotGenderedText(
+                            "Я получила твое голосовое сообщение, но не смогла разобрать, что ты говоришь.",
+                            "Я получил твое голосовое сообщение, но не смог разобрать, что ты говоришь.",
+                        ) + " Можешь повторить погромче или прислать текстовое сообщение? 🙏";
                         await ctx.api.editMessageText(ctx.chat.id, processingMsg.message_id, noTextResponse);
                     }
 
@@ -131,7 +144,10 @@ export function registerVoiceMessageHandler(bot: Bot<BotContext>): void {
                 } catch (processingError) {
                     console.error("Ошибка при обработке голосового сообщения:", processingError);
 
-                    const errorResponse = "Я получила твое голосовое сообщение, но возникла техническая проблема при его обработке. Можешь отправить текстом? 🙏";
+                    const errorResponse = getBotGenderedText(
+                        "Я получила твое голосовое сообщение, но возникла техническая проблема при его обработке.",
+                        "Я получил твое голосовое сообщение, но возникла техническая проблема при его обработке.",
+                    ) + " Можешь отправить текстом? 🙏";
                     await addToHistory(ctx, 'bot', errorResponse);
                     await ctx.api.editMessageText(ctx.chat.id, processingMsg.message_id, errorResponse);
 
@@ -140,7 +156,10 @@ export function registerVoiceMessageHandler(bot: Bot<BotContext>): void {
                     }
                 }
             } else {
-                const noFilePathResponse = "Я получила твое голосовое сообщение, но не могу получить к нему доступ. Возможно, проблема с API Telegram. Можешь отправить текстом? 🎤";
+                const noFilePathResponse = getBotGenderedText(
+                    "Я получила твое голосовое сообщение, но не могу получить к нему доступ.",
+                    "Я получил твое голосовое сообщение, но не могу получить к нему доступ.",
+                ) + " Возможно, проблема с API Telegram. Можешь отправить текстом? 🎤";
                 await addToHistory(ctx, 'bot', noFilePathResponse);
                 await ctx.api.editMessageText(ctx.chat.id, processingMsg.message_id, noFilePathResponse);
             }

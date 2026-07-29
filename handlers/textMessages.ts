@@ -21,6 +21,7 @@ import { stripVoiceReplyDirective, wantsVoiceReply } from "../utils/voiceReply";
 import { editMessageTextIfChanged } from "../utils/telegramMessageEdit";
 import { normalizeNumbersForVoiceMessage } from "../utils/russianSpeechNumbers";
 import { syncReminderMemoryMutation } from "../services/ReminderMemorySync";
+import { getBotGenderedText } from "../persona";
 import {
     commitImplicitReminderCandidate,
     detectImplicitReminderCandidate,
@@ -421,7 +422,10 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
                         const reminder = ReminderRegistry.getInstance().get(pending.reminderId);
                         if (!reminder) {
                             ctx.session.pendingReminderEdit = undefined;
-                            await ctx.reply('Не нашла это напоминание. Возможно, оно уже выполнено или отменено.');
+                            await ctx.reply(getBotGenderedText(
+                                "Не нашла это напоминание.",
+                                "Не нашёл это напоминание.",
+                            ) + " Возможно, оно уже выполнено или отменено.");
                             return;
                         }
 
@@ -468,7 +472,10 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
                             const previousReminder: Reminder = { ...reminder, dueDate: new Date(reminder.dueDate) };
                             const updated = await postponeReminderUntil(bot, reminder, parsed.dueDate);
                             if (!updated) {
-                                await ctx.reply('Не смогла перенести напоминание. Попробуй ещё раз.');
+                                await ctx.reply(getBotGenderedText(
+                                    "Не смогла перенести напоминание.",
+                                    "Не смог перенести напоминание.",
+                                ) + " Попробуй ещё раз.");
                                 ctx.session.pendingPostpone = pending;
                                 return;
                             }

@@ -29,6 +29,7 @@ import {
 import { isStatusCommandArg, parseBooleanCommandArg } from "../utils/booleanCommandArg";
 import { buildHelpOverviewBlocks, buildHelpTopicBlocks } from "../utils/helpMessage";
 import { sendRecurringTasksMenu } from "../services/recurringTaskService";
+import { getBotGenderedText } from "../persona";
 
 
 function parseCommandArgument(text: string | undefined, command: string): string {
@@ -242,7 +243,10 @@ bot.command("summary", async (ctx) => {
     let message = '';
 
     if (sessionData.dialogueSummary && sessionData.dialogueSummary.trim() !== '') {
-        message = "📝 Вот что я запомнила из нашего общения:\n\n" + sessionData.dialogueSummary;
+        message = getBotGenderedText(
+            "📝 Вот что я запомнила из нашего общения:",
+            "📝 Вот что я запомнил из нашего общения:",
+        ) + "\n\n" + sessionData.dialogueSummary;
     } else {
         message = "У меня пока нет сохраненной суммаризации нашего разговора. Она будет создана автоматически после достаточного количества сообщений! 📚";
     }

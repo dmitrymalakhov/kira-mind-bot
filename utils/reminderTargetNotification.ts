@@ -1,6 +1,7 @@
 import { InlineKeyboard } from "grammy";
 import type { InlineKeyboardButton } from "grammy/types";
 import { config } from "../config";
+import { getBotGenderedText } from "../persona";
 import type { ReminderTargetChat } from "../types/reminderTypes";
 
 export const REMINDER_TARGET_NOTIFY_PREFIX = "reminder_notify";
@@ -55,17 +56,18 @@ export function parseTargetNotificationCallback(
 
 export function appendTargetNotificationPrompt(
     responseText: string,
-    reminders: TargetReminderButtonSource[]
+    reminders: TargetReminderButtonSource[],
+    genderedText: (feminine: string, masculine: string) => string = getBotGenderedText,
 ): string {
     const withTargets = reminders.filter((r) => r.targetChat);
     if (withTargets.length === 0) return responseText;
 
     if (withTargets.length === 1) {
         const target = withTargets[0].targetChat!;
-        return `${responseText}\n\nЯ нашла адресата: ${targetChatHumanLabel(target)}. Оповестить адресата отдельным сообщением, когда напоминание сработает?`;
+        return `${responseText}\n\n${genderedText("Я нашла адресата", "Я нашёл адресата")}: ${targetChatHumanLabel(target)}. Оповестить адресата отдельным сообщением, когда напоминание сработает?`;
     }
 
-    return `${responseText}\n\nЯ нашла адресатов в нескольких напоминаниях. По каждому можно выбрать, отправлять ли отдельное сообщение адресату.`;
+    return `${responseText}\n\n${genderedText("Я нашла адресатов", "Я нашёл адресатов")} в нескольких напоминаниях. По каждому можно выбрать, отправлять ли отдельное сообщение адресату.`;
 }
 
 export function addTargetNotificationButtons(

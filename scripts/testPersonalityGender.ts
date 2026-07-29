@@ -6,6 +6,7 @@ import {
     buildPersonalityMoodStyles,
     buildProactiveMessageFormats,
     getPersonalityGenderForms,
+    selectPersonalityGenderText,
 } from "../utils/personalityGender";
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "kira-personality-gender-"));
@@ -33,6 +34,28 @@ try {
     assert.match(config.biography, /мужчин|помощник/u);
     assert.doesNotMatch(config.biography, /женщин|помощница/u);
     assert.equal(config.proactiveMessageHint, "как будто ты сам написал первым");
+    const { getBotGenderedText } = require("../persona") as typeof import("../persona");
+
+    assert.equal(selectPersonalityGenderText("женский", "создала", "создал"), "создала");
+    assert.equal(selectPersonalityGenderText("мужской", "нашла", "нашёл"), "нашёл");
+    assert.equal(selectPersonalityGenderText(undefined, "сохранила", "сохранил"), "сохранила");
+    assert.equal(getBotGenderedText("получила медиа", "получил медиа"), "получил медиа");
+    assert.equal(getBotGenderedText("не смогла", "не смог"), "не смог");
+    const { parseRecurringTaskEdit } = require("../services/recurringTaskService") as typeof import("../services/recurringTaskService");
+    assert.match(
+        parseRecurringTaskEdit("расписание: неизвестно когда", "Europe/Moscow").scheduleError ?? "",
+        /^Не понял новое расписание/u,
+    );
+
+    const projectRoot = path.resolve(__dirname, "..");
+    const reminderEditorSource = fs.readFileSync(path.join(projectRoot, "utils/reminderEditor.ts"), "utf8");
+    const studyChatSource = fs.readFileSync(path.join(projectRoot, "utils/studyChatPipeline.ts"), "utf8");
+    const commandsSource = fs.readFileSync(path.join(projectRoot, "handlers/commands.ts"), "utf8");
+    assert.match(reminderEditorSource, /getBotGenderedText\([\s\S]{0,120}"Не увидел изменений\."/u);
+    assert.match(studyChatSource, /загрузил \$\{fetchResult\.messageCount\} сообщений/u);
+    assert.match(studyChatSource, /Изучил переписку[\s\S]{0,300}Запомнил \$\{savedCount\}/u);
+    assert.match(studyChatSource, /Ничего не сохранил: \$\{reason\}/u);
+    assert.match(commandsSource, /getBotGenderedText\([\s\S]{0,120}"📝 Вот что я запомнил из нашего общения:"/u);
 
     const malePromptLanguage = JSON.stringify({
         forms: getPersonalityGenderForms("мужской"),

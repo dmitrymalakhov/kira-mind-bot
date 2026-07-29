@@ -13,6 +13,7 @@ import { getPersonalChatMemoryIndexStatus, runPersonalChatMemoryIndexingCycle } 
 import { getReflectionMemoryNoiseReasons } from '../utils/reflectionMemoryFilter';
 import { esc, heading, table, list, blockquote, paragraph, RichBlock } from '../utils/richMessage';
 import { sendStructuredBlocks } from '../utils';
+import { getBotGenderedText } from '../persona';
 
 function isAdmin(ctx: BotContext): boolean {
     return ctx.from?.id === config.adminUserId;
@@ -101,7 +102,8 @@ function ambiguousContactGuard(query: string): string | null {
         .slice(0, 6)
         .map(contactOptionLabel)
         .join(', ');
-    return `Имя «${target}» неоднозначно (${variants}). Уточни фамилию или username, чтобы я не выбрала не тот факт.`;
+    return `Имя «${target}» неоднозначно (${variants}). Уточни фамилию или username, чтобы я ` +
+        getBotGenderedText("не выбрала", "не выбрал") + " не тот факт.";
 }
 
 export function registerMemoryCommands(bot: Bot<BotContext>) {
@@ -286,7 +288,10 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
             }));
 
         if (totalCandidates === 0) {
-            await ctx.reply('Явного мусора из фоновой рефлексии не нашла.');
+            await ctx.reply(getBotGenderedText(
+                "Явного мусора из фоновой рефлексии не нашла.",
+                "Явного мусора из фоновой рефлексии не нашёл.",
+            ));
             return;
         }
 
@@ -309,8 +314,14 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
         const blocks: RichBlock[] = [
             paragraph(
                 remaining > 0
-                    ? `Нашла <b>${totalCandidates}</b> кандидат(ов), показываю первые ${candidates.length}:`
-                    : `Нашла <b>${candidates.length}</b> кандидат(ов) на удаление из reflection-памяти:`
+                    ? getBotGenderedText(
+                        `Нашла <b>${totalCandidates}</b> кандидат(ов), показываю первые ${candidates.length}:`,
+                        `Нашёл <b>${totalCandidates}</b> кандидат(ов), показываю первые ${candidates.length}:`,
+                    )
+                    : getBotGenderedText(
+                        `Нашла <b>${candidates.length}</b> кандидат(ов) на удаление из reflection-памяти:`,
+                        `Нашёл <b>${candidates.length}</b> кандидат(ов) на удаление из reflection-памяти:`,
+                    )
             ),
             list(items, true),
             paragraph('Удалять только если список выглядит как технический шум.'),
@@ -452,7 +463,10 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
 
         const found = await findMemoryByContent(ctx, query);
         if (!found) {
-            await ctx.reply(`Не нашла в памяти ничего похожего на "${query}". Попробуй сформулировать иначе.`);
+            await ctx.reply(getBotGenderedText(
+                `Не нашла в памяти ничего похожего на "${query}".`,
+                `Не нашёл в памяти ничего похожего на "${query}".`,
+            ) + " Попробуй сформулировать иначе.");
             return;
         }
 
@@ -461,7 +475,8 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
             .text('❌ Отмена', 'mem_del_cancel');
 
         await ctx.reply(
-            `Нашла в памяти:\n\n"${found.content}"\n\nУдалить этот факт?`,
+            getBotGenderedText("Нашла в памяти:", "Нашёл в памяти:") +
+                `\n\n"${found.content}"\n\nУдалить этот факт?`,
             { reply_markup: keyboard }
         );
     });
@@ -604,7 +619,10 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
 
         const found = await findMemoryByContent(ctx, query);
         if (!found) {
-            await ctx.reply(`Не нашла в памяти ничего похожего на "${query}".`);
+            await ctx.reply(getBotGenderedText(
+                `Не нашла в памяти ничего похожего на "${query}".`,
+                `Не нашёл в памяти ничего похожего на "${query}".`,
+            ));
             return;
         }
 
