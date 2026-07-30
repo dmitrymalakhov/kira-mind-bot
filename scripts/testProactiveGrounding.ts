@@ -1,6 +1,7 @@
 import assert from 'assert';
 import {
     acceptsKiraLifeGroundingDecision,
+    classifyKiraLifeGroundingDecision,
     chooseGroundedKiraLifeMessage,
     CONVERSATION_EPISODE_TRUST,
     hasUnsupportedKiraLifeOwnerClaim,
@@ -16,15 +17,17 @@ import type { SessionData } from '../types';
 
 const unsupported = 'Ты обещала выполнить ранее названное действие.';
 assert.equal(hasUnsupportedKiraLifeOwnerClaim(unsupported), true);
-const guarded = chooseGroundedKiraLifeMessage(unsupported, 'женский');
-assert.equal(guarded.rejectedUnsupportedClaim, true);
+const fallbackEvent = 'Сегодня я закончила читать синтетический рассказ и записала одну мысль.';
+const guarded = chooseGroundedKiraLifeMessage(unsupported, fallbackEvent, 'женский', 'local_guard');
 assert.equal(guarded.usedFallback, true);
+assert.equal(guarded.fallbackReason, 'local_guard');
+assert.equal(guarded.fallbackSource, 'event');
+assert.equal(guarded.message, fallbackEvent);
 assert.doesNotMatch(guarded.message, /обещан/iu);
 
 const safe = 'Сегодня я разобрала свои заметки и решила немного выдохнуть.';
-assert.deepStrictEqual(chooseGroundedKiraLifeMessage(safe, 'женский'), {
+assert.deepStrictEqual(chooseGroundedKiraLifeMessage(safe, fallbackEvent, 'женский'), {
     message: safe,
-    rejectedUnsupportedClaim: false,
     usedFallback: false,
 });
 assert.equal(
@@ -34,19 +37,51 @@ assert.equal(
 assert.equal(hasUnsupportedKiraLifeOwnerClaim('Тебе нужно попробовать этот плейлист.'), false);
 assert.equal(hasUnsupportedKiraLifeOwnerClaim('У тебя есть планы на вечер?'), false);
 const lively = 'Я сегодня немного выдохнула. А ты как — ещё держишься или уже устроил себе паузу?';
-assert.deepStrictEqual(chooseGroundedKiraLifeMessage(lively, 'женский'), {
+assert.deepStrictEqual(chooseGroundedKiraLifeMessage(lively, fallbackEvent, 'женский'), {
     message: lively,
-    rejectedUnsupportedClaim: false,
     usedFallback: false,
 });
-assert.equal(
-    chooseGroundedKiraLifeMessage('Синтетический неоднозначный кандидат', 'женский', false).rejectedUnsupportedClaim,
-    true,
+for (const reason of ['semantic_rejection', 'review_error', 'invalid_review'] as const) {
+    const fallback = chooseGroundedKiraLifeMessage(
+        'Синтетический неоднозначный кандидат',
+        fallbackEvent,
+        'женский',
+        reason,
+    );
+    assert.equal(fallback.message, fallbackEvent);
+    assert.equal(fallback.fallbackReason, reason);
+    assert.equal(fallback.fallbackSource, 'event');
+}
+const emptyCandidateFallback = chooseGroundedKiraLifeMessage('', fallbackEvent, 'женский', 'empty_candidate');
+assert.equal(emptyCandidateFallback.message, fallbackEvent);
+assert.equal(emptyCandidateFallback.fallbackReason, 'empty_candidate');
+
+const unsafeFallbackEvent = 'Ты забыл выполнить синтетическое действие.';
+const staticFemaleFallback = chooseGroundedKiraLifeMessage(
+    unsupported,
+    unsafeFallbackEvent,
+    'женский',
+    'local_guard',
 );
+assert.equal(staticFemaleFallback.fallbackSource, 'static');
+assert.match(staticFemaleFallback.message, /поймала себя/iu);
+const staticMaleFallback = chooseGroundedKiraLifeMessage(
+    unsupported,
+    unsafeFallbackEvent,
+    'мужской',
+    'local_guard',
+);
+assert.equal(staticMaleFallback.fallbackSource, 'static');
+assert.match(staticMaleFallback.message, /поймал себя/iu);
+
 assert.equal(acceptsKiraLifeGroundingDecision({ safe: true, attributesOwnerObligation: false }), true);
 assert.equal(acceptsKiraLifeGroundingDecision({ safe: true, attributesOwnerObligation: true }), false);
 assert.equal(acceptsKiraLifeGroundingDecision({ safe: false, attributesOwnerObligation: false }), false);
 assert.equal(acceptsKiraLifeGroundingDecision(undefined), false);
+assert.equal(classifyKiraLifeGroundingDecision({ safe: true, attributesOwnerObligation: false }), 'safe');
+assert.equal(classifyKiraLifeGroundingDecision({ safe: false, attributesOwnerObligation: true }), 'semantic_rejection');
+assert.equal(classifyKiraLifeGroundingDecision({ safe: true }), 'invalid_review');
+assert.equal(classifyKiraLifeGroundingDecision(undefined), 'invalid_review');
 
 assert.equal(isEligibleMemoryInsightSource({ subject: 'user', memoryKind: 'goal', status: 'planned' }), true);
 assert.equal(isEligibleMemoryInsightSource({ subject: 'system', memoryKind: 'episode', tags: ['memory-episode'] }), false);
@@ -155,11 +190,22 @@ assert.match(webGroundedExplanation, /https:\/\/culture\.example\/synthetic-even
 const fallbackExplanation = buildProactiveSourceExplanation({
     ...insight,
     message: 'Синтетический резервный текст',
-    sourceMemories: ['Безопасный резервный текст после отклонения исходного кандидата'],
+    sourceMemories: [fallbackEvent],
+    webSources: ['https://example.test/synthetic-source'],
     generationOutcome: 'fallback',
 });
-assert.match(fallbackExplanation, /безопасное резервное сообщение/iu);
-assert.match(fallbackExplanation, /исходный вариант не прошёл проверку/iu);
-assert.doesNotMatch(fallbackExplanation, /события, на которых/iu);
+assert.match(fallbackExplanation, /безопасной резервной форме/iu);
+assert.match(fallbackExplanation, /отправлено само событие/iu);
+assert.match(fallbackExplanation, /синтетический рассказ/iu);
+assert.match(fallbackExplanation, /https:\/\/example\.test\/synthetic-source/iu);
+assert.doesNotMatch(fallbackExplanation, /не приписываю резервному тексту/iu);
+
+const staticFallbackExplanation = buildProactiveSourceExplanation({
+    ...insight,
+    message: 'Синтетический нейтральный резервный текст',
+    sourceMemories: [],
+    generationOutcome: 'fallback',
+});
+assert.match(staticFallbackExplanation, /нейтральный текст без источников/iu);
 
 console.log('proactive grounding checks passed');

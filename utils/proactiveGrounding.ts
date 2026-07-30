@@ -45,11 +45,28 @@ export interface KiraLifeGroundingDecision {
     attributesOwnerObligation?: boolean;
 }
 
+export type KiraLifeReviewStatus =
+    | 'safe'
+    | 'semantic_rejection'
+    | 'review_error'
+    | 'invalid_review'
+    | 'empty_candidate'
+    | 'local_guard';
+
 /** Semantic-review считается успешным только при двух согласованных явных полях. */
 export function acceptsKiraLifeGroundingDecision(
     decision: KiraLifeGroundingDecision | null | undefined,
 ): boolean {
     return decision?.safe === true && decision.attributesOwnerObligation === false;
+}
+
+export function classifyKiraLifeGroundingDecision(
+    decision: KiraLifeGroundingDecision | null | undefined,
+): Extract<KiraLifeReviewStatus, 'safe' | 'semantic_rejection' | 'invalid_review'> {
+    if (typeof decision?.safe !== 'boolean' || typeof decision.attributesOwnerObligation !== 'boolean') {
+        return 'invalid_review';
+    }
+    return acceptsKiraLifeGroundingDecision(decision) ? 'safe' : 'semantic_rejection';
 }
 
 /** Дешёвый high-confidence барьер; неоднозначные формулировки проверяются semantic-review. */
@@ -70,18 +87,43 @@ export function safeKiraLifeFallback(gender: string | undefined): string {
 
 export function chooseGroundedKiraLifeMessage(
     candidate: string | null | undefined,
+    eventFallback: string | null | undefined,
     gender: string | undefined,
-    semanticReviewPassed = true,
-): { message: string; rejectedUnsupportedClaim: boolean; usedFallback: boolean } {
+    reviewStatus: KiraLifeReviewStatus = 'safe',
+): {
+    message: string;
+    usedFallback: boolean;
+    fallbackReason?: Exclude<KiraLifeReviewStatus, 'safe'>;
+    fallbackSource?: 'event' | 'static';
+} {
     const normalized = candidate?.trim();
-    if (!normalized || !semanticReviewPassed || hasUnsupportedKiraLifeOwnerClaim(normalized)) {
+    const rejectedByLocalGuard = Boolean(normalized && hasUnsupportedKiraLifeOwnerClaim(normalized));
+    if (normalized && reviewStatus === 'safe' && !rejectedByLocalGuard) {
+        return { message: normalized, usedFallback: false };
+    }
+
+    const fallbackReason: Exclude<KiraLifeReviewStatus, 'safe'> = !normalized
+        ? 'empty_candidate'
+        : rejectedByLocalGuard
+            ? 'local_guard'
+            : reviewStatus === 'safe' ? 'local_guard' : reviewStatus;
+
+    const normalizedEvent = eventFallback?.trim();
+    if (normalizedEvent && !hasUnsupportedKiraLifeOwnerClaim(normalizedEvent)) {
         return {
-            message: safeKiraLifeFallback(gender),
-            rejectedUnsupportedClaim: Boolean(normalized),
+            message: normalizedEvent,
             usedFallback: true,
+            fallbackReason,
+            fallbackSource: 'event',
         };
     }
-    return { message: normalized, rejectedUnsupportedClaim: false, usedFallback: false };
+
+    return {
+        message: safeKiraLifeFallback(gender),
+        usedFallback: true,
+        fallbackReason,
+        fallbackSource: 'static',
+    };
 }
 
 /** Только подтверждённые пользовательские утверждения могут запускать memory-insight. */
