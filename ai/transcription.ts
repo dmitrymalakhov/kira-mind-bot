@@ -1,13 +1,27 @@
 import fs from 'fs';
-import { resolveModelForTaskAsync } from './modelResolver';
+import { resolveModelForTaskAsync, resolveModelForTaskFreshAsync } from './modelResolver';
 import type { AiModelRef } from './modelPresets';
 import { getAiProviderAdapter } from './providers/registry';
-import { buildSafeAiErrorLog, classifyAiError, createAiExecutionTrace, type AiExecutionStage } from './errorDiagnostics';
+import { classifyAiErrorForProvider, buildSafeAiErrorLogForProvider, createAiExecutionTrace, type AiExecutionStage } from './errorDiagnostics';
 import { allowsCrossProviderFallback, getTransitionalTaskFallbackModel, errorToMessage } from './runtimeSupport';
+import { resolveRetryPolicy } from './providers/policyDefaults';
 import { logAiUsage } from '../services/aiUsageLogService';
+
+const MAX_PRESET_REFRESHES_PER_REQUEST = 3;
 
 function recordAiUsage(payload: Parameters<typeof logAiUsage>[0]): void {
     void logAiUsage(payload);
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+type ErrorIdentityParser = (error: unknown) => { providerRequestId?: string };
+
+function getErrorIdentityParser(modelRef: AiModelRef): ErrorIdentityParser | undefined {
+    const adapter = getAiProviderAdapter(modelRef.provider);
+    return adapter.parseErrorIdentities?.bind(adapter);
 }
 
 async function createTranscriptionWithModel(
@@ -18,6 +32,7 @@ async function createTranscriptionWithModel(
     attempt: number,
     stage: AiExecutionStage,
     originalError?: unknown,
+    originalErrorParser?: ErrorIdentityParser,
 ): Promise<string> {
     const taskKey = 'transcription';
     const startedAt = Date.now();
@@ -51,7 +66,8 @@ async function createTranscriptionWithModel(
         });
         return result.text;
     } catch (error) {
-        const diagnostics = classifyAiError(error);
+        const parseErrorIdentities = providerAdapter.parseErrorIdentities?.bind(providerAdapter);
+        const diagnostics = classifyAiErrorForProvider(error, parseErrorIdentities);
         recordAiUsage({
             taskKey,
             provider: modelRef.provider,
@@ -76,8 +92,8 @@ async function createTranscriptionWithModel(
         if (originalError) {
             console.warn('[AI transcription fallback failed]', {
                 fallbackModel: modelRef,
-                originalError: buildSafeAiErrorLog(originalError),
-                fallbackError: buildSafeAiErrorLog(error),
+                originalError: buildSafeAiErrorLogForProvider(originalError, originalErrorParser),
+                fallbackError: buildSafeAiErrorLogForProvider(error, parseErrorIdentities),
             });
         }
 
@@ -88,40 +104,112 @@ async function createTranscriptionWithModel(
 }
 
 export async function createTranscriptionForTask(audioFilePath: string): Promise<string> {
-    const { presetName, modelRef } = await resolveModelForTaskAsync('transcription');
+    let route = await resolveModelForTaskAsync('transcription');
     const trace = createAiExecutionTrace();
 
-    try {
-        return await createTranscriptionWithModel(audioFilePath, presetName, modelRef, trace.traceId, 1, 'primary');
-    } catch (error) {
-        const diagnostics = classifyAiError(error);
+    let attempt = 1;
+    let primaryRetriesUsed = 0;
+    let presetRefreshCount = 0;
 
-        if (diagnostics.retryable) {
-            try {
-                return await createTranscriptionWithModel(audioFilePath, presetName, modelRef, trace.traceId, 2, 'retry');
-            } catch (retryError) {
-                if (!allowsCrossProviderFallback(presetName)) {
-                    throw retryError;
-                }
+    const switchToCurrentRoute = async (): Promise<boolean> => {
+        const currentRoute = await resolveModelForTaskFreshAsync('transcription');
+        if (currentRoute.presetName === route.presetName
+            && currentRoute.modelRef.provider === route.modelRef.provider
+            && currentRoute.modelRef.model === route.modelRef.model) {
+            return false;
+        }
+        if (presetRefreshCount >= MAX_PRESET_REFRESHES_PER_REQUEST) {
+            throw new Error('AI preset changed too many times during request: transcription');
+        }
+        route = currentRoute;
+        primaryRetriesUsed = 0;
+        attempt += 1;
+        presetRefreshCount += 1;
+        return true;
+    };
+
+    while (true) {
+        try {
+            return await createTranscriptionWithModel(
+                audioFilePath,
+                route.presetName,
+                route.modelRef,
+                trace.traceId,
+                attempt,
+                attempt === 1 ? 'primary' : 'retry',
+            );
+        } catch (error) {
+            const parseErrorIdentities = getErrorIdentityParser(route.modelRef);
+            const diagnostics = classifyAiErrorForProvider(error, parseErrorIdentities);
+
+            // Non-retryable: либо проброс (true-full), либо cross-provider fallback.
+            if (!diagnostics.retryable) {
+                if (!allowsCrossProviderFallback(route.presetName)) throw error;
                 const fallbackModel = getTransitionalTaskFallbackModel('transcription');
                 console.warn('[AI transcription fallback]', {
                     traceId: trace.traceId,
                     fallbackModel,
-                    originalError: buildSafeAiErrorLog(retryError),
+                    originalError: buildSafeAiErrorLogForProvider(error, parseErrorIdentities),
                 });
-                return createTranscriptionWithModel(audioFilePath, presetName, fallbackModel, trace.traceId, 3, 'fallback', retryError);
+                return createTranscriptionWithModel(
+                    audioFilePath,
+                    route.presetName,
+                    fallbackModel,
+                    trace.traceId,
+                    attempt + 1,
+                    'fallback',
+                    error,
+                    parseErrorIdentities,
+                );
             }
-        }
 
-        if (!allowsCrossProviderFallback(presetName)) {
-            throw error;
+            if (await switchToCurrentRoute()) continue;
+
+            const providerAdapter = getAiProviderAdapter(route.modelRef.provider);
+            const policy = allowsCrossProviderFallback(route.presetName)
+                ? resolveRetryPolicy(undefined)
+                : resolveRetryPolicy(providerAdapter.getRetryPolicy, providerAdapter);
+
+            // File-flow сохраняет один управляемый retry: повторные upload с
+            // пятиминутным file timeout не должны умножать пользовательский deadline.
+            const baselineRetries = 1;
+            // Истёкший файловый deadline повторять нельзя: это удвоило бы самое
+            // длинное ожидание. Быстрые 429/5xx/network-сбои всё ещё получают retry.
+            const configuredRetries = policy.enabled
+                ? Math.min(baselineRetries, policy.maxAttempts)
+                : baselineRetries;
+            const maxPrimaryRetries = diagnostics.errorCategory === 'timeout' ? 0 : configuredRetries;
+            const primaryRetriesRemaining = Math.max(0, maxPrimaryRetries - primaryRetriesUsed);
+            if (primaryRetriesRemaining > 0) {
+                if (policy.enabled) await sleep(policy.getDelayMs(primaryRetriesUsed + 1));
+                if (await switchToCurrentRoute()) continue;
+                primaryRetriesUsed += 1;
+                attempt += 1;
+                continue;
+            }
+
+            // Попытки primary исчерпаны → cross-provider fallback на GPT (true-full
+            // для transcription не имеет same-provider degradation: смена модели
+            // транскрибации внутри одного провайдера не предусмотрена chain-ом).
+            if (!allowsCrossProviderFallback(route.presetName)) {
+                throw error;
+            }
+            const fallbackModel = getTransitionalTaskFallbackModel('transcription');
+            console.warn('[AI transcription fallback]', {
+                traceId: trace.traceId,
+                fallbackModel,
+                originalError: buildSafeAiErrorLogForProvider(error, parseErrorIdentities),
+            });
+            return createTranscriptionWithModel(
+                audioFilePath,
+                route.presetName,
+                fallbackModel,
+                trace.traceId,
+                attempt + 1,
+                'fallback',
+                error,
+                parseErrorIdentities,
+            );
         }
-        const fallbackModel = getTransitionalTaskFallbackModel('transcription');
-        console.warn('[AI transcription fallback]', {
-            traceId: trace.traceId,
-            fallbackModel,
-            originalError: buildSafeAiErrorLog(error),
-        });
-        return createTranscriptionWithModel(audioFilePath, presetName, fallbackModel, trace.traceId, 2, 'fallback', error);
     }
 }

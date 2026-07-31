@@ -1,6 +1,7 @@
 import { getFallbackModel } from './fallbackModels';
-import { getDegradedModel } from './degradedModels';
 import { isTrueFullAiPreset, parseAiPresetName, type AiModelRef, type AiTaskKey } from './modelPresets';
+import { getAiProviderAdapter } from './providers/registry';
+import { resolveDegradationChain, type DegradationContext } from './providers/policyDefaults';
 
 export type FallbackPolicyMode = 'task-default';
 
@@ -19,21 +20,36 @@ export function allowsCrossProviderFallback(presetName: string): boolean {
 }
 
 /**
- * True-full preset остаётся provider-pure и при деградации: после исчерпанного
- * retry тяжёлая Gemini-модель может перейти на более доступную Gemini Flash
- * Lite. Повторять тот же lite-маршрут ещё раз бессмысленно.
+ * Источник same-provider degradation модели для упавшего маршрута.
+ *
+ * Спрашивает цепочку у самого провайдера: провайдер знает свои модели и их
+ * порядок, а runtime выбирает первую ещё не опробованную модель того же
+ * провайдера.
+ *
+ * Cross-provider fallback здесь не выполняется: за него отвечает
+ * {@link allowsCrossProviderFallback} + {@link getTaskFallbackModel} в caller-е.
  */
 export function getSameProviderDegradedModel(
     presetName: string,
     currentModel: AiModelRef,
     retryable: boolean,
+    triedModels: ReadonlySet<string> = new Set(),
 ): AiModelRef | null {
     const parsedPresetName = parseAiPresetName(presetName);
     if (!retryable || !parsedPresetName || !isTrueFullAiPreset(parsedPresetName)) return null;
-    const degradedModel = getDegradedModel(parsedPresetName);
-    if (!degradedModel || degradedModel.provider !== currentModel.provider) return null;
-    if (currentModel.model === degradedModel.model) return null;
-    return degradedModel;
+
+    const context: DegradationContext = { currentModel: currentModel.model, retryable };
+    const providerAdapter = getAiProviderAdapter(currentModel.provider);
+    const providerChain = resolveDegradationChain(
+        providerAdapter.getSameProviderDegradationChain,
+        context,
+        providerAdapter,
+    );
+    return providerChain.find((entry) => (
+        entry.provider === currentModel.provider
+        && entry.model !== currentModel.model
+        && !triedModels.has(entry.model)
+    )) ?? null;
 }
 
 const MAX_AI_ERROR_MESSAGE_LENGTH = 320;

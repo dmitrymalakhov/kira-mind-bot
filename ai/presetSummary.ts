@@ -1,4 +1,5 @@
 import type { AiModelRef, AiProvider, AiTaskKey } from './modelPresets';
+import { getAiProviderDescriptor } from './providerMetadata';
 
 export const GENERATIVE_TASK_KEYS: readonly AiTaskKey[] = [
     'defaultText',
@@ -23,15 +24,6 @@ const GENERATIVE_PROVIDER_LABELS: Readonly<Record<AiProvider, string>> = {
     gemini: 'Gemini',
     zai: 'GLM',
     openrouter: 'OpenRouter Auto',
-};
-
-const SERVICE_MODEL_LABELS: Readonly<Record<string, string>> = {
-    'openai:text-embedding-3-small': 'OpenAI Embeddings',
-    'openai:text-embedding-ada-002': 'OpenAI Embeddings',
-    'openai:whisper-1': 'Whisper',
-    'gemini:gemini-embedding-2': 'Gemini Embeddings',
-    'gemini:gemini-3.5-flash': 'Gemini Transcription',
-    'zai:glm-asr-2512': 'GLM Transcription',
 };
 
 export interface PresetProviderCount {
@@ -98,21 +90,13 @@ export function formatGenerativeUsageSummary(models: Record<string, AiModelRef>)
     return items.length > 0 ? items.join(' · ') : '—';
 }
 
-function getFallbackServiceLabel(modelRef: AiModelRef): string {
-    if (modelRef.provider === 'openai') return 'OpenAI';
-    if (modelRef.provider === 'gemini') return 'Gemini';
-    if (modelRef.provider === 'zai') return 'GLM';
-    if (modelRef.provider === 'openrouter') return 'OpenRouter Auto';
-    return `${modelRef.provider} · ${modelRef.model}`;
-}
-
 export function getServiceLabels(models: Record<string, AiModelRef>): string[] {
     const labels: string[] = [];
     for (const taskKey of SERVICE_TASK_KEYS) {
         const modelRef = models[taskKey];
         if (!modelRef) continue;
-        const key = `${modelRef.provider}:${modelRef.model}`;
-        labels.push(SERVICE_MODEL_LABELS[key] ?? `${getFallbackServiceLabel(modelRef)} · ${modelRef.model}`);
+        const service = taskKey === 'embedding' ? 'Embeddings' : 'Transcription';
+        labels.push(`${getAiProviderDescriptor(modelRef.provider).label} ${service}`);
     }
     return labels;
 }

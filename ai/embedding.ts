@@ -1,6 +1,6 @@
 import { resolveMemoryEmbeddingConfigAsync } from './memoryEmbeddingResolver';
 import { getAiProviderAdapter } from './providers/registry';
-import { buildSafeAiErrorLog, classifyAiError, createAiExecutionTrace, type AiExecutionStage } from './errorDiagnostics';
+import { classifyAiErrorForProvider, buildSafeAiErrorLogForProvider, createAiExecutionTrace, type AiExecutionStage } from './errorDiagnostics';
 import { errorToMessage } from './runtimeSupport';
 import { logAiUsage } from '../services/aiUsageLogService';
 import type { AiModelRef } from './modelPresets';
@@ -56,7 +56,8 @@ async function createEmbeddingWithModel(
         });
         return result.embedding;
     } catch (error) {
-        const diagnostics = classifyAiError(error);
+        const parseErrorIdentities = providerAdapter.parseErrorIdentities?.bind(providerAdapter);
+        const diagnostics = classifyAiErrorForProvider(error, parseErrorIdentities);
         recordAiUsage({
             taskKey,
             provider: modelRef.provider,
@@ -81,8 +82,8 @@ async function createEmbeddingWithModel(
         if (originalError) {
             console.warn('[AI embedding fallback failed]', {
                 fallbackModel: modelRef,
-                originalError: buildSafeAiErrorLog(originalError),
-                fallbackError: buildSafeAiErrorLog(error),
+                originalError: buildSafeAiErrorLogForProvider(originalError, parseErrorIdentities),
+                fallbackError: buildSafeAiErrorLogForProvider(error, parseErrorIdentities),
             });
         }
 
@@ -101,7 +102,9 @@ export async function createMemoryEmbedding(input: string): Promise<number[]> {
     try {
         return await createEmbeddingWithModel(input, profileName, modelRef, config.outputDimension, trace.traceId, 1, 'primary');
     } catch (error) {
-        const diagnostics = classifyAiError(error);
+        const providerAdapter = getAiProviderAdapter(modelRef.provider);
+        const parseErrorIdentities = providerAdapter.parseErrorIdentities?.bind(providerAdapter);
+        const diagnostics = classifyAiErrorForProvider(error, parseErrorIdentities);
 
         if (diagnostics.retryable) {
             try {
@@ -111,7 +114,7 @@ export async function createMemoryEmbedding(input: string): Promise<number[]> {
                     traceId: trace.traceId,
                     profileName,
                     modelRef,
-                    originalError: buildSafeAiErrorLog(retryError),
+                    originalError: buildSafeAiErrorLogForProvider(retryError, parseErrorIdentities),
                 });
                 throw retryError;
             }

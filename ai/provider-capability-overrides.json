@@ -9,6 +9,9 @@
     },
     "gemini-3.5-flash": {
       "supportsTranscription": true
+    },
+    "gemini-3.6-flash": {
+      "supportsTranscription": true
     }
   },
   "zai": {

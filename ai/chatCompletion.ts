@@ -5,14 +5,14 @@ import { getAiProviderAdapter } from './providers/registry';
 import type {
     ChatCompletion,
     ChatCompletionParamsWithoutModel,
+    RetryPolicy,
 } from './providers/types';
-import { buildSafeAiErrorLog, classifyAiError, createAiExecutionTrace, type AiExecutionStage } from './errorDiagnostics';
+import { classifyAiError, classifyAiErrorForProvider, buildSafeAiErrorLog, buildSafeAiErrorLogForProvider, createAiExecutionTrace, type AiExecutionStage } from './errorDiagnostics';
 import { parseLLMJson } from '../utils';
-import { allowsCrossProviderFallback, errorToMessage, getSameProviderDegradedModel, getTaskFallbackModel } from './runtimeSupport';
-import { logDegradedFailure, logDegradedStart, logDegradedSuccess } from './degradedLogging';
+import { allowsCrossProviderFallback, errorToMessage, getTaskFallbackModel } from './runtimeSupport';
+import { resolveRetryPolicy } from './providers/policyDefaults';
+import { runSameProviderDegradationChain } from './executionPolicy';
 
-const GEMINI_RETRY_BASE_DELAY_MS = 1000;
-const GEMINI_RETRY_MAX_DELAY_MS = 5000;
 const MAX_PRESET_REFRESHES_PER_REQUEST = 3;
 
 function recordAiUsage(payload: Parameters<typeof logAiUsage>[0]): void {
@@ -21,16 +21,6 @@ function recordAiUsage(payload: Parameters<typeof logAiUsage>[0]): void {
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function getGeminiRetryDelayMs(attempt: number): number {
-    const baseDelay = Number(process.env.AI_GEMINI_RETRY_BASE_DELAY_MS) || GEMINI_RETRY_BASE_DELAY_MS;
-    const maxDelay = Number(process.env.AI_GEMINI_RETRY_MAX_DELAY_MS) || GEMINI_RETRY_MAX_DELAY_MS;
-    const cappedBase = Math.max(1, baseDelay);
-    const cappedMax = Math.max(cappedBase, maxDelay);
-    const exponentialDelay = Math.min(cappedMax, cappedBase * Math.pow(2, Math.max(0, attempt - 1)));
-    const jitterMultiplier = 0.85 + Math.random() * 0.3;
-    return Math.max(1, Math.round(exponentialDelay * jitterMultiplier));
 }
 
 interface AiTaskRoute {
@@ -45,6 +35,13 @@ interface AiExecutionResult {
     stage: AiExecutionStage;
 }
 
+type ErrorIdentityParser = (error: unknown) => { providerRequestId?: string };
+
+function getErrorIdentityParser(modelRef: AiModelRef): ErrorIdentityParser | undefined {
+    const adapter = getAiProviderAdapter(modelRef.provider);
+    return adapter.parseErrorIdentities?.bind(adapter);
+}
+
 function isSameRoute(left: AiTaskRoute, right: AiTaskRoute): boolean {
     return left.presetName === right.presetName
         && left.modelRef.provider === right.modelRef.provider
@@ -52,16 +49,17 @@ function isSameRoute(left: AiTaskRoute, right: AiTaskRoute): boolean {
 }
 
 async function maybeDelayRetry(
-    presetName: string,
+    policy: RetryPolicy,
     taskKey: AiTaskKey,
     modelRef: AiModelRef,
-    attempt: number,
+    retryOrdinal: number,
+    executionAttempt: number,
     error: unknown,
 ): Promise<void> {
-    if (presetName !== 'gemini-full' || modelRef.provider !== 'gemini') return;
-    const delayMs = getGeminiRetryDelayMs(attempt);
+    if (!policy.enabled) return;
+    const delayMs = policy.getDelayMs(retryOrdinal);
     const diagnostics = classifyAiError(error);
-    // Первый retry (попытка 2) — штатная ситуация: Gemini может кратковременно
+    // Первый retry (попытка 2) — штатная ситуация: провайдер может кратковременно
     // вернуть 503/429/timeout, и короткий backoff её переваривает. Не пишем его
     // в лог: Docker всё равно показывает console.debug. Начиная с попытки 3
     // оставляем warn как индикатор затяжной проблемы провайдера.
@@ -69,7 +67,7 @@ async function maybeDelayRetry(
         taskKey,
         provider: modelRef.provider,
         model: modelRef.model,
-        attempt,
+        attempt: executionAttempt,
         errorStatus: diagnostics.errorStatus,
         errorCategory: diagnostics.errorCategory,
         delayMs,
@@ -77,7 +75,7 @@ async function maybeDelayRetry(
     // `console.debug` также попадает в docker logs, поэтому первый штатный
     // retry не должен создавать отдельную запись на каждый временный 503.
     // Если ошибка пережила retry, попытка 3 уже остаётся видимой как warn.
-    if (attempt >= 3) console.warn('[AI retry scheduled]', payload);
+    if (executionAttempt >= 3) console.warn('[AI retry scheduled]', payload);
     await sleep(delayMs);
 }
 
@@ -91,7 +89,7 @@ function recordJsonResolutionFailure(
     error: Error,
     fallbackUsed: boolean,
 ): void {
-    const diagnostics = classifyAiError(error);
+    const diagnostics = classifyAiErrorForProvider(error, getErrorIdentityParser(modelRef));
     recordAiUsage({
         taskKey,
         provider: modelRef.provider,
@@ -122,6 +120,7 @@ async function createChatCompletionWithModel(
     attempt: number,
     stage: AiExecutionStage,
     originalError?: unknown,
+    originalErrorParser?: ErrorIdentityParser,
 ): Promise<ChatCompletion> {
     const startedAt = Date.now();
     const providerAdapter = getAiProviderAdapter(modelRef.provider);
@@ -149,7 +148,8 @@ async function createChatCompletionWithModel(
 
         return result;
     } catch (error) {
-        const diagnostics = classifyAiError(error);
+        const parseErrorIdentities = providerAdapter.parseErrorIdentities?.bind(providerAdapter);
+        const diagnostics = classifyAiErrorForProvider(error, parseErrorIdentities);
         recordAiUsage({
             taskKey,
             provider: modelRef.provider,
@@ -176,8 +176,8 @@ async function createChatCompletionWithModel(
                 taskKey,
                 traceId,
                 fallbackModel: modelRef,
-                originalError: buildSafeAiErrorLog(originalError),
-                fallbackError: buildSafeAiErrorLog(error),
+                originalError: buildSafeAiErrorLogForProvider(originalError, originalErrorParser),
+                fallbackError: buildSafeAiErrorLogForProvider(error, parseErrorIdentities),
             });
         }
 
@@ -193,8 +193,12 @@ async function createChatCompletionForTaskWithTrace(
     let route: AiTaskRoute = await resolveModelForTaskAsync(taskKey);
     let attempt = 1;
     let stage: AiExecutionStage = 'primary';
-    let retryUsed = false;
     let presetRefreshCount = 0;
+    let primaryRetriesUsed = 0;
+    // Модели, уже испробованные в same-provider degradation chain. Защищает от
+    // зацикливания и позволяет дойти до следующего дна chain при отказе lite.
+    const triedModels = new Set<string>([route.modelRef.model]);
+    let lastFailedModel = route.modelRef;
 
     const switchToCurrentRoute = async (): Promise<boolean> => {
         const currentRoute: AiTaskRoute = await resolveModelForTaskFreshAsync(taskKey);
@@ -213,8 +217,11 @@ async function createChatCompletionForTaskWithTrace(
         });
 
         route = currentRoute;
+        primaryRetriesUsed = 0;
+        triedModels.clear();
+        triedModels.add(currentRoute.modelRef.model);
+        lastFailedModel = currentRoute.modelRef;
         presetRefreshCount += 1;
-        retryUsed = true;
         attempt += 1;
         stage = 'retry';
         return true;
@@ -233,7 +240,7 @@ async function createChatCompletionForTaskWithTrace(
             );
             return { response, route, attempt, stage };
         } catch (error) {
-            const diagnostics = classifyAiError(error);
+            const diagnostics = classifyAiErrorForProvider(error, getErrorIdentityParser(route.modelRef));
 
             if (!diagnostics.retryable) {
                 if (!allowsCrossProviderFallback(route.presetName)) throw error;
@@ -243,27 +250,68 @@ async function createChatCompletionForTaskWithTrace(
             // Фоновая задача могла начаться до смены preset-а из админки.
             if (await switchToCurrentRoute()) continue;
 
-            if (retryUsed) {
+            // Retry primary. Базовое поведение — 1 повтор для всех пресетов (legacy).
+            // Провайдерная multi-retry-политика применяется только для true-full
+            // (без cross-provider подушки) и увеличивает число попыток: так временную
+            // перегрузку Gemini можно пережить без немедленного fallback на GPT.
+            const crossProviderAllowed = allowsCrossProviderFallback(route.presetName);
+            const providerAdapter = getAiProviderAdapter(route.modelRef.provider);
+            const policy = crossProviderAllowed
+                ? resolveRetryPolicy(undefined)
+                : resolveRetryPolicy(providerAdapter.getRetryPolicy, providerAdapter);
+            const baselineRetries = 1;
+            // Включённая policy является авторитетной, в том числе при нуле:
+            // AI_GEMINI_RETRY_MAX_ATTEMPTS=0 должен действительно отключать retry.
+            const maxPrimaryRetries = policy.enabled ? policy.maxAttempts : baselineRetries;
+            const primaryRetriesRemaining = Math.max(0, maxPrimaryRetries - primaryRetriesUsed);
+
+            if (primaryRetriesRemaining <= 0) {
                 if (!allowsCrossProviderFallback(route.presetName)) {
-                    const degradedModel = getSameProviderDegradedModel(
+                    // Same-provider degradation: проходим по цепочке моделей того же
+                    // провайдера, пока одна не ответит или цепочка не иссякнет.
+                    const { result, attempt: degradedAttempt, model: degradedModel } = await runSameProviderDegradationChain<ChatCompletion>(
                         route.presetName,
-                        route.modelRef,
-                        diagnostics.retryable,
+                        lastFailedModel,
+                        triedModels,
+                        attempt,
+                        error,
+                        { taskKey, traceId, previousModel: route.modelRef },
+                        (degradedModel, degradedAttempt) => createChatCompletionWithModel(
+                            taskKey,
+                            params,
+                            route.presetName,
+                            degradedModel,
+                            traceId,
+                            degradedAttempt,
+                            'fallback',
+                        ).then((response) => response),
                     );
-                    if (!degradedModel) throw error;
-                    return createDegradedExecution(taskKey, params, error, route, degradedModel, traceId, attempt + 1);
+                    return {
+                        response: result,
+                        route: { presetName: route.presetName, modelRef: degradedModel },
+                        attempt: degradedAttempt,
+                        stage: 'fallback',
+                    };
                 }
                 return createFallbackExecution(taskKey, params, error, route, traceId, attempt + 1);
             }
 
-            await maybeDelayRetry(route.presetName, taskKey, route.modelRef, attempt + 1, error);
+            await maybeDelayRetry(
+                policy,
+                taskKey,
+                route.modelRef,
+                primaryRetriesUsed + 1,
+                attempt + 1,
+                error,
+            );
 
             // Preset мог измениться во время backoff-задержки.
             if (await switchToCurrentRoute()) continue;
 
-            retryUsed = true;
+            primaryRetriesUsed += 1;
             attempt += 1;
             stage = 'retry';
+            lastFailedModel = route.modelRef;
         }
     }
 }
@@ -275,48 +323,6 @@ export async function createChatCompletionForTask(
     const trace = createAiExecutionTrace();
     const execution = await createChatCompletionForTaskWithTrace(taskKey, params, trace.traceId);
     return execution.response;
-}
-
-async function createDegradedExecution(
-    taskKey: AiTaskKey,
-    params: ChatCompletionParamsWithoutModel,
-    originalError: unknown,
-    route: AiTaskRoute,
-    degradedModel: AiModelRef,
-    traceId: string,
-    attempt: number,
-): Promise<AiExecutionResult> {
-    const logContext = {
-        taskKey,
-        traceId,
-        previousModel: route.modelRef,
-        degradedModel,
-        attempt,
-    };
-    logDegradedStart(logContext, originalError);
-    const startedAt = Date.now();
-    let response: ChatCompletion;
-    try {
-        response = await createChatCompletionWithModel(
-            taskKey,
-            params,
-            route.presetName,
-            degradedModel,
-            traceId,
-            attempt,
-            'fallback',
-        );
-    } catch (error) {
-        logDegradedFailure(logContext, error, Date.now() - startedAt);
-        throw error;
-    }
-    logDegradedSuccess(logContext, Date.now() - startedAt);
-    return {
-        response,
-        route: { presetName: route.presetName, modelRef: degradedModel },
-        attempt,
-        stage: 'fallback',
-    };
 }
 
 async function createFallbackExecution(
@@ -335,6 +341,7 @@ async function createFallbackExecution(
         route.presetName,
         traceId,
         attempt,
+        route.modelRef,
     );
     return {
         response,
@@ -351,17 +358,33 @@ export async function createFallbackChatCompletion(
     preset = 'fallback',
     traceId = createAiExecutionTrace().traceId,
     attempt = 1,
+    originalModelRef?: AiModelRef,
 ): Promise<ChatCompletion> {
     const fallbackModel = getTaskFallbackModel(taskKey);
+    const originalErrorParser = originalModelRef
+        ? getErrorIdentityParser(originalModelRef)
+        : undefined;
 
     console.warn('[AI fallback]', {
         taskKey,
         traceId,
         fallbackModel,
-        originalError: buildSafeAiErrorLog(originalError),
+        originalError: originalErrorParser
+            ? buildSafeAiErrorLogForProvider(originalError, originalErrorParser)
+            : buildSafeAiErrorLog(originalError),
     });
 
-    return createChatCompletionWithModel(taskKey, params, preset, fallbackModel, traceId, attempt, 'fallback', originalError);
+    return createChatCompletionWithModel(
+        taskKey,
+        params,
+        preset,
+        fallbackModel,
+        traceId,
+        attempt,
+        'fallback',
+        originalError,
+        originalErrorParser,
+    );
 }
 
 export async function createJsonChatCompletionForTask<T>(
