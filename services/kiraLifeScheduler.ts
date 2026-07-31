@@ -394,7 +394,7 @@ async function buildProactiveMessage(generatedEvent: GeneratedKiraLifeEvent): Pr
       reason: grounded.fallbackReason,
       source: grounded.fallbackSource,
     });
-    if (grounded.fallbackSource === 'static' && grounded.fallbackReason !== 'local_guard') {
+    if (grounded.fallbackSource === 'static') {
       console.warn("[kira-life] Event fallback rejected", {
         reason: 'local_guard',
         source: 'event',
@@ -481,7 +481,11 @@ async function runProactiveCycle(bot: Bot<BotContext>): Promise<void> {
       proactiveInsight: insight,
       createdAt: lastSentAt,
     });
-    console.log("[kira-life] Sent proactive message:", proactive.message.slice(0, 80));
+    console.log("[kira-life] Sent proactive message", {
+      generationOutcome: proactive.generationOutcome,
+      sourceCount: proactive.sourceMemories.length,
+      webSourceCount: proactive.webSources.length,
+    });
   } catch (error) {
     console.error("[kira-life] proactive cycle failed:", error);
   } finally {

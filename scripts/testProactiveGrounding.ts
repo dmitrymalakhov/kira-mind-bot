@@ -6,6 +6,7 @@ import {
     CONVERSATION_EPISODE_TRUST,
     hasUnsupportedKiraLifeOwnerClaim,
     isEligibleMemoryInsightSource,
+    KiraLifeGroundingDecision,
     normalizeInsightSourceIndexes,
 } from '../utils/proactiveGrounding';
 import {
@@ -13,6 +14,7 @@ import {
     isProactiveSourceQuestion,
     resolveProactiveSourceQuestion,
 } from '../utils/proactiveSourceQuestion';
+import { parseLLMJson } from '../utils';
 import type { SessionData } from '../types';
 
 const unsupported = 'Ты обещала выполнить ранее названное действие.';
@@ -56,6 +58,16 @@ const emptyCandidateFallback = chooseGroundedKiraLifeMessage('', fallbackEvent, 
 assert.equal(emptyCandidateFallback.message, fallbackEvent);
 assert.equal(emptyCandidateFallback.fallbackReason, 'empty_candidate');
 
+const maleFallbackEvent = 'Сегодня я закончил читать синтетический рассказ и записал одну мысль.';
+const maleEventFallback = chooseGroundedKiraLifeMessage(
+    'Синтетический неоднозначный кандидат',
+    maleFallbackEvent,
+    'мужской',
+    'review_error',
+);
+assert.equal(maleEventFallback.message, maleFallbackEvent);
+assert.equal(maleEventFallback.fallbackSource, 'event');
+
 const unsafeFallbackEvent = 'Ты забыл выполнить синтетическое действие.';
 const staticFemaleFallback = chooseGroundedKiraLifeMessage(
     unsupported,
@@ -82,6 +94,10 @@ assert.equal(classifyKiraLifeGroundingDecision({ safe: true, attributesOwnerObli
 assert.equal(classifyKiraLifeGroundingDecision({ safe: false, attributesOwnerObligation: true }), 'semantic_rejection');
 assert.equal(classifyKiraLifeGroundingDecision({ safe: true }), 'invalid_review');
 assert.equal(classifyKiraLifeGroundingDecision(undefined), 'invalid_review');
+assert.equal(
+    classifyKiraLifeGroundingDecision(parseLLMJson<KiraLifeGroundingDecision>('{invalid-json')),
+    'invalid_review',
+);
 
 assert.equal(isEligibleMemoryInsightSource({ subject: 'user', memoryKind: 'goal', status: 'planned' }), true);
 assert.equal(isEligibleMemoryInsightSource({ subject: 'system', memoryKind: 'episode', tags: ['memory-episode'] }), false);
@@ -204,8 +220,25 @@ const staticFallbackExplanation = buildProactiveSourceExplanation({
     ...insight,
     message: 'Синтетический нейтральный резервный текст',
     sourceMemories: [],
+    webSources: ['https://example.test/rejected-source'],
     generationOutcome: 'fallback',
 });
 assert.match(staticFallbackExplanation, /нейтральный текст без источников/iu);
+assert.doesNotMatch(staticFallbackExplanation, /rejected-source/iu);
+
+const legacyStaticFallbackExplanation = buildProactiveSourceExplanation({
+    ...insight,
+    message: 'Синтетический старый резервный текст',
+    sourceMemories: ['Безопасный резервный текст после отклонения исходного кандидата'],
+    generationOutcome: 'fallback',
+});
+assert.match(legacyStaticFallbackExplanation, /нейтральный текст без источников/iu);
+assert.doesNotMatch(legacyStaticFallbackExplanation, /отправлено само событие/iu);
+
+const malformedLegacyExplanation = buildProactiveSourceExplanation({
+    ...insight,
+    sourceMemories: 'повреждённый синтетический источник' as unknown as string[],
+});
+assert.match(malformedLegacyExplanation, /источник той подсказки не сохранился/iu);
 
 console.log('proactive grounding checks passed');

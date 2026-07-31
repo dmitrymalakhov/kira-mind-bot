@@ -1,6 +1,8 @@
 import type { ConversationReplyContext, MessageHistory, SessionData } from '../types';
 
 const PROACTIVE_SOURCE_QUESTION_RE = /(?:откуда\s+ты\s+(?:это\s+)?(?:взял[ао]?|знаешь)|на\s+основе\s+чего\s+ты\s+(?:это\s+)?(?:написал[ао]?|сказал[ао]?|решил[ао]?)|из\s+какой\s+(?:памяти|записи|подсказки)|какой\s+(?:именно\s+)?факт\s+ты\s+использовал[ао]?|о\s+ком\s+(?:была|эта)\s+подсказка|что\s+ты\s+имел[ао]?\s+в\s+виду\s+в\s+(?:этой\s+)?подсказке|^(?:какую?|какой|какое|какие)\s+(?:ещ[её]\s+)?[\p{L}\p{N}_-]+\??$|^что\s+за\s+[\p{L}\p{N}_-]+\??$|^о\s+ч[её]м\s+ты\??$|^что\s+ты\s+имеешь\s+в\s+виду\??$)/iu;
+const LEGACY_KIRA_LIFE_STATIC_FALLBACK_SOURCE =
+    'Безопасный резервный текст после отклонения исходного кандидата';
 
 export const IMMEDIATE_PROACTIVE_CONTEXT_TTL_MS = 10 * 60 * 1000;
 
@@ -59,7 +61,14 @@ export function resolveProactiveSourceQuestion(params: {
 export function buildProactiveSourceExplanation(
     insight: NonNullable<SessionData['lastProactiveInsight']>,
 ): string {
-    const sources = (insight.sourceMemories ?? [])
+    const sourceMemories = Array.isArray(insight.sourceMemories)
+        ? insight.sourceMemories
+        : [];
+    const hasLegacyStaticFallbackSource = insight.kind === 'kiraLife'
+        && insight.generationOutcome === 'fallback'
+        && sourceMemories.length === 1
+        && sourceMemories[0] === LEGACY_KIRA_LIFE_STATIC_FALLBACK_SOURCE;
+    const sources = (hasLegacyStaticFallbackSource ? [] : sourceMemories)
         .slice(0, 5)
         .map((source, index) => `${index + 1}. ${source}`)
         .join('\n');
