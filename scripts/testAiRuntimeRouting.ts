@@ -9,6 +9,12 @@ process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'test-openai-key';
 process.env.GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'test-gemini-key';
 process.env.ZAI_API_KEY = process.env.ZAI_API_KEY || 'test-zai-key';
 process.env.AI_GEMINI_REQUEST_TIMEOUT_MS = '12345';
+// Фиксированная retry-политика для детерминированных degradation-кейсов:
+// primary + 1 retry + degraded chain. Поведение много-retry проверяется
+// отдельным кейсом ниже.
+process.env.AI_GEMINI_RETRY_MAX_ATTEMPTS = '1';
+process.env.AI_GEMINI_RETRY_BASE_DELAY_MS = '1';
+process.env.AI_GEMINI_RETRY_MAX_DELAY_MS = '1';
 
 interface RecordedCall {
     provider: string;
@@ -105,6 +111,7 @@ async function main() {
     const { createEmbeddingForTask } = await import('../ai/embedding');
     const { createTranscriptionForTask } = await import('../ai/transcription');
     const { openaiClient, geminiClient, zaiClient } = await import('../ai/aiClients');
+    const { geminiProviderAdapter } = await import('../ai/providers/gemini');
     const { aiPresets } = await import('../ai/modelPresets');
 
     const openaiMutableClient = openaiClient as unknown as MutableAiClient;
@@ -133,6 +140,7 @@ async function main() {
     const originalFetch = globalThis.fetch;
     const degradedConsoleLogs: string[] = [];
     let lastTranscriptionStream: { destroyed?: boolean } | null = null;
+    let geminiFileOperationSignal: AbortSignal | null = null;
 
     try {
         console.info = (...args: unknown[]) => {
@@ -197,8 +205,20 @@ async function main() {
         globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
             const url = String(input);
             const parsedBody = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
-            if (url === 'https://generativelanguage.googleapis.com/v1beta/interactions') {
+            if (url === 'https://generativelanguage.googleapis.com/v1/interactions') {
                 assert.ok(init?.signal instanceof AbortSignal, 'Gemini Interactions request must have an abort signal');
+                assert.strictEqual(parsedBody?.store, false, 'Gemini Interactions must disable provider-side storage');
+                if (Array.isArray(parsedBody?.input)
+                    && parsedBody.input.some((part: { type?: string }) => part.type === 'audio')) {
+                    assert.ok(init.signal instanceof AbortSignal, 'Gemini transcription must have one file deadline');
+                    if (geminiFileOperationSignal) {
+                        assert.strictEqual(
+                            init.signal,
+                            geminiFileOperationSignal,
+                            'Gemini transcription inference должна разделять deadline с upload',
+                        );
+                    }
+                }
                 calls.push({
                     provider: 'gemini',
                     method: 'interactions.create',
@@ -217,10 +237,10 @@ async function main() {
                     json: async () => ({
                         id: 'interaction-1',
                         output_text: 'ok',
-                        usage_metadata: {
-                            prompt_token_count: 4,
-                            candidates_token_count: 2,
-                            total_token_count: 6,
+                        usage: {
+                            total_input_tokens: 4,
+                            total_output_tokens: 2,
+                            total_tokens: 6,
                         },
                     }),
                 } as Response;
@@ -253,6 +273,8 @@ async function main() {
             }
 
             if (url === 'https://generativelanguage.googleapis.com/upload/v1beta/files') {
+                assert.ok(init?.signal instanceof AbortSignal);
+                geminiFileOperationSignal = init.signal;
                 calls.push({
                     provider: 'gemini',
                     method: 'files.upload.start',
@@ -276,6 +298,7 @@ async function main() {
             }
 
             if (url === 'https://upload.example/gemini-file-1') {
+                assert.strictEqual(init?.signal, geminiFileOperationSignal);
                 calls.push({
                     provider: 'gemini',
                     method: 'files.upload.finalize',
@@ -302,6 +325,12 @@ async function main() {
             }
 
             if (url === 'https://generativelanguage.googleapis.com/v1beta/files/gemini-file-1') {
+                assert.ok(init?.signal instanceof AbortSignal);
+                assert.notStrictEqual(
+                    init.signal,
+                    geminiFileOperationSignal,
+                    'Gemini cleanup должен иметь независимый recovery deadline',
+                );
                 calls.push({
                     provider: 'gemini',
                     method: 'files.delete',
@@ -345,6 +374,46 @@ async function main() {
             'После смены preset retry не должен повторно обращаться к Gemini',
         );
 
+        // Смена preset после уже использованного retry должна полностью сбросить
+        // состояние старого маршрута. Иначе отказ GLM ошибочно продолжал Gemini chain.
+        calls.length = 0;
+        let geminiCallsBeforeGlmSwitch = 0;
+        geminiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => {
+            calls.push({ provider: 'gemini', method: 'chat.completions.create', body });
+            geminiCallsBeforeGlmSwitch += 1;
+            if (geminiCallsBeforeGlmSwitch === 2) {
+                process.env.AI_MODEL_PRESET = 'glm-full';
+            }
+            throw Object.assign(new Error('Gemini unavailable before GLM switch'), { status: 503 });
+        };
+        zaiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => {
+            calls.push({ provider: 'zai', method: 'chat.completions.create', body });
+            throw Object.assign(new Error('GLM unavailable'), { status: 503 });
+        };
+        await assert.rejects(() => withPreset('gemini-full', async () => {
+            await createChatCompletionForTask('conversation', {
+                messages: [{ role: 'user', content: 'не продолжай старую degradation chain' }],
+            } satisfies ChatParamsWithoutModel);
+        }));
+        assert.deepStrictEqual(
+            calls.map((call) => `${call.provider}:${String(call.body.model)}`),
+            [
+                'gemini:gemini-3.6-flash',
+                'gemini:gemini-3.6-flash',
+                'zai:glm-5.2',
+                'zai:glm-5.2',
+            ],
+            'Новый маршрут не должен наследовать retries/triedModels/lastFailedModel старого preset',
+        );
+        zaiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => {
+            calls.push({ provider: 'zai', method: 'chat.completions.create', body });
+            return chatResult(String(body.model));
+        };
+        geminiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => {
+            calls.push({ provider: 'gemini', method: 'chat.completions.create', body });
+            return chatResult(String(body.model));
+        };
+
         calls.length = 0;
         await withPreset('gpt-balanced', async () => {
             await createChatCompletionForTask('conversation', {
@@ -370,6 +439,7 @@ async function main() {
                 messages: [{ role: 'user', content: 'hello' }],
                 max_completion_tokens: 321,
                 temperature: 0.4,
+                n: 2,
                 store: true,
                 metadata: { trace: 'drop-me' },
                 user: 'drop-me-too',
@@ -380,11 +450,19 @@ async function main() {
             method: 'chat.completions.create',
             body: {
                 messages: [{ role: 'user', content: 'hello' }],
-                temperature: 0.4,
                 max_tokens: 321,
-                model: 'gemini-3-flash-preview',
+                model: 'gemini-3.6-flash',
             },
         });
+        assert.deepStrictEqual(
+            geminiProviderAdapter.normalizeChatParams('gemini-3.1-flash-lite', {
+                messages: [],
+                temperature: 0.4,
+                top_p: 0.8,
+            }),
+            { messages: [], temperature: 0.4, top_p: 0.8 },
+            'Старые Gemini-модели должны сохранять поддерживаемые sampling-параметры',
+        );
 
         calls.length = 0;
         degradedConsoleLogs.length = 0;
@@ -405,7 +483,7 @@ async function main() {
             body: {
                 messages: [{ role: 'user', content: 'classify' }],
                 max_tokens: 64,
-                model: 'gemini-3-flash-preview',
+                model: 'gemini-3.6-flash',
             },
         });
         assert.deepStrictEqual(calls[1], {
@@ -445,7 +523,7 @@ async function main() {
         const originalWebSearchModel: AiModelRef = { ...webSearchModel };
         aiPresets['hybrid-gemini-gpt'].models.webSearchReasoning = {
             provider: 'gemini',
-            model: 'gemini-3-flash-preview',
+            model: 'gemini-3.6-flash',
         };
         try {
             await withPreset('hybrid-gemini-gpt', async () => {
@@ -462,10 +540,11 @@ async function main() {
                 provider: 'gemini',
                 method: 'interactions.create',
                 body: {
-                    url: 'https://generativelanguage.googleapis.com/v1beta/interactions',
+                    url: 'https://generativelanguage.googleapis.com/v1/interactions',
                     method: 'POST',
                     body: {
-                        model: 'gemini-3-flash-preview',
+                        model: 'gemini-3.6-flash',
+                        store: false,
                         input: 'find current docs',
                         tools: [{ type: 'google_search' }],
                     },
@@ -493,10 +572,11 @@ async function main() {
             provider: 'gemini',
             method: 'interactions.create',
             body: {
-                url: 'https://generativelanguage.googleapis.com/v1beta/interactions',
+                url: 'https://generativelanguage.googleapis.com/v1/interactions',
                 method: 'POST',
                 body: {
-                    model: 'gemini-3.5-flash',
+                    model: 'gemini-3.6-flash',
+                    store: false,
                     input: 'find current docs',
                     system_instruction: 'Use fresh web data.',
                     tools: [{ type: 'google_search' }],
@@ -527,21 +607,62 @@ async function main() {
             provider: 'gemini',
             method: 'interactions.create',
             body: {
-                url: 'https://generativelanguage.googleapis.com/v1beta/interactions',
+                url: 'https://generativelanguage.googleapis.com/v1/interactions',
                 method: 'POST',
                 body: {
-                    model: 'gemini-3.5-flash',
+                    model: 'gemini-3.6-flash',
+                    store: false,
                     input: 'find current docs',
                     system_instruction: 'Use fresh web data.',
                     tools: [{ type: 'google_search' }],
                     generation_config: {
-                        temperature: 0.6,
-                        top_p: 0.8,
                         max_output_tokens: 512,
                     },
                 },
             },
         });
+
+        calls.length = 0;
+        const fetchBeforeResponsePresetSwitch = globalThis.fetch;
+        let responsePresetSwitched = false;
+        globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+            const url = String(input);
+            if (url !== 'https://generativelanguage.googleapis.com/v1/interactions') {
+                return fetchBeforeResponsePresetSwitch(input, init);
+            }
+            const parsedBody = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+            calls.push({
+                provider: 'gemini',
+                method: 'interactions.create',
+                body: { url, method: init?.method ?? 'POST', body: parsedBody },
+            });
+            if (!responsePresetSwitched) {
+                responsePresetSwitched = true;
+                process.env.AI_MODEL_PRESET = 'gpt-balanced';
+            }
+            return {
+                ok: false,
+                status: 503,
+                statusText: 'Service Unavailable',
+                headers: new Headers({ 'x-goog-request-id': 'gemini-response-before-switch' }),
+                text: async () => 'temporarily unavailable',
+            } as Response;
+        };
+        try {
+            await withPreset('gemini-full', async () => {
+                await createResponseForTask('webSearchReasoning', {
+                    input: 'refresh response route',
+                    tools: [{ type: 'web_search_preview' }],
+                } satisfies ResponseParamsWithoutModel);
+            });
+        } finally {
+            globalThis.fetch = fetchBeforeResponsePresetSwitch;
+        }
+        assert.deepStrictEqual(
+            calls.map((call) => `${call.provider}:${call.method}`),
+            ['gemini:interactions.create', 'openai:responses.create'],
+            'Responses retry должен перечитать текущий preset и уйти на новый маршрут',
+        );
 
         calls.length = 0;
         await withPreset('glm-balanced', async () => {
@@ -691,34 +812,13 @@ async function main() {
         assert.deepStrictEqual(calls, [
             {
                 provider: 'gemini',
-                method: 'files.upload.start',
-                body: {
-                    url: 'https://generativelanguage.googleapis.com/upload/v1beta/files',
-                    method: 'POST',
-                    body: {
-                        file: {
-                            display_name: '.tmp-test-zai-transcription.ogg',
-                        },
-                    },
-                },
-            },
-            {
-                provider: 'gemini',
-                method: 'files.upload.finalize',
-                body: {
-                    url: 'https://upload.example/gemini-file-1',
-                    method: 'POST',
-                    body: '[binary]',
-                },
-            },
-            {
-                provider: 'gemini',
                 method: 'interactions.create',
                 body: {
-                    url: 'https://generativelanguage.googleapis.com/v1beta/interactions',
+                    url: 'https://generativelanguage.googleapis.com/v1/interactions',
                     method: 'POST',
                     body: {
-                        model: 'gemini-3.5-flash',
+                        model: 'gemini-3.6-flash',
+                        store: false,
                         input: [
                             {
                                 type: 'text',
@@ -726,19 +826,11 @@ async function main() {
                             },
                             {
                                 type: 'audio',
-                                uri: 'gs://gemini-files/audio-1',
+                                data: 'dGVzdA==',
                                 mime_type: 'audio/ogg',
                             },
                         ],
                     },
-                },
-            },
-            {
-                provider: 'gemini',
-                method: 'files.delete',
-                body: {
-                    url: 'https://generativelanguage.googleapis.com/v1beta/files/gemini-file-1',
-                    method: 'DELETE',
                 },
             },
         ]);
@@ -787,11 +879,13 @@ async function main() {
                 body: body as Record<string, unknown>,
             };
             recordCall(recordedCall);
-            if (body.model === 'gemini-3.1-flash-lite') {
+            if (body.model === 'gemini-3.5-flash-lite') {
                 return chatResult(String(body.model));
             }
-            const error = new Error('Gemini temporary failure') as Error & { status?: number };
-            error.status = 503;
+            const error = Object.assign(new Error('Gemini temporary failure'), {
+                status: 503,
+                response: { headers: new Headers({ 'x-goog-request-id': 'gemini-chat-degraded-1' }) },
+            });
             throw error;
         };
         await withPreset('gemini-full', async () => {
@@ -807,16 +901,32 @@ async function main() {
                 'gemini:chat.completions.create',
             ],
         );
-        assert.strictEqual((calls[2] as RecordedCall).body.model, 'gemini-3.1-flash-lite');
+        assert.strictEqual((calls[2] as RecordedCall).body.model, 'gemini-3.5-flash-lite');
         assert.ok(degradedConsoleLogs[0]?.startsWith('[AI DEGRADED] SWITCH | task=conversation'));
-        assert.ok(degradedConsoleLogs[0]?.includes('gemini:gemini-3.5-flash → gemini:gemini-3.1-flash-lite'));
-        assert.ok(degradedConsoleLogs[0]?.includes('failedAttempt=2'));
-        assert.ok(degradedConsoleLogs[0]?.includes('reason=HTTP 503, provider_unavailable, Error, retryable'));
+        assert.ok(degradedConsoleLogs[0]?.includes('gemini:gemini-3.6-flash → gemini:gemini-3.5-flash-lite'));
+        assert.ok(degradedConsoleLogs[0]?.includes('reason=HTTP 503, http_503, provider_unavailable, Error, retryable'));
+        assert.ok(degradedConsoleLogs[0]?.includes('requestId=gemini-chat-degraded-1'));
         assert.ok(degradedConsoleLogs[0]?.includes('traceId='));
         assert.ok(degradedConsoleLogs[1]?.startsWith('[AI DEGRADED] ACTIVE | task=conversation'));
-        assert.ok(degradedConsoleLogs[1]?.includes('model=gemini:gemini-3.1-flash-lite'));
-        assert.ok(degradedConsoleLogs[1]?.includes('attempt=3'));
+        assert.ok(degradedConsoleLogs[1]?.includes('model=gemini:gemini-3.5-flash-lite'));
         assert.ok(degradedConsoleLogs[1]?.includes('latency='));
+
+        calls.length = 0;
+        process.env.AI_GEMINI_RETRY_MAX_ATTEMPTS = '0';
+        try {
+            await withPreset('gemini-full', async () => {
+                await createChatCompletionForTask('conversation', {
+                    messages: [{ role: 'user', content: 'degrade without primary retry' }],
+                } satisfies ChatParamsWithoutModel);
+            });
+        } finally {
+            process.env.AI_GEMINI_RETRY_MAX_ATTEMPTS = '1';
+        }
+        assert.deepStrictEqual(
+            calls.map((call) => (call.body as { model?: string }).model),
+            ['gemini-3.6-flash', 'gemini-3.5-flash-lite'],
+            'AI_GEMINI_RETRY_MAX_ATTEMPTS=0 должен сразу переходить к degradation chain',
+        );
 
         calls.length = 0;
         await withPreset('gemini-full', async () => {
@@ -832,7 +942,7 @@ async function main() {
                 'gemini:chat.completions.create',
             ],
         );
-        assert.strictEqual((calls[2] as RecordedCall).body.model, 'gemini-3.1-flash-lite');
+        assert.strictEqual((calls[2] as RecordedCall).body.model, 'gemini-3.5-flash-lite');
 
         calls.length = 0;
         degradedConsoleLogs.length = 0;
@@ -843,7 +953,7 @@ async function main() {
                 body: body as Record<string, unknown>,
             });
             const error = new Error('Gemini unavailable including lite') as Error & { status?: number };
-            error.status = body.model === 'gemini-3.1-flash-lite' ? 500 : 503;
+            error.status = body.model === 'gemini-3.6-flash' ? 503 : 500;
             throw error;
         };
         await assert.rejects(() => withPreset('gemini-full', async () => {
@@ -851,11 +961,22 @@ async function main() {
                 messages: [{ role: 'user', content: 'test failed degradation' }],
             } satisfies ChatParamsWithoutModel);
         }));
-        assert.strictEqual(calls.length, 3);
-        assert.ok(degradedConsoleLogs[0]?.startsWith('[AI DEGRADED] SWITCH | task=conversation'));
-        assert.ok(degradedConsoleLogs[1]?.startsWith('[AI DEGRADED] FAILED | task=conversation'));
-        assert.ok(degradedConsoleLogs[1]?.includes('model=gemini:gemini-3.1-flash-lite'));
-        assert.ok(degradedConsoleLogs[1]?.includes('reason=HTTP 500, provider_unavailable, Error, retryable'));
+        // primary(3.6-flash, 2 вызова: primary + retry) → degraded chain:
+        // 3.5-flash-lite → 3.1-flash-lite → 2.5-flash-lite, все падают → reject.
+        assert.strictEqual(calls.length, 5);
+        assert.strictEqual((calls[0] as RecordedCall).body.model, 'gemini-3.6-flash');
+        assert.strictEqual((calls[1] as RecordedCall).body.model, 'gemini-3.6-flash');
+        assert.strictEqual((calls[2] as RecordedCall).body.model, 'gemini-3.5-flash-lite');
+        assert.strictEqual((calls[3] as RecordedCall).body.model, 'gemini-3.1-flash-lite');
+        assert.strictEqual((calls[4] as RecordedCall).body.model, 'gemini-2.5-flash-lite');
+        assert.ok(degradedConsoleLogs.some((line) => line.startsWith('[AI DEGRADED] SWITCH | task=conversation')
+            && line.includes('gemini:gemini-3.6-flash → gemini:gemini-3.5-flash-lite')));
+        assert.ok(degradedConsoleLogs.some((line) => line.startsWith('[AI DEGRADED] FAILED | task=conversation')
+            && line.includes('model=gemini:gemini-3.5-flash-lite')));
+        assert.ok(degradedConsoleLogs.some((line) => line.startsWith('[AI DEGRADED] FAILED | task=conversation')
+            && line.includes('model=gemini:gemini-3.1-flash-lite')));
+        assert.ok(degradedConsoleLogs.some((line) => line.startsWith('[AI DEGRADED] FAILED | task=conversation')
+            && line.includes('model=gemini:gemini-2.5-flash-lite')));
         assert.ok(!degradedConsoleLogs.some((line) => line.includes('[AI DEGRADED] ACTIVE')));
         geminiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => {
             const recordedCall: RecordedCall = {
@@ -872,7 +993,7 @@ async function main() {
         globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
             const url = String(input);
             const parsedBody = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
-            if (url === 'https://generativelanguage.googleapis.com/v1beta/interactions') {
+            if (url === 'https://generativelanguage.googleapis.com/v1/interactions') {
                 recordCall({
                     provider: 'gemini',
                     method: 'interactions.create',
@@ -882,7 +1003,7 @@ async function main() {
                         body: parsedBody,
                     },
                 });
-                if (parsedBody?.model === 'gemini-3.1-flash-lite') {
+                if (parsedBody?.model === 'gemini-3.5-flash-lite') {
                     return {
                         ok: true,
                         status: 200,
@@ -919,11 +1040,60 @@ async function main() {
                 'gemini:interactions.create',
             ],
         );
-        assert.strictEqual((calls[2]?.body.body as Record<string, unknown>)?.model, 'gemini-3.1-flash-lite');
+        {
+            const interactionCall = calls[2] as RecordedCall;
+            const interactionBody = interactionCall?.body as { body?: { model?: string } };
+            assert.strictEqual(interactionBody?.body?.model, 'gemini-3.5-flash-lite');
+        }
         assert.ok(degradedConsoleLogs[0]?.startsWith('[AI DEGRADED] SWITCH | task=webSearchReasoning'));
-        assert.ok(degradedConsoleLogs[0]?.includes('gemini:gemini-3.5-flash → gemini:gemini-3.1-flash-lite'));
+        assert.ok(degradedConsoleLogs[0]?.includes('gemini:gemini-3.6-flash → gemini:gemini-3.5-flash-lite'));
         assert.ok(degradedConsoleLogs[1]?.startsWith('[AI DEGRADED] ACTIVE | task=webSearchReasoning'));
-        assert.ok(degradedConsoleLogs[1]?.includes('model=gemini:gemini-3.1-flash-lite'));
+        assert.ok(degradedConsoleLogs[1]?.includes('model=gemini:gemini-3.5-flash-lite'));
+
+        // Responses API (веб-поиск) тоже проходит по полной chain: если
+        // gemini-3.5 и 3.1 flash-lite отказываются, контур доходит до 2.5 flash-lite,
+        // а не падает после первого дна (regression для общего chain-walk helper).
+        calls.length = 0;
+        degradedConsoleLogs.length = 0;
+        globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+            const url = String(input);
+            const parsedBody = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+            if (url === 'https://generativelanguage.googleapis.com/v1/interactions') {
+                recordCall({
+                    provider: 'gemini',
+                    method: 'interactions.create',
+                    body: { url, method: init?.method ?? 'POST', body: parsedBody },
+                });
+                if (parsedBody?.model === 'gemini-2.5-flash-lite') {
+                    return {
+                        ok: true, status: 200, statusText: 'OK',
+                        headers: new Headers({ 'x-goog-request-id': 'gemini-interaction-lite2' }),
+                        json: async () => ({ id: 'interaction-lite2', output_text: 'deepest fallback result' }),
+                    } as Response;
+                }
+                return {
+                    ok: false, status: 503, statusText: 'Service Unavailable',
+                    headers: new Headers({ 'x-goog-request-id': 'gemini-interaction-fail2' }),
+                    text: async () => 'temporarily unavailable',
+                } as Response;
+            }
+            throw new Error(`Unexpected fetch URL in test: ${url}`);
+        };
+        await withPreset('gemini-full', async () => {
+            const result = await createResponseForTask('webSearchReasoning', {
+                input: 'need deep fallback',
+                tools: [{ type: 'web_search_preview' }],
+            } satisfies ResponseParamsWithoutModel);
+            assert.strictEqual(result.output_text, 'deepest fallback result');
+        });
+        assert.strictEqual(calls.length, 5, 'web search должен пройти primary + retry и три lite-модели');
+        assert.strictEqual((calls[2]?.body as { body?: { model?: string } })?.body?.model, 'gemini-3.5-flash-lite');
+        assert.strictEqual((calls[3]?.body as { body?: { model?: string } })?.body?.model, 'gemini-3.1-flash-lite');
+        assert.strictEqual((calls[4]?.body as { body?: { model?: string } })?.body?.model, 'gemini-2.5-flash-lite');
+        assert.ok(degradedConsoleLogs.some((line) => line.startsWith('[AI DEGRADED] SWITCH | task=webSearchReasoning')
+            && line.includes('gemini:gemini-3.1-flash-lite → gemini:gemini-2.5-flash-lite')));
+        assert.ok(degradedConsoleLogs.some((line) => line.startsWith('[AI DEGRADED] ACTIVE | task=webSearchReasoning')
+            && line.includes('model=gemini:gemini-2.5-flash-lite')));
 
         calls.length = 0;
         geminiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => {

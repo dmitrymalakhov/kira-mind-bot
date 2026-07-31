@@ -96,16 +96,16 @@
       "description": "Рекомендуемый гибрид: Gemini берёт основной текст и vision, GPT держит критичную маршрутизацию, web reasoning и fallback.",
       "characteristics": { "quality": "Высокое", "cost": "Средняя", "stability": "Высокая", "gptDependency": "Умеренная" },
       "models": {
-        "defaultText": { "provider": "gemini", "model": "gemini-3-flash-preview" },
+        "defaultText": { "provider": "gemini", "model": "gemini-3.6-flash" },
         "intentClassification": { "provider": "openai", "model": "gpt-5.4-nano" },
         "intentDedup": { "provider": "openai", "model": "gpt-5.4-nano" },
-        "conversation": { "provider": "gemini", "model": "gemini-3-flash-preview" },
+        "conversation": { "provider": "gemini", "model": "gemini-3.6-flash" },
         "memoryExtraction": { "provider": "openai", "model": "gpt-5.4-nano" },
-        "memoryConsolidation": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
-        "messageAnalysis": { "provider": "gemini", "model": "gemini-3-flash-preview" },
+        "memoryConsolidation": { "provider": "gemini", "model": "gemini-3.5-flash-lite" },
+        "messageAnalysis": { "provider": "gemini", "model": "gemini-3.6-flash" },
         "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4-mini" },
         "browserPlanning": { "provider": "openai", "model": "gpt-5.4-nano" },
-        "browserVision": { "provider": "gemini", "model": "gemini-3-flash-preview" },
+        "browserVision": { "provider": "gemini", "model": "gemini-3.6-flash" },
         "embedding": { "provider": "openai", "model": "text-embedding-3-small" },
         "transcription": { "provider": "openai", "model": "whisper-1" }
       }
@@ -116,18 +116,18 @@
       "description": "Полный Gemini-пресет: и генеративные, и сервисные задачи идут через Gemini API без OpenAI-зависимости.",
       "characteristics": { "quality": "Высокое", "cost": "Ниже средней", "stability": "Средняя", "gptDependency": "Нет" },
       "models": {
-        "defaultText": { "provider": "gemini", "model": "gemini-3.5-flash" },
-        "intentClassification": { "provider": "gemini", "model": "gemini-3.5-flash" },
-        "intentDedup": { "provider": "gemini", "model": "gemini-3.5-flash" },
-        "conversation": { "provider": "gemini", "model": "gemini-3.5-flash" },
-        "memoryExtraction": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
-        "memoryConsolidation": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
-        "messageAnalysis": { "provider": "gemini", "model": "gemini-3.1-flash-lite" },
-        "webSearchReasoning": { "provider": "gemini", "model": "gemini-3.5-flash" },
-        "browserPlanning": { "provider": "gemini", "model": "gemini-3.5-flash" },
-        "browserVision": { "provider": "gemini", "model": "gemini-3.5-flash" },
+        "defaultText": { "provider": "gemini", "model": "gemini-3.6-flash" },
+        "intentClassification": { "provider": "gemini", "model": "gemini-3.6-flash" },
+        "intentDedup": { "provider": "gemini", "model": "gemini-3.6-flash" },
+        "conversation": { "provider": "gemini", "model": "gemini-3.6-flash" },
+        "memoryExtraction": { "provider": "gemini", "model": "gemini-3.5-flash-lite" },
+        "memoryConsolidation": { "provider": "gemini", "model": "gemini-3.5-flash-lite" },
+        "messageAnalysis": { "provider": "gemini", "model": "gemini-3.5-flash-lite" },
+        "webSearchReasoning": { "provider": "gemini", "model": "gemini-3.6-flash" },
+        "browserPlanning": { "provider": "gemini", "model": "gemini-3.6-flash" },
+        "browserVision": { "provider": "gemini", "model": "gemini-3.6-flash" },
         "embedding": { "provider": "gemini", "model": "gemini-embedding-2" },
-        "transcription": { "provider": "gemini", "model": "gemini-3.5-flash" }
+        "transcription": { "provider": "gemini", "model": "gemini-3.6-flash" }
       }
     },
     "glm-full": {

@@ -48,9 +48,16 @@
   - runtime пишет только дешёвые event-log записи в `ai_usage_logs`;
   - все агрегации, breakdown и time-series считаются только в admin backend по запросу UI.
 - True-full AI preset-ы сохраняют провайдера при аварийной деградации:
-  - после исчерпанного управляемого runtime retry тяжёлая Gemini-модель может перейти на lite-модель из `ai/degraded-models.json`;
+  - после исчерпанного управляемого runtime retry тяжёлая Gemini-модель переходит по same-provider цепочке деградации (`gemini-3.5-flash-lite` → `gemini-3.1-flash-lite` → `gemini-2.5-flash-lite`), а не на одну lite-модель; цепочка упорядочена, и каждое дно исключает уже испробованные модели, чтобы не зацикливаться и доходить до самого дешёвого дна;
+  - провайдер-специфичная политика (retry, same-provider degradation chain, парсинг идентичности ошибки вроде `x-goog-request-id`) обязана жить только в контракте провайдера (`AiProviderAdapter.getRetryPolicy` / `getSameProviderDegradationChain` / `parseErrorIdentities`), без дублирующего preset/JSON-реестра; admin availability проверяет пользовательские маршруты и credentials, а внутреннюю policy защищают contract-тесты; при добавлении нового провайдера (включая локальные модели) общий код не правится — policy реализуется в файле провайдера;
+  - policy-методы вызываются с receiver адаптера, а общий runtime валидирует их результат: same-provider chain не принимает модель другого провайдера и сканируется до первого ещё не опробованного кандидата;
+  - preset перечитывается между retry; при смене provider/model состояние предыдущего маршрута (`retries`, `triedModels`, последняя упавшая модель) сбрасывается целиком и не может продолжить старую degradation chain;
+  - cross-provider fallback на GPT (`fallback-models.json`) остаётся runtime-политикой последнего рубежа и применяется только к пресетам, не являющимся true-full; true-full пресеты принципиально provider-pure и не падают на GPT;
+  - retry primary включается провайдерной политикой только для true-full пресетов (без cross-provider подушки), и её `maxAttempts` авторитетен даже при значении `0`; для гибридов и GPT-пресетов остаётся базовый 1 retry + cross-provider fallback, чтобы не менять их поведение;
   - provider SDK не должен выполнять скрытые retry поверх runtime retry-flow;
   - Gemini SDK, прямые HTTP-вызовы и ожидание semaphore slot используют ограниченные timeout-ы, а file operations имеют отдельный увеличенный timeout;
+  - Gemini Interactions вызывается через стабильный `/v1` с `store: false`, а usage читается из полей `usage.total_*`; для моделей 3.5/3.6 deprecated sampling-параметры (`temperature`, `top_p`, `top_k`) и OpenAI `n` (неподдерживаемый multi-candidate режим) должны удаляться провайдерным адаптером до HTTP-вызова;
+  - file-backed transcription не использует model degradation chain: аудио до 12 MiB передаётся inline, крупное — через Files API; чтение/upload и inference ограничены единым deadline, удаление remote-файла получает короткое recovery-окно, допускается максимум один retry, а timeout не повторяется;
   - фактическое переключение модели обязательно логируется отдельным событием `[AI DEGRADED]` с безопасной диагностикой причины.
 - Reminder-flows, которые продолжаются следующим сообщением пользователя после callback-кнопки, считаются context-critical и должны переживать отдельные Telegram updates через session storage.
 - Повтор напоминания обязан вычислять время строго позже текущего момента:

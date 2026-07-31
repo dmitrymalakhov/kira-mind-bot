@@ -6,6 +6,10 @@ process.env.KIRA_BOT_TOKEN = process.env.KIRA_BOT_TOKEN || 'test-token';
 process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'test-openai-key';
 process.env.GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'test-gemini-key';
 process.env.ZAI_API_KEY = process.env.ZAI_API_KEY || 'test-zai-key';
+// Детерминированная retry-политика для кейсов gemini-full: primary + 1 retry.
+process.env.AI_GEMINI_RETRY_MAX_ATTEMPTS = '1';
+process.env.AI_GEMINI_RETRY_BASE_DELAY_MS = '1';
+process.env.AI_GEMINI_RETRY_MAX_DELAY_MS = '1';
 
 async function withPreset<T>(preset: string, fn: () => Promise<T>): Promise<T> {
   const previous = process.env.AI_MODEL_PRESET;
@@ -27,6 +31,7 @@ async function main() {
   const { createEmbeddingForTask } = await import('../ai/embedding');
   const { createTranscriptionForTask } = await import('../ai/transcription');
   const { openaiClient, geminiClient, zaiClient } = await import('../ai/aiClients');
+  const { getAiProviderAdapter } = await import('../ai/providers/registry');
   const aiUsageLogService = await import('../services/aiUsageLogService');
 
   const loggedPayloads: Array<Record<string, unknown>> = [];
@@ -63,6 +68,8 @@ async function main() {
   const originalAudio = openaiMutableClient.audio;
   const hadZaiAudio = Object.prototype.hasOwnProperty.call(zaiMutableClient, 'audio');
   const originalZaiAudio = zaiMutableClient.audio;
+  const geminiAdapter = getAiProviderAdapter('gemini');
+  const originalGeminiTranscription = geminiAdapter.createTranscription;
 
   try {
     aiUsageLogService.logAiUsage = async (payload) => {
@@ -185,10 +192,10 @@ async function main() {
         json: async () => ({
           id: 'interaction-1',
           output_text: 'ok',
-          usage_metadata: {
-            prompt_token_count: 4,
-            candidates_token_count: 2,
-            total_token_count: 6,
+          usage: {
+            total_input_tokens: 4,
+            total_output_tokens: 2,
+            total_tokens: 6,
           },
         }),
       } as Response;
@@ -235,6 +242,58 @@ async function main() {
       [
         { operation: 'response', success: true, stage: 'primary', inputTokens: 4, outputTokens: 2 },
       ],
+    );
+
+    let degradedJsonCalls = 0;
+    geminiMutableClient.chat.completions.create = async (body: Record<string, unknown>) => {
+      degradedJsonCalls += 1;
+      if (body.model === 'gemini-3.6-flash') {
+        throw Object.assign(new Error('Gemini heavy 503'), {
+          status: 503,
+          response: { headers: new Headers({ 'x-goog-request-id': `gem-json-${degradedJsonCalls}` }) },
+        });
+      }
+      return {
+        id: 'chat-gemini-json-invalid-degraded',
+        object: 'chat.completion',
+        created: 0,
+        model: body.model,
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '{invalid json' } }],
+        usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+      };
+    };
+    loggedPayloads.length = 0;
+    await withPreset('gemini-full', async () => {
+      const result = await createJsonChatCompletionForTask<{ ok: boolean }>('conversation', {
+        messages: [{ role: 'user', content: 'invalid json after degradation' }],
+      });
+      assert.strictEqual(result, null);
+    });
+    assert.deepStrictEqual(
+      loggedPayloads.slice(-2).map((item) => ({
+        model: item.model,
+        stage: item.stage,
+        attempt: item.attempt,
+        success: item.success,
+        errorCategory: item.errorCategory,
+      })),
+      [
+        {
+          model: 'gemini-3.5-flash-lite',
+          stage: 'fallback',
+          attempt: 3,
+          success: true,
+          errorCategory: undefined,
+        },
+        {
+          model: 'gemini-3.5-flash-lite',
+          stage: 'fallback',
+          attempt: 3,
+          success: false,
+          errorCategory: 'invalid_response',
+        },
+      ],
+      'JSON resolution должен логировать фактическую degraded-модель и попытку',
     );
 
     loggedPayloads.length = 0;
@@ -372,7 +431,7 @@ async function main() {
       id: 'chat-gemini-json-invalid-full',
       object: 'chat.completion',
       created: 0,
-      model: 'gemini-3.5-flash',
+      model: 'gemini-3.6-flash',
       choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '{invalid json' } }],
       usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
     });
@@ -533,24 +592,19 @@ async function main() {
     });
     globalThis.setTimeout = originalSetTimeout;
 
-    assert.strictEqual(geminiFullAttempts, 3);
+    // gemini-full: primary + retry (baseline 1) + same-provider degradation chain
+    // (gemini-3.5-flash-lite → 3.1-flash-lite → 2.5-flash-lite), все падают → reject.
+    // Контракт: ни одного GPT-вызова (cross-provider fallback запрещён для true-full).
     assert.strictEqual(geminiFullOpenAiCalls, 0);
+    assert.ok(geminiFullAttempts >= 3, 'gemini-full должен сделать минимум primary + retry + degradation');
     assert.strictEqual(scheduledRetryDelays.length, 1);
     assert.ok(scheduledRetryDelays[0] >= 1);
-    assert.deepStrictEqual(
-      loggedPayloads.map((item) => ({
-        stage: item.stage,
-        attempt: item.attempt,
-        success: item.success,
-        errorStatus: item.errorStatus,
-        fallbackUsed: item.fallbackUsed,
-      })),
-      [
-        { stage: 'primary', attempt: 1, success: false, errorStatus: 503, fallbackUsed: false },
-        { stage: 'retry', attempt: 2, success: false, errorStatus: 503, fallbackUsed: false },
-        { stage: 'fallback', attempt: 3, success: false, errorStatus: 503, fallbackUsed: true },
-      ],
+    assert.ok(
+      loggedPayloads.every((item) => item.provider === 'gemini'),
+      'Все попытки gemini-full должны идти через Gemini без OpenAI',
     );
+    assert.strictEqual(loggedPayloads.at(-1)?.success, false);
+    assert.strictEqual(loggedPayloads.at(-1)?.fallbackUsed, true);
 
     for (const status of [400, 401, 403]) {
       let protectedAttempts = 0;
@@ -656,6 +710,77 @@ async function main() {
         { stage: 'fallback', attempt: 3, success: true },
       ],
     );
+
+    let transcriptionRouteSwitchGeminiCalls = 0;
+    let transcriptionRouteSwitchOpenAiCalls = 0;
+    geminiAdapter.createTranscription = async () => {
+      transcriptionRouteSwitchGeminiCalls += 1;
+      process.env.AI_MODEL_PRESET = 'glm-balanced';
+      throw Object.assign(new Error('Gemini transcription 503 before preset switch'), { status: 503 });
+    };
+    openaiMutableClient.audio = {
+      transcriptions: {
+        create: async () => {
+          transcriptionRouteSwitchOpenAiCalls += 1;
+          return 'decoded after preset switch';
+        },
+      },
+    };
+    const tempSwitchAudioPath = path.join(process.cwd(), '.tmp-test-ai-usage-transcription-switch.ogg');
+    fs.writeFileSync(tempSwitchAudioPath, 'test');
+    try {
+      await withPreset('gemini-full', async () => {
+        await createTranscriptionForTask(tempSwitchAudioPath);
+      });
+    } finally {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      if (fs.existsSync(tempSwitchAudioPath)) fs.unlinkSync(tempSwitchAudioPath);
+    }
+    assert.strictEqual(transcriptionRouteSwitchGeminiCalls, 1);
+    assert.strictEqual(transcriptionRouteSwitchOpenAiCalls, 1);
+
+    let boundedGeminiTranscriptionAttempts = 0;
+    geminiAdapter.createTranscription = async () => {
+      boundedGeminiTranscriptionAttempts += 1;
+      throw Object.assign(new Error('Gemini transcription remains unavailable'), { status: 503 });
+    };
+    const tempBoundedAudioPath = path.join(process.cwd(), '.tmp-test-ai-usage-transcription-bounded.ogg');
+    fs.writeFileSync(tempBoundedAudioPath, 'test');
+    try {
+      await assert.rejects(() => withPreset('gemini-full', async () => {
+        await createTranscriptionForTask(tempBoundedAudioPath);
+      }));
+    } finally {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      if (fs.existsSync(tempBoundedAudioPath)) fs.unlinkSync(tempBoundedAudioPath);
+    }
+    assert.strictEqual(
+      boundedGeminiTranscriptionAttempts,
+      2,
+      'File-backed transcription должна ограничиваться primary + одним retry',
+    );
+
+    let timedOutGeminiTranscriptionAttempts = 0;
+    geminiAdapter.createTranscription = async () => {
+      timedOutGeminiTranscriptionAttempts += 1;
+      throw Object.assign(new Error('Gemini file operation timed out'), { name: 'TimeoutError' });
+    };
+    const tempTimedOutAudioPath = path.join(process.cwd(), '.tmp-test-ai-usage-transcription-timeout.ogg');
+    fs.writeFileSync(tempTimedOutAudioPath, 'test');
+    try {
+      await assert.rejects(() => withPreset('gemini-full', async () => {
+        await createTranscriptionForTask(tempTimedOutAudioPath);
+      }));
+    } finally {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      if (fs.existsSync(tempTimedOutAudioPath)) fs.unlinkSync(tempTimedOutAudioPath);
+    }
+    assert.strictEqual(
+      timedOutGeminiTranscriptionAttempts,
+      1,
+      'Истёкший файловый deadline не должен запускать ещё одну долгую попытку',
+    );
+    geminiAdapter.createTranscription = originalGeminiTranscription;
   } finally {
     aiUsageLogService.logAiUsage = originalLogAiUsage;
     console.info = originalConsoleInfo;
@@ -683,6 +808,7 @@ async function main() {
     } else {
       delete zaiMutableClient.audio;
     }
+    geminiAdapter.createTranscription = originalGeminiTranscription;
     if (originalGeminiRetryBaseDelay === undefined) {
       delete process.env.AI_GEMINI_RETRY_BASE_DELAY_MS;
     } else {

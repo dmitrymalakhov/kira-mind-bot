@@ -485,8 +485,14 @@ make remote-deploy-admin SERVER_IP=<ip>
 |------------|--------------|
 | `OPENROUTER_API_KEY` | OpenRouter как дополнительный AI provider для preset-ов |
 | `GEMINI_API_KEY` | Gemini как дополнительный AI provider для preset-ов |
-| `AI_GEMINI_MAX_CONCURRENT` | Максимум одновременных Gemini API-запросов; по умолчанию `2`, чтобы не перегружать capacity провайдера |
+| `AI_GEMINI_MAX_CONCURRENT` | Максимум одновременных Gemini API-запросов; по умолчанию `8` |
 | `AI_GEMINI_MAX_QUEUE` | Максимум ожидающих Gemini API-запросов; по умолчанию `100`, после чего включается контролируемая деградация |
+| `AI_GEMINI_QUEUE_TIMEOUT_MS` | Максимальное ожидание слота в очереди Gemini; по умолчанию `20000` мс |
+| `AI_GEMINI_REQUEST_TIMEOUT_MS` | Timeout обычного Gemini-запроса; по умолчанию `30000` мс |
+| `AI_GEMINI_FILE_TIMEOUT_MS` | Общий timeout чтения/upload и inference Gemini; по умолчанию `300000` мс; аудио до 12 MiB передаётся inline, cleanup крупного remote-файла после timeout получает отдельные 5 секунд, транскрибация не повторяется после timeout |
+| `AI_GEMINI_RETRY_MAX_ATTEMPTS` | Максимум runtime retry для Gemini true-full; по умолчанию `3`, значение `0` отключает retry |
+| `AI_GEMINI_RETRY_BASE_DELAY_MS` | Начальная задержка exponential backoff; по умолчанию `1000` мс |
+| `AI_GEMINI_RETRY_MAX_DELAY_MS` | Верхняя граница backoff; по умолчанию `15000` мс |
 | `MEMORY_EMBEDDING_PROFILE` | Runtime override профиля памяти; обычно оставляйте системный `stable-1536` |
 | `ZAI_API_KEY` | Z.ai / GLM как дополнительный AI provider для preset-ов |
 | `GOOGLE_MAPS_API_KEY` | Карты, адреса, маршруты, места рядом |

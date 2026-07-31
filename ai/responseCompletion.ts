@@ -1,4 +1,4 @@
-import { resolveModelForTaskAsync } from './modelResolver';
+import { resolveModelForTaskAsync, resolveModelForTaskFreshAsync } from './modelResolver';
 import type { AiModelRef, AiTaskKey } from './modelPresets';
 import { getAiProviderAdapter } from './providers/registry';
 import type {
@@ -6,12 +6,26 @@ import type {
     ResponseResult,
 } from './providers/types';
 import { logAiUsage } from '../services/aiUsageLogService';
-import { buildSafeAiErrorLog, classifyAiError, createAiExecutionTrace, type AiExecutionStage } from './errorDiagnostics';
-import { allowsCrossProviderFallback, errorToMessage, getSameProviderDegradedModel, getTaskFallbackModel } from './runtimeSupport';
-import { logDegradedFailure, logDegradedStart, logDegradedSuccess } from './degradedLogging';
+import { classifyAiErrorForProvider, buildSafeAiErrorLogForProvider, createAiExecutionTrace, type AiExecutionStage } from './errorDiagnostics';
+import { allowsCrossProviderFallback, errorToMessage, getTaskFallbackModel } from './runtimeSupport';
+import { resolveRetryPolicy } from './providers/policyDefaults';
+import { runSameProviderDegradationChain } from './executionPolicy';
+
+const MAX_PRESET_REFRESHES_PER_REQUEST = 3;
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function recordAiUsage(payload: Parameters<typeof logAiUsage>[0]): void {
     void logAiUsage(payload);
+}
+
+type ErrorIdentityParser = (error: unknown) => { providerRequestId?: string };
+
+function getErrorIdentityParser(modelRef: AiModelRef): ErrorIdentityParser | undefined {
+    const adapter = getAiProviderAdapter(modelRef.provider);
+    return adapter.parseErrorIdentities?.bind(adapter);
 }
 
 function getUsageTokens(result: ResponseResult): {
@@ -44,6 +58,7 @@ async function createResponseWithModel(
     attempt: number,
     stage: AiExecutionStage,
     originalError?: unknown,
+    originalErrorParser?: ErrorIdentityParser,
 ): Promise<ResponseResult> {
     const startedAt = Date.now();
     const providerAdapter = getAiProviderAdapter(modelRef.provider);
@@ -70,7 +85,8 @@ async function createResponseWithModel(
 
         return result;
     } catch (error) {
-        const diagnostics = classifyAiError(error);
+        const parseErrorIdentities = providerAdapter.parseErrorIdentities?.bind(providerAdapter);
+        const diagnostics = classifyAiErrorForProvider(error, parseErrorIdentities);
         recordAiUsage({
             taskKey,
             provider: modelRef.provider,
@@ -97,8 +113,8 @@ async function createResponseWithModel(
                 taskKey,
                 traceId,
                 fallbackModel: modelRef,
-                originalError: buildSafeAiErrorLog(originalError),
-                fallbackError: buildSafeAiErrorLog(error),
+                originalError: buildSafeAiErrorLogForProvider(originalError, originalErrorParser),
+                fallbackError: buildSafeAiErrorLogForProvider(error, parseErrorIdentities),
             });
         }
         throw error;
@@ -109,70 +125,133 @@ export async function createResponseForTask(
     taskKey: AiTaskKey,
     params: ResponseCreateParams,
 ): Promise<ResponseResult> {
-    const { presetName, modelRef } = await resolveModelForTaskAsync(taskKey);
+    let route = await resolveModelForTaskAsync(taskKey);
     const trace = createAiExecutionTrace();
 
-    try {
-        return await createResponseWithModel(taskKey, params, presetName, modelRef, trace.traceId, 1, 'primary');
-    } catch (error) {
-        const diagnostics = classifyAiError(error);
+    let attempt = 1;
+    let primaryRetriesUsed = 0;
+    let presetRefreshCount = 0;
+    // Модели, уже испробованные в same-provider degradation chain.
+    const triedModels = new Set<string>([route.modelRef.model]);
 
-        if (diagnostics.retryable) {
-            try {
-                return await createResponseWithModel(taskKey, params, presetName, modelRef, trace.traceId, 2, 'retry');
-            } catch (retryError) {
-                const retryDiagnostics = classifyAiError(retryError);
-                if (!allowsCrossProviderFallback(presetName)) {
-                    const degradedModel = getSameProviderDegradedModel(presetName, modelRef, retryDiagnostics.retryable);
-                    if (!degradedModel) throw retryError;
-                    const logContext = {
-                        taskKey,
-                        traceId: trace.traceId,
-                        previousModel: modelRef,
-                        degradedModel,
-                        attempt: 3,
-                    };
-                    logDegradedStart(logContext, retryError);
-                    const startedAt = Date.now();
-                    let result: ResponseResult;
-                    try {
-                        result = await createResponseWithModel(
-                            taskKey,
-                            params,
-                            presetName,
-                            degradedModel,
-                            trace.traceId,
-                            3,
-                            'fallback',
-                        );
-                    } catch (error) {
-                        logDegradedFailure(logContext, error, Date.now() - startedAt);
-                        throw error;
-                    }
-                    logDegradedSuccess(logContext, Date.now() - startedAt);
-                    return result;
-                }
+    const switchToCurrentRoute = async (): Promise<boolean> => {
+        const currentRoute = await resolveModelForTaskFreshAsync(taskKey);
+        if (currentRoute.presetName === route.presetName
+            && currentRoute.modelRef.provider === route.modelRef.provider
+            && currentRoute.modelRef.model === route.modelRef.model) {
+            return false;
+        }
+        if (presetRefreshCount >= MAX_PRESET_REFRESHES_PER_REQUEST) {
+            throw new Error(`AI preset changed too many times during request: ${taskKey}`);
+        }
+        route = currentRoute;
+        primaryRetriesUsed = 0;
+        triedModels.clear();
+        triedModels.add(route.modelRef.model);
+        attempt += 1;
+        presetRefreshCount += 1;
+        return true;
+    };
+
+    while (true) {
+        try {
+            return await createResponseWithModel(
+                taskKey,
+                params,
+                route.presetName,
+                route.modelRef,
+                trace.traceId,
+                attempt,
+                attempt === 1 ? 'primary' : 'retry',
+            );
+        } catch (error) {
+            const parseErrorIdentities = getErrorIdentityParser(route.modelRef);
+            const diagnostics = classifyAiErrorForProvider(error, parseErrorIdentities);
+
+            // Non-retryable: либо проброс (true-full), либо cross-provider fallback.
+            if (!diagnostics.retryable) {
+                if (!allowsCrossProviderFallback(route.presetName)) throw error;
                 const fallbackModel = getTaskFallbackModel(taskKey);
                 console.warn('[AI responses fallback]', {
                     taskKey,
                     traceId: trace.traceId,
                     fallbackModel,
-                    originalError: buildSafeAiErrorLog(retryError),
+                    originalError: buildSafeAiErrorLogForProvider(error, parseErrorIdentities),
                 });
-                return createResponseWithModel(taskKey, params, presetName, fallbackModel, trace.traceId, 3, 'fallback', retryError);
+                return createResponseWithModel(
+                    taskKey,
+                    params,
+                    route.presetName,
+                    fallbackModel,
+                    trace.traceId,
+                    attempt + 1,
+                    'fallback',
+                    error,
+                    parseErrorIdentities,
+                );
             }
-        }
 
-        if (!allowsCrossProviderFallback(presetName)) {
-            throw error;
+            if (await switchToCurrentRoute()) continue;
+
+            const providerAdapter = getAiProviderAdapter(route.modelRef.provider);
+            const policy = allowsCrossProviderFallback(route.presetName)
+                ? resolveRetryPolicy(undefined)
+                : resolveRetryPolicy(providerAdapter.getRetryPolicy, providerAdapter);
+
+            // Retry primary. Базовое поведение — 1 повтор для всех пресетов (legacy).
+            const baselineRetries = 1;
+            // Включённая policy является авторитетной, в том числе при нуле.
+            const maxPrimaryRetries = policy.enabled ? policy.maxAttempts : baselineRetries;
+            const primaryRetriesRemaining = Math.max(0, maxPrimaryRetries - primaryRetriesUsed);
+            if (primaryRetriesRemaining > 0) {
+                if (policy.enabled) await sleep(policy.getDelayMs(primaryRetriesUsed + 1));
+                if (await switchToCurrentRoute()) continue;
+                primaryRetriesUsed += 1;
+                attempt += 1;
+                continue;
+            }
+
+            // Попытки primary исчерпаны → same-provider degradation chain (true-full)
+            // либо cross-provider fallback на GPT (остальные пресеты).
+            if (!allowsCrossProviderFallback(route.presetName)) {
+                const { result } = await runSameProviderDegradationChain<ResponseResult>(
+                    route.presetName,
+                    route.modelRef,
+                    triedModels,
+                    attempt,
+                    error,
+                    { taskKey, traceId: trace.traceId, previousModel: route.modelRef },
+                    (degradedModel, degradedAttempt) => createResponseWithModel(
+                        taskKey,
+                        params,
+                        route.presetName,
+                        degradedModel,
+                        trace.traceId,
+                        degradedAttempt,
+                        'fallback',
+                    ),
+                );
+                return result;
+            }
+
+            const fallbackModel = getTaskFallbackModel(taskKey);
+            console.warn('[AI responses fallback]', {
+                taskKey,
+                traceId: trace.traceId,
+                fallbackModel,
+                originalError: buildSafeAiErrorLogForProvider(error, parseErrorIdentities),
+            });
+            return createResponseWithModel(
+                taskKey,
+                params,
+                route.presetName,
+                fallbackModel,
+                trace.traceId,
+                attempt + 1,
+                'fallback',
+                error,
+                parseErrorIdentities,
+            );
         }
-        const fallbackModel = getTaskFallbackModel(taskKey);
-        console.warn('[AI responses fallback]', {
-            taskKey,
-            traceId: trace.traceId,
-            fallbackModel,
-            originalError: buildSafeAiErrorLog(error),
-        });
-        return createResponseWithModel(taskKey, params, presetName, fallbackModel, trace.traceId, 2, 'fallback', error);
     }
 }
