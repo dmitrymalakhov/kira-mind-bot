@@ -333,7 +333,10 @@ function pruneLastProactiveInsight(
     if (!insight) return undefined;
     const ttlMs = 3 * 24 * 60 * 60 * 1000;
     if (!insight.createdAt || now - insight.createdAt > ttlMs) return undefined;
-    if (!Array.isArray(insight.sourceMemories) || insight.sourceMemories.length === 0) return undefined;
+    const hasSources = Array.isArray(insight.sourceMemories) && insight.sourceMemories.length > 0;
+    const isSourceFreeKiraLifeFallback = insight.kind === 'kiraLife'
+        && insight.generationOutcome === 'fallback';
+    if (!hasSources && !isSourceFreeKiraLifeFallback) return undefined;
     return insight;
 }
 
