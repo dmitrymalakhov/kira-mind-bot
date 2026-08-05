@@ -811,8 +811,10 @@ async function analyzeBatch(
         const sessionToAnalyze = sessions[sessions.length - 1];
         const emitDaytimeReflection = async (): Promise<void> => {
             const currentMessageIds = sessionToAnalyze
+                .filter(message => !message.isOwn)
                 .map(message => message.messageId)
                 .filter((id): id is number => Number.isInteger(id));
+            if (currentMessageIds.length === 0) return;
             await sendDaytimeReflection(bot, { chatId, currentMessageIds }).catch(error => {
                 console.error(`[daytime-reflection] failed for "${buf.chatTitle}":`, error);
             });

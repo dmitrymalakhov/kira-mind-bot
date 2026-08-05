@@ -8,6 +8,7 @@ import {
     InboxThreadCandidate,
     normalizeLLMItems,
     selectDaytimeContext,
+    selectIncomingDaytimeFocusIds,
     sendDaytimeReflection,
 } from "../services/inboxGuardianScheduler";
 import { StoredMessage } from "../stores/MessageStore";
@@ -204,6 +205,20 @@ describe("Inbox Guardian reflection", () => {
 
         assert.equal(selected.length, 13);
         assert.ok(selected.some(item => item.id === focused.id));
+    });
+
+    test("daytime reflection only accepts incoming messages as its new fragment", () => {
+        const incoming = message(301, 2);
+        const outgoing = { ...message(302, 1), isOwn: true };
+
+        assert.deepEqual(
+            [...selectIncomingDaytimeFocusIds([outgoing, incoming], [incoming.id, outgoing.id])],
+            [incoming.id],
+        );
+        assert.deepEqual(
+            [...selectIncomingDaytimeFocusIds([outgoing, incoming], [outgoing.id])],
+            [],
+        );
     });
 
     test("daytime reflection can be disabled independently", async () => {
