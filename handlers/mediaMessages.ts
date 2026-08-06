@@ -4,6 +4,7 @@ import { processMessage } from "../orchestrator";
 import { addToHistory } from "../utils/history";
 import { saveRemindersFromResult } from "./shared";
 import { getBotGenderedText } from "../persona";
+import { getForwardedMessageInfo } from "../utils/forwardedMessage";
 
 // ── Обобщённый обработчик для документов и аудиофайлов ──────
 
@@ -14,6 +15,18 @@ async function handleCaptionedMedia(
     fallbackResponse: string,
 ): Promise<void> {
     const caption = ctx.message?.caption || "";
+
+    const forwarded = getForwardedMessageInfo(ctx.message);
+    if (forwarded.isForwarded) {
+        await addToHistory(ctx, 'user', `[Пересланное сообщение от ${forwarded.source}]`, {
+            turn: {
+                userText: 'Пересланное сообщение',
+                isForwardOnly: true,
+                forwardContext: { sender: forwarded.source, text: caption || `[${historyLabel}]` },
+            },
+        });
+        return;
+    }
 
     await addToHistory(ctx, 'user', `[${historyLabel}]${caption ? ` с подписью: "${caption}"` : ''}`);
     await ctx.api.sendChatAction(ctx.chat!.id, "typing");

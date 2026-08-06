@@ -3,6 +3,7 @@ import { initTelegramClient } from '../services/telegram';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { getActivePresetNameAsync } from '../ai/modelResolver';
 import { config } from '../config';
+import { getGramJsForwardSource } from './forwardedMessage';
 import { parseLLMJson } from '../utils';
 import type { MemoryStatus } from '../types';
 import { filterUserFactsForThirdPartyEvents } from './factAttributionFilter';
@@ -64,9 +65,15 @@ export function formatConversation(
         const text = msg.message?.trim();
         if (!text) continue;
         const fromId = msg.fromId && 'userId' in msg.fromId ? String(msg.fromId.userId) : '';
-        // msg.out надёжнее fromId: в личных чатах fromId для собственных сообщений бывает null
-        const isOwn = msg.out || fromId === ownerId;
-        const sender = isOwn ? 'Я' : contactName;
+        // Telegram помечает исходящий forward как out=true, хотя текст
+        // принадлежит автору исходного сообщения. Forward никогда не должен
+        // становиться репликой владельца или доказательством его факта.
+        const isForwarded = Boolean((msg as Api.Message & { fwdFrom?: unknown }).fwdFrom);
+        const carrierIsOwn = Boolean(msg.out || fromId === ownerId);
+        const isOwn = !isForwarded && carrierIsOwn;
+        const sender = isForwarded
+            ? `${carrierIsOwn ? 'Я' : contactName} (переслал сообщение от ${getGramJsForwardSource((msg as Api.Message & { fwdFrom?: unknown }).fwdFrom)})`
+            : isOwn ? 'Я' : contactName;
         const date = new Date((msg.date || 0) * 1000).toLocaleString('ru-RU');
         lines.push(`[${date}] ${sender}: ${text}`);
     }
@@ -102,6 +109,18 @@ export interface ExtractedFactAboutUser {
     predicate?: string;
     /** Объект того же атомарного утверждения, согласованный с content. */
     object?: string;
+}
+
+/** Forward-only evidence cannot establish a fact about the owner or contact. */
+export function isForwardOnlyEvidence(evidence?: string): boolean {
+    const lines = String(evidence || '')
+        .split(/\r?\n/u)
+        .map(line => line.trim())
+        .filter(Boolean);
+    if (lines.length === 0) return false;
+
+    const forwarded = lines.filter(line => /переслал сообщение от|пересланное сообщение/iu.test(line));
+    return forwarded.length > 0 && forwarded.length === lines.length;
 }
 
 export type StudyChatAnalysisProgress =
@@ -353,6 +372,7 @@ function buildUserFactsPrompt(
 1. Строки "[дата] Я: ..." — что ${ownerName} говорит о себе напрямую
 2. Строки "[дата] ${contactName}: ..." — когда контакт говорит о ${ownerName} или обращается к нему
    Примеры: "ты всегда задерживаешься", "${ownerName}, ты же программист?", "ты столько работаешь"
+3. Строки с пометкой "переслал сообщение от ..." — чужой пересланный материал; используй его только для понимания соседних реплик и никогда как доказательство факта о ${ownerName}
 
 Имена/обращения к ${ownerName}: "${ownerName}", сокращения его имени, "ты" в контексте обращения к нему.
 
@@ -367,6 +387,7 @@ function buildUserFactsPrompt(
 - Косвенные выводы: "опять не сплю" → проблемы со сном
 
 НЕ включай: факты о ${contactName} или третьих лицах.
+НЕ включай: содержание строк с пометкой «переслал сообщение от ...» — у них отдельный исходный автор, и они не являются доказательством факта о ${ownerName}.
 НЕ включай: тривиальное ("написал сообщение"), единичные оговорки без контекста.
 ВАЖНО ПРО АТРИБУЦИЮ СОБЫТИЙ: если событие/праздник/ДР/годовщина/встреча/игра/поездка инициированы собеседником или принадлежат ему (его ДР, его отпуск, его корпоратив), а ${ownerName} лишь приглашён/вписан/идёт как гость — это факт О СОБЕСЕДНИКЕ, не о ${ownerName}. Не превращай приглашение в факт о владельце.
 Пример: "${contactName}: хочу собрать встречу на свой праздник, ты как?" → это событие ${contactName}, НЕ ${ownerName}; не извлекай «у ${ownerName} личный праздник».
@@ -435,6 +456,7 @@ function buildContactFactsPrompt(
    Примеры: "я устала", "у меня встреча", "мне не нравится", "я работаю в..."
 2. Строки "[дата] Я: ..." — когда ${ownerName} говорит о ${contactName} или обращается к нему/ней
    Примеры: "ты постоянно переживаешь", "ты же работаешь в X?", "ты всегда так делаешь"
+3. Строки с пометкой "переслал сообщение от ..." — чужой пересланный материал; используй его только для понимания соседних реплик и никогда как доказательство факта о ${contactName}
 
 Что искать о ${contactName}:
 - Работа и занятия
@@ -446,6 +468,7 @@ function buildContactFactsPrompt(
 - События и инициативы контакта: его праздник/годовщина/встреча/игра/поездка, которые он инициирует или которые принадлежат ему (например «хочу собрать встречу на свой праздник») — это факты о ${contactName}
 
 НЕ включай: факты о ${ownerName}.
+НЕ включай: содержание строк с пометкой «переслал сообщение от ...» — у них отдельный исходный автор, и они не являются доказательством факта о ${contactName}.
 НЕ включай: тривиальное, единичные случайные фразы без контекста.
 КРИТИЧНО ПРО СУБЪЕКТА: владелец чата ${contactName} не становится субъектом события автоматически.
 Фраза с пропущенным субъектом вроде «в понедельник будут делать операцию» — не факт о ${contactName}, если в текущем или предыдущем сообщении нет доказуемого antecedent.

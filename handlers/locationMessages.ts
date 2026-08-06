@@ -4,6 +4,7 @@ import { GoogleMapsService } from "../services/googleMaps";
 import { devLog } from "../utils";
 import { addToHistory } from "../utils/history";
 import { getBotGenderedText } from "../persona";
+import { getForwardedMessageInfo } from "../utils/forwardedMessage";
 
 // ── Регистрация обработчика геолокации ─────────────────────
 
@@ -11,6 +12,18 @@ export function registerLocationMessageHandler(bot: Bot<BotContext>): void {
     bot.on("message:location", async (ctx) => {
         try {
             devLog('📍 Получена геолокация от пользователя:', ctx.from?.id);
+            const forwarded = getForwardedMessageInfo(ctx.message);
+            if (forwarded.isForwarded) {
+                await addToHistory(ctx, 'user', `[Пересланная геолокация от ${forwarded.source}]`, {
+                    turn: {
+                        userText: 'Пересланная геолокация',
+                        isForwardOnly: true,
+                        forwardContext: { sender: forwarded.source, text: '[Геолокация]' },
+                    },
+                });
+                return;
+            }
+
             const location = ctx.message.location;
             const latitude = location.latitude;
             const longitude = location.longitude;

@@ -65,6 +65,8 @@ export interface SessionData {
         caption: string;
         timestamp: number;
         processed: boolean;
+        isForwarded?: boolean;
+        forwardSource?: string;
     }>;
     forwardGroups?: {
         [key: string]: {
@@ -408,6 +410,8 @@ export interface ConversationTurn {
         sender?: string;
         text: string;
     };
+    /** Ход состоит только из пересланного материала; слова владельца отсутствуют. */
+    isForwardOnly?: boolean;
     activePeople?: Array<{ contactId?: number; contactName?: string; personId?: string }>;
     currentTopic?: string;
 }

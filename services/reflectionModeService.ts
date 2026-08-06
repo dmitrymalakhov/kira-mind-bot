@@ -44,7 +44,7 @@ import {
     isReflectionFactWorthSaving,
     isReflectionMemoryNoiseCandidate,
 } from '../utils/reflectionMemoryFilter';
-import type { ExtractedFactAboutUser } from '../utils/studyChatFlow';
+import { isForwardOnlyEvidence, type ExtractedFactAboutUser } from '../utils/studyChatFlow';
 import { sendDaytimeReflection } from './inboxGuardianScheduler';
 
 // ── Настройки ─────────────────────────────────────────────────────────────────
@@ -89,6 +89,14 @@ interface BufferedMessage {
     date: Date;
     /** true = исходящее сообщение от владельца бота */
     isOwn: boolean;
+    /** Пересланный текст принадлежит исходному автору, а не переносчику. */
+    isForwarded?: boolean;
+    forwardSource?: string;
+}
+
+function formatBufferedMessage(message: BufferedMessage): string {
+    if (!message.isForwarded) return `${message.senderName}: ${message.text}`;
+    return `${message.senderName} (переслал сообщение от ${message.forwardSource || 'неизвестного автора'}): ${message.text}`;
 }
 
 interface ChatBuffer {
@@ -211,6 +219,7 @@ export function queueMessage(
     date: Date,
     isOwn = false,
     messageId?: number,
+    options: { isForwarded?: boolean; forwardSource?: string } = {},
 ): void {
     if (!enabled) return;
     if (botChatIds.has(chatId)) return;
@@ -243,10 +252,18 @@ export function queueMessage(
     // Имя чата берём от собеседника, не от себя
     if (!isOwn) buf.chatTitle = senderName;
     buf.lastMessageAt = date;
-    buf.messages.push({ senderName: isOwn ? (config.ownerName || 'Я') : senderName, text: trimmed, date, isOwn, messageId });
+    buf.messages.push({
+        senderName: isOwn ? (config.ownerName || 'Я') : senderName,
+        text: trimmed,
+        date,
+        isOwn,
+        messageId,
+        isForwarded: options.isForwarded,
+        forwardSource: options.forwardSource,
+    });
 
     // Асинхронный LLM-triage жизненных событий (fire-and-forget, дебаунс 2 мин)
-    scheduleAsyncTriage(chatId, senderName, trimmed);
+    if (!options.isForwarded) scheduleAsyncTriage(chatId, senderName, trimmed);
 
     if (buf.messages.length > MAX_BUFFER_SIZE) {
         buf.messages.splice(0, buf.messages.length - MAX_BUFFER_SIZE);
@@ -513,6 +530,8 @@ function getContextMessages(chatId: string, beforeDate: Date): BufferedMessage[]
             date: m.date,
             isOwn: !!m.isOwn,
             messageId: m.id,
+            isForwarded: m.isForwarded,
+            forwardSource: m.forwardSource,
         }));
 }
 
@@ -659,6 +678,7 @@ function normalizeDomain(domain: string): string {
 
 function filterReflectionFacts(facts: ExtractedFactAboutUser[], contactName: string): ExtractedFactAboutUser[] {
     return facts
+        .filter(fact => !isForwardOnlyEvidence(fact.evidence))
         .filter(fact => isReflectionContactAttributionSupported(fact, contactName, config.ownerName || 'Я'))
         .filter(fact => !isReflectionMemoryNoiseCandidate(fact))
         .filter(isReflectionFactWorthSaving)
@@ -680,13 +700,13 @@ function formatReflectionEpisodeContent(input: {
 }): string {
     const antecedentSample = (input.contextMessages ?? [])
         .slice(-6)
-        .map((message) => `${message.senderName}: ${message.text}`)
+        .map(formatBufferedMessage)
         .join(' / ')
         .replace(/\s+/g, ' ')
         .slice(0, 500);
     const sample = input.messages
         .slice(-12)
-        .map((message) => `${message.senderName}: ${message.text}`)
+        .map(formatBufferedMessage)
         .join(' / ')
         .replace(/\s+/g, ' ')
         .slice(0, 900);
@@ -861,7 +881,7 @@ async function analyzeBatch(
 
         if (contextMessages.length > 0) {
             const ctxLines = contextMessages
-                .map(m => `[${m.date.toLocaleString('ru-RU')}] ${m.senderName}: ${m.text}`)
+                .map(m => `[${m.date.toLocaleString('ru-RU')}] ${formatBufferedMessage(m)}`)
                 .join('\n');
             convText += `[контекст предыдущей переписки — не анализировать, только для понимания темы]\n${ctxLines}\n\n`;
         }
@@ -884,14 +904,22 @@ async function analyzeBatch(
 
         convText += `[новые сообщения для анализа]\n`;
         convText += sessionToAnalyze
-            .map(m => `[${m.date.toLocaleString('ru-RU')}] ${m.senderName}: ${m.text}`)
+            .map(m => `[${m.date.toLocaleString('ru-RU')}] ${formatBufferedMessage(m)}`)
             .join('\n');
 
         const startDate = sessionToAnalyze[0].date;
         const endDate = sessionToAnalyze[sessionToAnalyze.length - 1].date;
         // ── Шаг 4: Извлечение фактов ─────────────────────────────────────────
         const facts = await runAnalyzeConversationAgent(
-            convText,
+            [
+                '[контекст переписки — использовать только для разрешения референтов, не извлекать факты из него]',
+                contextMessages.map(m => `[${m.date.toLocaleString('ru-RU')}] ${formatBufferedMessage(m)}`).join('\n'),
+                '[обычные новые сообщения — единственный источник извлекаемых фактов]',
+                sessionToAnalyze
+                    .filter(message => !message.isForwarded)
+                    .map(m => `[${m.date.toLocaleString('ru-RU')}] ${formatBufferedMessage(m)}`)
+                    .join('\n'),
+            ].filter(Boolean).join('\n'),
             buf.chatTitle,
             startDate,
             endDate,

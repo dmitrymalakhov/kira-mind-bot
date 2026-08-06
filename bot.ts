@@ -14,6 +14,7 @@ import { pushGroupChatMessage } from "./stores/GroupChatBuffer";
 import { isBotMentioned, isMessageReplyToBot } from "./utils/groupChatContext";
 import { GroupChatMessageRepository } from "./services/GroupChatMessageRepository";
 import { isGroupChatContextEnabled, isGroupReplyToBotEnabled } from "./services/groupChatFeatureSettings";
+import { getForwardedMessageInfo } from "./utils/forwardedMessage";
 
 const DISMISSAL_VARIANTS = [
   "занята важными делами",
@@ -200,6 +201,10 @@ function setupBot(bot: Bot<BotContext>, config: any) {
         return;
       }
       const text = ctx.message?.text || ctx.message?.caption || '';
+      // Forwarded messages in groups are silently ignored regardless of type
+      // (text, photo, voice, etc.). In private chats they are handled by
+      // registerForwardedTextGuard / registerTextMessageHandler instead.
+      if (getForwardedMessageInfo(ctx.message).isForwarded) return;
       // Команды пропускаем
       if (text.startsWith('/')) {
         await next();
