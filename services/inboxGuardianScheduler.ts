@@ -15,6 +15,8 @@ const CHECK_INTERVAL_MS = 60_000;
 const MAX_THREADS_PER_RUN = 30;
 const MAX_MESSAGES_PER_THREAD = 12;
 const LAST_RUN_SETTING_KEY = `${getActiveBotProfile()}:inboxGuardian:lastRunDate`;
+const DAYTIME_STATE_SETTING_KEY = `${getActiveBotProfile()}:inboxGuardian:daytimeState`;
+const DAYTIME_MAX_SENT_PER_DAY = 2;
 
 export interface InboxThreadCandidate {
     chatId: string;
@@ -61,13 +63,12 @@ export interface InboxGuardianItem {
 
 let timer: NodeJS.Timeout | undefined;
 let isRunning = false;
-let daytimeWindowStartedAt = Date.now();
-let daytimeAttemptsThisHour = 0;
-let daytimeSentThisHour = 0;
 
-// AI-budget: at most six grounded analyses and two actual messages per hour.
-const DAYTIME_MAX_ATTEMPTS_PER_HOUR = 6;
-const DAYTIME_MAX_SENT_PER_HOUR = 2;
+interface DaytimeReflectionState {
+    dateKey: string;
+    sentCount: number;
+    sentSourceKeys: string[];
+}
 
 function getZonedParts(date: Date): { year: string; month: string; day: string; hour: number; minute: number } {
     const parts = new Intl.DateTimeFormat("en-CA", {
@@ -195,12 +196,13 @@ function buildGuardianPrompt(
 
 Ниже личные диалоги за последние ${config.inboxGuardianLookbackHours} часов.
 
-Твоя задача: выбрать ${options.daytime ? "не более одного срочного или своевременного" : "максимум три действительно важных"} наблюдения. Подходят незакрытая просьба или обязательство, изменение плана, важное решение, конфликт, либо заметный эмоциональный/отношенческий сигнал.${focus}
+Твоя задача: выбрать ${options.daytime ? "только действительно критичное событие, не более одного" : "максимум три действительно важных"} наблюдения. Для дневного режима подходят только серьёзный риск, жёсткий срок, существенное изменение договорённости, конфликт или сильный отношенческий сигнал.${focus}
 
 Правила:
 - Если владелец уже ответил и вопрос выглядит закрытым, НЕ включай диалог.
 - Если владелец ответил "сделаю позже", "скину завтра", "уточню", "посмотрю" и действие ещё не выполнено в видимом контексте — включи.
 - Если это просто информация, small talk, благодарность, реакция, уведомление или вопрос уже решён — НЕ включай.
+- Для дневного режима НЕ включай бытовые приглашения, обед, перекур, вопросы о местонахождении или времени возвращения, обычные планы на вечер, рабочие статусы и любую ситуацию без серьёзного риска или обязательства.
 - Сам факт, что сообщение не прочитано, НЕ является причиной включения: этим занимается отдельный unread-report.
 - Если не уверен, НЕ включай. Нужны только сильно незакрытые вопросы.
 - Не выдумывай факты и не добавляй диалоги, которых нет в списке.
@@ -334,16 +336,64 @@ function inProactiveQuietHours(now: Date): boolean {
     return start < end ? hour >= start && hour < end : hour >= start || hour < end;
 }
 
-function reserveDaytimeAttempt(): boolean {
-    const now = Date.now();
-    if (now - daytimeWindowStartedAt >= 60 * 60_000) {
-        daytimeWindowStartedAt = now;
-        daytimeAttemptsThisHour = 0;
-        daytimeSentThisHour = 0;
+function sourceKey(chatId: string, messageId: number): string {
+    return `${chatId}:${messageId}`;
+}
+
+export function shouldRunDaytimeReflection(criticalSignal: boolean, sentCount: number): boolean {
+    return criticalSignal && sentCount < DAYTIME_MAX_SENT_PER_DAY;
+}
+
+export function hasDaytimeSourceOverlap(item: Pick<InboxGuardianItem, "chatId" | "sourceMessageIds">, sourceKeys: Set<string>): boolean {
+    return item.sourceMessageIds.some(id => sourceKeys.has(sourceKey(item.chatId, id)));
+}
+
+export function filterDaytimeSourcesFromThreads(
+    threads: InboxThreadCandidate[],
+    sourceKeys: Set<string>,
+): InboxThreadCandidate[] {
+    return threads.flatMap(thread => {
+        const messages = thread.messages.filter(message => !sourceKeys.has(sourceKey(thread.chatId, message.id)));
+        const lastIncoming = lastWhere(messages, message => !message.isOwn);
+        if (!lastIncoming || messages.length === 0) return [];
+
+        const lastOwn = lastWhere(messages, message => Boolean(message.isOwn));
+        return [{
+            ...thread,
+            senderName: lastIncoming.senderName,
+            senderUsername: lastIncoming.senderUsername,
+            lastIncomingAt: lastIncoming.date,
+            lastOwnAt: lastOwn?.date,
+            latestAt: messages[messages.length - 1].date,
+            messages,
+        }];
+    });
+}
+
+async function loadDaytimeReflectionState(now = new Date()): Promise<DaytimeReflectionState> {
+    const dateKey = todayDateKey(now);
+    try {
+        const raw = await getSetting(DAYTIME_STATE_SETTING_KEY, "");
+        const parsed = raw ? JSON.parse(raw) as Partial<DaytimeReflectionState> : {};
+        if (parsed.dateKey !== dateKey || !Array.isArray(parsed.sentSourceKeys)) {
+            return { dateKey, sentCount: 0, sentSourceKeys: [] };
+        }
+        return {
+            dateKey,
+            sentCount: typeof parsed.sentCount === "number" ? parsed.sentCount : 0,
+            sentSourceKeys: parsed.sentSourceKeys.filter((value): value is string => typeof value === "string"),
+        };
+    } catch {
+        return { dateKey, sentCount: 0, sentSourceKeys: [] };
     }
-    if (daytimeAttemptsThisHour >= DAYTIME_MAX_ATTEMPTS_PER_HOUR || daytimeSentThisHour >= DAYTIME_MAX_SENT_PER_HOUR) return false;
-    daytimeAttemptsThisHour += 1;
-    return true;
+}
+
+async function saveDaytimeReflectionState(state: DaytimeReflectionState): Promise<void> {
+    await setSetting(DAYTIME_STATE_SETTING_KEY, JSON.stringify(state));
+}
+
+async function daytimeSourceKeys(): Promise<Set<string>> {
+    return new Set((await loadDaytimeReflectionState()).sentSourceKeys);
 }
 
 export function selectDaytimeContext(
@@ -377,7 +427,8 @@ export async function sendDaytimeReflection(
     );
     const lastIncoming = lastWhere(messages, message => !message.isOwn);
     if (!lastIncoming || messages.length === 0) return false;
-    if (!reserveDaytimeAttempt()) return false;
+    const state = await loadDaytimeReflectionState();
+    if (!shouldRunDaytimeReflection(true, state.sentCount)) return false;
     const lastOwn = lastWhere(messages, message => Boolean(message.isOwn));
     const candidate: InboxThreadCandidate = {
         chatId: input.chatId,
@@ -391,19 +442,24 @@ export async function sendDaytimeReflection(
     const items = await analyzeThreads([candidate], {
         daytime: true,
         maxItems: 1,
-        minConfidence: 0.82,
+        minConfidence: 0.9,
         requiredSourceMessageIds: focusIds,
     });
     const item = items[0];
     if (!item) return false;
 
     const username = item.senderUsername ? ` (@${esc(item.senderUsername)})` : "";
+    const nextState = await loadDaytimeReflectionState();
+    if (!shouldRunDaytimeReflection(true, nextState.sentCount)) return false;
+    const newSourceKeys = item.sourceMessageIds.map(id => sourceKey(input.chatId, id));
+    nextState.sentCount += 1;
+    nextState.sentSourceKeys = [...new Set([...nextState.sentSourceKeys, ...newSourceKeys])];
     await sendStructured(bot.api as any, await getProactiveChatId(), [
         heading("💭 Что я заметила", 3),
         paragraph(`<b>${esc(item.senderName)}${username}</b><br/><i>Что произошло:</i> ${esc(item.observation)}`),
         paragraph(`<i>Почему это важно:</i> ${esc(item.whyImportant)}<br/><i>Моё мнение:</i> ${esc(item.kiraView)}<br/><i>Следующий шаг:</i> ${esc(item.suggestedAction)}`),
     ]);
-    daytimeSentThisHour += 1;
+    await saveDaytimeReflectionState(nextState);
     console.info(`[daytime-reflection] sent grounded observation for chat ${input.chatId}`);
     return true;
 }
@@ -449,7 +505,9 @@ async function runGuardian(bot: Bot<BotContext>): Promise<void> {
 
         const now = new Date();
         const threads = selectThreadCandidates(now);
-        const items = await analyzeThreads(threads);
+        const daytimeSources = await daytimeSourceKeys();
+        const eligibleThreads = filterDaytimeSourcesFromThreads(threads, daytimeSources);
+        const items = await analyzeThreads(eligibleThreads);
 
         if (items.length > 0) {
             const chatId = await getProactiveChatId();

@@ -9,6 +9,9 @@ import {
     normalizeLLMItems,
     selectDaytimeContext,
     sendDaytimeReflection,
+    shouldRunDaytimeReflection,
+    hasDaytimeSourceOverlap,
+    filterDaytimeSourcesFromThreads,
 } from "../services/inboxGuardianScheduler";
 import { StoredMessage } from "../stores/MessageStore";
 import { MessageStore } from "../stores/MessageStore";
@@ -215,5 +218,33 @@ describe("Inbox Guardian reflection", () => {
         } finally {
             config.daytimeReflectionEnabled = original;
         }
+    });
+
+    test("daytime reflection requires a critical signal and allows only two cards per day", () => {
+        assert.equal(shouldRunDaytimeReflection(false, 0), false);
+        assert.equal(shouldRunDaytimeReflection(true, 0), true);
+        assert.equal(shouldRunDaytimeReflection(true, 1), true);
+        assert.equal(shouldRunDaytimeReflection(true, 2), false);
+    });
+
+    test("evening guardian suppresses sources already shown during the day", () => {
+        const item = { chatId: "42", sourceMessageIds: [101, 102] };
+        assert.equal(hasDaytimeSourceOverlap(item, new Set(["42:102"])), true);
+        assert.equal(hasDaytimeSourceOverlap(item, new Set(["43:102"])), false);
+    });
+
+    test("removes daytime sources before evening Guardian analysis but keeps newer messages", () => {
+        const older = message(101, 120, "42");
+        const newer = message(102, 30, "42");
+        const filtered = filterDaytimeSourcesFromThreads([{
+            ...thread,
+            messages: [older, newer],
+            lastIncomingAt: older.date,
+            latestAt: newer.date,
+        }], new Set(["42:101"]));
+
+        assert.equal(filtered.length, 1);
+        assert.deepEqual(filtered[0].messages.map(item => item.id), [102]);
+        assert.equal(filtered[0].lastIncomingAt.getTime(), newer.date.getTime());
     });
 });
