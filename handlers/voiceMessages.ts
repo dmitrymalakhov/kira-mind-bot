@@ -16,6 +16,7 @@ import {
 } from "./shared";
 import { handleRecurringTaskText } from "../services/recurringTaskService";
 import { getBotGenderedText } from "../persona";
+import { getForwardedMessageInfo } from "../utils/forwardedMessage";
 
 // ── Регистрация обработчика голосовых сообщений ─────────────
 
@@ -24,6 +25,18 @@ export function registerVoiceMessageHandler(bot: Bot<BotContext>): void {
         try {
             devLog('🎤 Получено голосовое сообщение от пользователя:', ctx.from?.id);
             await ctx.api.sendChatAction(ctx.chat.id, "typing");
+
+            const forwarded = getForwardedMessageInfo(ctx.message);
+            if (forwarded.isForwarded) {
+                await addToHistory(ctx, 'user', `[Пересланное голосовое сообщение от ${forwarded.source}]`, {
+                    turn: {
+                        userText: 'Пересланное голосовое сообщение',
+                        isForwardOnly: true,
+                        forwardContext: { sender: forwarded.source, text: '[Голосовое сообщение]' },
+                    },
+                });
+                return;
+            }
 
             const { isReply, replyToContent, replyToSender } = resolveReplyTo(ctx);
 

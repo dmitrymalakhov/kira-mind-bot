@@ -1,7 +1,57 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { sendMessage } from "../utils";
-import { formatConversation } from "../utils/studyChatFlow";
+import { formatConversation, isForwardOnlyEvidence } from "../utils/studyChatFlow";
+import { formatGroupMessages } from "../agents/readMessagesAgent";
+import { getForwardedMessageInfo, getGramJsForwardSource } from "../utils/forwardedMessage";
+
+describe("Telegram forwarded-message detection", () => {
+    test("detects modern forward_origin", () => {
+        assert.deepEqual(getForwardedMessageInfo({
+            forward_origin: {
+                type: "user",
+                sender_user: { first_name: "Синтетический отправитель" },
+            },
+        }), { isForwarded: true, source: "Синтетический отправитель" });
+    });
+
+    test("detects forward_origin from chat", () => {
+        assert.deepEqual(getForwardedMessageInfo({
+            forward_origin: { type: "chat", sender_chat: { title: "Рабочий чат" } },
+        }), { isForwarded: true, source: "Рабочий чат" });
+    });
+
+    test("detects forward_origin from channel", () => {
+        assert.deepEqual(getForwardedMessageInfo({
+            forward_origin: { type: "channel", chat: { title: "Новостной канал" } },
+        }), { isForwarded: true, source: "Новостной канал" });
+    });
+
+    test("detects hidden_user origin by sender_user_name", () => {
+        assert.deepEqual(getForwardedMessageInfo({
+            forward_origin: { type: "hidden_user", sender_user_name: "Скрытый пользователь" },
+        }), { isForwarded: true, source: "Скрытый пользователь" });
+    });
+
+    test("detects legacy forward_from_chat", () => {
+        assert.deepEqual(getForwardedMessageInfo({
+            forward_from_chat: { title: "Группа поддержки" },
+        }), { isForwarded: true, source: "Группа поддержки" });
+    });
+
+    test("detects legacy forward_sender_name", () => {
+        assert.deepEqual(getForwardedMessageInfo({
+            forward_sender_name: "Пользователь скрыл имя",
+        }), { isForwarded: true, source: "Пользователь скрыл имя" });
+    });
+
+    test("keeps ordinary messages unchanged", () => {
+        assert.deepEqual(getForwardedMessageInfo({ text: "обычный текст" }), {
+            isForwarded: false,
+            source: "",
+        });
+    });
+});
 
 describe("long message delivery", () => {
     test("sends short text once with the original options", async () => {
@@ -73,9 +123,55 @@ describe("studied conversation formatting", () => {
         assert.match(result, /\] Я: Привет$/);
     });
 
+    test("never labels an outgoing forwarded message as the owner", () => {
+        const result = formatConversation([{
+            date: 100,
+            message: "Чужой текст",
+            out: true,
+            fwdFrom: { fromId: { userId: 42 } },
+        }] as any, 1, "Анна");
+        assert.match(result, /\] Я \(переслал сообщение от пользователь #42\): Чужой текст$/);
+        assert.doesNotMatch(result, /\] Я:/);
+    });
+
+    test("keeps the carrier and original author separate for incoming GramJS forwards", () => {
+        const result = formatConversation([{
+            date: 100,
+            message: "Чужое событие",
+            out: false,
+            fromId: { userId: 7 },
+            fwdFrom: { fromName: "Кирилл" },
+        }] as any, 7, "Анна");
+        assert.match(result, /Анна \(переслал сообщение от Кирилл\): Чужое событие$/);
+        assert.doesNotMatch(result, /\] Кирилл:/);
+    });
+
+    test("marks the owner as carrier but not author for outgoing GramJS forwards", () => {
+        const result = formatConversation([{
+            date: 100,
+            message: "Чужое событие",
+            out: true,
+            fromId: { userId: 1 },
+            fwdFrom: { fromName: "Кирилл" },
+        }] as any, 7, "Анна");
+        assert.match(result, /Я \(переслал сообщение от Кирилл\): Чужое событие$/);
+        assert.doesNotMatch(result, /\] Я: Чужое событие/);
+    });
+
     test("labels incoming messages with the contact name", () => {
         const result = formatConversation([{ date: 100, message: "Привет", out: false }] as any, 1, "Анна");
         assert.match(result, /\] Анна: Привет$/);
+    });
+
+    test("never labels an outgoing forwarded group message as the owner", () => {
+        const result = formatGroupMessages([{
+            date: 100,
+            message: "Чужое событие",
+            fromId: { userId: 42 },
+            fwdFrom: { fromId: { userId: 99 } },
+        }] as any);
+        assert.match(result, /Участник_42 \(переслал сообщение от пользователь #99\): Чужое событие$/);
+        assert.doesNotMatch(result, /Я: Чужое событие/);
     });
 
     test("trims message text", () => {
@@ -98,5 +194,20 @@ describe("studied conversation formatting", () => {
     test("returns an empty string when there are no textual messages", () => {
         assert.equal(formatConversation([] as any, 1, "Анна"), "");
         assert.equal(formatConversation([{ date: 1, message: " " }] as any, 1, "Анна"), "");
+    });
+
+    test("recognizes forward-only evidence and preserves mixed evidence", () => {
+        assert.equal(isForwardOnlyEvidence("[дата] Анна (переслал сообщение от Кирилл): текст"), true);
+        assert.equal(isForwardOnlyEvidence("[дата] Анна: я ответила\n[дата] Анна (переслал сообщение от Кирилл): текст"), false);
+    });
+});
+
+describe("GramJS forward attribution", () => {
+    test("prefers visible original source name", () => {
+        assert.equal(getGramJsForwardSource({ fromName: "Кирилл", fromId: { userId: 42 } }), "Кирилл");
+    });
+
+    test("keeps unknown original source explicit", () => {
+        assert.equal(getGramJsForwardSource({}), "неизвестный автор");
     });
 });

@@ -12,6 +12,7 @@ import { contactDisplayName } from '../utils/contactMemory';
 import {
     extractFactsAboutUserFromConversation,
     formatConversation,
+    isForwardOnlyEvidence,
 } from '../utils/studyChatFlow';
 import { devLog, parseLLMJson } from '../utils';
 import { initTelegramClient } from './telegram';
@@ -57,6 +58,10 @@ interface PrivateDialogInfo {
 interface NewMessagesResult {
     messages: Api.Message[];
     latestSeenMessageId?: number;
+}
+
+function isForwardedMessage(message: Api.Message): boolean {
+    return Boolean((message as Api.Message & { fwdFrom?: unknown }).fwdFrom);
 }
 
 export interface PersonalChatMemoryCycleResult {
@@ -559,7 +564,12 @@ export async function runPersonalChatMemoryIndexingCycle(options: { force?: bool
             const watermark = state.chats[key];
             try {
                 const fetched = await fetchNewMessages(client, dialog.chatId, watermark);
-                const textMessages = fetched.messages.filter((msg) => Boolean(msg.message?.trim()));
+                // Forwards remain in the conversation context, but their text
+                // is never evidence of an owner-authored fact.
+                const textMessages = fetched.messages.filter((msg) =>
+                    Boolean(msg.message?.trim())
+                );
+                const authoredTextMessages = textMessages.filter((msg) => !isForwardedMessage(msg));
 
                 if (fetched.messages.length === 0) {
                     updateWatermark(state, dialog, { lastError: undefined });
@@ -568,7 +578,7 @@ export async function runPersonalChatMemoryIndexingCycle(options: { force?: bool
                     continue;
                 }
 
-                if (textMessages.length === 0) {
+                if (textMessages.length === 0 || authoredTextMessages.length === 0) {
                     updateWatermark(state, dialog, {
                         lastProcessedMessageId: maxMessageId(fetched.messages, fetched.latestSeenMessageId),
                         lastProcessedAt: new Date().toISOString(),
@@ -579,7 +589,8 @@ export async function runPersonalChatMemoryIndexingCycle(options: { force?: bool
                     continue;
                 }
 
-                if (textMessages.length < config.personalChatMemoryMinNewMessages) {
+                const containsForwardedMessages = textMessages.some(isForwardedMessage);
+                if (authoredTextMessages.length < config.personalChatMemoryMinNewMessages && !containsForwardedMessages) {
                     updateWatermark(state, dialog, { lastError: undefined });
                     result.skippedChats++;
                     await saveState(state);
@@ -607,12 +618,12 @@ export async function runPersonalChatMemoryIndexingCycle(options: { force?: bool
                 const episode = await savePersonalChatEpisode(dialog, formattedText, textMessages, startDate, endDate);
                 if (episode?.created) result.episodesCreated++;
 
-                const facts = await extractFactsAboutUserFromConversation(
-                    formattedText,
+                const facts = (await extractFactsAboutUserFromConversation(
+                    formatConversation(authoredTextMessages, dialog.chatId, dialog.displayName),
                     dialog.displayName,
                     startDate,
                     endDate
-                );
+                )).filter(fact => !isForwardOnlyEvidence(fact.evidence));
                 const ctx = createBackgroundContext();
                 const update = await runUpdateLongTermMemoryAgentDetailed(ctx, facts, {
                     source: 'personal_chat_background',

@@ -2,7 +2,7 @@ import { restoreReminderAfterRestart, setBotRef } from "./reminder";
 import { setBotApi } from "./services/telegram";
 import { createBot } from "./bot";
 import { registerCommandHandlers } from "./handlers/commands";
-import { registerTextMessageHandler } from "./handlers/textMessages";
+import { registerForwardedTextGuard, registerTextMessageHandler } from "./handlers/textMessages";
 import { registerPhotoMessageHandler } from "./handlers/photoMessages";
 import { registerVoiceMessageHandler } from "./handlers/voiceMessages";
 import { registerMediaMessageHandler } from "./handlers/mediaMessages";
@@ -42,6 +42,7 @@ console.log('🤖 Бот создан успешно');
 startRuntimeHealthServer();
 
 // Регистрация всех обработчиков
+registerForwardedTextGuard(bot);
 registerCommandHandlers(bot);
 console.log('⚙️ Обработчики команд зарегистрированы');
 

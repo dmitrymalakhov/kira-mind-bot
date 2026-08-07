@@ -40,6 +40,14 @@ export async function addToHistory(
     content: string,
     options: { turn?: ConversationTurn } = {},
 ) {
+    if (options.turn?.isForwardOnly) {
+        // Пересланный материал передаётся отдельно через forwardContext и не
+        // должен попадать ни в историю владельца, ни в её последующие
+        // суммаризации и фоновые анализаторы.
+        devLog('Skip history: forward-only message');
+        return;
+    }
+
     ctx.session.messageHistory.unshift({
         role,
         content,

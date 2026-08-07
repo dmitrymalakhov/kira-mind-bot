@@ -50,6 +50,19 @@ describe("MessageStore", () => {
         assert.equal(store.getMessages("chat").length, 1);
     });
 
+    test("keeps forward attribution metadata for incoming and outgoing messages", () => {
+        store.addMessage("chat", storedMessage({ id: 1, isForwarded: true, forwardSource: "Кирилл" }));
+        store.addMessage("chat", storedMessage({ id: 2, isOwn: true, isRead: true, isForwarded: true, forwardSource: "Кирилл" }));
+        assert.deepEqual(store.getMessages("chat").map(({ isOwn, isForwarded, forwardSource }) => ({
+            isOwn,
+            isForwarded,
+            forwardSource,
+        })), [
+            { isOwn: undefined, isForwarded: true, forwardSource: "Кирилл" },
+            { isOwn: true, isForwarded: true, forwardSource: "Кирилл" },
+        ]);
+    });
+
     test("updates a duplicate ID without losing its read state", () => {
         store.addMessage("chat", storedMessage({ id: 7, isRead: false, text: "old" }));
         store.markAsRead("chat");
