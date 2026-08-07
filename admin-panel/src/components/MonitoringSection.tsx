@@ -1,377 +1,102 @@
-import { useEffect, useMemo, useState } from 'react';
-import {
-  Alert,
-  Box,
-  Button,
-  Chip,
-  CircularProgress,
-  Collapse,
-  Divider,
-  IconButton,
-  Paper,
-  Stack,
-  Tooltip,
-  Typography,
-} from '@mui/material';
+import { memo, useEffect, useMemo, useState } from 'react';
+import { Alert, Box, Button, Chip, CircularProgress, Collapse, Divider, Paper, Stack, Tooltip, Typography } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import SyncProblemIcon from '@mui/icons-material/SyncProblem';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
-import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutline';
-import type {
-  MonitoringCheck,
-  MonitoringCheckCategory,
-  MonitoringCheckStatus,
-  MonitoringHealthResponse,
-} from '../types';
+import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
+import type { MonitoringCheck, MonitoringCheckCategory, MonitoringHealthResponse } from '../types';
 import { fetchMonitoringHealth } from '../api';
 import { AiUsageSection } from './AiUsageSection';
+import { getStatusAppearance } from './monitoring/statusPalette';
 
-const CATEGORY_LABELS: Record<MonitoringCheckCategory, string> = {
-  runtime: 'Runtime',
-  storage: 'Storage',
-  telegram: 'Telegram',
-  ai: 'AI Providers',
+const CATEGORY_LABELS: Record<MonitoringCheckCategory, string> = { runtime: 'Исполнение', storage: 'Хранилище', telegram: 'Telegram', ai: 'Провайдеры ИИ' };
+const STATUS_LABELS = { ok: 'исправно', warn: 'предупреждений', down: 'ошибок', disabled: 'отключено' } as const;
+const CATEGORY_ORDER: MonitoringCheckCategory[] = ['runtime', 'storage', 'telegram', 'ai'];
+const formatDateTime = (iso?: string | null) => iso ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—';
+const formatLatency = (value?: number) => typeof value !== 'number' ? '—' : value < 1000 ? `${value} мс` : `${(value / 1000).toFixed(2)} с`;
+const pluralize = (value: number, one: string, few: string, many: string) => {
+  const mod100 = value % 100;
+  const mod10 = value % 10;
+  if (mod100 >= 11 && mod100 <= 14) return many;
+  if (mod10 === 1) return one;
+  if (mod10 >= 2 && mod10 <= 4) return few;
+  return many;
 };
 
-const CATEGORY_ORDER: MonitoringCheckCategory[] = ['runtime', 'storage', 'telegram', 'ai'];
-
-function formatDateTime(iso?: string | null) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-}
-
-function formatLatency(latencyMs?: number) {
-  if (typeof latencyMs !== 'number') return '—';
-  if (latencyMs < 1000) return `${latencyMs} мс`;
-  return `${(latencyMs / 1000).toFixed(2)} c`;
-}
-
-function getOverallStatusLabel(status: MonitoringHealthResponse['overallStatus']) {
-  if (status === 'ok') return 'Все основные зависимости доступны';
-  if (status === 'degraded') return 'Есть деградации, но не всё упало';
-  return 'Есть критические недоступные зависимости';
-}
-
-function buildOverallStatusDetails(data: MonitoringHealthResponse | null): string {
-  if (!data?.checks?.length) {
-    return 'Нет данных по проверкам.';
-  }
-
-  const downChecks = data.checks.filter((check) => check.status === 'down');
-  const warnChecks = data.checks.filter((check) => check.status === 'warn');
-
-  if (data.overallStatus === 'down') {
-    const downSummary = downChecks
-      .slice(0, 3)
-      .map((check) => `${check.label}: ${check.summary}`)
-      .join('; ');
-    const extraDown = downChecks.length > 3 ? `; ещё ${downChecks.length - 3}` : '';
-    const warnHint = warnChecks.length ? ` Дополнительно деградируют: ${warnChecks.map((check) => check.label).slice(0, 3).join(', ')}.` : '';
-    return downChecks.length
-      ? `Критично недоступны: ${downSummary}${extraDown}.${warnHint}`.trim()
-      : 'Есть критические недоступные зависимости, но snapshot не вернул список проблемных checks.';
-  }
-
-  if (data.overallStatus === 'degraded') {
-    const warnSummary = warnChecks
-      .slice(0, 3)
-      .map((check) => `${check.label}: ${check.summary}`)
-      .join('; ');
-    const extraWarn = warnChecks.length > 3 ? `; ещё ${warnChecks.length - 3}` : '';
-    return warnChecks.length
-      ? `Деградации: ${warnSummary}${extraWarn}.`
-      : 'Есть деградации, но snapshot не вернул проблемные checks.';
-  }
-
-  const disabledChecks = data.checks.filter((check) => check.status === 'disabled');
-  if (disabledChecks.length) {
-    return `Основные зависимости доступны. Отключены проверки: ${disabledChecks.map((check) => check.label).slice(0, 3).join(', ')}${disabledChecks.length > 3 ? ` и ещё ${disabledChecks.length - 3}` : ''}.`;
-  }
-
-  return 'Все обязательные проверки сейчас проходят успешно.';
-}
-
-function getStatusAppearance(status: MonitoringCheckStatus | MonitoringHealthResponse['overallStatus']) {
-  if (status === 'ok') {
-    return {
-      color: '#8af0c0',
-      bg: 'rgba(16, 185, 129, 0.14)',
-      border: 'rgba(110, 231, 183, 0.26)',
-      icon: <CheckCircleOutlineIcon fontSize="small" />,
-      label: 'OK',
-    };
-  }
-
-  if (status === 'warn' || status === 'degraded') {
-    return {
-      color: '#ffd37d',
-      bg: 'rgba(245, 158, 11, 0.14)',
-      border: 'rgba(253, 224, 71, 0.26)',
-      icon: <SyncProblemIcon fontSize="small" />,
-      label: status === 'warn' ? 'WARN' : 'DEGRADED',
-    };
-  }
-
-  if (status === 'disabled') {
-    return {
-      color: '#cbd5e1',
-      bg: 'rgba(148, 163, 184, 0.14)',
-      border: 'rgba(148, 163, 184, 0.24)',
-      icon: <PauseCircleOutlineIcon fontSize="small" />,
-      label: 'DISABLED',
-    };
-  }
-
-  return {
-    color: '#ff9f9f',
-    bg: 'rgba(239, 68, 68, 0.14)',
-    border: 'rgba(252, 165, 165, 0.26)',
-    icon: <ErrorOutlineIcon fontSize="small" />,
-    label: 'DOWN',
-  };
-}
-
-function MonitoringCheckCard({ check }: { check: MonitoringCheck }) {
+function CheckCell({ check }: { check: MonitoringCheck }) {
   const [open, setOpen] = useState(false);
   const appearance = getStatusAppearance(check.status);
-  const metaEntries = Object.entries(check.meta ?? {}).filter(([, value]) => value !== null && value !== undefined && value !== '');
-
+  const meta = Object.entries(check.meta ?? {}).filter(([, value]) => value !== null && value !== undefined && value !== '');
   return (
-    <Paper
-      variant="outlined"
-      sx={{
-        p: 1.75,
-        borderRadius: '18px',
-        borderColor: appearance.border,
-        bgcolor: 'rgba(15, 23, 42, 0.72)',
-        boxShadow: '0 12px 32px rgba(2, 6, 23, 0.16)',
-      }}
-    >
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5, alignItems: 'flex-start' }}>
-        <Box sx={{ minWidth: 0 }}>
-          <Typography variant="subtitle1" fontWeight={700}>
-            {check.label}
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            {check.summary}
-          </Typography>
-        </Box>
-        <Chip
-          size="small"
-          icon={appearance.icon}
-          label={appearance.label}
-          sx={{
-            bgcolor: appearance.bg,
-            color: appearance.color,
-            border: '1px solid',
-            borderColor: appearance.border,
-            fontWeight: 700,
-            alignSelf: 'flex-start',
-          }}
-        />
+    <Paper variant="outlined" sx={{ overflow: 'hidden', borderRadius: '12px', borderColor: open ? appearance.border : 'rgba(148,163,184,.16)', bgcolor: 'rgba(15,23,42,.48)' }}>
+      <Box component="button" type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%', border: 0, color: 'inherit', font: 'inherit', textAlign: 'left', bgcolor: 'transparent', p: 1.1, cursor: 'pointer', '&:hover': { bgcolor: 'rgba(148,163,184,.05)' }, '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.light', outlineOffset: -2 } }}>
+        <FiberManualRecordIcon sx={{ fontSize: 10, color: appearance.dot, flexShrink: 0 }} />
+        <Typography variant="body2" fontWeight={700} sx={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{check.label}</Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>{formatLatency(check.latencyMs)}</Typography>
+        <ExpandMoreIcon aria-hidden sx={{ fontSize: 18, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 160ms' }} />
       </Box>
-
-      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 1.25 }}>
-        <Chip size="small" variant="outlined" label={`Latency: ${formatLatency(check.latencyMs)}`} />
-        <Chip size="small" variant="outlined" label={`Проверено: ${formatDateTime(check.checkedAt)}`} />
-        {metaEntries.slice(0, 3).map(([key, value]) => (
-          <Tooltip key={key} title={key} arrow>
-            <Chip size="small" variant="outlined" label={`${key}: ${String(value)}`} />
-          </Tooltip>
-        ))}
-      </Stack>
-
-      <Box sx={{ mt: 1.25, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Typography variant="caption" color="text.secondary">
-          {check.key}
-        </Typography>
-        <IconButton size="small" onClick={() => setOpen((value) => !value)} aria-label="Показать детали">
-          <ExpandMoreIcon
-            sx={{
-              transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
-              transition: 'transform 160ms ease',
-            }}
-          />
-        </IconButton>
-      </Box>
-
-      <Collapse in={open}>
-        <Divider sx={{ my: 1.25 }} />
-        <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
-          {check.details}
-        </Typography>
-        {metaEntries.length > 3 && (
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 1.25 }}>
-            {metaEntries.slice(3).map(([key, value]) => (
-              <Chip key={key} size="small" variant="outlined" label={`${key}: ${String(value)}`} />
-            ))}
+      <Collapse in={open} timeout="auto" unmountOnExit>
+        <Divider />
+        <Box sx={{ p: 1.25 }}>
+          <Typography variant="body2">{check.summary}</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: .75, whiteSpace: 'pre-wrap' }}>{check.details}</Typography>
+          <Stack direction="row" spacing={.75} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+            <Chip size="small" label={`${appearance.label} · ${check.key}`} sx={{ bgcolor: appearance.bg, color: appearance.text, border: '1px solid', borderColor: appearance.border }} />
+            <Chip size="small" variant="outlined" label={`Проверено: ${formatDateTime(check.checkedAt)}`} />
+            {meta.map(([key, value]) => <Tooltip key={key} title={key} arrow><Chip size="small" variant="outlined" label={`${key}: ${String(value)}`} /></Tooltip>)}
           </Stack>
-        )}
+        </Box>
       </Collapse>
     </Paper>
   );
 }
 
-export function MonitoringSection() {
+export const MonitoringSection = memo(function MonitoringSection() {
   const [data, setData] = useState<MonitoringHealthResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const load = async (isManualRefresh = false) => {
-    if (isManualRefresh) {
-      setRefreshing(true);
-    } else {
-      setLoading(true);
-    }
-
-    try {
-      const response = await fetchMonitoringHealth();
-      setData(response);
-      setError(null);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Не удалось загрузить monitoring health');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
+  const load = async (manual = false) => {
+    manual ? setRefreshing(true) : setLoading(true);
+    try { setData(await fetchMonitoringHealth()); setError(null); }
+    catch (value) { setError(value instanceof Error ? value.message : 'Не удалось загрузить проверки мониторинга'); }
+    finally { setLoading(false); setRefreshing(false); }
   };
-
-  useEffect(() => {
-    void load();
-    const intervalId = window.setInterval(() => {
-      void load(true);
-    }, 30_000);
-
-    return () => window.clearInterval(intervalId);
-  }, []);
-
-  const groupedChecks = useMemo(() => {
-    const groups = new Map<MonitoringCheckCategory, MonitoringCheck[]>();
-    for (const category of CATEGORY_ORDER) {
-      groups.set(category, []);
-    }
-
-    for (const check of data?.checks ?? []) {
-      const existing = groups.get(check.category);
-      if (existing) {
-        existing.push(check);
-      } else {
-        groups.set(check.category, [check]);
-      }
-    }
-
-    return groups;
+  useEffect(() => { void load(); const id = window.setInterval(() => void load(true), 30000); return () => window.clearInterval(id); }, []);
+  const groups = useMemo(() => {
+    const result = new Map<MonitoringCheckCategory, MonitoringCheck[]>();
+    CATEGORY_ORDER.forEach((category) => result.set(category, []));
+    (data?.checks ?? []).forEach((check) => result.get(check.category)?.push(check));
+    return result;
   }, [data]);
-
-  if (loading && !data) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <CircularProgress />
-      </Box>
-    );
-  }
-
-  const overallAppearance = getStatusAppearance(data?.overallStatus ?? 'down');
-  const overallDetails = buildOverallStatusDetails(data);
-
+  if (loading && !data) return <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}><CircularProgress /></Box>;
+  const checks = data?.checks ?? [];
+  const counts = checks.reduce<Record<string, number>>((acc, check) => { acc[check.status] = (acc[check.status] ?? 0) + 1; return acc; }, {});
+  const categoryCount = new Set(checks.map((check) => check.category)).size;
+  const overall = getStatusAppearance(data?.overallStatus ?? 'down');
   return (
     <Box>
-      <Paper
-        variant="outlined"
-        sx={{
-          p: { xs: 1.75, md: 2.25 },
-          mb: 2.5,
-          borderRadius: '24px',
-          borderColor: overallAppearance.border,
-          background:
-            'radial-gradient(circle at top right, rgba(59, 130, 246, 0.14), transparent 30%), linear-gradient(180deg, rgba(15,23,42,0.92) 0%, rgba(17,24,39,0.84) 100%)',
-        }}
-      >
-        <Box
-          sx={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            gap: 2,
-            alignItems: { xs: 'flex-start', md: 'center' },
-            flexDirection: { xs: 'column', md: 'row' },
-          }}
-        >
-          <Box>
-            <Typography variant="overline" sx={{ color: 'text.secondary', letterSpacing: 1.2 }}>
-              Общий статус
-            </Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-              <Chip
-                icon={overallAppearance.icon}
-                label={overallAppearance.label}
-                sx={{
-                  bgcolor: overallAppearance.bg,
-                  color: overallAppearance.color,
-                  border: '1px solid',
-                  borderColor: overallAppearance.border,
-                  fontWeight: 800,
-                }}
-              />
-              <Typography variant="h6" fontWeight={800}>
-                {getOverallStatusLabel(data?.overallStatus ?? 'down')}
-              </Typography>
-            </Box>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-              {overallDetails}
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
-              Последний snapshot: {formatDateTime(data?.generatedAt)}
-            </Typography>
+      <Box id="monitor-overview" sx={{ scrollMarginTop: 20 }}>
+        <Paper variant="outlined" sx={{ p: 1.5, mb: 2, borderRadius: '14px', borderColor: overall.border, bgcolor: 'rgba(15,23,42,.58)' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+            <Chip label={overall.label} sx={{ bgcolor: overall.bg, color: overall.text, border: '1px solid', borderColor: overall.border, fontWeight: 800 }} />
+            <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>Снимок: {formatDateTime(data?.generatedAt)}</Typography>
+            {(['ok', 'warn', 'down', 'disabled'] as const).map((status) => <Chip key={status} size="small" label={`${STATUS_LABELS[status]} ${counts[status] ?? 0}`} variant="outlined" sx={{ color: getStatusAppearance(status).text, borderColor: getStatusAppearance(status).border }} />)}
+            <Chip size="small" variant="outlined" label={`${categoryCount} ${pluralize(categoryCount, 'категория', 'категории', 'категорий')}`} />
+            <Button size="small" variant="outlined" startIcon={refreshing ? <CircularProgress size={13} color="inherit" /> : <RefreshIcon />} onClick={() => void load(true)} disabled={refreshing}>Проверить сейчас</Button>
           </Box>
-
-          <Button
-            variant="outlined"
-            startIcon={refreshing ? <CircularProgress size={14} color="inherit" /> : <RefreshIcon fontSize="small" />}
-            onClick={() => void load(true)}
-            disabled={refreshing}
-          >
-            Обновить
-          </Button>
-        </Box>
-      </Paper>
-
-      {error && (
-        <Alert severity="error" sx={{ mb: 2.5 }}>
-          {error}
-        </Alert>
-      )}
-
-      <Stack spacing={2.5}>
-        {CATEGORY_ORDER.map((category) => {
-          const checks = groupedChecks.get(category) ?? [];
-          if (!checks.length) return null;
-
-          return (
-            <Box key={category}>
-              <Typography variant="h6" fontWeight={800} sx={{ mb: 1.25 }}>
-                {CATEGORY_LABELS[category]}
-              </Typography>
-              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', xl: '1fr 1fr' }, gap: 1.5 }}>
-                {checks.map((check) => (
-                  <MonitoringCheckCard key={check.key} check={check} />
-                ))}
-              </Box>
-            </Box>
-          );
-        })}
-      </Stack>
-
+        </Paper>
+      </Box>
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      <Box id="monitor-deps" sx={{ scrollMarginTop: 20 }}>
+        <Stack spacing={1.75}>
+          {CATEGORY_ORDER.map((category) => {
+            const categoryChecks = groups.get(category) ?? [];
+            if (!categoryChecks.length) return null;
+            return <Box key={category}><Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: .75 }}><Chip size="small" label={CATEGORY_LABELS[category]} variant="outlined" /><Typography variant="caption" color="text.secondary">{categoryChecks.length} {pluralize(categoryChecks.length, 'проверка', 'проверки', 'проверок')}</Typography></Box><Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' }, gap: .75 }}>{categoryChecks.map((check) => <CheckCell key={check.key} check={check} />)}</Box></Box>;
+          })}
+        </Stack>
+      </Box>
       <AiUsageSection />
     </Box>
   );
-}
+});

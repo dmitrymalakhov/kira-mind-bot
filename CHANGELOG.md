@@ -6,6 +6,8 @@
 
 ## 2026-07-31
 
+- Раздел «Мониторинг» в админ-панели получил компактную статусную сводку, плотные карточки зависимостей с раскрытием деталей, SVG-график AI usage, объединённые breakdown-лидеры и компактные таблицы цепочек и ошибок с якорной навигацией.
+
 - Упрощена конфигурация AI: удалён legacy-реестр `degraded-models.json`, поэтому единственным источником цепочки деградации остаётся policy провайдера; админка больше не дублирует runtime-валидацию fallback. Подписи embeddings/transcription теперь выводятся из provider и типа задачи, поэтому смена model ID не требует отдельной таблицы UI-названий.
 - Gemini-пресеты переведены с deprecated `gemini-3-flash-preview` и предыдущих default-моделей на GA-линейку: основные задачи и транскрибация используют `gemini-3.6-flash`, фоновые lite-задачи — `gemini-3.5-flash-lite`, embeddings остаются на `gemini-embedding-2`. Same-provider degradation теперь идёт `3.5 Flash-Lite → 3.1 Flash-Lite → 2.5 Flash-Lite`.
 - Прямые Gemini Interactions переведены на стабильный `/v1`, явно отключают provider-side хранение через `store: false`, читают токены из официального объекта `usage`, а deprecated `temperature`/`top_p` и неподдерживаемый multi-candidate `n` не отправляются моделям 3.5/3.6. Короткое аудио до 12 MiB передаётся inline без временного Files-объекта; крупные файлы сохраняют общий deadline, обязательный delete и независимое cleanup-окно.
