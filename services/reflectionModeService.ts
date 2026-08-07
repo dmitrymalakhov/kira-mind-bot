@@ -393,12 +393,13 @@ export async function processBuffers(bot: Bot<BotContext>): Promise<void> {
         }
 
         const batch = [...buf.messages];
+        const criticalSignal = buf.highPriority;
         buf.messages = [];
         buf.lastAnalyzedAt = new Date();
         buf.enqueuedAt = new Date();
         buf.highPriority = false;
 
-        await analyzeBatch(bot, chatId, buf, batch);
+        await analyzeBatch(bot, chatId, buf, batch, criticalSignal);
     }
 }
 
@@ -809,7 +810,8 @@ async function analyzeBatch(
     bot: Bot<BotContext>,
     chatId: string,
     buf: ChatBuffer,
-    allMessages: BufferedMessage[]
+    allMessages: BufferedMessage[],
+    criticalSignal: boolean,
 ): Promise<void> {
     try {
         // ── Шаг 1: Фильтрация уже проанализированных ────────────────────────
@@ -851,7 +853,7 @@ async function analyzeBatch(
             await saveLastAnalyzedMessageAt(chatId, lastMsgDate);
             buf.lastAnalyzedMessageAt = lastMsgDate;
             await updateYieldRate(chatId, 0);
-            await emitDaytimeReflection();
+            if (criticalSignal) await emitDaytimeReflection();
             return;
         }
 
@@ -935,7 +937,7 @@ async function analyzeBatch(
         const lastMsgDate = newMessages[newMessages.length - 1].date;
         await saveLastAnalyzedMessageAt(chatId, lastMsgDate);
         buf.lastAnalyzedMessageAt = lastMsgDate;
-        await emitDaytimeReflection();
+        if (criticalSignal) await emitDaytimeReflection();
 
         // Fix 5: Обновляем кумулятивную статистику
         totalAnalyses++;
