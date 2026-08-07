@@ -119,7 +119,7 @@ const TAB_META: Record<number, { title: string; caption: string }> = {
   },
   5: {
     title: 'Мониторинг зависимостей',
-    caption: 'Live health checks для контейнера, хранилищ, Telegram и AI-провайдеров',
+    caption: 'Проверки контейнера, хранилищ, Telegram и провайдеров ИИ',
   },
   6: {
     title: 'Регулярные задачи',
@@ -150,6 +150,19 @@ const SETTINGS_GROUPS: SidebarSectionGroup[] = [
     items: [
       { targetId: 'general', shortLabel: 'Общие', icon: <SettingsIcon fontSize="small" />, caption: 'Общие настройки' },
       { targetId: 'kira', shortLabel: 'Расписание', icon: <EventRepeatIcon fontSize="small" />, caption: 'Kira — Расписание' },
+    ],
+  },
+];
+
+const MONITORING_GROUPS: SidebarSectionGroup[] = [
+  {
+    title: 'Мониторинг',
+    items: [
+      { targetId: 'monitor-overview', shortLabel: 'Обзор', icon: <MonitorHeartIcon fontSize="small" />, caption: 'Статус и показатели' },
+      { targetId: 'monitor-deps', shortLabel: 'Зависимости', icon: <StorageIcon fontSize="small" />, caption: 'Исполнение, хранилище, Telegram и ИИ' },
+      { targetId: 'monitor-ai-usage', shortLabel: 'Использование ИИ', icon: <PsychologyIcon fontSize="small" />, caption: 'Фильтры, график и разбор' },
+      { targetId: 'monitor-chains', shortLabel: 'Маршрутизация', icon: <ChevronRightIcon fontSize="small" />, caption: 'Основной, повторный и резервный путь' },
+      { targetId: 'monitor-failures', shortLabel: 'Ошибки', icon: <LocalHospitalIcon fontSize="small" />, caption: 'Последние ошибки' },
     ],
   },
 ];
@@ -280,6 +293,7 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
 
   const selectTab = (value: number) => {
     setActiveTab(value);
+    setActiveSection(value === 5 ? 'monitor-overview' : value === 0 ? CONFIG_SCHEMA[0].id : '');
     if (isMobile) {
       setMobileOpen(false);
     }
@@ -298,6 +312,7 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
     icon,
     label,
     caption,
+    itemKey,
     selected,
     onClick,
     clickable = true,
@@ -305,11 +320,13 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
     icon: JSX.Element;
     label: string;
     caption: string;
+    itemKey?: string;
     selected: boolean;
     onClick?: () => void;
     clickable?: boolean;
   }) => (
     <ListItemButton
+      key={itemKey}
       selected={selected}
       onClick={onClick}
       disabled={!clickable}
@@ -527,9 +544,9 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
           py: 1.1,
         }}
       >
-        {activeTab === 0 ? (
+        {activeTab === 0 || activeTab === 5 ? (
           <Box>
-            {SETTINGS_GROUPS.map((group) => (
+            {(activeTab === 5 ? MONITORING_GROUPS : SETTINGS_GROUPS).map((group) => (
               <Box key={group.title} sx={{ mb: 0.9 }}>
                 <Typography
                   variant="caption"
@@ -548,6 +565,7 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
                 </Typography>
                 {group.items.map((item) =>
                   renderNavCard({
+                    itemKey: item.targetId,
                     icon: item.icon,
                     label: item.shortLabel,
                     caption: item.caption,
@@ -577,6 +595,7 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
             </Typography>
             {(SIDEBAR_INTRO_CARDS[activeTab] ?? []).map((item) =>
               renderNavCard({
+                itemKey: item.targetId ?? item.label,
                 icon: item.icon,
                 label: item.label,
                 caption: item.caption,
