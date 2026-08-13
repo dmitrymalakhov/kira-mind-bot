@@ -9,6 +9,11 @@ export interface AgentMemoryContext {
     recalledMemories?: RecalledMemoryRef[];
 }
 
+export interface AgentMemoryContextOptions {
+    /** Детерминированная дневная сводка строит snapshot отдельно и не должна читать его дважды. */
+    includeTodayImportance?: boolean;
+}
+
 /**
  * На все запросы пользователя подтягиваем контекст из долговременной памяти:
  * запрос разбирается на интенты в getMultiQueryMemoryContext, по каждому подтягиваются факты.
@@ -16,7 +21,11 @@ export interface AgentMemoryContext {
  * Сначала классифицирует потребность в памяти (none / light / full),
  * чтобы не тратить ресурсы на приветствия и реакции.
  */
-export async function fetchAgentMemoryContext(ctx: BotContext, message: string): Promise<AgentMemoryContext> {
+export async function fetchAgentMemoryContext(
+    ctx: BotContext,
+    message: string,
+    options: AgentMemoryContextOptions = {},
+): Promise<AgentMemoryContext> {
     // Personal memory is only available in private chat to prevent leaking private info in group chats
     if (ctx.chat?.type !== 'private') {
         return { domain: 'personal', context: '' };
@@ -35,7 +44,9 @@ export async function fetchAgentMemoryContext(ctx: BotContext, message: string):
 
     const [memory, todayImportanceContext] = await Promise.all([
         getMultiQueryMemoryContextDetailed(ctx, trimmed, memoryNeed),
-        buildTodayImportanceContext(ctx, trimmed),
+        options.includeTodayImportance === false
+            ? Promise.resolve('')
+            : buildTodayImportanceContext(ctx, trimmed),
     ]);
     const context = memory.context;
     const working = formatWorkingMemory(ctx);

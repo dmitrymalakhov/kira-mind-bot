@@ -32,6 +32,7 @@ import {
     guardRecurringTaskPlan,
 } from "./utils/recurringTaskPrompt";
 import { isAssistantSelfPhotoRequest } from "./utils/assistantSelfPhoto";
+import type { RichBlock } from './utils/richMessage';
 
 // Загрузка переменных окружения
 dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
@@ -115,29 +116,36 @@ export interface MessageClassification {
 }
 
 // Расширенный интерфейс для результата обработки сообщения
+export interface ReminderCreationDetails {
+    id: string;
+    text: string;
+    reminderMessage?: string;
+    /** Текст для адресата, если владелец подтвердит отправку в targetChat */
+    targetReminderMessage?: string;
+    dueDate: Date;
+    /** Указал ли пользователь конкретное время; false означает выбранное ботом время. */
+    exactTimeSpecified?: boolean;
+    /** Куда отправить напоминание: в группу или контакту (резолвится при срабатывании) */
+    targetChat?: { type: "group"; groupName: string } | { type: "contact"; contactQuery: string };
+    recurrence?: import("./types/reminderTypes").RecurrenceRule;
+}
+
+export interface ReminderCreationFailure {
+    text: string;
+    error: string;
+}
+
 export interface ProcessingResult {
     responseText: string;
     reminderCreated?: boolean;
-    reminderDetails?: {
-        id: string;
-        text: string;
-        reminderMessage?: string;
-        /** Текст для адресата, если владелец подтвердит отправку в targetChat */
-        targetReminderMessage?: string;
-        dueDate: Date;
-        /** Куда отправить напоминание: в группу или контакту (резолвится при срабатывании) */
-        targetChat?: { type: "group"; groupName: string } | { type: "contact"; contactQuery: string };
-        recurrence?: import("./types/reminderTypes").RecurrenceRule;
-    };
-    reminderDetailsList?: {
-        id: string;
-        text: string;
-        reminderMessage?: string;
-        targetReminderMessage?: string;
-        dueDate: Date;
-        targetChat?: { type: "group"; groupName: string } | { type: "contact"; contactQuery: string };
-        recurrence?: import("./types/reminderTypes").RecurrenceRule;
-    }[];
+    reminderAction?: 'create_reminder' | 'create_reminders_batch';
+    reminderDetails?: ReminderCreationDetails;
+    reminderDetailsList?: ReminderCreationDetails[];
+    reminderCreationFailures?: ReminderCreationFailure[];
+    /** Ответ другого terminal-шага, который нужно сохранить рядом с подтверждением напоминания. */
+    companionResponseText?: string;
+    /** Детерминированные блоки для системного Telegram-ответа. */
+    structuredResponseBlocks?: RichBlock[];
     detectedText?: string; // Текст, который был распознан в сообщении
     description?: string; // Описание изображения, если оно было сгенерировано
     imageGenerated?: boolean;  // Флаг успешной генерации изображения
@@ -914,7 +922,9 @@ export async function processMessage(
         }
 
         // Шаг 1: Донасыщаем запрос из долговременной памяти (факты по интентам + роль→имя). Контекст передаём агенту позже.
-        const initialMemory = await fetchAgentMemoryContext(ctx, originalMessage);
+        const initialMemory = await fetchAgentMemoryContext(ctx, originalMessage, {
+            includeTodayImportance: !isTodayImportanceRequest(originalMessage),
+        });
         const initialBlock = buildMemoryContextBlock(initialMemory);
         let enrichedContextFromMemory = initialBlock ? initialBlock + '\n\n' : '';
         const knowledgeBlock = buildKnowledgeSourcePrompt(knowledgeDecision);

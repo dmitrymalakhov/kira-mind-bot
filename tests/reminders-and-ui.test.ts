@@ -14,11 +14,20 @@ import {
     targetChatHumanLabel,
 } from "../utils/reminderTargetNotification";
 import {
+    REMINDERS_PAGE_SIZE,
     buildChatPicker,
     buildPostponeKeyboard,
     buildReminderCard,
+    buildReminderOpenCommand,
     buildRemindersList,
+    filterReminders,
     getActiveReminders,
+    getReminderCommandCode,
+    getReminderListStats,
+    parseReminderOpenCommand,
+    parseReminderPanelOrigin,
+    resolveReminderCallbackRef,
+    resolveReminderCommandCode,
 } from "../utils/reminderCard";
 import { renderFallbackHtml } from "../utils/richMessage";
 import { selectPersonalityGenderText } from "../utils/personalityGender";
@@ -202,21 +211,24 @@ describe("reminder cards and keyboards", () => {
         assert.deepEqual(getActiveReminders(ctx).map((r) => r.id), [value.id]);
     });
 
-    test("supports cross-chat viewing from a session", () => {
-        const value = add(reminder({ chatId: -920_002 }));
-        const ctx = { chat: { id: 920_002 }, session: { viewingRemindersInChat: -920_002 } } as any;
-        assert.deepEqual(getActiveReminders(ctx).map((r) => r.id), [value.id]);
+    test("uses persisted cross-chat selection only in a private chat", () => {
+        const group = add(reminder({ chatId: -920_002 }));
+        const personal = add(reminder({ chatId: 920_002 }));
+        const privateCtx = { chat: { id: 920_002, type: "private" }, session: { viewingRemindersInChat: -920_002 } } as any;
+        const groupCtx = { chat: { id: 920_002, type: "group" }, session: { viewingRemindersInChat: -920_002 } } as any;
+        assert.deepEqual(getActiveReminders(privateCtx).map((r) => r.id), [group.id]);
+        assert.deepEqual(getActiveReminders(groupCtx).map((r) => r.id), [personal.id]);
     });
 
-    test("builds a chat picker with counts and callbacks", () => {
+    test("keeps the legacy chat picker callbacks available", () => {
         const picker = buildChatPicker([
-            { chatId: 1, title: "Личный", count: 2 },
-            { chatId: -2, title: "Работа", count: 3 },
+            { chatId: 1, title: "Личный чат", count: 2 },
+            { chatId: -2, title: "Группа", count: 1 },
         ]);
-        const text = renderFallbackHtml(picker.blocks);
-        assert.match(text, /Личный.*2.*напом/);
-        assert.match(text, /Работа.*3.*напом/);
-        assert.deepEqual(rows(picker.keyboard).map((row) => row[0].callback_data), ["reminder_chat_1", "reminder_chat_-2"]);
+        assert.deepEqual(rows(picker.keyboard).flat().map(button => button.callback_data), [
+            "reminder_chat_1",
+            "reminder_chat_-2",
+        ]);
     });
 
     test("uses displayText, status, recurrence, and target details in a card", () => {
@@ -245,38 +257,105 @@ describe("reminder cards and keyboards", () => {
         const middle = rows(buildReminderCard(reminders, 1).keyboard).flat();
         const last = rows(buildReminderCard(reminders, 2).keyboard).flat();
         assert.equal(first.filter((b) => b.text === "·")[0].callback_data, "reminders_nav_noop");
-        assert.equal(middle.find((b) => b.text === "◀️").callback_data, "reminders_nav_0");
-        assert.equal(middle.find((b) => b.text === "▶️").callback_data, "reminders_nav_2");
+        assert.equal(middle.find((b) => b.text === "◀️").callback_data, "reminders_card_0");
+        assert.equal(middle.find((b) => b.text === "▶️").callback_data, "reminders_card_2");
         assert.equal(last.find((b) => b.text === "·").callback_data, "reminders_nav_noop");
     });
 
     test("builds all postpone choices for the correct reminder", () => {
-        const buttons = rows(buildPostponeKeyboard("abc")).flat();
+        const value = reminder({ id: "abc" });
+        const buttons = rows(buildPostponeKeyboard(value)).flat();
         assert.equal(buttons.length, 9);
-        assert.deepEqual(buttons.map((b) => b.callback_data), [
-            "postpone_abc_15",
-            "postpone_abc_30",
-            "postpone_abc_60",
-            "postpone_abc_180",
-            "postpone_abc_evening",
-            "postpone_abc_tomorrow",
-            "postpone_abc_week",
-            "postpone_abc_custom",
-            "postpone_abc_back",
-        ]);
+        assert.equal(buttons.every((b) => /^postpone_~[a-f0-9]{20}_(15|30|60|180|evening|tomorrow|week|custom|back)$/.test(b.callback_data)), true);
     });
 
-    test("builds a compact reminder list and clamps return index", () => {
+    test("keeps filter and page in card actions without exceeding callback limits", () => {
+        const value = reminder({ id: "1770000000000-health-followup-12345678-24" });
+        const origin = { filter: "recurring" as const, page: 12345 };
+        const callbacks = [
+            ...rows(buildReminderCard([value], 0, false, origin).keyboard).flat(),
+            ...rows(buildPostponeKeyboard(value, origin)).flat(),
+        ].map(button => button.callback_data);
+        assert.equal(callbacks.every(value => Buffer.byteLength(value, "utf8") <= 64), true);
+        assert.equal(callbacks.includes("reminders_page_recurring_12345"), true);
+        assert.equal(callbacks.some(value => value.endsWith(":p:r:9ix")), true);
+        assert.deepEqual(parseReminderPanelOrigin("~0123456789abcdef0123:p:r:9ix"), {
+            value: "~0123456789abcdef0123",
+            origin: { filter: "recurring", page: 12345 },
+        });
+        const callbackRef = callbacks.find(callback => callback.startsWith("reminder_complete_"))!
+            .match(/^reminder_complete_([^:]+)/)?.[1];
+        assert.equal(resolveReminderCallbackRef([value], callbackRef!)?.id, value.id);
+    });
+
+    test("builds a compact reminder list and clamps the page", () => {
         const values = [
             reminder({ text: "Первое", recurrence: { type: "daily", interval: 2 } }),
             reminder({ text: "Второе", status: ReminderStatus.Sent, targetChat: { type: "contact", contactQuery: "Иван" } }),
         ];
-        const list = buildRemindersList(values, 99);
+        const list = buildRemindersList(values, { page: 99, botUsername: "kira_bot" });
         const text = renderFallbackHtml(list.blocks);
-        assert.match(text, /Все напоминания \(2\)/);
-        assert.match(text, /Каждые 2 дн/);
+        assert.match(text, /Напоминания · 2/);
         assert.match(text, /Ожидает ответа/);
-        assert.match(text, /контакт «Иван»/);
-        assert.equal(rows(list.keyboard)[0][0].callback_data, "reminders_nav_1");
+        assert.match(text, /\/r_[a-f0-9]{10}_a_0@kira_bot/);
+        assert.equal(list.page, 0);
+        assert.equal(list.totalPages, 1);
+    });
+
+    test("splits reminders into deterministic timezone filters", () => {
+        const now = new Date("2026-08-11T09:00:00Z"); // 12:00 Europe/Moscow
+        const values = [
+            reminder({ dueDate: new Date("2026-08-11T18:00:00Z") }),
+            reminder({ dueDate: new Date("2026-08-12T08:00:00Z") }),
+            reminder({ dueDate: new Date("2026-08-18T08:00:00Z") }),
+            reminder({ dueDate: new Date("2026-08-19T08:00:00Z") }),
+            reminder({ dueDate: new Date("2026-08-20T08:00:00Z"), recurrence: { type: "daily", interval: 1 } }),
+            reminder({ dueDate: new Date("2026-08-10T08:00:00Z"), status: ReminderStatus.Expired }),
+        ];
+        const stats = getReminderListStats(values, now);
+        assert.deepEqual(stats, { total: 6, attention: 1, today: 1, week: 2, later: 2, recurring: 1 });
+        assert.equal(filterReminders(values, "today", now).length, 1);
+        assert.equal(filterReminders(values, "week", now).length, 2);
+        assert.equal(filterReminders(values, "later", now).length, 2);
+        assert.equal(filterReminders(values, "attention", now)[0].status, ReminderStatus.Expired);
+    });
+
+    test("paginates eight reminders and offers first, neighbor, and last pages", () => {
+        const values = Array.from({ length: REMINDERS_PAGE_SIZE * 4 + 1 }, (_, index) => reminder({
+            dueDate: new Date(Date.now() + (index + 1) * 60_000),
+        }));
+        const view = buildRemindersList(values, { page: 2 });
+        assert.equal(view.filteredReminders.length, values.length);
+        assert.equal(view.page, 2);
+        assert.equal(view.totalPages, 5);
+        const callbacks = rows(view.keyboard).flat().map(button => button.callback_data);
+        assert.equal(callbacks.includes("reminders_page_all_0"), true);
+        assert.equal(callbacks.includes("reminders_page_all_1"), true);
+        assert.equal(callbacks.includes("reminders_page_all_3"), true);
+        assert.equal(callbacks.includes("reminders_page_all_4"), true);
+
+        assert.equal(buildRemindersList(values.slice(0, 8)).totalPages, 1);
+        assert.equal(buildRemindersList(values.slice(0, 9)).totalPages, 2);
+    });
+
+    test("round-trips a short clickable command and keeps panel origin", () => {
+        const values = [reminder({ id: "long-arbitrary-reminder-id-one" }), reminder({ id: "other-id" })];
+        const command = buildReminderOpenCommand(values[0], values, { filter: "today", page: 35 }, "kira_bot");
+        const parsed = parseReminderOpenCommand(command);
+        assert.ok(parsed);
+        assert.match(command, /^\/r_[a-f0-9]{10,20}_t_z@kira_bot$/);
+        assert.ok(command.slice(1).split("@")[0].length <= 32);
+        assert.equal(resolveReminderCommandCode(values, parsed!.code)?.id, values[0].id);
+        assert.equal(getReminderCommandCode(values[0], values), parsed!.code);
+        assert.deepEqual(parseReminderPanelOrigin("123:p:today:35"), {
+            value: "123",
+            origin: { filter: "today", page: 35 },
+        });
+    });
+
+    test("does not resolve missing or ambiguous short codes", () => {
+        const duplicate = reminder({ id: "same" });
+        assert.equal(resolveReminderCommandCode([duplicate], "deadbeef00"), undefined);
+        assert.equal(resolveReminderCommandCode([duplicate, { ...duplicate, chatId: duplicate.chatId + 1 }], getReminderCommandCode(duplicate, [duplicate])), undefined);
     });
 });
