@@ -3,11 +3,23 @@ import { InputFile } from "grammy/types";
 import * as fs from "fs";
 import * as path from "path";
 import { BotContext } from "../types";
-import { Reminder, ReminderStatus, cancelReminder, markReminderAsCompleted, postponeReminderUntil, resolveTargetChat, scheduleReminder } from "../reminder";
+import { Reminder, ReminderStatus, cancelReminder, markReminderAsCompleted, postponeReminderUntil } from "../reminder";
 import { reminderAgent } from "../agents/reminderAgent";
 import { ReminderRepository } from "../services/ReminderRepository";
 import { hasFreshPendingReminder } from "../utils/implicitReminderDetector";
-import { getActiveReminders, buildReminderCard, buildPostponeKeyboard, buildRemindersList, buildChatPicker } from "../utils/reminderCard";
+import {
+    REMINDERS_PAGE_SIZE,
+    ReminderListFilter,
+    ReminderPanelOrigin,
+    buildChatPicker,
+    buildReminderCard,
+    buildPostponeKeyboard,
+    buildRemindersList,
+    filterReminders,
+    getActiveReminders,
+    parseReminderPanelOrigin,
+    resolveReminderCallbackRef,
+} from "../utils/reminderCard";
 import { ReminderRegistry } from "../stores/ReminderRegistry";
 import { sendMessageFromDraftDetailed, deleteMessageDraft, saveMessageDraft, getMessageDraft } from "../agents/sendMessagesAgent";
 import { ContactsStore } from "../stores/ContactsStore";
@@ -21,7 +33,7 @@ import { scheduleNegotiationAgreementReminders } from "../agents/negotiationAgre
 import { initTelegramClient, sendMessage as sendTelegramMessage } from "../services/telegram";
 import { getMessagesSummary, handleChatAnalysisPeriodCallback, handleStudyChatPeriodCallback } from "../agents/readMessagesAgent";
 import { sendMessage } from "../utils";
-import { editStructured } from "../utils/richMessage";
+import { editStructured, sendStructured } from "../utils/richMessage";
 import { editMessageTextIfChanged, editReplyMarkupIfChanged, runNonCriticalTelegramEdit } from "../utils/telegramMessageEdit";
 import type { StudyChatPeriod } from "../utils/studyChatFlow";
 import { handleContactMemoryCallback } from "../utils/contactMemory";
@@ -30,11 +42,9 @@ import { processMessage, type ProcessingResult } from "../orchestrator";
 import { addToHistory } from "../utils/history";
 import { consumeQuickChoice, isQuickChoiceCallback } from "../utils/quickChoice";
 import { MAX_MESSAGE_LENGTH, USER_TIMEZONE } from "../constants";
-import { createOrRefreshReminderMemory, syncReminderMemoryMutation } from "../services/ReminderMemorySync";
+import { syncReminderMemoryMutation } from "../services/ReminderMemorySync";
 import { getTelegramVoiceReadinessIssue, withTelegramVoiceFile } from "../services/elevenLabsTts";
 import {
-    addTargetNotificationButtons,
-    appendTargetNotificationPrompt,
     buildDefaultTargetReminderMessage,
     parseTargetNotificationCallback,
     removeTargetNotificationButtons,
@@ -42,6 +52,7 @@ import {
 } from "../utils/reminderTargetNotification";
 import { handleRecurringTaskCallback } from "../services/recurringTaskService";
 import { getBotGenderedText } from "../persona";
+import { saveRemindersFromResult as saveSharedRemindersFromResult } from '../handlers/shared';
 
 const EVENING_POSTPONE_HOUR = 19;
 
@@ -134,61 +145,51 @@ function parseReminderListReturnIndex(callbackData: string): number {
     return match ? Number(match[1]) : 0;
 }
 
+function parseReminderActionCallback(callbackData: string): {
+    action: 'complete' | 'postpone' | 'edit' | 'cancel';
+    reminderId: string;
+    origin?: ReminderPanelOrigin;
+} | undefined {
+    const match = callbackData.match(/^reminder_(complete|postpone|edit|cancel)_(.+)$/);
+    if (!match) return undefined;
+    const parsed = parseReminderPanelOrigin(match[2]);
+    return {
+        action: match[1] as 'complete' | 'postpone' | 'edit' | 'cancel',
+        reminderId: parsed.value,
+        origin: parsed.origin,
+    };
+}
+
+function activeForOrigin(ctx: BotContext, origin?: ReminderPanelOrigin): Reminder[] {
+    const active = getActiveReminders(ctx);
+    return origin ? filterReminders(active, origin.filter) : active;
+}
+
+function resolveReminderForCallback(ctx: BotContext, ref: string): Reminder | undefined {
+    if (ref.startsWith('~')) return resolveReminderCallbackRef(getActiveReminders(ctx), ref);
+    return ReminderRegistry.getInstance().get(ref);
+}
+
+function isCrossChatReminderView(ctx: BotContext): boolean {
+    return ctx.chat?.type === 'private' && ctx.session.viewingRemindersInChat !== undefined;
+}
+
+function isReminderInCallbackScope(ctx: BotContext, reminder: Reminder): boolean {
+    const chatId = isCrossChatReminderView(ctx)
+        ? ctx.session.viewingRemindersInChat
+        : ctx.chat?.id;
+    return reminder.chatId === chatId;
+}
+
+function emptyRemindersKeyboard(ctx: BotContext): InlineKeyboard {
+    const keyboard = new InlineKeyboard();
+    if (isCrossChatReminderView(ctx)) keyboard.text('↩️ К чатам', 'reminder_chat_back');
+    return keyboard;
+}
+
 async function saveRemindersFromResult(ctx: BotContext, bot: Bot<BotContext>, result: ProcessingResult) {
-    if (!result.reminderCreated) return;
-    if (!Array.isArray(ctx.session.reminders)) ctx.session.reminders = [];
-    const list = result.reminderDetailsList ?? (result.reminderDetails ? [result.reminderDetails] : []);
-    const targetNotificationCandidates: Reminder[] = [];
-    const chatType = ctx.chat?.type;
-    const chatTitle = chatType === "group" || chatType === "supergroup"
-        ? `👥 ${(ctx.chat as any).title ?? "Группа"}`
-        : undefined;
-
-    for (const details of list) {
-        const reminder: Reminder = {
-            id: details.id,
-            text: details.text,
-            displayText: details.reminderMessage,
-            dueDate: details.dueDate,
-            chatId: ctx.chat!.id,
-            status: ReminderStatus.Pending,
-            createdAt: new Date(),
-            targetChat: details.targetChat,
-            targetDisplayText: details.targetReminderMessage || (details.targetChat ? buildDefaultTargetReminderMessage(details.text) : undefined),
-            targetChatNotifyStatus: details.targetChat ? "pending" : undefined,
-            chatTitle,
-            recurrence: details.recurrence,
-        };
-        if (reminder.targetChat) {
-            targetNotificationCandidates.push(reminder);
-        }
-        ctx.session.reminders.push(reminder);
-        ReminderRegistry.getInstance().add(reminder);
-        await ReminderRepository.save(reminder).catch(e => console.error("[reminder] DB save failed on quick choice:", e));
-        scheduleReminder(bot, reminder);
-        await createOrRefreshReminderMemory(ctx, reminder).catch((e) => console.error("[reminder] memory sync failed on quick create:", e));
-
-        if (details.targetChat) {
-            resolveTargetChat(details.targetChat).then((resolved) => {
-                if (!resolved) {
-                    const what = details.targetChat!.type === "group"
-                        ? `группу «${(details.targetChat as any).groupName}»`
-                        : `контакт «${(details.targetChat as any).contactQuery}»`;
-                    ctx.reply(
-                        getBotGenderedText(`⚠️ Не нашла ${what}.`, `⚠️ Не нашёл ${what}.`) +
-                        " Напоминание сохранено, но проверь правильность названия — иначе оно не дойдёт до адресата."
-                    ).catch(() => {});
-                }
-            }).catch(() => {});
-        }
-    }
-
-    if (targetNotificationCandidates.length > 0) {
-        result.responseText = appendTargetNotificationPrompt(result.responseText, targetNotificationCandidates);
-        const keyboard = result.keyboard ?? new InlineKeyboard();
-        if (result.keyboard) keyboard.row();
-        result.keyboard = addTargetNotificationButtons(keyboard, targetNotificationCandidates);
-    }
+    void bot;
+    await saveSharedRemindersFromResult(ctx, result);
 }
 
 async function sendProcessingResult(ctx: BotContext, result: ProcessingResult) {
@@ -198,6 +199,12 @@ async function sendProcessingResult(ctx: BotContext, result: ProcessingResult) {
     }
 
     await addToHistory(ctx, "bot", result.responseText);
+    if (result.structuredResponseBlocks?.length) {
+        await sendStructured(ctx.api as any, ctx.chat!.id, result.structuredResponseBlocks, {
+            replyMarkup: result.keyboard,
+        });
+        return;
+    }
     const replyOptions = result.keyboard ? { reply_markup: result.keyboard } : {};
     await sendMessage(ctx, result.responseText, replyOptions);
 
@@ -479,77 +486,68 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 return;
             }
 
-            // ── Пикер чатов с напоминаниями (из приватного чата) ────────────────
+            // ── Кросс-чатовый пикер из приватного чата ───────────────────────────
             if (callbackData === 'reminder_chat_back') {
+                if (ctx.chat?.type !== 'private') {
+                    await ctx.answerCallbackQuery({ text: 'Кросс-чатовый просмотр доступен в личном чате' });
+                    return;
+                }
                 ctx.session.viewingRemindersInChat = undefined;
-                await ctx.answerCallbackQuery();
                 const chats = ReminderRegistry.getInstance().getChatsWithActive();
+                await ctx.answerCallbackQuery();
                 if (ctx.callbackQuery.message?.message_id) {
                     if (chats.length === 0) {
-                        await editMessageTextIfChanged(ctx.api,
+                        await editMessageTextIfChanged(
+                            ctx.api,
                             ctx.callbackQuery.message.chat.id,
                             ctx.callbackQuery.message.message_id,
                             '✅ Все напоминания выполнены!',
-                            { reply_markup: new InlineKeyboard() }
+                            { reply_markup: new InlineKeyboard() },
                         );
                     } else if (chats.length === 1) {
-                        const active = ReminderRegistry.getInstance().getActiveByChatId(chats[0].chatId);
-                        const { blocks, keyboard } = buildReminderCard(active, 0, chats.length > 1);
-                        await editStructured(
-                            ctx.api as any,
-                            ctx.callbackQuery.message.chat.id,
-                            ctx.callbackQuery.message.message_id,
-                            blocks,
-                            { replyMarkup: keyboard }
-                        );
+                        if (chats[0].chatId !== ctx.chat.id) ctx.session.viewingRemindersInChat = chats[0].chatId;
+                        const { blocks, keyboard } = buildRemindersList(getActiveReminders(ctx), {
+                            botUsername: ctx.me.username,
+                        });
+                        await editStructured(ctx.api as any, ctx.chat.id, ctx.callbackQuery.message.message_id, blocks, { replyMarkup: keyboard });
                     } else {
                         const { blocks, keyboard } = buildChatPicker(chats);
-                        await editStructured(
-                            ctx.api as any,
-                            ctx.callbackQuery.message.chat.id,
-                            ctx.callbackQuery.message.message_id,
-                            blocks,
-                            { replyMarkup: keyboard }
-                        );
+                        await editStructured(ctx.api as any, ctx.chat.id, ctx.callbackQuery.message.message_id, blocks, { replyMarkup: keyboard });
                     }
                 }
                 return;
             }
 
             if (callbackData.startsWith('reminder_chat_')) {
-                const chatId = parseInt(callbackData.replace('reminder_chat_', ''), 10);
-                if (isNaN(chatId)) {
-                    await ctx.answerCallbackQuery();
+                if (ctx.chat?.type !== 'private') {
+                    await ctx.answerCallbackQuery({ text: 'Кросс-чатовый просмотр доступен в личном чате' });
+                    return;
+                }
+                const chatId = Number(callbackData.replace('reminder_chat_', ''));
+                const chats = ReminderRegistry.getInstance().getChatsWithActive();
+                if (!Number.isSafeInteger(chatId) || !chats.some((chat) => chat.chatId === chatId)) {
+                    await ctx.answerCallbackQuery({ text: 'Этот чат больше недоступен' });
                     return;
                 }
                 ctx.session.viewingRemindersInChat = chatId;
-                const active = ReminderRegistry.getInstance().getActiveByChatId(chatId);
-                const allChats = ReminderRegistry.getInstance().getChatsWithActive();
-                const showBack = allChats.length > 1;
+                const { blocks, keyboard } = buildRemindersList(getActiveReminders(ctx), {
+                    botUsername: ctx.me.username,
+                    showBackToChats: chats.length > 1,
+                });
                 await ctx.answerCallbackQuery();
                 if (ctx.callbackQuery.message?.message_id) {
-                    if (active.length === 0) {
-                        await editMessageTextIfChanged(ctx.api,
-                            ctx.callbackQuery.message.chat.id,
-                            ctx.callbackQuery.message.message_id,
-                            '✅ Нет активных напоминаний в этом чате.',
-                            { reply_markup: showBack ? new InlineKeyboard().text('↩️ К чатам', 'reminder_chat_back') : new InlineKeyboard() }
-                        );
-                    } else {
-                        const { blocks, keyboard } = buildReminderCard(active, 0, showBack);
-                        await editStructured(
-                            ctx.api as any,
-                            ctx.callbackQuery.message.chat.id,
-                            ctx.callbackQuery.message.message_id,
-                            blocks,
-                            { replyMarkup: keyboard }
-                        );
-                    }
+                    await editStructured(
+                        ctx.api as any,
+                        ctx.callbackQuery.message.chat.id,
+                        ctx.callbackQuery.message.message_id,
+                        blocks,
+                        { replyMarkup: keyboard },
+                    );
                 }
                 return;
             }
 
-            // ── Навигация по карточкам напоминаний ──────────────────────────────
+            // ── Список, фильтры и навигация по карточкам ─────────────────────────
             if (callbackData === 'reminders_nav_noop') {
                 await ctx.answerCallbackQuery();
                 return;
@@ -558,6 +556,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
             if (callbackData === 'reminders_list' || callbackData.startsWith('reminders_list_')) {
                 const returnIndex = parseReminderListReturnIndex(callbackData);
                 const active = getActiveReminders(ctx);
+                const page = Math.floor(returnIndex / REMINDERS_PAGE_SIZE);
                 await ctx.answerCallbackQuery();
                 if (ctx.callbackQuery.message?.message_id) {
                     if (active.length === 0) {
@@ -565,10 +564,14 @@ export function registerCallback(bot: Bot<BotContext>): void {
                             ctx.callbackQuery.message.chat.id,
                             ctx.callbackQuery.message.message_id,
                             '✅ Все напоминания выполнены!',
-                            { reply_markup: new InlineKeyboard() }
+                            { reply_markup: emptyRemindersKeyboard(ctx) }
                         );
                     } else {
-                        const { blocks, keyboard } = buildRemindersList(active, returnIndex);
+                        const { blocks, keyboard } = buildRemindersList(active, {
+                            page,
+                            botUsername: ctx.me.username,
+                            showBackToChats: isCrossChatReminderView(ctx),
+                        });
                         await editStructured(
                             ctx.api as any,
                             ctx.callbackQuery.message.chat.id,
@@ -581,11 +584,89 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 return;
             }
 
+            const filterMatch = callbackData.match(/^reminders_filter_(all|attention|today|week|later|recurring)$/);
+            const pageMatch = callbackData.match(/^reminders_page_(all|attention|today|week|later|recurring)_(\d+)$/);
+            if (filterMatch || pageMatch) {
+                const filter = (filterMatch?.[1] ?? pageMatch?.[1]) as ReminderListFilter;
+                const page = pageMatch ? Number(pageMatch[2]) : 0;
+                const active = getActiveReminders(ctx);
+                await ctx.answerCallbackQuery();
+                if (ctx.callbackQuery.message?.message_id) {
+                    if (active.length === 0) {
+                        await editMessageTextIfChanged(
+                            ctx.api,
+                            ctx.callbackQuery.message.chat.id,
+                            ctx.callbackQuery.message.message_id,
+                            '✅ В этом чате больше нет активных напоминаний.',
+                            { reply_markup: emptyRemindersKeyboard(ctx) },
+                        );
+                    } else {
+                        const { blocks, keyboard } = buildRemindersList(active, {
+                            filter,
+                            page,
+                            botUsername: ctx.me.username,
+                            showBackToChats: isCrossChatReminderView(ctx),
+                        });
+                        await editStructured(
+                            ctx.api as any,
+                            ctx.callbackQuery.message.chat.id,
+                            ctx.callbackQuery.message.message_id,
+                            blocks,
+                            { replyMarkup: keyboard },
+                        );
+                    }
+                }
+                return;
+            }
+
+            if (callbackData.startsWith('reminders_card_')) {
+                const parsed = parseReminderPanelOrigin(callbackData);
+                const idx = Number.parseInt(parsed.value.replace('reminders_card_', ''), 10);
+                if (!Number.isSafeInteger(idx) || idx < 0) {
+                    await ctx.answerCallbackQuery({ text: 'Некорректная карточка' });
+                    return;
+                }
+                const origin = parsed.origin ?? { filter: 'all' as const, page: 0 };
+                const active = filterReminders(getActiveReminders(ctx), origin.filter);
+                const safeIdx = Math.max(0, Math.min(idx, active.length - 1));
+                if (active.length === 0) {
+                    await ctx.answerCallbackQuery({ text: 'В этом фильтре больше нет напоминаний' });
+                    if (ctx.callbackQuery.message?.message_id) {
+                        const { blocks, keyboard } = buildRemindersList(getActiveReminders(ctx), {
+                            filter: origin.filter,
+                            page: origin.page,
+                            botUsername: ctx.me.username,
+                            showBackToChats: isCrossChatReminderView(ctx),
+                        });
+                        await editStructured(
+                            ctx.api as any,
+                            ctx.callbackQuery.message.chat.id,
+                            ctx.callbackQuery.message.message_id,
+                            blocks,
+                            { replyMarkup: keyboard },
+                        );
+                    }
+                    return;
+                }
+                const { blocks, keyboard } = buildReminderCard(active, safeIdx, isCrossChatReminderView(ctx), origin);
+                await ctx.answerCallbackQuery();
+                if (ctx.callbackQuery.message?.message_id) {
+                    await editStructured(
+                        ctx.api as any,
+                        ctx.callbackQuery.message.chat.id,
+                        ctx.callbackQuery.message.message_id,
+                        blocks,
+                        { replyMarkup: keyboard },
+                    );
+                }
+                return;
+            }
+
+            // Backward compatibility for cards sent before the update.
             if (callbackData.startsWith('reminders_nav_')) {
                 const idx = parseInt(callbackData.replace('reminders_nav_', ''), 10);
                 const active = getActiveReminders(ctx);
                 const safeIdx = Math.max(0, Math.min(idx, active.length - 1));
-                const showBack = !!ctx.session.viewingRemindersInChat;
 
                 if (active.length === 0) {
                     await ctx.answerCallbackQuery({ text: 'Нет активных напоминаний' });
@@ -593,13 +674,13 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         const cid = ctx.callbackQuery.message.chat.id;
                         const mid = ctx.callbackQuery.message.message_id;
                         await editMessageTextIfChanged(ctx.api, cid, mid, '✅ Все напоминания выполнены!',
-                            { reply_markup: showBack ? new InlineKeyboard().text('↩️ К чатам', 'reminder_chat_back') : new InlineKeyboard() }
+                            { reply_markup: emptyRemindersKeyboard(ctx) }
                         );
                     }
                     return;
                 }
 
-                const { blocks, keyboard } = buildReminderCard(active, safeIdx, showBack);
+                const { blocks, keyboard } = buildReminderCard(active, safeIdx, isCrossChatReminderView(ctx));
                 await ctx.answerCallbackQuery();
                 if (ctx.callbackQuery.message?.message_id) {
                     await editStructured(
@@ -620,6 +701,10 @@ export function registerCallback(bot: Bot<BotContext>): void {
 
                 if (!reminder) {
                     await ctx.answerCallbackQuery({ text: "Напоминание не найдено" });
+                    return;
+                }
+                if (reminder.chatId !== ctx.chat?.id) {
+                    await ctx.answerCallbackQuery({ text: "Это напоминание из другого чата" });
                     return;
                 }
 
@@ -697,44 +782,60 @@ export function registerCallback(bot: Bot<BotContext>): void {
 
             // ── Отмена напоминания ──────────────────────────────────────────────
             if (callbackData.startsWith("reminder_cancel_")) {
-                const reminderId = callbackData.replace("reminder_cancel_", "");
-                if (!reminderId) {
+                const parsedAction = parseReminderActionCallback(callbackData);
+                const reminderRef = parsedAction?.reminderId ?? '';
+                const origin = parsedAction?.origin;
+                if (!reminderRef) {
                     await ctx.answerCallbackQuery({ text: "Произошла ошибка при обработке запроса" });
                     return;
                 }
 
-                const reminder = ReminderRegistry.getInstance().get(reminderId);
+                const reminder = resolveReminderForCallback(ctx, reminderRef);
                 if (!reminder) {
                     await ctx.answerCallbackQuery({ text: "Напоминание не найдено" });
                     return;
                 }
+                if (!isReminderInCallbackScope(ctx, reminder)) {
+                    await ctx.answerCallbackQuery({ text: "Это напоминание из другого чата" });
+                    return;
+                }
+                const reminderId = reminder.id;
 
                 const callbackMidCancel = ctx.callbackQuery.message?.message_id;
                 const isReminderCardCancel = callbackMidCancel !== undefined && callbackMidCancel !== reminder.messageId;
-                const activeBeforeCancel = isReminderCardCancel ? getActiveReminders(ctx) : [];
+                const activeBeforeCancel = isReminderCardCancel ? activeForOrigin(ctx, origin) : [];
                 const reminderDisplayText = reminder.displayText || reminder.text;
                 await cancelReminder(reminderId);
                 ReminderRegistry.getInstance().remove(reminderId);
-                ctx.session.reminders = ctx.session.reminders.filter(r => r.id !== reminderId);
+                if (reminder.chatId === ctx.chat?.id) {
+                    ctx.session.reminders = ctx.session.reminders.filter(r => r.id !== reminderId);
+                }
                 await syncReminderMemoryMutation(ctx, reminder, reminder, 'cancel').catch((e) =>
                     console.error('[reminder] memory sync failed on cancel:', e)
                 );
                 await ctx.answerCallbackQuery({ text: "Напоминание отменено" });
 
-                const showBack = !!ctx.session.viewingRemindersInChat;
                 if (ctx.callbackQuery.message?.message_id) {
                     const cid = ctx.callbackQuery.message.chat.id;
                     const mid = ctx.callbackQuery.message.message_id;
                     if (isReminderCardCancel) {
                         // Кнопка нажата на карточке из /reminders — обновляем карточку
-                        const remaining = getActiveReminders(ctx);
-                        if (remaining.length === 0) {
+                        const allRemaining = getActiveReminders(ctx);
+                        const remaining = origin ? filterReminders(allRemaining, origin.filter) : allRemaining;
+                        if (allRemaining.length === 0) {
                             await editMessageTextIfChanged(ctx.api, cid, mid, '✅ Все напоминания выполнены!',
-                                { reply_markup: showBack ? new InlineKeyboard().text('↩️ К чатам', 'reminder_chat_back') : new InlineKeyboard() }
+                                { reply_markup: emptyRemindersKeyboard(ctx) }
                             );
+                        } else if (remaining.length === 0 && origin) {
+                            const { blocks, keyboard } = buildRemindersList(allRemaining, {
+                                ...origin,
+                                botUsername: ctx.me.username,
+                                showBackToChats: isCrossChatReminderView(ctx),
+                            });
+                            await editStructured(ctx.api as any, cid, mid, blocks, { replyMarkup: keyboard });
                         } else {
                             const nextIndex = getCardIndexAfterRemoval(activeBeforeCancel, remaining, reminderId);
-                            const { blocks, keyboard } = buildReminderCard(remaining, nextIndex, showBack);
+                            const { blocks, keyboard } = buildReminderCard(remaining, nextIndex, isCrossChatReminderView(ctx), origin);
                             await editStructured(ctx.api as any, cid, mid, blocks, { replyMarkup: keyboard });
                         }
                     } else {
@@ -870,34 +971,41 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 }
             // Проверяем, что колбэк связан с напоминанием
             } else if (callbackData.startsWith("reminder_")) {
-                // Извлекаем действие и ID напоминания из данных колбэка
-                const [action, reminderId] = callbackData.replace("reminder_", "").split("_");
+                const parsedAction = parseReminderActionCallback(callbackData);
+                const action = parsedAction?.action;
+                const reminderRef = parsedAction?.reminderId;
+                const origin = parsedAction?.origin;
 
-                if (!reminderId) {
-                    console.error(`Invalid reminder ID: ${reminderId}`);
+                if (!action || !reminderRef) {
+                    console.error(`Invalid reminder ID: ${reminderRef}`);
                     await ctx.answerCallbackQuery({ text: "Произошла ошибка при обработке запроса" });
                     return;
                 }
 
-                // Ищем напоминание в глобальном реестре (работает из любого чата)
-                const reminder = ReminderRegistry.getInstance().get(reminderId);
+                // Реестр ищет по ID, а chatId ниже не позволяет действовать из чужого чата.
+                const reminder = resolveReminderForCallback(ctx, reminderRef);
 
                 if (!reminder) {
-                    console.error(`Reminder with ID ${reminderId} not found`);
+                    console.error(`Reminder with ref ${reminderRef} not found`);
                     await ctx.answerCallbackQuery({ text: "Напоминание не найдено" });
                     return;
                 }
-
-                const showBack = !!ctx.session.viewingRemindersInChat;
+                if (!isReminderInCallbackScope(ctx, reminder)) {
+                    await ctx.answerCallbackQuery({ text: "Это напоминание из другого чата" });
+                    return;
+                }
+                const reminderId = reminder.id;
 
                 if (action === "complete") {
                     const callbackMid = ctx.callbackQuery.message?.message_id;
                     const isReminderCard = callbackMid !== undefined && callbackMid !== reminder.messageId;
-                    const activeBeforeComplete = isReminderCard ? getActiveReminders(ctx) : [];
+                    const activeBeforeComplete = isReminderCard ? activeForOrigin(ctx, origin) : [];
 
                     await markReminderAsCompleted(bot, reminder);
                     ReminderRegistry.getInstance().remove(reminderId);
-                    ctx.session.reminders = ctx.session.reminders.filter(r => r.id !== reminderId);
+                    if (reminder.chatId === ctx.chat?.id) {
+                        ctx.session.reminders = ctx.session.reminders.filter(r => r.id !== reminderId);
+                    }
                     await syncReminderMemoryMutation(ctx, reminder, reminder, 'complete').catch((e) =>
                         console.error('[reminder] memory sync failed on complete:', e)
                     );
@@ -906,15 +1014,23 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     // Если кнопка нажата на самом уведомлении — markReminderAsCompleted уже обновил его,
                     // перезаписывать не нужно. Если кнопка нажата на карточке из /reminders — обновляем карточку.
                     if (isReminderCard) {
-                        const remaining = getActiveReminders(ctx);
+                        const allRemaining = getActiveReminders(ctx);
+                        const remaining = origin ? filterReminders(allRemaining, origin.filter) : allRemaining;
                         const cid = ctx.callbackQuery.message!.chat.id;
-                        if (remaining.length === 0) {
+                        if (allRemaining.length === 0) {
                             await editMessageTextIfChanged(ctx.api, cid, callbackMid, '✅ Все напоминания выполнены!',
-                                { reply_markup: showBack ? new InlineKeyboard().text('↩️ К чатам', 'reminder_chat_back') : new InlineKeyboard() }
+                                { reply_markup: emptyRemindersKeyboard(ctx) }
                             );
+                        } else if (remaining.length === 0 && origin) {
+                            const { blocks, keyboard } = buildRemindersList(allRemaining, {
+                                ...origin,
+                                botUsername: ctx.me.username,
+                                showBackToChats: isCrossChatReminderView(ctx),
+                            });
+                            await editStructured(ctx.api as any, cid, callbackMid, blocks, { replyMarkup: keyboard });
                         } else {
                             const nextIndex = getCardIndexAfterRemoval(activeBeforeComplete, remaining, reminderId);
-                            const { blocks, keyboard } = buildReminderCard(remaining, nextIndex, showBack);
+                            const { blocks, keyboard } = buildReminderCard(remaining, nextIndex, isCrossChatReminderView(ctx), origin);
                             await editStructured(ctx.api as any, cid, callbackMid, blocks, { replyMarkup: keyboard });
                         }
                     }
@@ -924,7 +1040,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         await editReplyMarkupIfChanged(
                             ctx.api,
                             ctx.callbackQuery.message,
-                            buildPostponeKeyboard(reminderId),
+                            buildPostponeKeyboard(reminder, origin),
                         );
                     }
                 } else if (action === "edit") {
@@ -948,15 +1064,28 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 }
             } else if (callbackData.startsWith("postpone_")) {
                 // Обработка выбора времени откладывания
-                const parts = callbackData.replace("postpone_", "").split("_");
+                const parsedPostpone = parseReminderPanelOrigin(callbackData);
+                const origin = parsedPostpone.origin;
+                const parts = parsedPostpone.value.replace("postpone_", "").split("_");
                 const postponeTime = parts[parts.length - 1];
-                const reminderId = parts.slice(0, -1).join("_");
+                const reminderRef = parts.slice(0, -1).join("_");
 
-                if (!reminderId) {
-                    console.error(`Invalid reminder ID: ${reminderId}`);
+                if (!reminderRef) {
+                    console.error(`Invalid reminder ID: ${reminderRef}`);
                     await ctx.answerCallbackQuery({ text: "Произошла ошибка при обработке запроса" });
                     return;
                 }
+                const reminder = resolveReminderForCallback(ctx, reminderRef);
+                if (!reminder) {
+                    console.error(`Reminder with ref ${reminderRef} not found`);
+                    await ctx.answerCallbackQuery({ text: "Напоминание не найдено" });
+                    return;
+                }
+                if (!isReminderInCallbackScope(ctx, reminder)) {
+                    await ctx.answerCallbackQuery({ text: "Это напоминание из другого чата" });
+                    return;
+                }
+                const reminderId = reminder.id;
 
                 // Нажата кнопка «Своё время» — просим ввести время текстом
                 if (postponeTime === "custom") {
@@ -977,8 +1106,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
 
                 // Нажата кнопка «Назад» — восстанавливаем карточку напоминания
                 if (postponeTime === "back") {
-                    const active = getActiveReminders(ctx);
-                    const showBackOnBack = !!ctx.session.viewingRemindersInChat;
+                    const active = activeForOrigin(ctx, origin);
                     await ctx.answerCallbackQuery();
                     if (ctx.callbackQuery.message?.message_id) {
                         if (active.length === 0) {
@@ -986,11 +1114,11 @@ export function registerCallback(bot: Bot<BotContext>): void {
                                 ctx.callbackQuery.message.chat.id,
                                 ctx.callbackQuery.message.message_id,
                                 '✅ Все напоминания выполнены!',
-                                { reply_markup: showBackOnBack ? new InlineKeyboard().text('↩️ К чатам', 'reminder_chat_back') : new InlineKeyboard() }
+                                { reply_markup: emptyRemindersKeyboard(ctx) }
                             );
                         } else {
                             const idx = Math.max(0, active.findIndex(r => r.id === reminderId));
-                            const { blocks, keyboard } = buildReminderCard(active, idx, showBackOnBack);
+                            const { blocks, keyboard } = buildReminderCard(active, idx, isCrossChatReminderView(ctx), origin);
                             await editStructured(
                                 ctx.api as any,
                                 ctx.callbackQuery.message.chat.id,
@@ -1000,14 +1128,6 @@ export function registerCallback(bot: Bot<BotContext>): void {
                             );
                         }
                     }
-                    return;
-                }
-
-                const reminder = ReminderRegistry.getInstance().get(reminderId);
-
-                if (!reminder) {
-                    console.error(`Reminder with ID ${reminderId} not found`);
-                    await ctx.answerCallbackQuery({ text: "Напоминание не найдено" });
                     return;
                 }
 
@@ -1057,7 +1177,6 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     if (ctx.callbackQuery.message?.message_id) {
                         const chatId = ctx.callbackQuery.message.chat.id;
                         const messageId = ctx.callbackQuery.message.message_id;
-                        const showBackAfterPostpone = !!ctx.session.viewingRemindersInChat;
                         const formattedTime = newDueDate.toLocaleString('ru-RU', {
                             timeZone: USER_TIMEZONE,
                             day: 'numeric', month: 'long', hour: 'numeric', minute: 'numeric'
@@ -1065,8 +1184,10 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         const confirmText = `⏰ Напоминание перенесено\n\nСледующий сигнал: ${formattedTime}`;
                         const activeAfterPostpone = getActiveReminders(ctx);
                         const returnIndex = Math.max(0, activeAfterPostpone.findIndex((r) => r.id === reminderId));
-                        const backKeyboard = new InlineKeyboard().text('📋 К списку напоминаний', `reminders_nav_${returnIndex}`);
-                        if (showBackAfterPostpone) backKeyboard.row().text('↩️ К чатам', 'reminder_chat_back');
+                        const backCallback = origin
+                            ? `reminders_page_${origin.filter}_${origin.page}`
+                            : `reminders_page_all_${Math.floor(returnIndex / REMINDERS_PAGE_SIZE)}`;
+                        const backKeyboard = new InlineKeyboard().text('📋 К списку напоминаний', backCallback);
                         await editMessageTextIfChanged(ctx.api, chatId, messageId, confirmText, { reply_markup: backKeyboard });
                     }
                 } else {
