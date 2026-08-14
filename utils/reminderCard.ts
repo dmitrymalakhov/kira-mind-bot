@@ -280,8 +280,10 @@ export function buildReminderCard(
 
     const suffix = callbackOriginSuffix(origin);
     const reminderRef = reminderCallbackRef(r);
+    const firstCb = safeIndex > 0 ? `reminders_card_0${suffix}` : 'reminders_nav_noop';
     const prevCb = safeIndex > 0 ? `reminders_card_${safeIndex - 1}${suffix}` : 'reminders_nav_noop';
     const nextCb = safeIndex < total - 1 ? `reminders_card_${safeIndex + 1}${suffix}` : 'reminders_nav_noop';
+    const lastCb = safeIndex < total - 1 ? `reminders_card_${total - 1}${suffix}` : 'reminders_nav_noop';
     const keyboard = new InlineKeyboard()
         .text('✅ Выполнено', `reminder_complete_${reminderRef}${suffix}`)
         .text('⏰ Отложить', `reminder_postpone_${reminderRef}${suffix}`)
@@ -290,9 +292,11 @@ export function buildReminderCard(
         .row()
         .text('❌ Отменить', `reminder_cancel_${reminderRef}${suffix}`)
         .row()
+        .text(safeIndex > 0 ? '⏮' : '·', firstCb)
         .text(safeIndex > 0 ? '◀️' : '·', prevCb)
         .text(`${num} из ${total}`, 'reminders_nav_noop')
-        .text(safeIndex < total - 1 ? '▶️' : '·', nextCb);
+        .text(safeIndex < total - 1 ? '▶️' : '·', nextCb)
+        .text(safeIndex < total - 1 ? '⏭' : '·', lastCb);
 
     const listPage = origin?.page ?? Math.floor(safeIndex / REMINDERS_PAGE_SIZE);
     const listFilter = origin?.filter ?? 'all';
@@ -412,13 +416,27 @@ export function buildRemindersList(
     } else {
         blocks.push(list(pageItems.map((reminder, index) => {
             const number = page * REMINDERS_PAGE_SIZE + index + 1;
-            const command = buildReminderOpenCommand(reminder, sortedAll, origin, options.botUsername);
-            return `<b>${number}.</b> ${esc(compactDueLabel(reminder, now))} · ${statusLabel(reminder.status)}\n${esc(truncateListText(reminder.displayText || reminder.text))}\n${command}`;
+            return `<b>${number}.</b> ${esc(compactDueLabel(reminder, now))} · ${statusLabel(reminder.status)}\n${esc(truncateListText(reminder.displayText || reminder.text))}`;
         })));
     }
 
     const keyboard = new InlineKeyboard();
     addFilterButtons(keyboard, stats, filter);
+    for (let index = 0; index < pageItems.length; index += 2) {
+        keyboard.row();
+        const firstIndex = page * REMINDERS_PAGE_SIZE + index;
+        keyboard.text(
+            `${firstIndex + 1} · Открыть`,
+            `reminders_card_${firstIndex}${callbackOriginSuffix(origin)}`,
+        );
+        const secondIndex = firstIndex + 1;
+        if (index + 1 < pageItems.length) {
+            keyboard.text(
+                `${secondIndex + 1} · Открыть`,
+                `reminders_card_${secondIndex}${callbackOriginSuffix(origin)}`,
+            );
+        }
+    }
     if (totalPages > 1) {
         keyboard.row()
             .text('⏮', page > 0 ? `reminders_page_${filter}_0` : 'reminders_nav_noop')
