@@ -248,6 +248,8 @@ describe("reminder cards and keyboards", () => {
         assert.match(text, /Отложено/);
         assert.match(text, /Каждую неделю \(пн, пт\)/);
         assert.match(text, /чат «Команда» \(оповестить\)/);
+        assert.deepEqual(rows(card.keyboard)[0].map((button) => button.text), ["✅ Выполнено", "⏰ Отложить"]);
+        assert.deepEqual(rows(card.keyboard)[1].map((button) => button.text), ["✏️ Изменить", "❌ Отменить"]);
         assert.equal(rows(card.keyboard).flat().some((button) => button.callback_data === "reminder_chat_back"), true);
     });
 
@@ -320,11 +322,24 @@ describe("reminder cards and keyboards", () => {
         assert.match(text, /Напоминания · 2/);
         assert.match(text, /Ожидает ответа/);
         assert.doesNotMatch(text, /\/r_[a-f0-9]{10,20}_a_0@kira_bot/);
+        assert.match(text, /Нажми номер, чтобы открыть карточку/);
         const buttons = rows(list.keyboard).flat();
-        assert.equal(buttons.find((button) => button.text === "1 · Открыть")?.callback_data, "reminders_card_0:p:a:0");
-        assert.equal(buttons.find((button) => button.text === "2 · Открыть")?.callback_data, "reminders_card_1:p:a:0");
+        assert.equal(buttons.find((button) => button.text === "1 🔔")?.callback_data, "reminders_card_0:p:a:0");
+        assert.equal(buttons.find((button) => button.text === "2 ⏳")?.callback_data, "reminders_card_1:p:a:0");
         assert.equal(list.page, 0);
         assert.equal(list.totalPages, 1);
+    });
+
+    test("keeps reminder selectors compact and aligned in rows of three", () => {
+        const values = [reminder(), reminder({ status: ReminderStatus.Sent }), reminder({ status: ReminderStatus.Expired })];
+        const view = buildRemindersList(values);
+        const selectorRow = rows(view.keyboard).find((row) => row.some((button) => button.text === "1 ⚠️"));
+        assert.deepEqual(selectorRow?.map((button) => button.text), ["1 ⚠️", "2 🔔", "3 ⏳"]);
+        assert.deepEqual(selectorRow?.map((button) => button.callback_data), [
+            "reminders_card_0:p:a:0",
+            "reminders_card_1:p:a:0",
+            "reminders_card_2:p:a:0",
+        ]);
     });
 
     test("splits reminders into deterministic timezone filters", () => {
