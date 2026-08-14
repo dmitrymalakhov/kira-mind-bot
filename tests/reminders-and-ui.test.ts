@@ -253,13 +253,35 @@ describe("reminder cards and keyboards", () => {
 
     test("builds navigation callbacks for first, middle, and last cards", () => {
         const reminders = [reminder(), reminder(), reminder()];
-        const first = rows(buildReminderCard(reminders, 0).keyboard).flat();
-        const middle = rows(buildReminderCard(reminders, 1).keyboard).flat();
-        const last = rows(buildReminderCard(reminders, 2).keyboard).flat();
-        assert.equal(first.filter((b) => b.text === "·")[0].callback_data, "reminders_nav_noop");
-        assert.equal(middle.find((b) => b.text === "◀️").callback_data, "reminders_card_0");
-        assert.equal(middle.find((b) => b.text === "▶️").callback_data, "reminders_card_2");
-        assert.equal(last.find((b) => b.text === "·").callback_data, "reminders_nav_noop");
+        const origin = { filter: "today" as const, page: 2 };
+        const first = rows(buildReminderCard(reminders, 0, false, origin).keyboard);
+        const middle = rows(buildReminderCard(reminders, 1, false, origin).keyboard);
+        const last = rows(buildReminderCard(reminders, 2, false, origin).keyboard);
+        const firstNavigation = first.find((row) => row.some((button) => button.text === "1 из 3"))!;
+        const middleNavigation = middle.find((row) => row.some((button) => button.text === "2 из 3"))!;
+        const lastNavigation = last.find((row) => row.some((button) => button.text === "3 из 3"))!;
+
+        assert.deepEqual(firstNavigation.map((button) => button.callback_data), [
+            "reminders_nav_noop",
+            "reminders_nav_noop",
+            "reminders_nav_noop",
+            "reminders_card_1:p:t:2",
+            "reminders_card_2:p:t:2",
+        ]);
+        assert.deepEqual(middleNavigation.map((button) => button.callback_data), [
+            "reminders_card_0:p:t:2",
+            "reminders_card_0:p:t:2",
+            "reminders_nav_noop",
+            "reminders_card_2:p:t:2",
+            "reminders_card_2:p:t:2",
+        ]);
+        assert.deepEqual(lastNavigation.map((button) => button.callback_data), [
+            "reminders_card_0:p:t:2",
+            "reminders_card_1:p:t:2",
+            "reminders_nav_noop",
+            "reminders_nav_noop",
+            "reminders_nav_noop",
+        ]);
     });
 
     test("builds all postpone choices for the correct reminder", () => {
@@ -297,7 +319,10 @@ describe("reminder cards and keyboards", () => {
         const text = renderFallbackHtml(list.blocks);
         assert.match(text, /Напоминания · 2/);
         assert.match(text, /Ожидает ответа/);
-        assert.match(text, /\/r_[a-f0-9]{10}_a_0@kira_bot/);
+        assert.doesNotMatch(text, /\/r_[a-f0-9]{10,20}_a_0@kira_bot/);
+        const buttons = rows(list.keyboard).flat();
+        assert.equal(buttons.find((button) => button.text === "1 · Открыть")?.callback_data, "reminders_card_0:p:a:0");
+        assert.equal(buttons.find((button) => button.text === "2 · Открыть")?.callback_data, "reminders_card_1:p:a:0");
         assert.equal(list.page, 0);
         assert.equal(list.totalPages, 1);
     });
@@ -333,6 +358,8 @@ describe("reminder cards and keyboards", () => {
         assert.equal(callbacks.includes("reminders_page_all_1"), true);
         assert.equal(callbacks.includes("reminders_page_all_3"), true);
         assert.equal(callbacks.includes("reminders_page_all_4"), true);
+        assert.equal(callbacks.includes("reminders_card_16:p:a:2"), true);
+        assert.equal(callbacks.includes("reminders_card_23:p:a:2"), true);
 
         assert.equal(buildRemindersList(values.slice(0, 8)).totalPages, 1);
         assert.equal(buildRemindersList(values.slice(0, 9)).totalPages, 2);
