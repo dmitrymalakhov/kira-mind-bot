@@ -2,7 +2,7 @@ import * as dotenv from "dotenv";
 import { MessageHistory } from "../types";
 import { ProcessingResult } from "../orchestrator";
 import { devLog, processReminderTime } from "../utils";
-import { getBotPersona, getCommunicationStyle } from "../persona";
+import { getBotGenderedText, getBotPersona, getCommunicationStyle } from "../persona";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { USER_TIMEZONE } from "../constants";
 import type { ReminderTargetChat, RecurrenceRule } from "../reminder";
@@ -25,12 +25,52 @@ interface ReminderAnalysis {
 }
 
 interface MultiReminderAnalysis {
+    action?: "create_reminder" | "create_reminders_batch";
     reminders: ReminderAnalysis[];
+}
+
+export function validateReminderAnalysisCandidates(
+    candidates: unknown[],
+    noTemporalReference: boolean,
+): {
+    validReminders: ReminderAnalysis[];
+    failures: NonNullable<ProcessingResult['reminderCreationFailures']>;
+} {
+    const validReminders: ReminderAnalysis[] = [];
+    const failures: NonNullable<ProcessingResult['reminderCreationFailures']> = [];
+    for (const value of candidates) {
+        const candidate = value && typeof value === 'object'
+            ? value as Partial<ReminderAnalysis>
+            : null;
+        const text = typeof candidate?.reminderText === 'string' ? candidate.reminderText.trim() : '';
+        const failureText = text
+            || (typeof candidate?.reminderMessage === 'string' ? candidate.reminderMessage.trim() : '')
+            || 'Не удалось распознать задачу';
+        if (!candidate || !text) {
+            failures.push({ text: failureText, error: 'Не удалось определить текст напоминания' });
+            continue;
+        }
+        candidate.reminderText = text;
+        if (!candidate.reminderMessage) candidate.reminderMessage = text;
+        if (!noTemporalReference && !candidate.reminderTime) {
+            failures.push({ text: failureText, error: 'Не удалось определить дату и время' });
+            continue;
+        }
+        if (!noTemporalReference && isNaN(new Date(candidate.reminderTime!).getTime())) {
+            failures.push({ text: failureText, error: 'Получена некорректная дата' });
+            continue;
+        }
+        validReminders.push(candidate as ReminderAnalysis);
+    }
+    return { validReminders, failures };
 }
 
 function buildFallbackResponse(): ProcessingResult {
     return {
-        responseText: "Я пыталась создать напоминание, но не смогла точно определить, о чем и когда вам напомнить. Можете, пожалуйста, сформулировать вашу просьбу более конкретно? Например: \"Напомни мне завтра в 15:00 о встрече\". 🙏",
+        responseText: getBotGenderedText(
+            "Я пыталась создать напоминание, но не смогла точно определить, о чем и когда вам напомнить.",
+            "Я пытался создать напоминание, но не смог точно определить, о чем и когда вам напомнить.",
+        ) + " Можете, пожалуйста, сформулировать вашу просьбу более конкретно? Например: \"Напомни мне завтра в 15:00 о встрече\". 🙏",
         reminderCreated: false
     };
 }
@@ -136,11 +176,13 @@ function buildFallbackReminderResponse(message: string, currentDate: Date, userT
     return {
         responseText: `✅ Напомню: ${text} — ${displayTime}.`,
         reminderCreated: true,
+        reminderAction: "create_reminder",
         reminderDetails: {
             id,
             text,
             reminderMessage: `Напоминаю: ${text}`,
             dueDate,
+            exactTimeSpecified: false,
         },
         reminderDetailsList: [
             {
@@ -148,6 +190,7 @@ function buildFallbackReminderResponse(message: string, currentDate: Date, userT
                 text,
                 reminderMessage: `Напоминаю: ${text}`,
                 dueDate,
+                exactTimeSpecified: false,
             },
         ],
     };
@@ -231,8 +274,10 @@ export async function reminderAgent(
            Дни недели: 0=вс, 1=пн, 2=вт, 3=ср, 4=чт, 5=пт, 6=сб
 
         Если в сообщении несколько напоминаний, выдели каждое в отдельный объект массива.
+        Для одного напоминания верни action "create_reminder", для нескольких — "create_reminders_batch".
         Ответ предоставь в формате JSON:
         {
+          "action": "create_reminder" или "create_reminders_batch",
           "reminders": [
             {
               "reminderText": "краткий текст о чем напомнить (для внутреннего использования)",
@@ -281,17 +326,19 @@ export async function reminderAgent(
             return buildFallbackReminderResponse(message, currentDate, userTimezone);
         }
 
-        const validReminders = analysis.reminders.filter((r) => {
-            if (!r?.reminderText) return false;
-            if (!r.reminderMessage) r.reminderMessage = r.reminderText;
-            if (noTemporalReference && !r.reminderTime) return true;
-            if (!r.reminderTime) return false;
-            const parsed = new Date(processReminderTime(r.reminderTime));
-            return !isNaN(parsed.getTime());
-        });
+        const { validReminders, failures: validationFailures } = validateReminderAnalysisCandidates(
+            analysis.reminders,
+            noTemporalReference,
+        );
 
         if (validReminders.length === 0) {
-            return buildFallbackReminderResponse(message, currentDate, userTimezone);
+            return {
+                responseText: '',
+                reminderCreated: false,
+                reminderAction: analysis.reminders.length > 1 ? 'create_reminders_batch' : 'create_reminder',
+                reminderDetailsList: [],
+                reminderCreationFailures: validationFailures,
+            };
         }
 
         const normalizeTargetChat = (t: ReminderAnalysis["targetChat"]): ReminderTargetChat | undefined => {
@@ -330,6 +377,7 @@ export async function reminderAgent(
                 reminderMessage: r.reminderMessage,
                 targetReminderMessage,
                 dueDate: due,
+                exactTimeSpecified: noTemporalReference ? false : r.exactTimeSpecified === true,
                 targetChat,
                 recurrence: normalizeRecurrence(r.recurrence),
             };
@@ -341,8 +389,13 @@ export async function reminderAgent(
                 : new Date(processReminderTime(r.reminderTime));
             const displayTime = formatReminderDueDate(due, userTimezone);
             if (detailsList[idx]?.targetChat) {
-                const recurrenceSuffix = detailsList[idx].recurrence ? " Повторение учла." : "";
-                return `✅ Создала напоминание для тебя: ${r.reminderText} — ${displayTime}.${recurrenceSuffix}`;
+                const recurrenceSuffix = detailsList[idx].recurrence
+                    ? getBotGenderedText(" Повторение учла.", " Повторение учёл.")
+                    : "";
+                return getBotGenderedText(
+                    `✅ Создала напоминание для тебя: ${r.reminderText} — ${displayTime}.${recurrenceSuffix}`,
+                    `✅ Создал напоминание для тебя: ${r.reminderText} — ${displayTime}.${recurrenceSuffix}`,
+                );
             }
             if (noTemporalReference) {
                 return `✅ Напомню: ${r.reminderText} — ${displayTime}.`;
@@ -353,8 +406,10 @@ export async function reminderAgent(
         return {
             responseText,
             reminderCreated: true,
+            reminderAction: detailsList.length > 1 ? "create_reminders_batch" : "create_reminder",
             reminderDetails: detailsList[0],
-            reminderDetailsList: detailsList
+            reminderDetailsList: detailsList,
+            reminderCreationFailures: validationFailures,
         };
     } catch (error) {
         console.error("Error in reminder agent:", error);

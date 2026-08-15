@@ -1,7 +1,10 @@
 import type OpenAI from 'openai';
 import type { ReadStream } from 'fs';
-import type { AiProvider } from '../modelPresets';
+import type { AiProvider, AiModelRef } from '../modelPresets';
 import type { AiCapabilityMap, AiProviderDescriptor } from '../providerMetadata';
+import type { RetryPolicy, ErrorIdentities, DegradationContext } from './policyDefaults';
+
+export type { RetryPolicy, ErrorIdentities, DegradationContext } from './policyDefaults';
 
 export type ChatCompletionCreateParams = OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming;
 export type ChatCompletion = OpenAI.Chat.Completions.ChatCompletion;
@@ -74,6 +77,25 @@ export interface AiProviderAdapter {
         model: string,
         params: TranscriptionCreateParams,
     ): Promise<TranscriptionResult>;
+    /**
+     * Провайдерная политика повторов. Если метод не реализован, общий
+     * execution-flow использует дефолт (повторы выключены) — так текущее
+     * поведение OpenAI/OpenRouter/Z.ai сохраняется без изменений.
+     */
+    getRetryPolicy?(): RetryPolicy;
+    /**
+     * Same-provider цепочка degradation: упорядоченный список моделей того же
+     * провайдера, на которые можно переключиться при отказе текущей. Возвращает
+     * пустое значение/массив, если провайдер не поддерживает same-provider
+     * деградацию.
+     */
+    getSameProviderDegradationChain?(context: DegradationContext): AiModelRef[] | null;
+    /**
+     * Извлечение провайдер-специфичной идентичности ошибки (заголовки запроса,
+     * внутренние коды). Общий классификатор ошибок вызывает этот метод, чтобы
+     * не захардкоживать имена заголовков конкретных провайдеров.
+     */
+    parseErrorIdentities?(error: unknown): ErrorIdentities;
 }
 
 export function resolveModelCapabilities(

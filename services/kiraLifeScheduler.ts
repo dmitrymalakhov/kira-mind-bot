@@ -27,10 +27,11 @@ import { getSetting, setSetting } from "./botSettingsService";
 import { appendPersistedHistory, appendPersistedSentMessageContext, saveProactiveInsight } from "./SessionStorage";
 import { buildProactiveMessageFormats, getPersonalityGenderForms } from "../utils/personalityGender";
 import {
-  acceptsKiraLifeGroundingDecision,
+  classifyKiraLifeGroundingDecision,
   chooseGroundedKiraLifeMessage,
   hasUnsupportedKiraLifeOwnerClaim,
   KiraLifeGroundingDecision,
+  KiraLifeReviewStatus,
 } from "../utils/proactiveGrounding";
 import { performWebSearch } from "../agents/webSearchAgent";
 import {
@@ -201,7 +202,7 @@ async function maybeGenerateLifeEvent(
           `Направление события не ограничено каталогом категорий: выведи его из биографии, текущих жизненных линий, настроения, времени и найденной веб-опоры. Прогулка, тренировка, чтение, музыка, кино, бытовое дело, встреча с ${genderForms.friendInstrumental}, работа, учёба или поездка — только примеры; допустима любая другая земная активность, мысль или маленькое событие, органичное для этого персонажа.\n\n` +
           `Событие должно не просто описывать день, а немного продвигать одну линию жизни: новый этап, маленький вывод, привычка, желание или следующий шаг. Можно аккуратно доработать биографию до владельца одной маленькой деталью, если она объясняет характер ${config.characterName} и не противоречит устойчивым фактам.\n\n` +
           `Напиши JSON с полями: description, mood, thought, topics (массив строк 2-4 шт.), type, arc, groundingUsed, biographyPatch, innerWorld, lifeArc, personalityPatch.\n` +
-          `description — 1-2 живых предложения с конкретными деталями: где именно, что ${genderForms.did}, что изменилось, что ${genderForms.felt}. ${config.eventDescriptionGender ?? "женский"} род. Без абстракций и без "как ИИ/бот".\n` +
+          `description — 1-2 живых предложения от первого лица с конкретными деталями: где именно, что ${genderForms.did}, что изменилось, что ${genderForms.felt}. ${config.eventDescriptionGender ?? "женский"} род. Без абстракций и без "как ИИ/бот".\n` +
           `mood — из набора: ${(config.moodVariants ?? ["спокойное", "уставшее", "задумчивое", "воодушевлённое", "нейтральное", "скептичное"]).join(", ")}. Утром — живее, вечером — спокойнее/${genderForms.tired}.\n` +
           `thought — внутренняя реакция, короткая (1 предложение, опционально).\n` +
           `arc — какую долгую линию жизни это продолжает или создаёт; не больше 7 слов.\n` +
@@ -269,9 +270,10 @@ async function maybeGenerateLifeEvent(
   };
 }
 
-async function reviewKiraLifeOwnerAttribution(message: string, selfEvents: string[]): Promise<boolean> {
-  if (hasUnsupportedKiraLifeOwnerClaim(message)) return false;
-
+async function reviewKiraLifeOwnerAttribution(
+  message: string,
+  selfEvents: string[],
+): Promise<Extract<KiraLifeReviewStatus, 'safe' | 'semantic_rejection' | 'review_error' | 'invalid_review'>> {
   try {
     const response = await createChatCompletionForTask('messageAnalysis', {
       messages: [
@@ -312,10 +314,9 @@ JSON: {"safe": true/false, "attributesOwnerObligation": true/false, "reason": "�
     const decision = parseLLMJson<KiraLifeGroundingDecision>(
       response.choices[0]?.message?.content?.trim() || '',
     );
-    return acceptsKiraLifeGroundingDecision(decision);
-  } catch (error) {
-    console.warn('[kira-life] Semantic grounding review failed; using safe fallback');
-    return false;
+    return classifyKiraLifeGroundingDecision(decision);
+  } catch {
+    return 'review_error';
   }
 }
 
@@ -377,17 +378,34 @@ async function buildProactiveMessage(generatedEvent: GeneratedKiraLifeEvent): Pr
     generatedEvent.description,
     generatedEvent.arc ? `линия: ${generatedEvent.arc}` : "",
   ].filter(Boolean).join(" — ")];
-  const semanticReviewPassed = candidate
-    ? await reviewKiraLifeOwnerAttribution(candidate, sourceMemories)
-    : false;
-  const grounded = chooseGroundedKiraLifeMessage(candidate, config.eventDescriptionGender, semanticReviewPassed);
-  if (grounded.rejectedUnsupportedClaim) {
-    console.warn("[kira-life] Rejected proactive message with unsupported owner obligation");
+  const reviewStatus: KiraLifeReviewStatus = !candidate
+    ? 'empty_candidate'
+    : hasUnsupportedKiraLifeOwnerClaim(candidate)
+      ? 'local_guard'
+      : await reviewKiraLifeOwnerAttribution(candidate, sourceMemories);
+  const grounded = chooseGroundedKiraLifeMessage(
+    candidate,
+    generatedEvent.description,
+    config.eventDescriptionGender,
+    reviewStatus,
+  );
+  if (grounded.usedFallback) {
+    console.warn("[kira-life] Proactive fallback selected", {
+      reason: grounded.fallbackReason,
+      source: grounded.fallbackSource,
+    });
+    if (grounded.fallbackSource === 'static') {
+      console.warn("[kira-life] Event fallback rejected", {
+        reason: 'local_guard',
+        source: 'event',
+      });
+    }
   }
+  const preservesEventProvenance = !grounded.usedFallback || grounded.fallbackSource === 'event';
   return {
     message: grounded.message,
-    sourceMemories: grounded.usedFallback ? [] : sourceMemories,
-    webSources: grounded.usedFallback ? [] : (webGrounding?.sources ?? []),
+    sourceMemories: preservesEventProvenance ? sourceMemories : [],
+    webSources: preservesEventProvenance ? (webGrounding?.sources ?? []) : [],
     generationOutcome: grounded.usedFallback ? 'fallback' : 'generated',
   };
 }
@@ -448,11 +466,7 @@ async function runProactiveCycle(bot: Bot<BotContext>): Promise<void> {
     await appendPersistedHistory(chatId, "bot", proactive.message);
     const insight = {
       message: proactive.message,
-      sourceMemories: proactive.sourceMemories.length
-        ? proactive.sourceMemories
-        : proactive.generationOutcome === 'fallback'
-          ? ["Безопасный резервный текст после отклонения исходного кандидата"]
-          : ["Внутренняя линия жизни без сохранённого события-источника"],
+      sourceMemories: proactive.sourceMemories,
       webSources: proactive.webSources,
       createdAt: lastSentAt,
       messageId: sent.message_id,
@@ -467,7 +481,11 @@ async function runProactiveCycle(bot: Bot<BotContext>): Promise<void> {
       proactiveInsight: insight,
       createdAt: lastSentAt,
     });
-    console.log("[kira-life] Sent proactive message:", proactive.message.slice(0, 80));
+    console.log("[kira-life] Sent proactive message", {
+      generationOutcome: proactive.generationOutcome,
+      sourceCount: proactive.sourceMemories.length,
+      webSourceCount: proactive.webSources.length,
+    });
   } catch (error) {
     console.error("[kira-life] proactive cycle failed:", error);
   } finally {

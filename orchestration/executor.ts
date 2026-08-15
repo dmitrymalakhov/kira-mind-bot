@@ -23,12 +23,19 @@ import { cancelReminder, rescheduleReminder } from '../reminder';
 import { ReminderRepository } from '../services/ReminderRepository';
 import { devLog, parseLLMJson } from '../utils';
 import { buildQuickChoiceKeyboard } from '../utils/quickChoice';
+import { getBotGenderedText } from '../persona';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { applyReminderEditInput } from '../utils/reminderEditor';
 import { syncReminderMemoryMutation } from '../services/ReminderMemorySync';
 import { USER_TIMEZONE } from '../constants';
 import { addZonedDays, formatPromptDateTime, getZonedDateKey } from '../utils/time';
 import { isSilentInternalKnowledgePipeline, SILENT_STEPS } from './progressPolicy';
+import { isTodayImportanceRequest } from '../utils/todayImportanceIntent';
+import {
+    buildTodayImportanceBlocks,
+    buildTodayImportanceSnapshot,
+    buildTodayImportanceText,
+} from '../utils/todayImportance';
 
 /**
  * Ищет напоминание по текстовому запросу и отменяет его.
@@ -67,7 +74,10 @@ async function cancelReminderByQuery(
     if (!best) {
         const list = active.map((r, i) => `${i + 1}. ${r.displayText || r.text}`).join('\n');
         return {
-            responseText: `Не нашла напоминание по запросу «${query}». Активные напоминания:\n${list}`,
+            responseText: getBotGenderedText(
+                `Не нашла напоминание по запросу «${query}».`,
+                `Не нашёл напоминание по запросу «${query}».`,
+            ) + ` Активные напоминания:\n${list}`,
         };
     }
 
@@ -125,7 +135,10 @@ async function updateReminderByQuery(
     if (!best) {
         const list = active.map((r, i) => `${i + 1}. ${r.displayText || r.text}`).join('\n');
         return {
-            responseText: `Не нашла напоминание по запросу «${query}». Активные напоминания:\n${list}`,
+            responseText: getBotGenderedText(
+                `Не нашла напоминание по запросу «${query}».`,
+                `Не нашёл напоминание по запросу «${query}».`,
+            ) + ` Активные напоминания:\n${list}`,
         };
     }
 
@@ -253,7 +266,12 @@ async function updateAllReminders(
     }
 
     if (!shiftMinutes && !newDueDate) {
-        return { responseText: 'Не смогла распознать новое время. Уточни, например: «перенеси все на завтра в 9» или «сдвинь все на 2 часа вперёд».' };
+        return {
+            responseText: getBotGenderedText(
+                "Не смогла распознать новое время.",
+                "Не смог распознать новое время.",
+            ) + " Уточни, например: «перенеси все на завтра в 9» или «сдвинь все на 2 часа вперёд».",
+        };
     }
 
     for (const r of targets) {
@@ -285,13 +303,31 @@ async function updateAllReminders(
  * Объединяет результаты нескольких terminal-шагов в один ответ.
  * Используется когда план содержит несколько действий (например, sendMessage + reminder).
  */
-function mergeProcessingResults(results: ProcessingResult[], botReaction?: string): ProcessingResult {
+export function mergeProcessingResults(results: ProcessingResult[], botReaction?: string): ProcessingResult {
     if (results.length === 1) return { ...results[0], botReaction };
     const merged: ProcessingResult = {
         responseText: results.map((r) => r.responseText).filter(Boolean).join('\n\n'),
         botReaction,
     };
+    const reminderResults = results.filter((result) =>
+        result.reminderCreated || result.reminderAction || result.reminderCreationFailures?.length
+    );
+    if (reminderResults.length > 0) {
+        const companionResponseText = results
+            .filter((result) => !reminderResults.includes(result))
+            .map((result) => result.responseText)
+            .filter(Boolean)
+            .join('\n\n');
+        if (companionResponseText) merged.companionResponseText = companionResponseText;
+    }
     for (const r of results) {
+        if (r.reminderAction) merged.reminderAction = r.reminderAction;
+        if (r.reminderCreationFailures?.length) {
+            merged.reminderCreationFailures = [
+                ...(merged.reminderCreationFailures ?? []),
+                ...r.reminderCreationFailures,
+            ];
+        }
         if (r.keyboard) merged.keyboard = r.keyboard;
         if (r.messageDraft) merged.messageDraft = r.messageDraft;
         if (r.reminderCreated) {
@@ -487,7 +523,10 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
                     if (!canContinueAfterWebSearchFailure(nextStep)) {
                         console.warn('[ORCH] dependent step blocked after webSearch failure:', nextStep.agentId);
                         return {
-                            responseText: 'Поиск временно недоступен, поэтому я не стала выполнять зависящее от него действие. Попробуй ещё раз чуть позже.',
+                            responseText: getBotGenderedText(
+                                "Поиск временно недоступен, поэтому я не стала выполнять зависящее от него действие.",
+                                "Поиск временно недоступен, поэтому я не стал выполнять зависящее от него действие.",
+                            ) + " Попробуй ещё раз чуть позже.",
                             botReaction: classification.details?.botReaction,
                         };
                     }
@@ -507,13 +546,31 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
             case 'conversation': {
                 console.log("[ORCH] invoking conversationAgent");
                 await notifyProgress('conversation');
+                if (isTodayImportanceRequest(message)) {
+                    const snapshot = await buildTodayImportanceSnapshot(ctx, message);
+                    if (snapshot) {
+                        const summaryResult: ProcessingResult = {
+                            responseText: buildTodayImportanceText(snapshot),
+                            structuredResponseBlocks: buildTodayImportanceBlocks(snapshot),
+                            botReaction: classification.details?.botReaction,
+                        };
+                        if (collectedResults.length > 0) {
+                            collectedResults.push(summaryResult);
+                            return mergeProcessingResults(collectedResults, classification.details?.botReaction as string | undefined);
+                        }
+                        return summaryResult;
+                    }
+                }
                 const sharedMemoryContext = enrichedContextFromMemory.trim()
                     ? { domain: 'personal' as const, context: enrichedContextFromMemory.trim() }
                     : await fetchAgentMemoryContext(ctx, message).then((m) => ({ domain: m.domain as 'personal', context: m.context }));
                 const conv = await safeStep('conversation', () => conversationAgent(
                     ctx, message, isForwarded, forwardFrom, messageHistory, classification, sharedMemoryContext
                 ));
-                if (conv === null) return { responseText: 'Не смогла сформировать ответ. Попробуй ещё раз 🙏', botReaction: classification.details?.botReaction };
+                if (conv === null) return {
+                    responseText: getBotGenderedText("Не смогла сформировать ответ.", "Не смог сформировать ответ.") + " Попробуй ещё раз 🙏",
+                    botReaction: classification.details?.botReaction,
+                };
                 if (latestWebSearchText) {
                     const requestContext = [
                         ...messageHistory.slice(-6).map(item => item.content),
@@ -569,7 +626,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
                     message, isForwarded, forwardFrom, messageHistory, enrichedContextFromMemory || ''
                 ));
                 if (reminderRes === null) return { responseText: 'Не удалось создать напоминание. Попробуй ещё раз 🙏', botReaction: classification.details?.botReaction };
-                if (reminderRes.reminderCreated) {
+                if (reminderRes.reminderCreated || reminderRes.reminderCreationFailures?.length) {
                     reminderRes.botReaction = classification.details?.botReaction;
                     if (!isLastStep) {
                         collectedResults.push(reminderRes);
@@ -657,7 +714,10 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
                 const unclearRes = await safeStep('unclearIntent', () => unclearIntentAgent(
                     message, isForwarded, forwardFrom, messageHistory, classification, enrichedContextFromMemory || ''
                 ));
-                if (unclearRes === null) return { responseText: 'Не смогла уточнить запрос. Попробуй сформулировать иначе 🙏', botReaction: classification.details?.botReaction };
+                if (unclearRes === null) return {
+                    responseText: getBotGenderedText("Не смогла уточнить запрос.", "Не смог уточнить запрос.") + " Попробуй сформулировать иначе 🙏",
+                    botReaction: classification.details?.botReaction,
+                };
                 const keyboard = buildQuickChoiceKeyboard(ctx, message, unclearRes.responseText, classification);
                 if (keyboard) unclearRes.keyboard = keyboard;
                 unclearRes.botReaction = classification.details?.botReaction;

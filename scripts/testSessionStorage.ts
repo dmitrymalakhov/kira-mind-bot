@@ -301,6 +301,28 @@ async function testKiraLifeProvenanceDoesNotTouchMemoryHintCooldown() {
     });
 }
 
+async function testSourceFreeKiraLifeFallbackSurvivesRestart() {
+    await withMockedRepo(async () => {
+        const chatId = 910000020;
+        const storage = new TypeORMSessionStorage();
+        const createdAt = Date.now();
+        await saveProactiveInsight(chatId, {
+            message: 'Синтетический нейтральный резервный текст',
+            sourceMemories: [],
+            webSources: [],
+            createdAt,
+            messageId: 173,
+            kind: 'kiraLife',
+            generationOutcome: 'fallback',
+        }, { touchMemoryHintCooldown: false });
+
+        const restored = await storage.read(String(chatId));
+        assert.equal(restored?.lastProactiveInsight?.messageId, 173);
+        assert.equal(restored?.lastProactiveInsight?.generationOutcome, 'fallback');
+        assert.deepStrictEqual(restored?.lastProactiveInsight?.sourceMemories, []);
+    });
+}
+
 async function testPerMessageProactiveProvenanceSurvivesRestart() {
     await withMockedRepo(async () => {
         const chatId = 910000019;
@@ -512,6 +534,7 @@ async function main() {
     await testLegacyStringJsonbIsReadable();
     await testBackgroundUpdatesPreserveStructuredContext();
     await testKiraLifeProvenanceDoesNotTouchMemoryHintCooldown();
+    await testSourceFreeKiraLifeFallbackSurvivesRestart();
     await testPerMessageProactiveProvenanceSurvivesRestart();
     await testRawKiraLifeProvenanceSkipsCooldownField();
     await testMiddlewareFlushPreservesConcurrentBackgroundUpdates();

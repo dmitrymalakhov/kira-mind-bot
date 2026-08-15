@@ -111,6 +111,24 @@ function classifyByStatus(status?: number): AiErrorCategory | null {
     return null;
 }
 
+/**
+ * Синтетический код ошибки для 5xx-ответов «no body», когда провайдер не вернул
+ * ни `code`, ни `type` (типично для Gemini 503 через OpenAI-совместимый
+ * endpoint: `503 status code (no body)`). Без этого аналитика AI usage
+ * показывала `errorCode = NULL` и не различала такие ошибки.
+ *
+ * Не влияет на retry/fallback-решения: они опираются на `errorStatus` и
+ * `retryable`, а не на `errorCode`.
+ */
+function inferErrorCodeFromStatus(status?: number): string | undefined {
+    if (status === 429) return 'http_429';
+    if (status === 500) return 'http_500';
+    if (status === 502) return 'http_502';
+    if (status === 503) return 'http_503';
+    if (status === 504) return 'http_504';
+    return undefined;
+}
+
 export function createAiExecutionTrace(): AiExecutionTrace {
     return {
         traceId: randomUUID(),
@@ -131,21 +149,23 @@ export function classifyAiError(error: unknown): AiErrorDiagnostics {
     const errorCode = pickString(
         record?.code,
         nestedError?.code,
-    );
+    ) ?? inferErrorCodeFromStatus(errorStatus);
     const errorType = pickString(
         record?.type,
         nestedError?.type,
         record?.name,
     );
+    // Универсальные идентификаторы запроса. Провайдер-специфичные заголовки
+    // (например, `x-goog-request-id` у Gemini) НЕ захардкожены здесь: их извлекает
+    // сам провайдер через `AiProviderAdapter.parseErrorIdentities`, а общий
+    // классификатор вызывает `classifyAiErrorForProvider`, чтобы их смержить.
     const providerRequestId = pickString(
         record?.request_id,
         record?.requestId,
         nestedError?.request_id,
         nestedError?.requestId,
         getHeaderValue(record?.headers, 'x-request-id'),
-        getHeaderValue(record?.headers, 'x-goog-request-id'),
         getHeaderValue(response?.headers, 'x-request-id'),
-        getHeaderValue(response?.headers, 'x-goog-request-id'),
     );
     const message = pickString(
         record?.message,
@@ -213,6 +233,57 @@ export function classifyAiError(error: unknown): AiErrorDiagnostics {
 
 export function buildSafeAiErrorLog(error: unknown): Record<string, unknown> {
     const diagnostics = classifyAiError(error);
+    return {
+        errorStatus: diagnostics.errorStatus,
+        errorCode: diagnostics.errorCode,
+        errorType: diagnostics.errorType,
+        errorCategory: diagnostics.errorCategory,
+        providerRequestId: diagnostics.providerRequestId,
+        retryable: diagnostics.retryable,
+    };
+}
+
+/**
+ * Классификация ошибки с учётом провайдера.
+ *
+ * Сначала выполняется универсальная классификация (HTTP-статусы, коды, типы,
+ * универсальные идентификаторы запроса), затем — если передан
+ * `parseErrorIdentities` адаптера — идентификатор запроса дополняется
+ * провайдер-специфичными заголовками (например, `x-goog-request-id` у Gemini).
+ * Так общий классификатор не знает имён заголовков конкретных провайдеров и не
+ * создаёт цикла импортов: caller передаёт саму функцию адаптера.
+ *
+ * Функция-парсер опциональна: если не передана или адаптер её не реализовал,
+ * поведение идентично {@link classifyAiError}.
+ */
+export function classifyAiErrorForProvider(
+    error: unknown,
+    parseErrorIdentities?: (error: unknown) => { providerRequestId?: string },
+): AiErrorDiagnostics {
+    const diagnostics = classifyAiError(error);
+    if (!parseErrorIdentities || diagnostics.providerRequestId) return diagnostics;
+
+    let identities: { providerRequestId?: string } = {};
+    try {
+        const result = parseErrorIdentities(error);
+        identities = result && typeof result === 'object' ? result : {};
+    } catch {
+        identities = {};
+    }
+    if (identities.providerRequestId) {
+        return { ...diagnostics, providerRequestId: identities.providerRequestId };
+    }
+    return diagnostics;
+}
+
+/**
+ * Безопасный лог ошибки с учётом провайдера (см. {@link classifyAiErrorForProvider}).
+ */
+export function buildSafeAiErrorLogForProvider(
+    error: unknown,
+    parseErrorIdentities?: (error: unknown) => { providerRequestId?: string },
+): Record<string, unknown> {
+    const diagnostics = classifyAiErrorForProvider(error, parseErrorIdentities);
     return {
         errorStatus: diagnostics.errorStatus,
         errorCode: diagnostics.errorCode,

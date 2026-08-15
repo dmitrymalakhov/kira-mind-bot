@@ -6,6 +6,7 @@ import { ReminderRegistry } from "../stores/ReminderRegistry";
 import { USER_TIMEZONE } from "../constants";
 import { parseLLMJson, processReminderTime } from "../utils";
 import type { BotContext } from "../types";
+import { getBotGenderedText } from "../persona";
 
 interface ReminderEditExtraction {
     newDueDate?: string | null;
@@ -124,7 +125,10 @@ export async function extractReminderPostponeDate(reminder: Reminder, userInput:
     if (!extracted) {
         return {
             ok: false,
-            responseText: "Не смогла распознать дату и время. Попробуй ещё раз, например: «завтра в 10» или «в пятницу в 15:30».",
+            responseText: getBotGenderedText(
+                "Не смогла распознать дату и время.",
+                "Не смог распознать дату и время.",
+            ) + " Попробуй ещё раз, например: «завтра в 10» или «в пятницу в 15:30».",
         };
     }
 
@@ -132,7 +136,10 @@ export async function extractReminderPostponeDate(reminder: Reminder, userInput:
     if (!dueDate || dueDate.getTime() <= Date.now()) {
         return {
             ok: false,
-            responseText: "Не смогла распознать будущую дату и время. Попробуй ещё раз, например: «завтра в 10» или «через 2 часа».",
+            responseText: getBotGenderedText(
+                "Не смогла распознать будущую дату и время.",
+                "Не смог распознать будущую дату и время.",
+            ) + " Попробуй ещё раз, например: «завтра в 10» или «через 2 часа».",
         };
     }
 
@@ -155,8 +162,10 @@ export async function applyReminderEditInput(ctx: BotContext, reminder: Reminder
     if (!extracted) {
         return {
             ok: false,
-            responseText:
-                "Не смогла понять, что изменить. Напиши, например: «завтра в 11», «через 2 часа» или «текст: позвонить маме».",
+            responseText: getBotGenderedText(
+                "Не смогла понять, что изменить.",
+                "Не смог понять, что изменить.",
+            ) + " Напиши, например: «завтра в 11», «через 2 часа» или «текст: позвонить маме».",
         };
     }
 
@@ -187,8 +196,10 @@ export async function applyReminderEditInput(ctx: BotContext, reminder: Reminder
     if (!changedTime && !changedText) {
         return {
             ok: false,
-            responseText:
-                "Не увидела изменений. Можно написать так: «перенеси на пятницу в 10» или «текст: оплатить счёт».",
+            responseText: getBotGenderedText(
+                "Не увидела изменений.",
+                "Не увидел изменений.",
+            ) + " Можно написать так: «перенеси на пятницу в 10» или «текст: оплатить счёт».",
         };
     }
 
@@ -218,7 +229,10 @@ export async function applyReminderEditInput(ctx: BotContext, reminder: Reminder
         changedText,
         changedTime,
         responseText:
-            `✅ Обновила ${changedParts.join(" и ")} напоминания:\n` +
+            getBotGenderedText(
+                `✅ Обновила ${changedParts.join(" и ")} напоминания:\n`,
+                `✅ Обновил ${changedParts.join(" и ")} напоминания:\n`,
+            ) +
             `«${updated.displayText || updated.text}»\n\n` +
             `🗓 ${formatDueDate(dueDate)}`,
     };

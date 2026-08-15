@@ -19,6 +19,7 @@ import { getActiveBotProfile } from "../utils/botIdentity";
 import { InlineKeyboard } from "grammy";
 import { editReplyMarkupIfChanged } from "../utils/telegramMessageEdit";
 import { normalizeRecurringExecutionPrompt } from "../utils/recurringTaskPrompt";
+import { getBotGenderedText } from "../persona";
 
 const EDIT_TTL_MS = 10 * 60 * 1000;
 const CREATION_ACTION_RE = /(?:присыла(?:й|йте|ть)|отправля(?:й|йте|ть)|запуска(?:й|йте|ть)|выполня(?:й|йте|ть)|дела(?:й|йте|ть)|повторя(?:й|йте|ть)|повтори(?:те)?|поставь(?:те)?|ставь(?:те)?|добавь(?:те)?|запланируй(?:те)?|назначь(?:те)?)/iu;
@@ -199,7 +200,8 @@ export function parseRecurringTaskEdit(
         prompt,
         parsedSchedule,
         scheduleError: scheduleField && !parsedSchedule
-            ? "Не поняла новое расписание. Например: «расписание: по будням в 08:30»."
+            ? getBotGenderedText("Не поняла новое расписание.", "Не понял новое расписание.") +
+                " Например: «расписание: по будням в 08:30»."
             : undefined,
     };
 }
@@ -339,7 +341,10 @@ async function handlePendingEdit(ctx: BotContext, text: string): Promise<boolean
     const task = await RecurringTaskRepository.findById(pending.taskId, ctx.chat!.id);
     if (!task) {
         ctx.session.pendingRecurringTaskEdit = undefined;
-        await ctx.reply("Не нашла эту регулярную задачу. Возможно, она уже удалена.");
+        await ctx.reply(getBotGenderedText(
+            "Не нашла эту регулярную задачу.",
+            "Не нашёл эту регулярную задачу.",
+        ) + " Возможно, она уже удалена.");
         return true;
     }
     if (task.lockedAt && Date.now() - task.lockedAt.getTime() < RECURRING_TASK_STALE_LOCK_MS) {
@@ -360,7 +365,7 @@ async function handlePendingEdit(ctx: BotContext, text: string): Promise<boolean
 
     if (!title && !prompt && !parsedSchedule) {
         await ctx.reply(
-            "Не поняла правку. Напиши, например:\n" +
+            getBotGenderedText("Не поняла правку.", "Не понял правку.") + " Напиши, например:\n" +
             "«расписание: каждый будний день в 08:30»\n" +
             "или «запрос: найди свежие новости про космос».",
         );
@@ -386,7 +391,10 @@ async function handlePendingEdit(ctx: BotContext, text: string): Promise<boolean
     }
     ctx.session.pendingRecurringTaskEdit = undefined;
     await ctx.reply(
-        `Готово, обновила регулярную задачу «${patch.title ?? task.title}».` +
+        getBotGenderedText(
+            `Готово, обновила регулярную задачу «${patch.title ?? task.title}».`,
+            `Готово, обновил регулярную задачу «${patch.title ?? task.title}».`,
+        ) +
         (parsedSchedule ? ` Теперь: ${parsedSchedule.description}.` : ""),
     );
     return true;
@@ -412,7 +420,10 @@ async function handleNaturalManagement(ctx: BotContext, text: string): Promise<b
         if (match.reason === "not_found" && !management.strongIntent) return false;
         if (match.reason === "not_found") {
             await ctx.reply(
-                `Не нашла регулярную задачу по описанию «${management.query || text}». ` +
+                getBotGenderedText(
+                    `Не нашла регулярную задачу по описанию «${management.query || text}».`,
+                    `Не нашёл регулярную задачу по описанию «${management.query || text}».`,
+                ) + " " +
                 "Покажи список командой /tasks или уточни название.",
             );
             return true;
@@ -432,7 +443,10 @@ async function handleNaturalManagement(ctx: BotContext, text: string): Promise<b
     if (management.action === "delete") {
         const deleted = await RecurringTaskRepository.delete(task.id, ctx.chat!.id);
         await ctx.reply(deleted
-            ? `Удалила регулярную задачу «${task.title}».`
+            ? getBotGenderedText(
+                `Удалила регулярную задачу «${task.title}».`,
+                `Удалил регулярную задачу «${task.title}».`,
+            )
             : `Задача «${task.title}» сейчас выполняется. Удалить её можно после завершения запуска.`);
         return true;
     }
@@ -443,8 +457,12 @@ async function handleNaturalManagement(ctx: BotContext, text: string): Promise<b
         }
         const updated = await RecurringTaskRepository.setStatus(task.id, "paused", ctx.chat!.id);
         await ctx.reply(updated
-            ? `Отключила задачу «${task.title}». Она останется на паузе, пока ты её не возобновишь.`
-            : "Не нашла эту регулярную задачу. Возможно, она уже удалена.");
+            ? getBotGenderedText(
+                `Отключила задачу «${task.title}».`,
+                `Отключил задачу «${task.title}».`,
+            ) + " Она останется на паузе, пока ты её не возобновишь."
+            : getBotGenderedText("Не нашла эту регулярную задачу.", "Не нашёл эту регулярную задачу.") +
+                " Возможно, она уже удалена.");
         return true;
     }
     if (task.status === "active") {
@@ -453,8 +471,12 @@ async function handleNaturalManagement(ctx: BotContext, text: string): Promise<b
     }
     const updated = await RecurringTaskRepository.setStatus(task.id, "active", ctx.chat!.id);
     await ctx.reply(updated
-        ? `Возобновила задачу «${task.title}». Следующий запуск — по расписанию.`
-        : "Не нашла эту регулярную задачу. Возможно, она уже удалена.");
+        ? getBotGenderedText(
+            `Возобновила задачу «${task.title}».`,
+            `Возобновил задачу «${task.title}».`,
+        ) + " Следующий запуск — по расписанию."
+        : getBotGenderedText("Не нашла эту регулярную задачу.", "Не нашёл эту регулярную задачу.") +
+            " Возможно, она уже удалена.");
     return true;
 }
 
@@ -494,7 +516,10 @@ async function createRecurringTask(
     };
     await RecurringTaskRepository.create(task);
     await ctx.reply(
-        `Поставила запрос «${task.title}» на повтор: ${formatRecurringSchedule(task.schedule)}. ` +
+        getBotGenderedText(
+            `Поставила запрос «${task.title}» на повтор: ${formatRecurringSchedule(task.schedule)}. `,
+            `Поставил запрос «${task.title}» на повтор: ${formatRecurringSchedule(task.schedule)}. `,
+        ) +
         `Следующий запуск — ${task.nextRunAt.toLocaleString("ru-RU", { timeZone: task.timezone, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.`,
     );
 }

@@ -33,15 +33,15 @@ withPreset('hybrid-openrouter-gpt', () => {
 withPreset('hybrid-gemini-gpt', () => {
     assert.deepStrictEqual(resolveModelForTask('browserVision'), {
         provider: 'gemini',
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-3.6-flash',
     });
     assert.deepStrictEqual(resolveModelForTask('conversation'), {
         provider: 'gemini',
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-3.6-flash',
     });
     assert.deepStrictEqual(resolveModelForTask('messageAnalysis'), {
         provider: 'gemini',
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-3.6-flash',
     });
     assert.deepStrictEqual(resolveModelForTask('memoryExtraction'), {
         provider: 'openai',
@@ -68,11 +68,11 @@ withPreset('hybrid-gemini-gpt', () => {
 withPreset('gemini-full', () => {
     assert.deepStrictEqual(resolveModelForTask('webSearchReasoning'), {
         provider: 'gemini',
-        model: 'gemini-3.5-flash',
+        model: 'gemini-3.6-flash',
     });
     assert.deepStrictEqual(resolveModelForTask('browserVision'), {
         provider: 'gemini',
-        model: 'gemini-3.5-flash',
+        model: 'gemini-3.6-flash',
     });
     assert.deepStrictEqual(resolveModelForTask('embedding'), {
         provider: 'gemini',
@@ -80,7 +80,7 @@ withPreset('gemini-full', () => {
     });
     assert.deepStrictEqual(resolveModelForTask('transcription'), {
         provider: 'gemini',
-        model: 'gemini-3.5-flash',
+        model: 'gemini-3.6-flash',
     });
 });
 
@@ -214,9 +214,13 @@ assert.deepStrictEqual(
     ['GPT:6', 'OpenRouter Auto:4'],
 );
 assert.strictEqual(formatGenerativeUsageSummary(aiPresets['hybrid-gemini-gpt'].models), 'Gemini 5 · GPT 5');
-assert.strictEqual(formatServiceSummary(aiPresets['hybrid-gemini-gpt'].models), 'OpenAI Embeddings · Whisper');
+assert.strictEqual(formatServiceSummary(aiPresets['hybrid-gemini-gpt'].models), 'OpenAI Embeddings · OpenAI Transcription');
 assert.strictEqual(formatServiceSummary(aiPresets['gemini-full'].models), 'Gemini Embeddings · Gemini Transcription');
-assert.strictEqual(formatServiceSummary(aiPresets['glm-full'].models), 'OpenAI Embeddings · GLM Transcription');
+assert.strictEqual(formatServiceSummary(aiPresets['glm-full'].models), 'OpenAI Embeddings · Z.ai Transcription');
+assert.strictEqual(formatServiceSummary({
+    embedding: { provider: 'gemini', model: 'future-embedding-model' },
+    transcription: { provider: 'gemini', model: 'future-audio-model' },
+}), 'Gemini Embeddings · Gemini Transcription');
 assert.strictEqual(isTrueFullAiPreset('gemini-full'), true);
 assert.strictEqual(isTrueFullAiPreset('glm-full'), true);
 assert.strictEqual(isTrueFullAiPreset('gpt-balanced'), false);

@@ -4,21 +4,23 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
     Reminder,
-    ReminderStatus,
-    scheduleReminder,
     resolveTargetChat,
-    getBotRef,
 } from "../reminder";
 import { type ProcessingResult } from "../orchestrator";
 import { devLog, sendMessage } from "../utils";
 import { addToHistory } from "../utils/history";
 import { config } from "../config";
-import { ReminderRegistry } from "../stores/ReminderRegistry";
-import { ReminderRepository } from "../services/ReminderRepository";
 import { MAX_SENT_MESSAGE_CONTEXTS, persistSessionNow } from "../services/SessionStorage";
 import { getTelegramVoiceReadinessIssue, withTelegramVoiceFile } from "../services/elevenLabsTts";
-import { addTargetNotificationButtons, appendTargetNotificationPrompt, buildDefaultTargetReminderMessage } from "../utils/reminderTargetNotification";
-import { createOrRefreshReminderMemory } from "../services/ReminderMemorySync";
+import { addTargetNotificationButtons, appendTargetNotificationPrompt } from "../utils/reminderTargetNotification";
+import { getBotGenderedText } from "../persona";
+import { sendStructuredBlocks } from '../utils';
+import { reminderService } from '../services/ReminderService';
+import {
+    buildReminderConfirmationBlocks,
+    buildReminderConfirmationText,
+} from '../utils/reminderConfirmation';
+import { esc, paragraph } from '../utils/richMessage';
 
 // ── Константы ──────────────────────────────────────────────
 
@@ -36,6 +38,7 @@ export const REACTIONS_ENABLED = config.reactionsEnabled;
 
 export const MEMORY_HEARS_RE = /^(?:что\s+(?:ты\s+)?(?:знаешь|помнишь|помнила)\s+обо?\s+мне|расскажи\s+что\s+(?:ты\s+)?(?:знаешь|помнишь)(?:\s+обо?\s+мне)?|покажи\s+(?:мою\s+)?память|что\s+ты\s+обо\s+мне(?:\s+знаешь)?|что\s+помнишь\s+обо?\s+мне)\??$/i;
 export const MEMORY_DELETE_RE = /^(?:забудь[,\s]|удали из памяти|убери из памяти)/i;
+const REMINDER_TARGET_VALIDATION_TIMEOUT_MS = 5_000;
 
 // ── Хранение отправленных сообщений ─────────────────────────
 
@@ -120,6 +123,7 @@ export function canSendResultAsVoice(result: ProcessingResult): boolean {
 
 export function shouldRunProactiveHint(result: ProcessingResult, processedMessage: string): boolean {
     if (!result.responseText?.trim()) return false;
+    if (result.reminderAction || result.reminderCreationFailures?.length) return false;
     if (result.reminderCreated) return false;
     if (result.messageDraft) return false;
     if (result.imageGenerated || result.generatedImageUrl) return false;
@@ -157,15 +161,33 @@ export async function replyProcessingResult(ctx: BotContext, result: ProcessingR
         } catch (voiceError) {
             console.error("[voice-reply] failed to generate or send voice:", voiceError);
             const sent = await replyAndStore(ctx, result.responseText);
-            await ctx.reply("Не смогла отправить голосом, поэтому оставила текстом.");
+            await ctx.reply(getBotGenderedText(
+                "Не смогла отправить голосом, поэтому оставила текстом.",
+                "Не смог отправить голосом, поэтому оставил текстом.",
+            ));
             return sent;
         }
     }
 
     if (result.keyboard) {
+        if (result.structuredResponseBlocks?.length) {
+            const msg = await sendStructuredBlocks(ctx, ctx.chat!.id, result.structuredResponseBlocks, {
+                replyMarkup: result.keyboard,
+            }) as { message_id: number };
+            storeSentMessageText(ctx, msg.message_id, result.responseText);
+            storeSentMessageContext(ctx, msg.message_id, result.responseText, { kind: 'structured' });
+            return msg;
+        }
         return replyAndStore(ctx, result.responseText, {
             reply_markup: result.keyboard
         });
+    }
+
+    if (result.structuredResponseBlocks?.length) {
+        const msg = await sendStructuredBlocks(ctx, ctx.chat!.id, result.structuredResponseBlocks) as { message_id: number };
+        storeSentMessageText(ctx, msg.message_id, result.responseText);
+        storeSentMessageContext(ctx, msg.message_id, result.responseText, { kind: 'structured' });
+        return msg;
     }
 
     return replyAndStore(ctx, result.responseText);
@@ -181,62 +203,91 @@ export async function flushSessionAfterAsyncWork(ctx: BotContext, label: string)
 
 // ── Напоминания ─────────────────────────────────────────────
 
-export async function saveRemindersFromResult(ctx: BotContext, result: ProcessingResult) {
-    if (!result.reminderCreated) return;
-    if (!Array.isArray(ctx.session.reminders)) ctx.session.reminders = [];
+export async function saveRemindersFromResult(
+    ctx: BotContext,
+    result: ProcessingResult,
+    service: Pick<typeof reminderService, 'createReminder'> = reminderService,
+    resolveReminderTarget: typeof resolveTargetChat = resolveTargetChat,
+) {
+    if (!result.reminderCreated && !result.reminderCreationFailures?.length) return;
     const list = result.reminderDetailsList ?? (result.reminderDetails ? [result.reminderDetails] : []);
-    const targetNotificationCandidates: Reminder[] = [];
-    // Название группового чата — для пикера в приватном
-    const chatType = ctx.chat?.type;
-    const chatTitle = chatType === 'group' || chatType === 'supergroup'
-        ? `👥 ${(ctx.chat as any).title ?? 'Группа'}`
-        : undefined;
+    const requestedTargetNotificationCandidates: Reminder[] = [];
+    const createdDetails: typeof list = [];
+    const failures: NonNullable<ProcessingResult['reminderCreationFailures']> = [
+        ...(result.reminderCreationFailures ?? []),
+    ];
     for (const details of list) {
-        const reminder: Reminder = {
-            id: details.id,
-            text: details.text,
-            displayText: details.reminderMessage,
-            dueDate: details.dueDate,
-            chatId: ctx.chat!.id,
-            status: ReminderStatus.Pending,
-            createdAt: new Date(),
-            targetChat: details.targetChat,
-            targetDisplayText: details.targetReminderMessage || (details.targetChat ? buildDefaultTargetReminderMessage(details.text) : undefined),
-            targetChatNotifyStatus: details.targetChat ? "pending" : undefined,
-            chatTitle,
-            recurrence: details.recurrence,
+        try {
+            const reminder = await service.createReminder(ctx, details);
+            createdDetails.push(details);
+            if (reminder.targetChat) requestedTargetNotificationCandidates.push(reminder);
+        } catch (error) {
+            console.error('[reminder] create failed:', error);
+            failures.push({
+                text: details.text,
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
+
+    }
+
+    const targetValidationResults = await Promise.all(requestedTargetNotificationCandidates.map(async (reminder) => {
+        try {
+            let timeout: ReturnType<typeof setTimeout> | undefined;
+            const resolved = await Promise.race([
+                resolveReminderTarget(reminder.targetChat!),
+                new Promise<null>((resolve) => {
+                    timeout = setTimeout(resolve, REMINDER_TARGET_VALIDATION_TIMEOUT_MS, null);
+                }),
+            ]).finally(() => {
+                if (timeout) clearTimeout(timeout);
+            });
+            if (resolved) return { reminder };
+        } catch (error) {
+            console.error('[reminder] target validation failed:', error);
+        }
+        const target = reminder.targetChat!;
+        const what = target.type === 'group'
+            ? `группу «${target.groupName}»`
+            : `контакт «${target.contactQuery}»`;
+        return {
+            reminder,
+            warning: `Не удалось проверить или найти ${what}. Проверь название: напоминание создано, но сообщение туда может не отправиться.`,
         };
-        if (reminder.targetChat) {
-            targetNotificationCandidates.push(reminder);
-        }
-        ctx.session.reminders.push(reminder);
-        ReminderRegistry.getInstance().add(reminder);
-        console.info(`[reminder] event=created id=${reminder.id} chatId=${reminder.chatId} due=${new Date(reminder.dueDate).toISOString()}` + (chatTitle ? ` chat="${chatTitle}"` : '') + (details.targetChat ? ` target=${details.targetChat.type}` : ""));
-        await ReminderRepository.save(reminder).catch(e => console.error('[reminder] DB save failed on create:', e));
+    }));
+    const targetWarnings = targetValidationResults
+        .map(({ warning }) => warning)
+        .filter((warning): warning is string => Boolean(warning));
+    const targetNotificationCandidates = targetValidationResults
+        .filter(({ warning }) => !warning)
+        .map(({ reminder }) => reminder);
 
-        const bot = getBotRef();
-        if (bot) {
-            scheduleReminder(bot, reminder);
-        }
-        await createOrRefreshReminderMemory(ctx, reminder).catch((e) => console.error('[reminder] memory sync failed on create:', e));
-
-        // Валидация targetChat — предупреждаем сразу если группа/контакт не найдены
-        if (details.targetChat) {
-            resolveTargetChat(details.targetChat).then((resolved) => {
-                if (!resolved) {
-                    const what = details.targetChat!.type === 'group'
-                        ? `группу «${(details.targetChat as any).groupName}»`
-                        : `контакт «${(details.targetChat as any).contactQuery}»`;
-                    ctx.reply(
-                        `⚠️ Не нашла ${what}. Напоминание сохранено, но проверь правильность названия — иначе оно не дойдёт до адресата.`
-                    ).catch(() => {});
-                }
-            }).catch(() => {});
-        }
+    result.reminderCreated = createdDetails.length > 0;
+    result.reminderDetails = createdDetails[0];
+    result.reminderDetailsList = createdDetails;
+    result.reminderCreationFailures = failures;
+    result.reminderAction = result.reminderAction === 'create_reminders_batch' || list.length + failures.length > 1
+        ? 'create_reminders_batch'
+        : 'create_reminder';
+    const confirmationText = buildReminderConfirmationText(createdDetails, failures);
+    const confirmationBlocks = buildReminderConfirmationBlocks(createdDetails, failures);
+    const companionResponseText = result.companionResponseText?.trim();
+    result.responseText = companionResponseText
+        ? `${companionResponseText}\n\n${confirmationText}`
+        : confirmationText;
+    result.structuredResponseBlocks = companionResponseText
+        ? [paragraph(esc(companionResponseText)), ...confirmationBlocks]
+        : confirmationBlocks;
+    if (targetWarnings.length > 0) {
+        const warningText = `⚠️ ${targetWarnings.join('\n⚠️ ')}`;
+        result.responseText = `${result.responseText}\n\n${warningText}`;
+        result.structuredResponseBlocks.push(paragraph(esc(warningText)));
     }
 
     if (targetNotificationCandidates.length > 0) {
-        result.responseText = appendTargetNotificationPrompt(result.responseText, targetNotificationCandidates);
+        const prompt = appendTargetNotificationPrompt('', targetNotificationCandidates).trim();
+        result.responseText = `${result.responseText}\n\n${prompt}`;
+        result.structuredResponseBlocks.push(paragraph(esc(prompt)));
         const keyboard = result.keyboard ?? new InlineKeyboard();
         if (result.keyboard) keyboard.row();
         result.keyboard = addTargetNotificationButtons(keyboard, targetNotificationCandidates);

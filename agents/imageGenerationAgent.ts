@@ -3,7 +3,7 @@ import * as dotenv from "dotenv";
 import { MessageHistory } from "../types";
 import { ProcessingResult } from "../orchestrator";
 import { devLog } from "../utils";
-import { getBotPersona, getCommunicationStyle, getBotBiography } from "../persona";
+import { getBotGenderedText, getBotPersona, getCommunicationStyle, getBotBiography } from "../persona";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { formatPromptDateTime } from "../utils/time";
 import { config } from "../config";
@@ -210,7 +210,10 @@ export async function imageGenerationAgent(
             return {
                 responseText: isSelfPhotoRequest
                     ? "Не получилось сейчас отправить фото — генерация сорвалась. Попробуй попросить ещё раз чуть позже."
-                    : "Я попыталась сгенерировать изображение по твоему запросу, но, к сожалению, возникла техническая проблема. Пожалуйста, попробуй сформулировать запрос иначе или попробуй позже. 🎨",
+                    : getBotGenderedText(
+                        "Я попыталась сгенерировать изображение по твоему запросу,",
+                        "Я попытался сгенерировать изображение по твоему запросу,",
+                    ) + " но, к сожалению, возникла техническая проблема. Пожалуйста, попробуй сформулировать запрос иначе или попробуй позже. 🎨",
                 imageGenerated: false
             };
         }
@@ -219,7 +222,10 @@ export async function imageGenerationAgent(
         return {
             responseText: isSelfPhotoRequest
                 ? "Вот, это я сейчас 🙂"
-                : "Вот изображение, которое я создала по твоему запросу ✨ Надеюсь, оно тебе понравится!",
+                : getBotGenderedText(
+                    "Вот изображение, которое я создала по твоему запросу ✨",
+                    "Вот изображение, которое я создал по твоему запросу ✨",
+                ) + " Надеюсь, оно тебе понравится!",
             imageGenerated: true,
             generatedImageUrl: imageUrl
         };
@@ -231,7 +237,10 @@ export async function imageGenerationAgent(
         return {
             responseText: isAssistantSelfPhotoRequest(message)
                 ? "Фото сейчас не получилось отправить. Давай попробуем ещё раз чуть позже."
-                : "Я очень хотела создать для тебя изображение, но, к сожалению, произошла ошибка. Можем попробовать еще раз с другим описанием или позже? 🖼️",
+                : getBotGenderedText(
+                    "Я очень хотела создать для тебя изображение,",
+                    "Я очень хотел создать для тебя изображение,",
+                ) + " но, к сожалению, произошла ошибка. Можем попробовать еще раз с другим описанием или позже? 🖼️",
             imageGenerated: false
         };
     }

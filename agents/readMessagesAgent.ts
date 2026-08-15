@@ -15,7 +15,7 @@ import {
     type NegotiationSession,
 } from "../stores/NegotiationStore";
 import { config } from "../config";
-import { getBotPersona, getCommunicationStyle } from "../persona";
+import { getBotGenderedText, getBotPersona, getCommunicationStyle } from "../persona";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
 import { sendMessage as sendTelegramMessage } from "../services/telegram";
 import { InlineKeyboard } from "grammy";
@@ -31,6 +31,7 @@ import { queueMessage as queueForReflection, markChatAsBot } from "../services/r
 import { ChatGroupRepository } from "../services/ChatGroupRepository";
 import { persistSessionNow } from "../services/SessionStorage";
 import { createIncomingTelegramQueue, type IncomingTelegramQueueJob } from "../services/IncomingTelegramQueue";
+import { getGramJsForwardSource } from "../utils/forwardedMessage";
 
 
 // Глобальное хранилище сообщений
@@ -89,6 +90,7 @@ interface TelegramMessageLike {
         className?: string;
     };
     fromId?: unknown;
+    fwdFrom?: unknown;
     peerId?: unknown;
     replyTo?: {
         replyToMsgId?: number;
@@ -159,6 +161,8 @@ function buildIncomingStoredMessage(
         date: new Date(message.date * 1000),
         isRead: false,
         isBot,
+        isForwarded: Boolean(message.fwdFrom),
+        forwardSource: message.fwdFrom ? getGramJsForwardSource(message.fwdFrom) : undefined,
     };
 }
 
@@ -401,7 +405,10 @@ async function processIncomingTelegramMessage(job: IncomingTelegramQueueJob<Tele
     messageStore.addMessage(String(chatId), storedMessage);
 
     if (storedMessage.text) {
-        queueForReflection(String(chatId), senderName, storedMessage.text, storedMessage.date, false, storedMessage.id);
+        queueForReflection(String(chatId), senderName, storedMessage.text, storedMessage.date, false, storedMessage.id, {
+            isForwarded: storedMessage.isForwarded,
+            forwardSource: storedMessage.forwardSource,
+        });
     }
 
     devLog(`Новое сообщение от ${senderName}: ${storedMessage.text}`);
@@ -536,8 +543,8 @@ async function forwardReplyToOwner(
 
 /**
  * Обрабатывает исходящие сообщения владельца бота в личных чатах.
- * Сохраняет их в MessageStore (isOwn=true) и добавляет в очередь рефлексии
- * как "Я: text" — чтобы LLM видел обе стороны диалога.
+ * Сохраняет их в MessageStore и добавляет в очередь рефлексии, разделяя
+ * переносчика и исходного автора у пересланных сообщений.
  */
 function handleOutgoingMessage(event: { message?: TelegramMessageLike; isPrivate?: boolean }): void {
     try {
@@ -550,6 +557,8 @@ function handleOutgoingMessage(event: { message?: TelegramMessageLike; isPrivate
         const chatId = message.chatId;
         const date = new Date(message.date * 1000);
         const ownerName = config.ownerName || 'Я';
+        const isForwarded = Boolean(message.fwdFrom);
+        const forwardSource = isForwarded ? getGramJsForwardSource(message.fwdFrom) : undefined;
 
         const storedMessage: StoredMessage = {
             id: message.id,
@@ -560,12 +569,16 @@ function handleOutgoingMessage(event: { message?: TelegramMessageLike; isPrivate
             isRead: true,
             isBot: false,
             isOwn: true,
+            isForwarded,
+            forwardSource,
         };
 
         messageStore.addMessage(String(chatId), storedMessage);
 
-        // Добавляем в буфер рефлексии — isOwn=true сигнализирует что это наш текст
-        queueForReflection(String(chatId), ownerName, text, date, true, storedMessage.id);
+        queueForReflection(String(chatId), ownerName, text, date, true, storedMessage.id, {
+            isForwarded,
+            forwardSource,
+        });
 
         devLog(`[outgoing] Сохранено исходящее сообщение в чат ${chatId}: ${text.slice(0, 60)}`);
     } catch (e) {
@@ -976,9 +989,10 @@ export function buildChatAnalysisPeriodKeyboard(requestId: string): InlineKeyboa
 
 /**
  * Форматирует сообщения из группового чата в читаемый текст для анализа.
- * Для сообщений владельца ставит "Я:", для остальных — "Участник_<id>:".
+ * Для сообщений владельца ставит "Я:", forwards помечает отдельно,
+ * для остальных — "Участник_<id>:".
  */
-function formatGroupMessages(messages: Api.Message[]): string {
+export function formatGroupMessages(messages: Api.Message[]): string {
     const ownerId = String(config.allowedUserId || '');
     const sorted = Array.from(messages).sort((a, b) => (a.date || 0) - (b.date || 0));
     const lines: string[] = [];
@@ -986,7 +1000,13 @@ function formatGroupMessages(messages: Api.Message[]): string {
         const text = msg.message || (msg.media ? '[медиа]' : '');
         if (!text.trim()) continue;
         const fromId = msg.fromId && 'userId' in msg.fromId ? String(msg.fromId.userId) : '';
-        const sender = fromId === ownerId ? 'Я' : (fromId ? `Участник_${fromId}` : 'Неизвестный');
+        const isForwarded = Boolean((msg as Api.Message & { fwdFrom?: unknown }).fwdFrom);
+        const carrierIsOwn = Boolean(msg.out || fromId === ownerId);
+        const sender = isForwarded
+            ? `${carrierIsOwn ? 'Я' : (fromId ? `Участник_${fromId}` : 'Неизвестный')} (переслал сообщение от ${getGramJsForwardSource((msg as Api.Message & { fwdFrom?: unknown }).fwdFrom)})`
+            : fromId === ownerId
+                ? 'Я'
+                : (fromId ? `Участник_${fromId}` : 'Неизвестный');
         const date = new Date((msg.date || 0) * 1000).toLocaleString('ru-RU');
         lines.push(`[${date}] ${sender}: ${text}`);
     }
@@ -1012,7 +1032,10 @@ async function studyGroupChatAndSaveFacts(
 
     const group = await searchGroupByTitle(client, groupName);
     if (!group) {
-        return `Не нашла групповой чат с названием «${groupName}». Проверь название — оно должно совпадать с тем, что в списке диалогов.`;
+        return getBotGenderedText(
+            `Не нашла групповой чат с названием «${groupName}».`,
+            `Не нашёл групповой чат с названием «${groupName}».`,
+        ) + " Проверь название — оно должно совпадать с тем, что в списке диалогов.";
     }
 
     const { startDate, endDate } = getChatAnalysisDateRange(period);
@@ -1041,7 +1064,12 @@ async function studyGroupChatAndSaveFacts(
 
     const [analysisResult, factsResult] = await Promise.allSettled([
         createChatCompletionForTask('messageAnalysis', analysisCompletionOptions),
-        extractFactsAboutUserFromConversation(conversationText, group.title as string, startDate, endDate),
+        extractFactsAboutUserFromConversation(
+            formatGroupMessages((messages as Api.Message[]).filter((message) => !message.fwdFrom)),
+            group.title as string,
+            startDate,
+            endDate,
+        ),
     ]);
 
     const analysisText = analysisResult.status === 'fulfilled'
@@ -1058,9 +1086,15 @@ async function studyGroupChatAndSaveFacts(
                         : savedCount < 5
                             ? 'важных факта'
                             : 'важных фактов';
-                    return `${analysisText} Я ещё сохранила ${savedCount} ${factLabel} в память.`;
+                    return `${analysisText} ` + getBotGenderedText(
+                        `Я ещё сохранила ${savedCount} ${factLabel} в память.`,
+                        `Я ещё сохранил ${savedCount} ${factLabel} в память.`,
+                    );
                 }
-                return `${analysisText}\n\n💾 Сохранила ${savedCount} факт(ов) в долговременную память.`;
+                return `${analysisText}\n\n` + getBotGenderedText(
+                    `💾 Сохранила ${savedCount} факт(ов) в долговременную память.`,
+                    `💾 Сохранил ${savedCount} факт(ов) в долговременную память.`,
+                );
             }
         } catch (e) {
             console.error('[studyGroupChatAndSaveFacts] save facts error:', e);
@@ -1086,7 +1120,10 @@ async function analyzeGroupChatMessages(
 
     const group = await searchGroupByTitle(client, groupName);
     if (!group) {
-        return `Не нашла групповой чат с названием «${groupName}». Проверь название — оно должно совпадать с тем, что в списке диалогов.`;
+        return getBotGenderedText(
+            `Не нашла групповой чат с названием «${groupName}».`,
+            `Не нашёл групповой чат с названием «${groupName}».`,
+        ) + " Проверь название — оно должно совпадать с тем, что в списке диалогов.";
     }
 
     const { startDate, endDate } = getChatAnalysisDateRange(period);
@@ -1438,7 +1475,10 @@ export async function readMessagesAgent(
                     ? " Проверь, что в памяти сохранён факт (например: «Запомни, моя жена — Юля») и что это имя есть в контактах."
                     : " Можно сохранить в память, кто это (например: «Запомни, моя жена — Юля»), или указать имя из контактов.";
                 return {
-                    responseText: `Не нашла контакт «${nameToSearch}» в списке контактов.${hint}`
+                    responseText: getBotGenderedText(
+                        `Не нашла контакт «${nameToSearch}» в списке контактов.`,
+                        `Не нашёл контакт «${nameToSearch}» в списке контактов.`,
+                    ) + hint
                 };
             }
             const contact = contacts[0];

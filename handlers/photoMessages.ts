@@ -15,6 +15,8 @@ import {
     sendResultToUser,
     checkLastFactSaveError,
 } from "./shared";
+import { getBotGenderedText } from "../persona";
+import { getForwardedMessageInfo } from "../utils/forwardedMessage";
 
 // ── Добавление результатов обработки изображений в историю ─
 
@@ -44,6 +46,17 @@ async function processMediaGroup(ctx: BotContext, mediaGroupId: string) {
 
         const groupInfo = ctx.session.mediaGroups.get(mediaGroupId);
         if (!groupInfo || groupInfo.fileIds.length === 0) return;
+
+        if (groupInfo.isForwarded) {
+            await addToHistory(ctx, 'user', `[Пересланная группа изображений от ${groupInfo.forwardSource ?? 'источника'}]`, {
+                turn: {
+                    userText: 'Пересланная группа изображений',
+                    isForwardOnly: true,
+                    forwardContext: { sender: groupInfo.forwardSource, text: groupInfo.caption || '[Изображения]' },
+                },
+            });
+            return;
+        }
 
         const fileIds = groupInfo.fileIds;
         const caption = groupInfo.caption || "";
@@ -100,6 +113,7 @@ export function registerPhotoMessageHandler(bot: Bot<BotContext>): void {
         try {
             devLog('🖼️ Получено изображение от пользователя:', ctx.from?.id);
             const caption = ctx.message.caption || "";
+            const forwarded = getForwardedMessageInfo(ctx.message);
             const photoInfo = ctx.message.photo;
             const bestPhoto = photoInfo[photoInfo.length - 1];
             const fileId = bestPhoto.file_id;
@@ -117,7 +131,9 @@ export function registerPhotoMessageHandler(bot: Bot<BotContext>): void {
                         fileIds: [fileId],
                         caption: caption,
                         timestamp: Date.now(),
-                        processed: false
+                        processed: false,
+                        isForwarded: forwarded.isForwarded,
+                        forwardSource: forwarded.source,
                     });
                 } else {
                     const groupInfo = ctx.session.mediaGroups.get(mediaGroupId);
@@ -125,6 +141,11 @@ export function registerPhotoMessageHandler(bot: Bot<BotContext>): void {
                         console.error("Ошибка: медиагруппа не найдена в сессии");
                         return;
                     }
+
+                    // Telegram does not allow mixing forwarded and own photos
+                    // in a single media_group_id, so OR aggregation is sufficient.
+                    groupInfo.isForwarded = groupInfo.isForwarded || forwarded.isForwarded;
+                    groupInfo.forwardSource = groupInfo.forwardSource || forwarded.source;
 
                     groupInfo.fileIds.push(fileId);
                     if (!groupInfo.caption && caption) {
@@ -147,6 +168,17 @@ export function registerPhotoMessageHandler(bot: Bot<BotContext>): void {
                     }
                 }, 1000);
 
+                return;
+            }
+
+            if (forwarded.isForwarded) {
+                await addToHistory(ctx, 'user', `[Пересланное изображение от ${forwarded.source}]`, {
+                    turn: {
+                        userText: 'Пересланное изображение',
+                        isForwardOnly: true,
+                        forwardContext: { sender: forwarded.source, text: caption || '[Изображение]' },
+                    },
+                });
                 return;
             }
 
@@ -190,10 +222,16 @@ export function registerPhotoMessageHandler(bot: Bot<BotContext>): void {
                     fs.unlinkSync(tempFilePath);
                 } catch (downloadError) {
                     console.error("Ошибка при загрузке изображения:", downloadError);
-                    await ctx.reply("Я получила ваше изображение, но, к сожалению, не смогла его детально проанализировать из-за технической проблемы. Могу я чем-то еще помочь вам? 💫");
+                    await ctx.reply(getBotGenderedText(
+                        "Я получила ваше изображение, но, к сожалению, не смогла его детально проанализировать из-за технической проблемы.",
+                        "Я получил ваше изображение, но, к сожалению, не смог его детально проанализировать из-за технической проблемы.",
+                    ) + " Могу я чем-то еще помочь вам? 💫");
                 }
             } else {
-                await ctx.reply("Я получила ваше изображение, но не могу получить к нему доступ. Возможно, проблема с API Telegram. Пожалуйста, попробуйте отправить изображение еще раз или опишите, что на нем. 🌷");
+                await ctx.reply(getBotGenderedText(
+                    "Я получила ваше изображение, но не могу получить к нему доступ.",
+                    "Я получил ваше изображение, но не могу получить к нему доступ.",
+                ) + " Возможно, проблема с API Telegram. Пожалуйста, попробуйте отправить изображение еще раз или опишите, что на нем. 🌷");
             }
         } catch (error) {
             console.error("Ошибка при обработке изображения:", error);

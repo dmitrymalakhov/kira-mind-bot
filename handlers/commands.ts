@@ -1,7 +1,16 @@
 import { Bot, InlineKeyboard } from "grammy";
 import { BotContext } from "../types";
 import { ContactsStore } from "../stores/ContactsStore";
-import { getActiveReminders, buildReminderCard, buildChatPicker } from "../utils/reminderCard";
+import {
+    REMINDERS_PAGE_SIZE,
+    buildChatPicker,
+    buildReminderCard,
+    buildRemindersList,
+    filterReminders,
+    getActiveReminders,
+    parseReminderOpenCommand,
+    resolveReminderCommandCode,
+} from "../utils/reminderCard";
 import { ReminderRegistry } from "../stores/ReminderRegistry";
 import { getMessagesSummary, getUnreadMessagesPreview, markAllMessagesAsRead, resetAllMessages } from "../agents/readMessagesAgent";
 import { EnhancedSessionData } from "../services/dialogueSummarizer";
@@ -29,6 +38,7 @@ import {
 import { isStatusCommandArg, parseBooleanCommandArg } from "../utils/booleanCommandArg";
 import { buildHelpOverviewBlocks, buildHelpTopicBlocks } from "../utils/helpMessage";
 import { sendRecurringTasksMenu } from "../services/recurringTaskService";
+import { getBotGenderedText } from "../persona";
 
 
 function parseCommandArgument(text: string | undefined, command: string): string {
@@ -127,44 +137,63 @@ bot.command("contacts", async (ctx) => {
     }
 });
 
-// Команда /reminders - показать активные напоминания
-bot.command("reminders", async (ctx) => {
-    const isPrivate = ctx.chat?.type === 'private';
+// Кликабельная служебная команда из списка: /r_<code>_<filter>_<page>
+bot.hears(/^\/r_[a-f0-9]{10,20}_[a-z]_[a-z0-9]{1,6}(?:@[a-z0-9_]+)?$/i, async (ctx) => {
+    const parsed = parseReminderOpenCommand(ctx.message?.text ?? '');
+    if (!parsed) return;
+    if (parsed.botUsername && parsed.botUsername.toLowerCase() !== ctx.me.username.toLowerCase()) return;
 
-    if (!isPrivate) {
-        // В групповом чате — показываем напоминания только этой группы
-        const active = getActiveReminders(ctx);
-        if (active.length === 0) {
-            await ctx.reply("В этом чате пока нет активных напоминаний.");
-            return;
-        }
-        const { blocks, keyboard } = buildReminderCard(active, 0);
-        await sendStructuredBlocks(ctx, ctx.chat!.id, blocks, { replyMarkup: keyboard });
+    const active = getActiveReminders(ctx);
+    const reminder = resolveReminderCommandCode(active, parsed.code);
+    if (!reminder) {
+        await ctx.reply('Не удалось однозначно открыть напоминание. Обнови /reminders и попробуй ещё раз.');
         return;
     }
 
-    // В приватном чате — проверяем напоминания во всех чатах
-    ctx.session.viewingRemindersInChat = undefined;
-    const allChats = ReminderRegistry.getInstance().getChatsWithActive();
+    let visible = filterReminders(active, parsed.filter);
+    let filter = parsed.filter;
+    let page = parsed.page;
+    let index = visible.findIndex(value => value.id === reminder.id);
+    if (index < 0) {
+        filter = 'all';
+        visible = filterReminders(active, filter);
+        index = visible.findIndex(value => value.id === reminder.id);
+        page = Math.floor(Math.max(0, index) / REMINDERS_PAGE_SIZE);
+    }
+    const totalPages = Math.max(1, Math.ceil(visible.length / REMINDERS_PAGE_SIZE));
+    page = Math.max(0, Math.min(page, totalPages - 1));
+    const showBackToChats = ctx.chat?.type === 'private' && ctx.session.viewingRemindersInChat !== undefined;
+    const { blocks, keyboard } = buildReminderCard(visible, index, showBackToChats, { filter, page });
+    await sendStructuredBlocks(ctx, ctx.chat!.id, blocks, { replyMarkup: keyboard });
+});
 
-    if (allChats.length === 0) {
-        const msg = "У тебя пока нет активных напоминаний. Хочешь, чтобы я что-то запланировала? Просто скажи, о чём напомнить! 🌺";
+// Команда /reminders - в личном чате сохраняет прежний кросс-чатовый пикер.
+bot.command("reminders", async (ctx) => {
+    ctx.session.viewingRemindersInChat = undefined;
+    if (ctx.chat?.type === 'private') {
+        const chats = ReminderRegistry.getInstance().getChatsWithActive();
+        if (chats.length > 1) {
+            const { blocks, keyboard } = buildChatPicker(chats);
+            addToHistory(ctx, 'bot', renderFallbackHtml(blocks));
+            await sendStructuredBlocks(ctx, ctx.chat.id, blocks, { replyMarkup: keyboard });
+            return;
+        }
+        if (chats.length === 1 && chats[0].chatId !== ctx.chat.id) {
+            ctx.session.viewingRemindersInChat = chats[0].chatId;
+        }
+    }
+    const active = getActiveReminders(ctx);
+    if (active.length === 0) {
+        const msg = "В этом чате пока нет активных напоминаний. Просто напиши, о чём и когда напомнить.";
         addToHistory(ctx, 'bot', msg);
         await ctx.reply(msg);
         return;
     }
-
-    // Если есть только личные напоминания — карточки как обычно
-    if (allChats.length === 1 && allChats[0].chatId === ctx.chat!.id) {
-        const active = ReminderRegistry.getInstance().getActiveByChatId(ctx.chat!.id);
-        const { blocks, keyboard } = buildReminderCard(active, 0);
-        addToHistory(ctx, 'bot', renderFallbackHtml(blocks));
-        await sendStructuredBlocks(ctx, ctx.chat!.id, blocks, { replyMarkup: keyboard });
-        return;
-    }
-
-    // Несколько чатов — показываем пикер
-    const { blocks, keyboard } = buildChatPicker(allChats);
+    const { blocks, keyboard } = buildRemindersList(active, {
+        botUsername: ctx.me.username,
+        showBackToChats: false,
+    });
+    addToHistory(ctx, 'bot', renderFallbackHtml(blocks));
     await sendStructuredBlocks(ctx, ctx.chat!.id, blocks, { replyMarkup: keyboard });
 });
 
@@ -242,7 +271,10 @@ bot.command("summary", async (ctx) => {
     let message = '';
 
     if (sessionData.dialogueSummary && sessionData.dialogueSummary.trim() !== '') {
-        message = "📝 Вот что я запомнила из нашего общения:\n\n" + sessionData.dialogueSummary;
+        message = getBotGenderedText(
+            "📝 Вот что я запомнила из нашего общения:",
+            "📝 Вот что я запомнил из нашего общения:",
+        ) + "\n\n" + sessionData.dialogueSummary;
     } else {
         message = "У меня пока нет сохраненной суммаризации нашего разговора. Она будет создана автоматически после достаточного количества сообщений! 📚";
     }

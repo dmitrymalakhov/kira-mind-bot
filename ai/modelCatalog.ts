@@ -55,9 +55,21 @@ export const AI_MODEL_CATALOG: Readonly<Record<string, AiModelCatalogEntry>> = {
         modalities: ['audio'],
         preferredApi: 'audio.transcriptions',
     },
-    'gemini:gemini-3-flash-preview': {
+    'gemini:gemini-3.6-flash': {
         provider: 'gemini',
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-3.6-flash',
+        modalities: ['text', 'vision', 'audio'],
+        preferredApi: 'chat.completions',
+    },
+    'gemini:gemini-3.5-flash': {
+        provider: 'gemini',
+        model: 'gemini-3.5-flash',
+        modalities: ['text', 'vision', 'audio'],
+        preferredApi: 'chat.completions',
+    },
+    'gemini:gemini-3.5-flash-lite': {
+        provider: 'gemini',
+        model: 'gemini-3.5-flash-lite',
         modalities: ['text', 'vision'],
         preferredApi: 'chat.completions',
     },
@@ -66,6 +78,18 @@ export const AI_MODEL_CATALOG: Readonly<Record<string, AiModelCatalogEntry>> = {
         model: 'gemini-3.1-flash-lite',
         modalities: ['text', 'vision'],
         preferredApi: 'chat.completions',
+    },
+    'gemini:gemini-2.5-flash-lite': {
+        provider: 'gemini',
+        model: 'gemini-2.5-flash-lite',
+        modalities: ['text', 'vision'],
+        preferredApi: 'chat.completions',
+    },
+    'gemini:gemini-embedding-2': {
+        provider: 'gemini',
+        model: 'gemini-embedding-2',
+        modalities: ['embedding'],
+        preferredApi: 'embeddings',
     },
     'openrouter:openrouter/auto': {
         provider: 'openrouter',

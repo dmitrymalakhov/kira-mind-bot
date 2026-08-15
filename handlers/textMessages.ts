@@ -21,6 +21,7 @@ import { stripVoiceReplyDirective, wantsVoiceReply } from "../utils/voiceReply";
 import { editMessageTextIfChanged } from "../utils/telegramMessageEdit";
 import { normalizeNumbersForVoiceMessage } from "../utils/russianSpeechNumbers";
 import { syncReminderMemoryMutation } from "../services/ReminderMemorySync";
+import { getBotGenderedText } from "../persona";
 import {
     commitImplicitReminderCandidate,
     detectImplicitReminderCandidate,
@@ -34,6 +35,7 @@ import {
 } from "../utils/proactiveMemory";
 import { decideKnowledgeSource } from "../utils/knowledgeSource";
 import { handleRecurringTaskText } from "../services/recurringTaskService";
+import { getForwardedMessageInfo } from "../utils/forwardedMessage";
 import {
     MEMORY_HEARS_RE,
     MEMORY_DELETE_RE,
@@ -132,7 +134,8 @@ async function processForwardedGroup(ctx: BotContext, forwardKey: string) {
             .flatMap(([source, messages]) => messages.map(text => `${source}: ${text}`))
             .join('\n');
         const forwardedTurn: ConversationTurn = {
-            userText: userMessages.join(' ').trim() || 'Проанализируй пересланные сообщения',
+            userText: userMessages.join(' ').trim() || 'Пересланное сообщение',
+            isForwardOnly: userMessages.length === 0,
             forwardContext: {
                 sender: Object.keys(sources).join(', ') || 'неизвестный источник',
                 text: forwardText,
@@ -175,6 +178,41 @@ async function processForwardedGroup(ctx: BotContext, forwardKey: string) {
     }
 }
 
+async function processForwardedTextMessage(
+    ctx: BotContext,
+    message: string,
+    forwardSource: string,
+): Promise<void> {
+    const currentTime = Date.now();
+    if (ctx.session.lastUserMessage &&
+        !ctx.session.lastUserMessage.processed &&
+        (currentTime - ctx.session.lastUserMessage.timestamp < 5000)) {
+        ctx.session.lastUserMessage.processed = true;
+        initOrReuseForwardGroup(ctx, forwardSource, message, currentTime, [ctx.session.lastUserMessage.text]);
+        return;
+    }
+
+    initOrReuseForwardGroup(ctx, forwardSource, message, currentTime, []);
+}
+
+/**
+ * Forwarded text must be handled before command/hears middleware.
+ * Intentionally does NOT call next() — forwarded content is not
+ * authored by the owner and must not reach commands, memory hears,
+ * draft editing, or any other owner-intent handlers.
+ */
+export function registerForwardedTextGuard(bot: Bot<BotContext>): void {
+    bot.on("message:text", async (ctx, next) => {
+        const { isForwarded, source } = getForwardedMessageInfo(ctx.message);
+        if (!isForwarded) {
+            await next();
+            return;
+        }
+
+        await processForwardedTextMessage(ctx, ctx.message.text, source);
+    });
+}
+
 // ── Регистрация обработчика текстовых сообщений ───────────
 
 export function registerTextMessageHandler(bot: Bot<BotContext>): void {
@@ -182,6 +220,16 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
         try {
             devLog('📨 Получено текстовое сообщение от пользователя:', ctx.from?.id);
             const message = ctx.message.text;
+            const currentTime = Date.now();
+            const { isForwarded, source: forwardSource } = getForwardedMessageInfo(ctx.message);
+
+            // Пересланное содержимое нельзя пропускать через команды,
+            // редактирование черновика или memory handlers: оно не является
+            // словами владельца.
+            if (isForwarded) {
+                await processForwardedTextMessage(ctx, message, forwardSource);
+                return;
+            }
 
             if (message.startsWith('/')) {
                 await next();
@@ -262,38 +310,6 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
                     `Подтверди отправку или внеси изменения:`,
                     { reply_markup: confirmKeyboard }
                 );
-                return;
-            }
-
-            // Текущее время для отслеживания временных промежутков
-            const currentTime = Date.now();
-
-            // Определяем, является ли сообщение пересланным
-            const isForwarded = Boolean(ctx.message.forward_from || ctx.message.forward_from_chat || ctx.message.forward_sender_name);
-            let forwardSource = '';
-
-            if (ctx.message.forward_from) {
-                forwardSource = ctx.message.forward_from.username || ctx.message.forward_from.first_name || "пользователя";
-            } else if (ctx.message.forward_from_chat) {
-                forwardSource = ctx.message.forward_from_chat.title || "чата";
-            } else if (ctx.message.forward_sender_name) {
-                forwardSource = ctx.message.forward_sender_name;
-            }
-
-            // Проверяем, было ли недавнее обычное сообщение пользователя,
-            // которое можно объединить с текущим пересланным сообщением
-            if (isForwarded && ctx.session.lastUserMessage &&
-                !ctx.session.lastUserMessage.processed &&
-                (currentTime - ctx.session.lastUserMessage.timestamp < 5000)) {
-
-                ctx.session.lastUserMessage.processed = true;
-                initOrReuseForwardGroup(ctx, forwardSource, message, currentTime, [ctx.session.lastUserMessage.text]);
-                return;
-            }
-
-            // Обработка обычного пересланного сообщения (без смешивания с сообщением пользователя)
-            if (isForwarded) {
-                initOrReuseForwardGroup(ctx, forwardSource, message, currentTime, []);
                 return;
             }
 
@@ -421,7 +437,10 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
                         const reminder = ReminderRegistry.getInstance().get(pending.reminderId);
                         if (!reminder) {
                             ctx.session.pendingReminderEdit = undefined;
-                            await ctx.reply('Не нашла это напоминание. Возможно, оно уже выполнено или отменено.');
+                            await ctx.reply(getBotGenderedText(
+                                "Не нашла это напоминание.",
+                                "Не нашёл это напоминание.",
+                            ) + " Возможно, оно уже выполнено или отменено.");
                             return;
                         }
 
@@ -468,7 +487,10 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
                             const previousReminder: Reminder = { ...reminder, dueDate: new Date(reminder.dueDate) };
                             const updated = await postponeReminderUntil(bot, reminder, parsed.dueDate);
                             if (!updated) {
-                                await ctx.reply('Не смогла перенести напоминание. Попробуй ещё раз.');
+                                await ctx.reply(getBotGenderedText(
+                                    "Не смогла перенести напоминание.",
+                                    "Не смог перенести напоминание.",
+                                ) + " Попробуй ещё раз.");
                                 ctx.session.pendingPostpone = pending;
                                 return;
                             }

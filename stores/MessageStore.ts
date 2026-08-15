@@ -11,6 +11,8 @@ export interface StoredMessage {
     isRead: boolean;
     isBot: boolean; // Флаг для ботов
     isOwn?: boolean; // Исходящее сообщение от владельца бота
+    isForwarded?: boolean; // Пересланное сообщение с неизвестным автором исходного текста
+    forwardSource?: string; // Доступное имя/идентификатор исходного автора forward
 }
 
 // Хранилище для сообщений

@@ -1,5 +1,9 @@
 export type PersonalityGender = "женский" | "мужской";
 
+export function selectPersonalityGenderText(gender: PersonalityGender | undefined, feminine: string, masculine: string): string {
+  return gender === "мужской" ? masculine : feminine;
+}
+
 export interface PersonalityGenderForms {
   person: "женщина" | "мужчина";
   personAccusative: "женщину" | "мужчину";

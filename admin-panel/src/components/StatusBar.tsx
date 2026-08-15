@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Box, Chip, Tooltip, Typography, CircularProgress } from '@mui/material';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import { apiFetch } from '../api';
+import { getStatusAppearance } from './monitoring/statusPalette';
 
 interface ContainerInfo {
   name: string;
@@ -29,42 +30,6 @@ function formatUptime(startedAt: string | null): string {
   const m = Math.floor((ms % 3_600_000) / 60_000);
   if (h > 0) return `${h}ч ${m}м`;
   return `${m}м`;
-}
-
-function getStatusAppearance(status: string) {
-  if (status === 'running') {
-    return {
-      dot: '#67e8f9',
-      bg: 'rgba(34, 211, 238, 0.10)',
-      border: 'rgba(103, 232, 249, 0.24)',
-      text: '#d9fbff',
-    };
-  }
-
-  if (status === 'paused' || status === 'exited' || status === 'stopped') {
-    return {
-      dot: '#fbbf24',
-      bg: 'rgba(251, 191, 36, 0.10)',
-      border: 'rgba(251, 191, 36, 0.22)',
-      text: '#ffe7b0',
-    };
-  }
-
-  if (status === 'restarting' || status === 'created' || status === 'removing') {
-    return {
-      dot: '#93c5fd',
-      bg: 'rgba(96, 165, 250, 0.10)',
-      border: 'rgba(147, 197, 253, 0.22)',
-      text: '#dbeafe',
-    };
-  }
-
-  return {
-    dot: '#fca5a5',
-    bg: 'rgba(248, 113, 113, 0.10)',
-    border: 'rgba(248, 113, 113, 0.20)',
-    text: '#ffd9d9',
-  };
 }
 
 export function StatusBar() {

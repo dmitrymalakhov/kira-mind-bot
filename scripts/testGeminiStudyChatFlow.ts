@@ -49,7 +49,7 @@ async function main() {
         id: `chat-${currentCall}`,
         object: 'chat.completion',
         created: 0,
-        model: 'gemini-3.5-flash',
+        model: 'gemini-3.6-flash',
         choices: [{
           index: 0,
           finish_reason: 'stop',

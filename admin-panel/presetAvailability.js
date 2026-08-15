@@ -3,7 +3,6 @@
 const { providers: AI_PROVIDER_REGISTRY } = require('../ai/provider-registry.json');
 const PROVIDER_CAPABILITY_OVERRIDES = require('../ai/provider-capability-overrides.json');
 const FALLBACK_MODELS = require('../ai/fallback-models.json');
-const DEGRADED_MODELS = require('../ai/degraded-models.json');
 const { getMemoryEmbeddingProfile } = require('./memoryEmbeddingProfileRegistry');
 
 function getProviderDescriptor(provider) {
@@ -20,10 +19,6 @@ function getTaskCapabilityKey(taskKey) {
 
 function getDeclaredFallbackModel(taskKey) {
   return FALLBACK_MODELS[taskKey] || null;
-}
-
-function getDeclaredDegradedModel(presetName) {
-  return DEGRADED_MODELS[presetName] || null;
 }
 
 function getProviderCapabilitiesForModel(provider, model) {
@@ -101,24 +96,6 @@ function getPresetAvailabilityWithRequirements(preset, vars, requiredProviders =
 
     if (!hasConfiguredValue(vars, descriptor.envKey)) {
       missingProviders.add(executionProvider.provider);
-    }
-
-    if (taskKey !== 'embedding' && taskKey !== 'transcription') {
-      const degradedModelRef = getDeclaredDegradedModel(preset.name);
-      if (degradedModelRef && degradedModelRef.model !== modelRef.model) {
-        if (degradedModelRef.provider !== modelRef.provider) {
-          invalidTasks.push(`${taskKey}: degraded model должен использовать provider ${modelRef.provider}`);
-          continue;
-        }
-        const degradedDescriptor = getProviderDescriptor(degradedModelRef.provider);
-        const capabilityKey = getTaskCapabilityKey(taskKey);
-        const degradedCapabilities = getProviderCapabilitiesForModel(degradedModelRef.provider, degradedModelRef.model);
-        if (!degradedDescriptor || !degradedCapabilities?.[capabilityKey]) {
-          invalidTasks.push(`${taskKey}: degraded model ${degradedModelRef.provider}:${degradedModelRef.model} не поддерживает ${capabilityKey}`);
-        } else if (!hasConfiguredValue(vars, degradedDescriptor.envKey)) {
-          missingProviders.add(degradedModelRef.provider);
-        }
-      }
     }
   }
 

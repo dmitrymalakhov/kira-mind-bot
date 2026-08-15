@@ -10,6 +10,7 @@ import {
     resolveContactIdentity,
 } from './contactMemory';
 import { devLog } from '../utils';
+import { getBotGenderedText } from '../persona';
 
 const PENDING_CONTACT_LOOKUP_TTL_MS = 10 * 60 * 1000;
 const MAX_CONTACT_FACTS_IN_ANSWER = 18;
@@ -172,14 +173,18 @@ async function buildContactFactsAnswer(
     const facts = await getContactFacts(ctx, contactName, contact);
 
     if (facts.length === 0) {
-        return `Не нашла сохранённых фактов о ${displayName}.`;
+        return getBotGenderedText(
+            `Не нашла сохранённых фактов о ${displayName}.`,
+            `Не нашёл сохранённых фактов о ${displayName}.`,
+        );
     }
 
     const lines = [`Вот что я помню о ${displayName}:`, ''];
     for (const fact of facts.slice(0, MAX_CONTACT_FACTS_IN_ANSWER)) {
         const confidencePrefix =
-            (fact.confidence ?? 0.6) < 0.35 ? '[не уверена] ' :
-                (fact.confidence ?? 0.6) < 0.65 ? '[возможно] ' : '';
+            (fact.confidence ?? 0.6) < 0.35
+                ? getBotGenderedText('[не уверена] ', '[не уверен] ')
+                : (fact.confidence ?? 0.6) < 0.65 ? '[возможно] ' : '';
         lines.push(`• ${confidencePrefix}${stripStoredContactPrefix(fact.content)}`);
     }
 
@@ -260,13 +265,19 @@ export async function handlePendingContactLookupText(
     if (resolution.status === 'ambiguous') {
         setPendingLookup(ctx, text, pending.originalMessage, resolution.candidates);
         return {
-            responseText: `Нашла несколько вариантов для «${text}». Выбери нужный контакт.`,
+            responseText: getBotGenderedText(
+                `Нашла несколько вариантов для «${text}».`,
+                `Нашёл несколько вариантов для «${text}».`,
+            ) + " Выбери нужный контакт.",
             keyboard: lookupKeyboard(resolution.candidates),
         };
     }
 
     return {
-        responseText: `Не смогла однозначно найти «${text}». Напиши имя с фамилией или username.`,
+        responseText: getBotGenderedText(
+            `Не смогла однозначно найти «${text}».`,
+            `Не смог однозначно найти «${text}».`,
+        ) + " Напиши имя с фамилией или username.",
     };
 }
 
@@ -301,7 +312,7 @@ export async function handleContactMemoryLookupCallback(ctx: BotContext, callbac
 
     const answer = await buildContactFactsAnswer(ctx, pending.contactName, contact);
     ctx.session.pendingContactLookup = undefined;
-    await ctx.answerCallbackQuery({ text: 'Нашла память' });
+    await ctx.answerCallbackQuery({ text: getBotGenderedText("Нашла память", "Нашёл память") });
     await ctx.editMessageText(answer);
     devLog('Contact memory lookup answered via callback:', contactDisplayName(contact));
     return true;

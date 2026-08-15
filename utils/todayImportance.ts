@@ -6,6 +6,7 @@ import type { Reminder } from '../reminder';
 import { getRecentMemories, searchAllDomainsMemories } from './enhancedDomainMemory';
 import { devLog } from '../utils';
 import { isTodayImportanceRequest, TODAY_IMPORTANCE_WORD_BOUNDARY } from './todayImportanceIntent';
+import { esc, footer, heading, list, paragraph, type RichBlock } from './richMessage';
 
 export { isTodayImportanceRequest } from './todayImportanceIntent';
 
@@ -313,8 +314,24 @@ function findReminderConflict(memory: TodayMemory, reminders: Reminder[], day: T
     return null;
 }
 
+function duplicatesActiveReminder(memory: TodayMemory, reminders: Reminder[], day: TodayImportanceDay, timeZone: string): boolean {
+    const reminderId = extractReminderId(memory.tags);
+    if (reminderId && reminders.some((reminder) => reminder.id === reminderId)) return true;
+
+    if (memoryStatus(memory) !== 'planned' && !(memory.tags ?? []).includes('temporal_scope:future_plan')) {
+        return false;
+    }
+    const memoryText = normalizeReminderText(memory.content);
+    if (!memoryText) return false;
+    return reminders.some((reminder) => {
+        if (!isSameZonedDay(new Date(reminder.dueDate), day, timeZone)) return false;
+        return reminderMemoryMatchesReminderText(memory, normalizeReminderText(reminder.displayText || reminder.text));
+    });
+}
+
 export const todayImportanceTestUtils = {
     findReminderConflict,
+    duplicatesActiveReminder,
 };
 
 function scoreTodayMemory(memory: TodayMemory, now: Date, day: TodayImportanceDay, timeZone: string, reminders: Reminder[]): TodayMemoryItem | null {
@@ -334,6 +351,7 @@ function scoreTodayMemory(memory: TodayMemory, now: Date, day: TodayImportanceDa
     if (!prospective && !exactContentDate && !relativeMatch && relation === 'актуально сегодня') return null;
     const reminderConflict = findReminderConflict(memory, reminders, day, timeZone);
     if (reminderConflict) return null;
+    if (duplicatesActiveReminder(memory, reminders, day, timeZone)) return null;
 
     let score = memory.importance ?? 0.5;
     if (relation === 'срок/окончание сегодня') score += 0.55;
@@ -486,6 +504,100 @@ export function formatTodayImportanceContext(snapshot: TodayImportanceSnapshot):
         '',
         'Правила ответа: сначала назови точные напоминания, затем пункты из памяти. Не придумывай календарь, встречи или сообщения. Не утверждай, что текущие Telegram-чаты проверены, если в контексте нет результата readMessages.',
     ].join('\n');
+}
+
+function reminderDisplayText(reminder: Reminder): string {
+    return reminder.displayText || reminder.text;
+}
+
+function reminderDisplayTime(reminder: Reminder, timeZone: string, includeDate = false): string {
+    const due = new Date(reminder.dueDate);
+    const time = due.toLocaleTimeString('ru-RU', {
+        timeZone,
+        hour: '2-digit',
+        minute: '2-digit',
+    });
+    if (!includeDate) return time;
+    const date = due.toLocaleDateString('ru-RU', {
+        timeZone,
+        day: 'numeric',
+        month: 'long',
+    });
+    return `${date}, ${time}`;
+}
+
+function reminderDisplayStatus(reminder: Reminder, now: Date): string {
+    const status = reminderStatusLabel(reminder, now);
+    return status ? ` · ${status}` : '';
+}
+
+export function buildTodayImportanceText(snapshot: TodayImportanceSnapshot): string {
+    const lines = [`🗓 Сегодня, ${snapshot.day.label}`];
+    lines.push('', `⏰ Напоминания · ${snapshot.todayReminders.length}`);
+    if (snapshot.todayReminders.length) {
+        snapshot.todayReminders.forEach((reminder) => {
+            lines.push(`${reminderDisplayTime(reminder, snapshot.timeZone)} — ${reminderDisplayText(reminder)}${reminderDisplayStatus(reminder, snapshot.now)}`);
+        });
+    } else {
+        lines.push('На сегодня активных напоминаний нет.');
+    }
+
+    lines.push('', `⚠️ Незавершённые · ${snapshot.earlierUnresolvedReminders.length}`);
+    if (snapshot.earlierUnresolvedReminders.length) {
+        snapshot.earlierUnresolvedReminders.forEach((reminder) => {
+            lines.push(`${reminderDisplayTime(reminder, snapshot.timeZone, true)} — ${reminderDisplayText(reminder)}`);
+        });
+    } else {
+        lines.push('Более ранних незавершённых напоминаний нет.');
+    }
+
+    lines.push('', `📝 Планы из памяти · ${snapshot.memoryItems.length}`);
+    if (snapshot.memoryLookupFailed) {
+        lines.push('Не удалось надёжно прочитать долговременную память.');
+    } else if (snapshot.memoryItems.length) {
+        snapshot.memoryItems.forEach((item) => lines.push(`• ${compactContent(item.memory.content)}`));
+    } else {
+        lines.push('В памяти нет конкретных планов на сегодня.');
+    }
+    lines.push('', 'Планы из памяти не являются напоминаниями и не присылают уведомлений.');
+    lines.push('Управление напоминаниями: /reminders');
+    return lines.join('\n');
+}
+
+export function buildTodayImportanceBlocks(snapshot: TodayImportanceSnapshot): RichBlock[] {
+    const blocks: RichBlock[] = [heading(`🗓 Сегодня, ${esc(snapshot.day.label)}`, 2)];
+
+    blocks.push(heading(`⏰ Напоминания · ${snapshot.todayReminders.length}`, 3));
+    if (snapshot.todayReminders.length) {
+        blocks.push(list(snapshot.todayReminders.map((reminder) => {
+            const status = reminderDisplayStatus(reminder, snapshot.now);
+            return `<b>${esc(reminderDisplayTime(reminder, snapshot.timeZone))}</b> — ${esc(reminderDisplayText(reminder))}${esc(status)}`;
+        })));
+    } else {
+        blocks.push(paragraph('На сегодня активных напоминаний нет.'));
+    }
+
+    blocks.push(heading(`⚠️ Незавершённые · ${snapshot.earlierUnresolvedReminders.length}`, 3));
+    if (snapshot.earlierUnresolvedReminders.length) {
+        blocks.push(list(snapshot.earlierUnresolvedReminders.map((reminder) =>
+            `<b>${esc(reminderDisplayTime(reminder, snapshot.timeZone, true))}</b> — ${esc(reminderDisplayText(reminder))}`
+        )));
+    } else {
+        blocks.push(paragraph('Более ранних незавершённых напоминаний нет.'));
+    }
+
+    blocks.push(heading(`📝 Планы из памяти · ${snapshot.memoryItems.length}`, 3));
+    if (snapshot.memoryLookupFailed) {
+        blocks.push(paragraph('Не удалось надёжно прочитать долговременную память.'));
+    } else if (snapshot.memoryItems.length) {
+        blocks.push(list(snapshot.memoryItems.map((item) => esc(compactContent(item.memory.content)))));
+    } else {
+        blocks.push(paragraph('В памяти нет конкретных планов на сегодня.'));
+    }
+
+    blocks.push(footer('Планы из памяти не являются напоминаниями и не присылают уведомлений.'));
+    blocks.push(footer('Управление напоминаниями: /reminders'));
+    return blocks;
 }
 
 export async function buildTodayImportanceContext(ctx: BotContext, message: string, timeZone = USER_TIMEZONE): Promise<string> {

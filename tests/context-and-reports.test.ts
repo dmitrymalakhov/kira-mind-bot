@@ -6,6 +6,7 @@ import { enhancePromptWithSummary } from "../services/dialogueSummarizer";
 import { formatSelfStudyReport } from "../services/selfStudyService";
 import { portraitTag } from "../services/PsychologicalPortraitService";
 import { formatTodayImportanceContext, type TodayImportanceSnapshot } from "../utils/todayImportance";
+import { addToHistory } from "../utils/history";
 
 const day = {
     key: "2026-07-21",
@@ -40,6 +41,23 @@ function reminder(overrides: Partial<Reminder> = {}): Reminder {
         ...overrides,
     };
 }
+
+describe("forward-only history isolation", () => {
+    test("does not persist a pure forwarded message in owner history", async () => {
+        const ctx = {
+            session: {
+                messageHistory: [],
+                recentlySavedFacts: [],
+            },
+        } as any;
+
+        await addToHistory(ctx, "user", "Пересланное сообщение", {
+            turn: { userText: "Пересланное сообщение", isForwardOnly: true },
+        });
+
+        assert.deepEqual(ctx.session.messageHistory, []);
+    });
+});
 
 describe("today importance context formatting", () => {
     test("formats the heading and all empty-state messages", () => {
