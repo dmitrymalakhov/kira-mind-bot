@@ -15,6 +15,7 @@
     "test:ts:ai": "ts-node scripts/runTsTestSuite.ts ai",
     "test:ts:memory": "ts-node scripts/runTsTestSuite.ts memory",
     "test:ts:interaction": "ts-node scripts/runTsTestSuite.ts interaction",
+    "eval:memory": "ts-node scripts/runMemoryRetrievalEval.ts",
     "lint": "npm run typecheck",
     "typecheck": "npm exec tsc -- --noEmit --project tsconfig.server.json && npm --prefix admin-panel exec tsc -- -b",
     "test:ai-preset-availability": "node scripts/testAiPresetAvailability.js",

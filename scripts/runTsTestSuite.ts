@@ -14,6 +14,8 @@ const SUITES = {
         "testKiraLifeWebGrounding.ts",
     ],
     memory: [
+        "testMemoryRetrieval.ts",
+        "testQdrantHybridRetrieval.ts",
         "testQdrantMemoryProfileCompatibility.ts",
         "testSessionStorage.ts",
         "testReflectionMemoryFilter.ts",
@@ -56,6 +58,8 @@ const SUITES = {
         "testGeminiConcurrency.ts",
         "testWebSearchFailureFlow.ts",
         "testKiraLifeWebGrounding.ts",
+        "testMemoryRetrieval.ts",
+        "testQdrantHybridRetrieval.ts",
         "testQdrantMemoryProfileCompatibility.ts",
         "testSessionStorage.ts",
         "testVoiceReply.ts",

@@ -530,9 +530,12 @@ make remote-deploy-admin SERVER_IP=<ip>
 | `QDRANT_URL` | URL Qdrant, обычно `http://qdrant:6333` |
 | `QDRANT_API_KEY` | Ключ Qdrant |
 | `VECTOR_SEARCH_THRESHOLD` | Глобальный порог релевантности поиска памяти |
+| `MEMORY_RETRIEVAL_EXPLAIN` | `true` добавляет внутренний диагностический trace ранжирования памяти; по умолчанию выключен |
 | `MEMORY_GRAPH_MAX_POINTS` | Серверный предел выборки Memory Atlas, по умолчанию `20000`, допустимо `1000–50000` |
 
 `PineconeVectorService` есть в коде, но основной поддерживаемый вариант сейчас Qdrant.
+
+Разговорный поиск по Qdrant объединяет semantic, lexical и entity-сигналы. Full-text индекс поля `content` создаётся автоматически и не меняет существующие dense-векторы; если индекс временно недоступен, бот продолжает работать через semantic retrieval. Качество ранжирования можно проверить на обезличенном regression-наборе командой `npm run eval:memory` или на своём JSON-наборе: `npm run eval:memory -- /path/to/dataset.json`; структуру набора показывает `scripts/fixtures/memory-retrieval.synthetic.json`.
 
 ### Несколько инстансов на одном VPS
 

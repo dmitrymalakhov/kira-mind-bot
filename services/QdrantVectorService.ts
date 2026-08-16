@@ -7,6 +7,11 @@ import { config } from '../config';
 import { createMemoryEmbedding } from '../ai/embedding';
 import { resolveMemoryEmbeddingConfigAsync } from '../ai/memoryEmbeddingResolver';
 import { devLog } from '../utils';
+import {
+    scoreMemoryEntityMatch,
+    scoreMemoryLexicalMatch,
+    tokenizeMemoryRetrievalText,
+} from '../utils/memoryRetrieval';
 
 export class QdrantVectorService implements IDomainVectorService {
     private client: QdrantClient;
@@ -15,6 +20,7 @@ export class QdrantVectorService implements IDomainVectorService {
     private configCollection: string;
     private defaultSearchThreshold: number;
     private validatedCollections = new Map<string, string>();
+    private textIndexReadiness = new Map<string, Promise<boolean>>();
 
     private collectionFor(domain: string) {
         return `${this.memoryPrefix}${domain}`;
@@ -486,6 +492,44 @@ export class QdrantVectorService implements IDomainVectorService {
         }
     }
 
+    /**
+     * Неразрушающий full-text payload index поверх существующего `content`.
+     * Он не меняет vector schema и поэтому не требует миграции dense-векторов.
+     */
+    private async ensureMemoryTextIndex(collectionName: string): Promise<boolean> {
+        const existing = this.textIndexReadiness.get(collectionName);
+        if (existing) return existing;
+
+        const pending = (async () => {
+            try {
+                await this.client.createPayloadIndex(collectionName, {
+                    wait: true,
+                    field_name: 'content',
+                    field_schema: {
+                        type: 'text',
+                        tokenizer: 'word',
+                        min_token_len: 2,
+                        max_token_len: 64,
+                        lowercase: true,
+                    },
+                });
+                return true;
+            } catch (error: any) {
+                const message = String(error?.message ?? error).toLowerCase();
+                if (message.includes('already exists') || message.includes('already indexed')) {
+                    return true;
+                }
+                devLog(`Qdrant full-text index unavailable for ${collectionName}:`, error);
+                return false;
+            }
+        })();
+
+        this.textIndexReadiness.set(collectionName, pending);
+        const ready = await pending;
+        if (!ready) this.textIndexReadiness.delete(collectionName);
+        return ready;
+    }
+
     private async createConfigCollection() {
         try {
             const status = await this.ensureCollectionCompatibility(this.configCollection);
@@ -514,10 +558,14 @@ export class QdrantVectorService implements IDomainVectorService {
             const collection = this.collectionFor(domainKey);
             try {
                 const status = await this.ensureCollectionCompatibility(collection);
+                const textIndexReady = await this.ensureMemoryTextIndex(collection);
                 if (status === 'created') {
                     console.log(`✅ Создан домен для ${config.characterName}: ${domainKey} (${collection})`);
                 } else {
                     console.log(`✅ Домен для ${config.characterName} уже существует: ${domainKey} (${collection})`);
+                }
+                if (!textIndexReady) {
+                    console.warn(`⚠️ Full-text индекс памяти недоступен: ${collection}; останется dense retrieval`);
                 }
             } catch (error) {
                 console.error(`❌ Домен для ${config.characterName} несовместим: ${domainKey} (${collection})`, error);
@@ -710,6 +758,71 @@ export class QdrantVectorService implements IDomainVectorService {
         }
 
         return this.applyImportanceRecencyRanking(allResults).slice(0, limit);
+    }
+
+    /**
+     * Возвращает lexical/entity candidate set без генерации embedding.
+     * Финальный score рассчитывается общим fusion-слоем; здесь score нужен лишь
+     * для ограничения числа кандидатов до объединения с dense-выдачей.
+     */
+    async searchLexicalAllDomains(query: string, userId: string, limit = 20): Promise<SearchResult[]> {
+        const queryTokens = tokenizeMemoryRetrievalText(query).slice(0, 12);
+        if (queryTokens.length === 0) return [];
+
+        const perDomainLimit = Math.min(25, Math.max(5, limit));
+        const domainSearches = Object.values(PREDEFINED_DOMAINS).map(async (domain) => {
+            const collection = this.collectionFor(domain);
+            await this.ensureCollectionCompatibility(collection);
+            if (!await this.ensureMemoryTextIndex(collection)) return [] as SearchResult[];
+
+            const scroll = await this.client.scroll(collection, {
+                filter: {
+                    must: [
+                        { key: 'botId', match: { value: this.botId } },
+                        { key: 'userId', match: { value: userId } },
+                    ],
+                    min_should: {
+                        conditions: queryTokens.map(token => ({
+                            key: 'content',
+                            match: { text: token },
+                        })),
+                        min_count: 1,
+                    },
+                    must_not: this.activeMustNotFilter(),
+                },
+                limit: perDomainLimit,
+                with_payload: true,
+                with_vector: false,
+            });
+
+            return (scroll.points ?? [])
+                .filter(point => Boolean(point.payload?.content && point.payload?.timestamp))
+                .map(point => {
+                    const content = String(point.payload!.content);
+                    const tags = Array.isArray(point.payload!.tags)
+                        ? point.payload!.tags.map(String)
+                        : [];
+                    const lexical = scoreMemoryLexicalMatch(content, query).score;
+                    const entity = scoreMemoryEntityMatch(content, tags, query).score;
+                    const candidateScore = Math.max(lexical, entity * 0.9);
+                    return this.mapSearchPoint(point, candidateScore);
+                })
+                .filter(result => result.score >= 0.18);
+        });
+
+        const settled = await Promise.allSettled(domainSearches);
+        const results: SearchResult[] = [];
+        for (const result of settled) {
+            if (result.status === 'fulfilled') results.push(...result.value);
+            else devLog('searchLexicalAllDomains domain error:', result.reason);
+        }
+
+        return results
+            .sort((a, b) => {
+                if (b.score !== a.score) return b.score - a.score;
+                return b.timestamp.getTime() - a.timestamp.getTime();
+            })
+            .slice(0, limit);
     }
 
     async getAnchorMemories(userId: string, limit = 3): Promise<SearchResult[]> {

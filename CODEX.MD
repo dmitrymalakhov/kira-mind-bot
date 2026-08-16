@@ -78,6 +78,11 @@
   - правила идентичности контакта, tag-based matching и проверки subject-а не дублируются по модулям;
   - retrieval, proactive hints и memory-gap должны использовать одни и те же helper-ы contact-memory.
   - `contact_username` считается сильным identity key наравне с `contact_id`, но не заменяет backward-compatible теги `contact_name/contact_alias/contact_key`.
+- Conversational memory retrieval является гибридным:
+  - dense cosine, нормализованные lexical overlap и entity match объединяются только в multi-query recall; raw cosine из vector service остаётся неизменным для dedup, contradiction и storage-порогов;
+  - entity match влияет только на порядок уже разрешённых contact scope кандидатов и не является механизмом идентификации или авторизации смешения людей;
+  - Qdrant full-text payload index на `content` добавляется без изменения vector schema; его недоступность должна деградировать поиск до dense-only, а не блокировать запуск;
+  - изменения формулы fusion закрепляются обезличенным eval-набором с recall@k, MRR и forbidden-hit метриками, а не подбираются только по единичному диалогу.
 - Memory Atlas в админ-панели является read-only представлением существующей Qdrant-памяти:
   - browser API получает только компактный payload без embedding-векторов;
   - граф строится из сохранённых `relatedIds`, `sourceMemoryIds`, `sourceEpisodeId`, `person_id` и доказуемых person-relation tags, без квадратичного similarity-перебора при открытии страницы;

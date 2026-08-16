@@ -1,0 +1,133 @@
+{
+  "name": "synthetic-memory-retrieval-v1",
+  "defaultK": 1,
+  "thresholds": {
+    "minHybridRecallAtK": 0.8,
+    "minHybridMrr": 0.9,
+    "maxHybridForbiddenHitRate": 0,
+    "minRecallLift": 0.3
+  },
+  "cases": [
+    {
+      "id": "exact-flight-id",
+      "query": "Когда рейс S7-104?",
+      "relevantIds": ["flight"],
+      "candidates": [
+        {
+          "id": "flight",
+          "content": "Рейс S7-104 вылетает в 09:15 из Домодедово",
+          "semanticScore": 0.39,
+          "semanticCandidate": false,
+          "tags": ["entity:рейс_s7-104"]
+        },
+        {
+          "id": "trip",
+          "content": "Планируется летняя поездка на море",
+          "semanticScore": 0.78
+        },
+        {
+          "id": "airport",
+          "content": "До аэропорта удобнее ехать на аэроэкспрессе",
+          "semanticScore": 0.64
+        }
+      ]
+    },
+    {
+      "id": "person-name-isolation",
+      "query": "Что любит Марина?",
+      "relevantIds": ["marina"],
+      "forbiddenIds": ["maria"],
+      "candidates": [
+        {
+          "id": "marina",
+          "content": "[Марина] любит молочный улун и пешие прогулки",
+          "semanticScore": 0.46,
+          "semanticCandidate": false,
+          "tags": ["contact_name:марина"]
+        },
+        {
+          "id": "maria",
+          "content": "[Мария] любит крепкий кофе и бег",
+          "semanticScore": 0.77,
+          "tags": ["contact_name:мария"]
+        },
+        {
+          "id": "tea",
+          "content": "Пользователь иногда выбирает зеленый чай",
+          "semanticScore": 0.61
+        }
+      ]
+    },
+    {
+      "id": "exact-object-description",
+      "query": "Где лежит синий блокнот?",
+      "relevantIds": ["notebook"],
+      "candidates": [
+        {
+          "id": "notebook",
+          "content": "Синий блокнот лежит в нижнем ящике рабочего стола",
+          "semanticScore": 0.43,
+          "semanticCandidate": false
+        },
+        {
+          "id": "desk",
+          "content": "Рабочий стол нужно разобрать на выходных",
+          "semanticScore": 0.73
+        },
+        {
+          "id": "notes",
+          "content": "Заметки по проекту сохранены в облаке",
+          "semanticScore": 0.66
+        }
+      ]
+    },
+    {
+      "id": "semantic-paraphrase-preserved",
+      "query": "Как я обычно восстанавливаюсь после сложной недели?",
+      "relevantIds": ["recovery"],
+      "candidates": [
+        {
+          "id": "recovery",
+          "content": "После перегрузки пользователю помогает тихий вечер без встреч и ранний сон",
+          "semanticScore": 0.84
+        },
+        {
+          "id": "workload",
+          "content": "В конце квартала часто становится больше рабочих задач",
+          "semanticScore": 0.69
+        },
+        {
+          "id": "weekend",
+          "content": "На выходных иногда бывают встречи с друзьями",
+          "semanticScore": 0.62
+        }
+      ]
+    },
+    {
+      "id": "username-entity",
+      "query": "Как связаться с @north_star?",
+      "relevantIds": ["north-star"],
+      "forbiddenIds": ["north-sea"],
+      "candidates": [
+        {
+          "id": "north-star",
+          "content": "[Алексей] Telegram: @north_star",
+          "semanticScore": 0.35,
+          "semanticCandidate": false,
+          "tags": ["contact_username:north_star"]
+        },
+        {
+          "id": "north-sea",
+          "content": "[Александр] Telegram: @north_sea",
+          "semanticScore": 0.76,
+          "tags": ["contact_username:north_sea"]
+        },
+        {
+          "id": "messenger",
+          "content": "Для рабочих контактов обычно используется Telegram",
+          "semanticScore": 0.68
+        }
+      ]
+    }
+  ]
+}
