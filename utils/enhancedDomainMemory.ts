@@ -7,6 +7,7 @@ import { llmCache, LLM_CACHE_TTL } from './llmCache';
 import { detectEmotionalTag } from './emotionalTagger';
 import { PREDEFINED_DOMAINS } from '../constants/domains';
 import { getActiveMemoryBotId } from './botIdentity';
+import { arePersonRelationTagScopesCompatible } from './personRelation';
 
 function vectorService() {
     return getVectorService();
@@ -383,6 +384,7 @@ function chooseDedupContent(existingContent: string, newContent: string): string
 }
 
 function isSameContactScope(newTags: string[], existingTags: string[] | undefined): boolean {
+    if (!arePersonRelationTagScopesCompatible(newTags, existingTags)) return false;
     const newSubject = subjectFromTags(newTags);
     const existingSubject = subjectFromTags(existingTags);
     if (newSubject && existingSubject && newSubject !== existingSubject) return false;

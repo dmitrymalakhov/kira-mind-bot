@@ -146,6 +146,8 @@ export async function studyChatAndSaveFacts(
             updateResult = await runUpdateLongTermMemoryAgentDetailed(ctx, facts, {
                 source: 'study_chat',
                 sourceContactName: displayName,
+                sourceContactId: contactId,
+                sourceContactUsername: contact?.username,
             });
         } catch (e: any) {
             const reason = e?.message || String(e);

@@ -78,6 +78,10 @@
   - правила идентичности контакта, tag-based matching и проверки subject-а не дублируются по модулям;
   - retrieval, proactive hints и memory-gap должны использовать одни и те же helper-ы contact-memory.
   - `contact_username` считается сильным identity key наравне с `contact_id`, но не заменяет backward-compatible теги `contact_name/contact_alias/contact_key`.
+- Memory Atlas в админ-панели является read-only представлением существующей Qdrant-памяти:
+  - browser API получает только компактный payload без embedding-векторов;
+  - граф строится из сохранённых `relatedIds`, `sourceMemoryIds`, `sourceEpisodeId`, `person_id` и доказуемых person-relation tags, без квадратичного similarity-перебора при открытии страницы;
+  - крупная раскладка выполняется ForceAtlas2 в Web Worker, а рендер — через Sigma.js/WebGL; graph bundle загружается лениво только при открытии атласа.
 - Каждый пользовательский ход представляется как структурированный `ConversationTurn`:
   - `userText` содержит только новую реплику и является единственным входом для regex, intent/source routing и быстрого извлечения фактов;
   - reply/forward metadata передаются отдельно и не склеиваются с пользовательским текстом;
@@ -94,6 +98,7 @@
   - единственный provisional-кандидат по точному alias переиспользует тот же UUID и может быть повышен до resolved при появлении сильного Telegram ID; исключение — личность, явно созданная через «Новый человек»: она остаётся отделённой от контактов до отдельного подтверждения;
   - reply metadata → Telegram ID/username → активная личность → подтверждённый alias → полное имя; одиночное неоднозначное имя не связывается автоматически;
   - одна запись содержит один `subject/predicate/object`; `content`, `object`, subject/contact tags, status, отрицание и temporal fields обязаны быть согласованы;
+  - бинарная связь людей хранится в той же evidence-backed memory-записи, а не в отдельном источнике правды: оба конца разрешаются через stable `person_id` (владелец — специальный endpoint `user`), точное имя третьего лица обязано присутствовать в evidence, а vector dedup учитывает пару endpoint-ов и тип связи;
   - прямая поправка применяется к текущему ответу сразу, но долговременный patch разрешён только при доказанном субъекте и отсутствии добавленной причинности, хронологии или эмоций;
   - составную legacy-запись нельзя реконсолидировать заменой всей строки: сначала read-only audit/dry-run, затем подтверждённое split/supersede отдельных предикатов.
 - Reflection не выводит субъект из источника чата. `subject:contact` допустим только при явном имени/обращении или местоимении с сохранённым speaker label; голое «я/ты» без автора не доказывает субъекта. Потерянный референт остаётся `unknown/third_party`, а antecedent-контекст входит в evidence-цепочку.

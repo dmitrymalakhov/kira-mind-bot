@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const compression = require('compression');
 const session = require('express-session');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -28,6 +29,7 @@ const {
   normalizeRecurringSchedule,
   computeNextRecurringRun,
 } = require('./recurringTasks');
+const { allocateMemoryGraphDomainLimits, buildMemoryGraph } = require('./memoryGraph');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -84,7 +86,7 @@ const EDITABLE_KEYS = new Set([
   'ELEVENLABS_VOICE_USE_SPEAKER_BOOST', 'ELEVENLABS_MAX_TEXT_CHARS',
   'KIRA_ALLOWED_USER_ID',
   'DB_HOST', 'DB_PORT', 'DB_USER', 'DB_PASSWORD', 'DB_NAME',
-  'VECTOR_PROVIDER', 'QDRANT_URL', 'QDRANT_API_KEY', 'VECTOR_SEARCH_THRESHOLD',
+  'VECTOR_PROVIDER', 'QDRANT_URL', 'QDRANT_API_KEY', 'VECTOR_SEARCH_THRESHOLD', 'MEMORY_GRAPH_MAX_POINTS',
   'TELEGRAM_API_ID', 'TELEGRAM_API_HASH', 'TELEGRAM_SESSION_STRING',
   'GOOGLE_MAPS_API_KEY', 'IDEOGRAM_API_KEY',
   'USER_TIMEZONE', 'REMINDER_EXPIRY_TIME_MS',
@@ -270,6 +272,7 @@ function dockerRequest(method, path) {
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 
+app.use(compression({ threshold: 1024 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(session({
@@ -1118,6 +1121,74 @@ async function scrollQdrantCollection(collection, filter, max = 2000) {
   return points;
 }
 
+const MEMORY_GRAPH_PAYLOAD_FIELDS = [
+  'id',
+  'content',
+  'domain',
+  'botId',
+  'userId',
+  'timestamp',
+  'importance',
+  'tags',
+  'confidence',
+  'strength',
+  'isAnchor',
+  'memoryKind',
+  'status',
+  'subject',
+  'predicate',
+  'object',
+  'sourceContext',
+  'sourceEpisodeId',
+  'sourceMemoryIds',
+  'sourceMessageIds',
+  'relatedIds',
+  'expiresAt',
+];
+
+async function countQdrantCollection(collection, filter, signal) {
+  try {
+    const response = await qdrantRequest(`/collections/${encodeURIComponent(collection)}/points/count`, {
+      method: 'POST',
+      body: JSON.stringify({ filter, exact: false }),
+      signal,
+    });
+    return Math.max(0, Number(response.result?.count || 0));
+  } catch (err) {
+    if (err.statusCode === 404) return 0;
+    throw err;
+  }
+}
+
+async function scrollQdrantGraphCollection(collection, filter, max, signal) {
+  const points = [];
+  let offset;
+  let truncated = false;
+  while (points.length < max) {
+    const remaining = max - points.length;
+    const response = await qdrantRequest(`/collections/${encodeURIComponent(collection)}/points/scroll`, {
+      method: 'POST',
+      body: JSON.stringify({
+        filter,
+        limit: Math.min(512, remaining),
+        offset,
+        with_payload: { include: MEMORY_GRAPH_PAYLOAD_FIELDS },
+        with_vector: false,
+      }),
+      signal,
+    });
+    const result = response.result || {};
+    points.push(...(result.points || []));
+    if (result.next_page_offset === undefined || result.next_page_offset === null) break;
+    if (points.length >= max) {
+      truncated = true;
+      break;
+    }
+    offset = result.next_page_offset;
+  }
+  return { points, truncated };
+}
+
 function normalizeMemoryTags(value) {
   const tags = Array.isArray(value)
     ? value
@@ -1153,6 +1224,7 @@ function normalizeMemoryPoint(point, fallbackDomain) {
     importance: typeof payload.importance === 'number' ? payload.importance : 0.5,
     tags,
     confidence: typeof payload.confidence === 'number' ? payload.confidence : 0.6,
+    strength: typeof payload.strength === 'number' ? payload.strength : 0.5,
     isAnchor: Boolean(payload.isAnchor),
     memoryKind: payload.memoryKind ? String(payload.memoryKind) : 'fact',
     status: payload.status ? String(payload.status) : 'active',
@@ -1164,6 +1236,17 @@ function normalizeMemoryPoint(point, fallbackDomain) {
     sourceEpisodeId: payload.sourceEpisodeId ? String(payload.sourceEpisodeId) : undefined,
     sourceMemoryIds: Array.isArray(payload.sourceMemoryIds) ? payload.sourceMemoryIds.map(String) : [],
     sourceMessageIds: Array.isArray(payload.sourceMessageIds) ? payload.sourceMessageIds.map(String) : [],
+    relatedIds: Array.isArray(payload.relatedIds)
+      ? payload.relatedIds
+        .map((relation) => ({
+          id: String(relation?.id || ''),
+          domain: String(relation?.domain || ''),
+          type: relation?.type ? String(relation.type) : 'semantic',
+          weight: typeof relation?.weight === 'number' ? relation.weight : 0.55,
+          cue: relation?.cue ? String(relation.cue) : undefined,
+        }))
+        .filter((relation) => relation.id && relation.domain)
+      : [],
     previousVersions: normalizePreviousVersions(payload.previousVersions),
     validFrom: payload.validFrom || null,
     validTo: payload.validTo || null,
@@ -1347,6 +1430,46 @@ async function fetchMemoryRecords(profile, userId, domainFilter) {
   return records.sort((a, b) => memoryDateMs(b.timestamp) - memoryDateMs(a.timestamp));
 }
 
+async function fetchMemoryGraphRecords(profile, userId, domainFilter, max, query, signal) {
+  const botId = getMemoryBotId(profile);
+  const domains = domainFilter ? [domainFilter] : MEMORY_DOMAINS;
+  const kind = String(firstQueryValue(query.kind) || '').trim();
+  const status = String(firstQueryValue(query.status) || '').trim();
+  const buildFilter = () => ({
+    must: [
+      { key: 'botId', match: { value: botId } },
+      userId ? { key: 'userId', match: { value: userId } } : undefined,
+      kind ? { key: 'memoryKind', match: { value: kind } } : undefined,
+      status ? { key: 'status', match: { value: status } } : undefined,
+    ].filter(Boolean),
+    must_not: activeMemoryMustNotFilter(),
+  });
+  const filter = buildFilter();
+  const domainCounts = await Promise.all(domains.map(async (domain) => ({
+    domain,
+    count: await countQdrantCollection(memoryCollection(profile, domain), filter, signal),
+  })));
+  const availableMemoryNodes = domainCounts.reduce((sum, item) => sum + item.count, 0);
+  const quotas = allocateMemoryGraphDomainLimits(domainCounts, max);
+  const results = await Promise.all(domainCounts.map(async ({ domain, count }) => {
+    const quota = quotas.get(domain) || 0;
+    if (!count || !quota) return { domain, points: [], truncated: false };
+    const result = await scrollQdrantGraphCollection(memoryCollection(profile, domain), filter, quota, signal);
+    return { domain, ...result };
+  }));
+  const records = [];
+  let truncated = availableMemoryNodes > max;
+  for (const result of results) {
+    truncated ||= result.truncated;
+    for (const point of result.points) {
+      const record = normalizeMemoryPoint(point, result.domain);
+      if (record.content) records.push(record);
+    }
+  }
+  records.sort((a, b) => memoryDateMs(b.timestamp) - memoryDateMs(a.timestamp));
+  return { records, truncated, availableMemoryNodes };
+}
+
 function applyMemoryFilters(records, query) {
   const q = String(firstQueryValue(query.q) || '').trim().toLowerCase();
   const kind = String(firstQueryValue(query.kind) || '').trim();
@@ -1485,6 +1608,69 @@ function buildAdminMemoryPayload({ id, profile, userId, domain, body, existingPa
 
   return payload;
 }
+
+app.get('/api/memory/graph', requireAuth, async (req, res) => {
+  const abortController = new AbortController();
+  const abortOnClose = () => {
+    if (!res.writableEnded) abortController.abort();
+  };
+  res.once('close', abortOnClose);
+  try {
+    const profile = getMemoryProfile(req.query.profile);
+    const userId = getMemoryUserId(profile, req.query.userId);
+    const domain = firstQueryValue(req.query.domain)
+      ? normalizeMemoryDomain(firstQueryValue(req.query.domain))
+      : '';
+    const vars = readEnvFile();
+    const rawConfiguredMax = Number(vars.MEMORY_GRAPH_MAX_POINTS || process.env.MEMORY_GRAPH_MAX_POINTS || 20000);
+    const configuredMax = Number.isFinite(rawConfiguredMax) && rawConfiguredMax > 0
+      ? Math.min(50000, Math.max(1000, Math.round(rawConfiguredMax)))
+      : 20000;
+    const limit = Math.max(100, normalizeIntegerQuery(req.query.limit, 3000, configuredMax));
+    const includeIdentityNodes = parseBooleanQuery(req.query.includeIdentityNodes, true);
+    const requiresLocalFiltering = Boolean(
+      String(firstQueryValue(req.query.q) || '').trim()
+      || String(firstQueryValue(req.query.focus) || '').trim()
+      || !parseBooleanQuery(req.query.includeSynthetic, true)
+    );
+    const scanLimit = Math.min(configuredMax, requiresLocalFiltering ? limit * 3 : limit);
+    const fetched = await fetchMemoryGraphRecords(profile, userId, domain, scanLimit, req.query, abortController.signal);
+    const matching = applyMemoryFilters(fetched.records, req.query);
+    const selected = matching.slice(0, limit);
+    const graph = buildMemoryGraph(selected, {
+      includeIdentityNodes,
+      truncated: fetched.truncated || matching.length > limit,
+    });
+
+    res.set('Cache-Control', 'private, no-store');
+    res.json({
+      ...graph,
+      stats: {
+        ...graph.stats,
+        availableMemoryNodes: fetched.availableMemoryNodes,
+        scannedMemoryNodes: fetched.records.length,
+        matchedMemoryNodes: matching.length,
+      },
+      filters: {
+        profile,
+        userId,
+        domain: domain || undefined,
+        q: firstQueryValue(req.query.q) || undefined,
+        kind: firstQueryValue(req.query.kind) || undefined,
+        status: firstQueryValue(req.query.status) || undefined,
+        focus: firstQueryValue(req.query.focus) || undefined,
+        includeSynthetic: parseBooleanQuery(req.query.includeSynthetic, true),
+        includeIdentityNodes,
+        limit,
+      },
+    });
+  } catch (err) {
+    if (err?.name === 'AbortError' || res.destroyed) return;
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : `Ошибка графа памяти: ${err.message}` });
+  } finally {
+    res.off('close', abortOnClose);
+  }
+});
 
 app.get('/api/memory', requireAuth, async (req, res) => {
   try {

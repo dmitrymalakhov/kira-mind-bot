@@ -150,6 +150,13 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         hint: 'Минимальная схожесть для поиска в памяти. Меньше — больше результатов, но менее точные.',
       },
       {
+        key: 'MEMORY_GRAPH_MAX_POINTS',
+        label: 'Максимум воспоминаний в Memory Atlas',
+        type: 'number',
+        placeholder: '20000',
+        hint: 'Серверный предел — от 1000 до 50000. Интерфейс по умолчанию загружает 3000.',
+      },
+      {
         key: 'MEMORY_CONSOLIDATION_ENABLED',
         label: 'Фоновая консолидация памяти включена',
         type: 'toggle',

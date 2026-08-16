@@ -4,6 +4,7 @@ import { devLog } from '../utils';
 import type { ExtractedFactAboutUser } from '../utils/studyChatFlow';
 import { saveContactMemoryFactOrAsk } from '../utils/contactMemory';
 import { resolveOrCreatePersonIdentity } from '../services/PersonIdentityService';
+import { buildPersonRelationTags } from '../utils/personRelation';
 
 const MIN_IMPORTANCE_TO_SAVE = 0.3;
 /**
@@ -42,6 +43,17 @@ function isContactScopeTag(tag: string): boolean {
         tag.startsWith('contact_key:');
 }
 
+function isPersonRelationSystemTag(tag: string): boolean {
+    return tag === 'person_relation' ||
+        tag.startsWith('relation_type:') ||
+        tag.startsWith('relation_subject:') ||
+        tag.startsWith('relation_subject_person_id:') ||
+        tag.startsWith('relation_object:') ||
+        tag.startsWith('relation_object_person_id:') ||
+        tag.startsWith('relation_object_name:') ||
+        tag.startsWith('relation_direction:');
+}
+
 function buildFactTags(
     fact: ExtractedFactAboutUser,
     subject: 'user' | 'contact',
@@ -51,7 +63,8 @@ function buildFactTags(
         .map(tag => String(tag).trim())
         .filter(Boolean)
         .filter(tag => !tag.startsWith('subject:'))
-        .filter(tag => !isContactScopeTag(tag));
+        .filter(tag => !isContactScopeTag(tag))
+        .filter(tag => !isPersonRelationSystemTag(tag));
 
     const systemTags = [`subject:${subject}`];
     if (options.source) systemTags.push(`source:${options.source}`);
@@ -121,6 +134,58 @@ function sourceContextForFact(options: MemoryUpdateOptions, fact: ExtractedFactA
     ].filter(Boolean).join('\n') || undefined;
 }
 
+async function resolveSourceContactIdentity(
+    ctx: BotContext,
+    options: MemoryUpdateOptions,
+): Promise<{ id: string } | undefined> {
+    if (!options.sourceContactName) return undefined;
+    const nameParts = options.sourceContactName.trim().split(/\s+/u);
+    const contact = options.sourceContactId != null
+        ? {
+            id: options.sourceContactId,
+            firstName: nameParts[0] || options.sourceContactName,
+            lastName: nameParts.slice(1).join(' ') || undefined,
+            username: options.sourceContactUsername,
+        }
+        : undefined;
+    return resolveOrCreatePersonIdentity(
+        String(ctx.from?.id ?? ''),
+        options.sourceContactName,
+        contact,
+    ).catch(() => undefined);
+}
+
+async function relationTagsForFact(
+    ctx: BotContext,
+    fact: ExtractedFactAboutUser,
+    sourceContactIdentity: { id: string } | undefined,
+    sourceContactName?: string,
+): Promise<string[]> {
+    const relation = fact.personRelation;
+    if (!relation) return [];
+
+    let targetPersonId: string | undefined;
+    let targetName: string | undefined;
+    if (relation.targetRole === 'contact') {
+        targetPersonId = sourceContactIdentity?.id;
+        targetName = sourceContactName;
+    } else if (relation.targetRole === 'third_party' && relation.targetName) {
+        targetName = relation.targetName;
+        const identity = await resolveOrCreatePersonIdentity(
+            String(ctx.from?.id ?? ''),
+            relation.targetName,
+        ).catch(() => undefined);
+        targetPersonId = identity?.id;
+    }
+
+    return buildPersonRelationTags(relation, {
+        subject: fact.subject,
+        subjectPersonId: fact.subject === 'contact' ? sourceContactIdentity?.id : undefined,
+        targetPersonId,
+        targetName,
+    });
+}
+
 /**
  * Агент 3: сохраняет переданные факты в долговременную память (векторная БД).
  *
@@ -160,7 +225,21 @@ export async function runUpdateLongTermMemoryAgentDetailed(
                 const isContactFact = fact.subject === 'contact';
                 const contactName = fact.contactName ?? 'Собеседник';
                 const expectedSubject: 'contact' | 'user' = isContactFact ? 'contact' : 'user';
-                const tags = buildFactTags(fact, expectedSubject, options);
+                const needsSourceContactIdentity = isContactFact || fact.personRelation?.targetRole === 'contact';
+                const sourceContactIdentity = needsSourceContactIdentity
+                    ? await resolveSourceContactIdentity(ctx, options)
+                    : undefined;
+                const relationTags = await relationTagsForFact(
+                    ctx,
+                    fact,
+                    sourceContactIdentity,
+                    options.sourceContactName,
+                );
+                const tags = [...new Set([
+                    ...buildFactTags(fact, expectedSubject, options),
+                    ...(isContactFact && sourceContactIdentity ? [`person_id:${sourceContactIdentity.id}`] : []),
+                    ...relationTags,
+                ])];
                 const memoryMetadata: MemorySaveMetadata = {
                     extractionMethod: extractionMethodFromSource(options.source),
                     subject: expectedSubject,
@@ -174,21 +253,13 @@ export async function runUpdateLongTermMemoryAgentDetailed(
                     status: fact.status,
                     predicate: fact.predicate ?? fact.domain,
                     object: fact.object ?? fact.content,
+                    memoryKind: fact.personRelation ? 'relationship' : undefined,
                 };
 
                 if (isContactFact) {
                     if ((options.askOnAmbiguous ?? true) === false && options.sourceContactId && options.sourceContactName) {
                         const memoryContent = directContactMemoryContent(options.sourceContactName, fact.content);
-                        const [firstName, ...lastNameParts] = options.sourceContactName.trim().split(/\s+/);
-                        const identity = await resolveOrCreatePersonIdentity(String(ctx.from?.id ?? ''), options.sourceContactName, {
-                            id: options.sourceContactId,
-                            firstName: firstName || options.sourceContactName,
-                            lastName: lastNameParts.join(' ') || undefined,
-                            username: options.sourceContactUsername,
-                        }).catch(() => undefined);
-                        const directTags = identity
-                            ? [...new Set([...tags, `person_id:${identity.id}`])]
-                            : tags;
+                        const directTags = tags;
                         const saved = await saveMemory(ctx, fact.domain, memoryContent, fact.importance, directTags, false, {
                             ...memoryMetadata,
                             subject: 'contact',
@@ -208,6 +279,7 @@ export async function runUpdateLongTermMemoryAgentDetailed(
                         memoryMetadata,
                     }, {
                         askOnAmbiguous: options.askOnAmbiguous ?? true,
+                        resolvedContactId: options.sourceContactId,
                     });
                     if (result.status === 'pending') return { status: 'pending' as const, fact };
                     if (result.status !== 'saved') return { status: 'skipped' as const, fact };

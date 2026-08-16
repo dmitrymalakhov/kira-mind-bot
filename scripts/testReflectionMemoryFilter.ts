@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
     getReflectionMemoryNoiseReasons,
     isReflectionContactAttributionSupported,
+    isReflectionFactAttributionSupported,
     isReflectionMemoryNoiseCandidate,
 } from "../utils/reflectionMemoryFilter";
 
@@ -55,6 +56,22 @@ assert.equal(isReflectionContactAttributionSupported({
     subject: 'third_party',
     evidence: 'Моему родственнику назначили медицинскую процедуру',
 }, 'Контакт Альфа'), true);
+
+assert.equal(isReflectionFactAttributionSupported({
+    content: 'Пользователь Тест работает удалённо',
+    subject: 'user',
+    evidence: '[10:00] Контакт Альфа: я работаю удалённо',
+}, 'Контакт Альфа', 'Пользователь Тест'), false);
+assert.equal(isReflectionFactAttributionSupported({
+    content: 'Пользователь Тест работает удалённо',
+    subject: 'user',
+    evidence: '[10:00] Пользователь Тест: я работаю удалённо',
+}, 'Контакт Альфа', 'Пользователь Тест'), true);
+assert.equal(isReflectionFactAttributionSupported({
+    content: 'Контакту Альфа назначили медицинскую процедуру',
+    subject: 'contact',
+    evidence: '[10:00] Контакт Альфа: моей маме назначили медицинскую процедуру',
+}, 'Контакт Альфа', 'Пользователь Тест'), false);
 
 const chatGptRecognition = {
         content: "10 июня 2026 года Пользователь Тест использует ChatGPT для распознавания материалов и готов донастроить процесс.",

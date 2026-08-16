@@ -1,3 +1,5 @@
+import { assessFactEvidenceAttribution } from './factAttributionFilter';
+
 export type ReflectionTemporalScope =
     | 'stable'
     | 'preference'
@@ -132,30 +134,31 @@ export function isReflectionContactAttributionSupported(
     ownerName = 'Я',
 ): boolean {
     if (fact.subject !== 'contact') return true;
-    const evidence = String(fact.evidence || '').trim();
-    if (!evidence) return false;
+    return assessFactEvidenceAttribution({
+        content: fact.content,
+        subject: fact.subject,
+        evidence: fact.evidence,
+        confidence: fact.confidence,
+    }, ownerName, contactName).status === 'supported';
+}
 
-    const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const normalizedContactName = String(contactName || '').trim();
-    const contactSpeaker = normalizedContactName
-        ? new RegExp(`^(?:\\[[^\\]]+\\]\\s*)?${escape(normalizedContactName)}\\s*:\\s*(.*)$`, 'iu')
-        : undefined;
-    const explicitContactSubject = normalizedContactName
-        ? new RegExp(`^(?:\\[[^\\]]+\\]\\s*)?${escape(normalizedContactName)}(?:$|[\\s,—-])`, 'iu')
-        : undefined;
-    const ownerSpeaker = new RegExp(`^(?:\\[[^\\]]+\\]\\s*)?(?:Я|${escape(ownerName)})\\s*:\\s*(.*)$`, 'iu');
-    const firstPerson = /(?:^|\s)(?:я|мне|меня|мой|моя|моё|мои|у\s+меня|со\s+мной)(?:\s|$|[,.!?])/iu;
-    const secondPerson = /(?:^|\s)(?:ты|тебе|тебя|твой|твоя|твоё|твои|у\s+тебя)(?:\s|$|[,.!?])/iu;
-
-    for (const line of evidence.split(/\r?\n/u).map(value => value.trim()).filter(Boolean)) {
-        const contactMatch = contactSpeaker?.exec(line);
-        if (contactMatch && firstPerson.test(contactMatch[1] ?? '')) return true;
-        const ownerMatch = ownerSpeaker.exec(line);
-        if (ownerMatch && secondPerson.test(ownerMatch[1] ?? '')) return true;
-        const attributableBody = contactMatch?.[1] ?? ownerMatch?.[1] ?? (!line.includes(':') ? line : '');
-        if (attributableBody && explicitContactSubject?.test(attributableBody)) return true;
-    }
-    return false;
+/**
+ * Reflection is deliberately strict for both participants: a chat is only the
+ * source, never proof that an unlabelled "I/you" or a relative's event belongs
+ * to the owner/contact.
+ */
+export function isReflectionFactAttributionSupported(
+    fact: ReflectionFactLike,
+    contactName?: string,
+    ownerName = 'Я',
+): boolean {
+    if (fact.subject !== 'user' && fact.subject !== 'contact') return true;
+    return assessFactEvidenceAttribution({
+        content: fact.content,
+        subject: fact.subject,
+        evidence: fact.evidence,
+        confidence: fact.confidence,
+    }, ownerName, contactName).status === 'supported';
 }
 
 export function getReflectionMemoryNoiseReasons(fact: ReflectionFactLike): ReflectionMemoryNoiseReason[] {

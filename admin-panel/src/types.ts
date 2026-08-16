@@ -488,6 +488,7 @@ export interface MemoryRecord {
   importance: number;
   tags: string[];
   confidence: number;
+  strength: number;
   isAnchor: boolean;
   memoryKind: MemoryKind | string;
   status: MemoryStatus | string;
@@ -499,6 +500,13 @@ export interface MemoryRecord {
   sourceEpisodeId?: string;
   sourceMemoryIds: string[];
   sourceMessageIds: string[];
+  relatedIds: Array<{
+    id: string;
+    domain: string;
+    type: string;
+    weight: number;
+    cue?: string;
+  }>;
   previousVersions: Array<{
     content: string;
     timestamp: string;
@@ -567,6 +575,72 @@ export interface MemoryResponse {
   kinds: string[];
   statuses: string[];
   focuses: string[];
+}
+
+export type MemoryGraphNodeType = 'memory' | 'person';
+export type MemoryGraphEdgeKind = 'relation' | 'derived_from' | 'episode' | 'identity' | 'person_relation';
+
+export interface MemoryGraphNode {
+  id: string;
+  nodeType: MemoryGraphNodeType;
+  memoryId?: string;
+  personId?: string;
+  label: string;
+  content: string;
+  domain: string;
+  memoryKind: string;
+  status: string;
+  subject?: string;
+  predicate?: string;
+  object?: string;
+  confidence: number;
+  importance: number;
+  strength: number;
+  isAnchor: boolean;
+  synthetic: boolean;
+  timestamp: string | null;
+  sourceEpisodeId?: string;
+  tags: string[];
+  flags: string[];
+  degree: number;
+}
+
+export interface MemoryGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  kind: MemoryGraphEdgeKind;
+  relationType: string;
+  weight: number;
+  cue?: string;
+  directed: boolean;
+}
+
+export interface MemoryGraphStats {
+  memoryNodes: number;
+  virtualNodes: number;
+  totalNodes: number;
+  totalEdges: number;
+  isolatedMemoryNodes: number;
+  unresolvedRelations: number;
+  unresolvedSources: number;
+  edgeCounts: Partial<Record<MemoryGraphEdgeKind, number>>;
+  truncated: boolean;
+  availableMemoryNodes: number;
+  scannedMemoryNodes: number;
+  matchedMemoryNodes: number;
+}
+
+export interface MemoryGraphQuery extends Omit<MemoryQuery, 'limit' | 'offset'> {
+  limit?: number;
+  includeIdentityNodes?: boolean;
+}
+
+export interface MemoryGraphResponse {
+  nodes: MemoryGraphNode[];
+  edges: MemoryGraphEdge[];
+  stats: MemoryGraphStats;
+  filters: MemoryGraphQuery;
 }
 
 export interface MemoryFormPayload {

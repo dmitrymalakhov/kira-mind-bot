@@ -25,7 +25,8 @@
     "test:built-server-runtime": "node scripts/testBuiltServerRuntime.js",
     "build:admin": "npm --prefix admin-panel run build",
     "build:all": "npm run build:server && npm run build:admin",
-    "test:admin-monitoring": "node scripts/testAdminMonitoring.js && node scripts/testAdminAiUsageAnalytics.js && node scripts/testAdminPersonality.js"
+    "test:admin-monitoring": "node scripts/testAdminMonitoring.js && node scripts/testAdminAiUsageAnalytics.js && node scripts/testAdminPersonality.js && npm run test:admin-memory-graph",
+    "test:admin-memory-graph": "node scripts/testAdminMemoryGraph.js"
   },
   "author": "",
   "license": "ISC",

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -25,6 +25,8 @@ import {
   TableRow,
   TextField,
   Tooltip,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
   useMediaQuery,
   useTheme,
@@ -36,9 +38,11 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
+import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SaveIcon from '@mui/icons-material/Save';
 import SearchIcon from '@mui/icons-material/Search';
+import TableRowsIcon from '@mui/icons-material/TableRows';
 import { createMemory, deleteMemory, fetchAiPreset, fetchMemories, updateMemory } from '../api';
 import type {
   AiPresetResponse,
@@ -117,6 +121,8 @@ const DEFAULT_STATUSES = Object.keys(STATUS_LABELS);
 const DEFAULT_FOCUSES = Object.keys(FOCUS_LABELS);
 
 type ToastFn = (message: string, severity: 'success' | 'error' | 'info') => void;
+
+const MemoryAtlas = lazy(() => import('./MemoryAtlas').then((module) => ({ default: module.MemoryAtlas })));
 
 interface MemoryFilterDraft {
   profile: MemoryProfile;
@@ -780,6 +786,8 @@ export function MemorySection({ onToast }: { onToast?: ToastFn }) {
   const [editing, setEditing] = useState<MemoryRecord | null>(null);
   const [form, setForm] = useState<MemoryFormPayload>(EMPTY_FORM);
   const [memoryProfileStatus, setMemoryProfileStatus] = useState<AiPresetResponse['memoryEmbeddingProfile'] | null>(null);
+  const [viewMode, setViewMode] = useState<'list' | 'atlas'>('list');
+  const [atlasRefreshToken, setAtlasRefreshToken] = useState(0);
 
   const page = Math.floor((query.offset ?? 0) / (query.limit ?? draft.limit));
   const rowsPerPage = query.limit ?? draft.limit;
@@ -796,11 +804,11 @@ export function MemorySection({ onToast }: { onToast?: ToastFn }) {
     return parts.join(' · ');
   }, [activeProfile, query.domain, query.q]);
 
-  const load = async (nextQuery = query) => {
+  const load = async (nextQuery = query, signal?: AbortSignal) => {
     setLoading(true);
     setError('');
     try {
-      const data = await fetchMemories(nextQuery);
+      const data = await fetchMemories(nextQuery, signal);
       setRecords(data.records);
       setStats(data.stats);
       setTotal(data.total);
@@ -815,16 +823,21 @@ export function MemorySection({ onToast }: { onToast?: ToastFn }) {
         setMemoryProfileStatus(null);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось загрузить память');
+      if (!(err instanceof Error && err.name === 'AbortError')) {
+        setError(err instanceof Error ? err.message : 'Не удалось загрузить память');
+      }
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   };
 
   useEffect(() => {
-    load(query);
+    if (viewMode !== 'list') return;
+    const controller = new AbortController();
+    load(query, controller.signal);
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query]);
+  }, [query, viewMode]);
 
   const applyFilters = () => {
     setQuery(buildQuery(draft, 0));
@@ -872,7 +885,8 @@ export function MemorySection({ onToast }: { onToast?: ToastFn }) {
         onToast?.('Воспоминание добавлено', 'success');
       }
       setDialogOpen(false);
-      await load(query);
+      if (viewMode === 'list') await load(query);
+      else setAtlasRefreshToken((value) => value + 1);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Не удалось сохранить воспоминание';
       setError(message);
@@ -907,13 +921,33 @@ export function MemorySection({ onToast }: { onToast?: ToastFn }) {
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <Tooltip title="Обновить">
-            <span>
-              <IconButton onClick={() => load(query)} disabled={loading} size="small" aria-label="Обновить память">
-                <RefreshIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            value={viewMode}
+            onChange={(_, next: 'list' | 'atlas' | null) => {
+              if (next) setViewMode(next);
+            }}
+            aria-label="Представление памяти"
+          >
+            <ToggleButton value="list" aria-label="Список памяти">
+              <TableRowsIcon fontSize="small" sx={{ mr: { sm: 0.75 } }} />
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Список</Box>
+            </ToggleButton>
+            <ToggleButton value="atlas" aria-label="Атлас памяти">
+              <HubOutlinedIcon fontSize="small" sx={{ mr: { sm: 0.75 } }} />
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Атлас</Box>
+            </ToggleButton>
+          </ToggleButtonGroup>
+          {viewMode === 'list' && (
+            <Tooltip title="Обновить">
+              <span>
+                <IconButton onClick={() => load(query)} disabled={loading} size="small" aria-label="Обновить память">
+                  <RefreshIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          )}
           <Button
             size="small"
             variant="contained"
@@ -1071,11 +1105,23 @@ export function MemorySection({ onToast }: { onToast?: ToastFn }) {
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>
       )}
 
-      <MemoryStatsStrip stats={stats} />
-      <ReviewFocusStrip active={(query.focus ?? '') as MemoryFocus | ''} stats={stats} onSelect={applyFocus} />
-      <DreamingSummary stats={stats} />
+      {viewMode === 'list' && (
+        <>
+          <MemoryStatsStrip stats={stats} />
+          <ReviewFocusStrip active={(query.focus ?? '') as MemoryFocus | ''} stats={stats} onSelect={applyFocus} />
+          <DreamingSummary stats={stats} />
+        </>
+      )}
 
-      {loading ? (
+      {viewMode === 'atlas' ? (
+        <Suspense fallback={(
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
+            <CircularProgress size={32} />
+          </Box>
+        )}>
+          <MemoryAtlas query={query} refreshToken={atlasRefreshToken} />
+        </Suspense>
+      ) : loading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
           <CircularProgress size={32} />
         </Box>

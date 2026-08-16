@@ -530,6 +530,7 @@ make remote-deploy-admin SERVER_IP=<ip>
 | `QDRANT_URL` | URL Qdrant, обычно `http://qdrant:6333` |
 | `QDRANT_API_KEY` | Ключ Qdrant |
 | `VECTOR_SEARCH_THRESHOLD` | Глобальный порог релевантности поиска памяти |
+| `MEMORY_GRAPH_MAX_POINTS` | Серверный предел выборки Memory Atlas, по умолчанию `20000`, допустимо `1000–50000` |
 
 `PineconeVectorService` есть в коде, но основной поддерживаемый вариант сейчас Qdrant.
 
