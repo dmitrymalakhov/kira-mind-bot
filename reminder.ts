@@ -12,6 +12,7 @@ import { createOrRefreshReminderMemoryForUserId } from "./services/ReminderMemor
 import { config } from "./config";
 import { esc, blockquote, RichBlock, sendStructured, editStructured } from "./utils/richMessage";
 import { getNextReminderOccurrence } from "./utils/reminderRecurrence";
+import { buildReminderNotificationKeyboard } from "./utils/reminderAssistance";
 export { ReminderStatus, ReminderTargetChat, ReminderTargetNotificationStatus, RecurrenceRule };
 
 // Расширенный интерфейс для напоминания с поддержкой статусов
@@ -268,12 +269,9 @@ async function sendReminder(bot: Bot<BotContext>, reminder: Reminder): Promise<v
         // посторонние могут нажимать их и вызывать спам-ответы бота
         const isGroupReminder = reminder.chatId < 0;
 
-        const keyboard = isGroupReminder ? undefined : new InlineKeyboard()
-            .text("✅ Выполнено", `reminder_complete_${reminder.id}`)
-            .text("⏰ Напомнить позже", `reminder_postpone_${reminder.id}`)
-            .row()
-            .text("✏️ Изменить", `reminder_edit_${reminder.id}`)
-            .text("❌ Отменить", `reminder_cancel_${reminder.id}`);
+        const keyboard = isGroupReminder
+            ? undefined
+            : buildReminderNotificationKeyboard(reminder);
 
         const blocks: RichBlock[] = [];
         if (prefix) blocks.push({ type: "paragraph", text: esc(prefix) });

@@ -53,8 +53,14 @@ import {
 import { handleRecurringTaskCallback } from "../services/recurringTaskService";
 import { getBotGenderedText } from "../persona";
 import { saveRemindersFromResult as saveSharedRemindersFromResult } from '../handlers/shared';
+import {
+    buildReminderAssistanceRequest,
+    getReminderAssistanceKnowledgeSourceText,
+    removeReminderAssistanceButton,
+} from '../utils/reminderAssistance';
 
 const EVENING_POSTPONE_HOUR = 19;
+const reminderAssistanceInFlight = new Set<string>();
 
 async function replyWithGeneratedVoice(ctx: BotContext, text: string): Promise<void> {
     await ctx.api.sendChatAction(ctx.chat!.id, "record_voice");
@@ -146,15 +152,15 @@ function parseReminderListReturnIndex(callbackData: string): number {
 }
 
 function parseReminderActionCallback(callbackData: string): {
-    action: 'complete' | 'postpone' | 'edit' | 'cancel';
+    action: 'assist' | 'complete' | 'postpone' | 'edit' | 'cancel';
     reminderId: string;
     origin?: ReminderPanelOrigin;
 } | undefined {
-    const match = callbackData.match(/^reminder_(complete|postpone|edit|cancel)_(.+)$/);
+    const match = callbackData.match(/^reminder_(assist|complete|postpone|edit|cancel)_(.+)$/);
     if (!match) return undefined;
     const parsed = parseReminderPanelOrigin(match[2]);
     return {
-        action: match[1] as 'complete' | 'postpone' | 'edit' | 'cancel',
+        action: match[1] as 'assist' | 'complete' | 'postpone' | 'edit' | 'cancel',
         reminderId: parsed.value,
         origin: parsed.origin,
     };
@@ -996,7 +1002,61 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 }
                 const reminderId = reminder.id;
 
-                if (action === "complete") {
+                if (action === "assist") {
+                    const callbackMessage = ctx.callbackQuery.message;
+                    const isCurrentNotification = callbackMessage?.message_id === reminder.messageId;
+                    const isActionable = reminder.status === ReminderStatus.Sent
+                        || reminder.status === ReminderStatus.Expired;
+                    if (!callbackMessage || !isCurrentNotification || !isActionable) {
+                        await ctx.answerCallbackQuery({ text: "Эта кнопка уже недоступна" });
+                        return;
+                    }
+
+                    if (reminderAssistanceInFlight.has(reminderId)) {
+                        await ctx.answerCallbackQuery({ text: "Уже помогаю с этой задачей" });
+                        return;
+                    }
+
+                    reminderAssistanceInFlight.add(reminderId);
+                    await ctx.answerCallbackQuery({ text: "Смотрю, что могу сделать…" });
+                    await runNonCriticalTelegramEdit("reminder assistance keyboard update", () =>
+                        editReplyMarkupIfChanged(ctx.api, callbackMessage, {
+                            inline_keyboard: removeReminderAssistanceButton(
+                                callbackMessage.reply_markup?.inline_keyboard,
+                                reminderId,
+                            ),
+                        })
+                    );
+
+                    try {
+                        const userRequest = buildReminderAssistanceRequest(reminder);
+                        const turn = { userText: userRequest };
+                        await addToHistory(ctx, "user", userRequest, { turn });
+                        await ctx.api.sendChatAction(ctx.chat!.id, "typing");
+                        const result = await processMessage(
+                            ctx,
+                            userRequest,
+                            false,
+                            "",
+                            ctx.session.messageHistory.slice().reverse(),
+                            undefined,
+                            {
+                                turn,
+                                knowledgeSourceText: getReminderAssistanceKnowledgeSourceText(reminder),
+                            },
+                        );
+                        await saveRemindersFromResult(ctx, bot, result);
+                        await sendProcessingResult(ctx, result);
+                    } catch (error) {
+                        console.error(`[reminder] assistance failed id=${reminderId}:`, error);
+                        await ctx.reply(
+                            "Не получилось запустить помощь по этой задаче. Напиши её мне сообщением — попробуем ещё раз.",
+                        );
+                    } finally {
+                        reminderAssistanceInFlight.delete(reminderId);
+                    }
+                    return;
+                } else if (action === "complete") {
                     const callbackMid = ctx.callbackQuery.message?.message_id;
                     const isReminderCard = callbackMid !== undefined && callbackMid !== reminder.messageId;
                     const activeBeforeComplete = isReminderCard ? activeForOrigin(ctx, origin) : [];
