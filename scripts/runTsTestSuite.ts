@@ -84,6 +84,7 @@ const SUITES = {
         "testIncomingTelegramQueue.ts",
         "testTelegramMessageEdit.ts",
         "testChatPromptWatchers.ts",
+        "testRichMessage.ts",
         "testHelpMessage.ts",
     ],
 } satisfies Record<string, string[]>;
