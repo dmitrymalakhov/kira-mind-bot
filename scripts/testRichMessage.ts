@@ -253,6 +253,64 @@ const apiUnsupported = {
     assert.equal(richCalls, 2, "rich должен пробоваться повторно после валидационной ошибки");
     console.log("✓ Ошибка валидации rich_message не кэширует unsupported");
 
+    // Реальный GrammyError содержит имя sendRichMessage в message при любой
+    // ошибке, а серверное описание лежит отдельно в description.
+    _resetRichUnsupportedForTests();
+    richCalls = 0;
+    const realisticApiValidationError = {
+        sendRichMessage: async () => {
+            richCalls++;
+            const error = new Error("Call to 'sendRichMessage' failed! (400: Bad Request: can't parse rich_message entity)");
+            Object.assign(error, { description: "Bad Request: can't parse rich_message entity" });
+            throw error;
+        },
+        sendMessage: async () => ({ message_id: 1 }),
+        editMessageText: async () => ({ message_id: 1 }),
+    };
+    await sendStructured(realisticApiValidationError as any, 123, [paragraph("ошибка валидации")]);
+    assert.equal(richCalls, 1);
+    assert.equal(_isRichUnsupported(), false, "имя метода в GrammyError не должно выключать rich");
+    console.log("✓ Реальный формат GrammyError классифицируется по description");
+
+    _resetRichUnsupportedForTests();
+    const apiTransientRichError = {
+        sendRichMessage: async () => {
+            throw new Error("Network request for 'sendRichMessage' failed!");
+        },
+        sendMessage: async () => ({ message_id: 1 }),
+        editMessageText: async () => ({ message_id: 1 }),
+    };
+    await sendStructured(apiTransientRichError as any, 123, [paragraph("временный сбой")]);
+    assert.equal(_isRichUnsupported(), false, "временная сетевая ошибка не должна выключать rich до рестарта");
+    console.log("✓ Сетевая ошибка rich не кэшируется как отсутствие поддержки");
+
+    // Если Telegram отвергает HTML fallback из-за конкретных данных, последний
+    // plain-text fallback должен сохранить ответ и клавиатуру.
+    _resetRichUnsupportedForTests();
+    const plainFallbackCalls: Array<{ text: string; other: Record<string, unknown> }> = [];
+    const apiBrokenHtml = {
+        sendRichMessage: async () => {
+            throw new Error("Bad Request: can't parse rich_message entity");
+        },
+        sendMessage: async (_chatId: unknown, text: string, other?: Record<string, unknown>) => {
+            if (other?.parse_mode === "HTML") {
+                const error = new Error("Call to 'sendMessage' failed! (400: Bad Request: can't parse entities)");
+                Object.assign(error, { description: "Bad Request: can't parse entities: unsupported start tag" });
+                throw error;
+            }
+            plainFallbackCalls.push({ text, other: other ?? {} });
+            return { message_id: 2 };
+        },
+        editMessageText: async () => ({ message_id: 1 }),
+    };
+    const replyMarkup = { inline_keyboard: [[{ text: "OK", callback_data: "ok" }]] };
+    await sendStructured(apiBrokenHtml as any, 123, [paragraph("A &amp; B <b>важно</b>")], { replyMarkup });
+    assert.equal(plainFallbackCalls.length, 1);
+    assert.equal(plainFallbackCalls[0].text, "A & B важно");
+    assert.equal(plainFallbackCalls[0].other.parse_mode, undefined);
+    assert.deepEqual(plainFallbackCalls[0].other.reply_markup, replyMarkup);
+    console.log("✓ Ошибка HTML-парсинга получает plain-text fallback с клавиатурой");
+
     // ── sendStructured: rich поддерживается ──────────────────────
     //
     // Эмулируем Api, у которого sendRichMessage работает — fallback не нужен.

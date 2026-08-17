@@ -12,6 +12,12 @@ export abstract class IDomainVectorService extends IVectorService {
     abstract searchInDomain(query: string, domain: string, userId: string, options?: SearchOptions): Promise<SearchResult[]>;
     abstract searchCrossDomain(query: string, userId: string, strategy: SearchStrategy): Promise<SearchResult[]>;
     abstract searchAllDomains(query: string, userId: string, limit?: number): Promise<SearchResult[]>;
+    /**
+     * Опциональный lexical candidate source для гибридного retrieval.
+     * `score` здесь служит только локальной сортировке; dense cosine возвращает
+     * `searchAllDomains` и сохраняется отдельно при fusion.
+     */
+    abstract searchLexicalAllDomains?(query: string, userId: string, limit?: number): Promise<SearchResult[]>;
     /** Якорные факты (явные «Запомни») для подмешивания в контекст */
     abstract getAnchorMemories(userId: string, limit?: number): Promise<SearchResult[]>;
     /** Обновить существующую точку (при дедупликации) */

@@ -62,7 +62,7 @@ async function main() {
                   domain: 'personal',
                   importance: 0.8,
                   confidence: 0.9,
-                  evidence: 'любит порядок',
+                  evidence: '[01.01.2026, 10:00:00] Я: я люблю порядок',
                   inferenceLevel: 'direct',
                   temporalScope: 'stable',
                   status: 'active',

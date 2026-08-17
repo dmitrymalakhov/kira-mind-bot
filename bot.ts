@@ -184,6 +184,28 @@ export function createBot() {
 }
 
 function setupBot(bot: Bot<BotContext>, config: any) {
+  // Без собственного error handler grammY останавливает long polling после
+  // первой непойманной ошибки middleware. Команды управления не должны делать
+  // весь бот недоступным из-за сбоя БД или одного некорректного Telegram payload.
+  bot.catch(async ({ ctx, error }) => {
+    const errorText = error instanceof Error
+      ? `${error.name}: ${error.message}`
+      : String(error);
+    console.error(`[bot] Необработанная ошибка update ${ctx.update.update_id}: ${errorText}`);
+
+    const commandText = ctx.message?.text;
+    const isOwnerCommand = ctx.from?.id === config.allowedUserId && commandText?.startsWith('/');
+    if (!isOwnerCommand || !ctx.chat) return;
+
+    await ctx.api.sendMessage(
+      ctx.chat.id,
+      "Не удалось выполнить команду. Ошибка записана в лог, бот продолжает работу.",
+    ).catch((replyError) => {
+      const replyErrorText = replyError instanceof Error ? replyError.message : String(replyError);
+      console.error(`[bot] Не удалось отправить сообщение об ошибке команды: ${replyErrorText}`);
+    });
+  });
+
   bot.use(session({
     initial(): SessionData {
       return createInitialSession();

@@ -31,6 +31,12 @@ import {
 } from "../utils/reminderCard";
 import { renderFallbackHtml } from "../utils/richMessage";
 import { selectPersonalityGenderText } from "../utils/personalityGender";
+import {
+    buildReminderAssistanceRequest,
+    buildReminderNotificationKeyboard,
+    getReminderAssistanceKnowledgeSourceText,
+    removeReminderAssistanceButton,
+} from "../utils/reminderAssistance";
 
 const registry = ReminderRegistry.getInstance();
 const addedIds: string[] = [];
@@ -205,6 +211,39 @@ describe("target reminder notifications", () => {
 });
 
 describe("reminder cards and keyboards", () => {
+    test("offers one-shot bot assistance on a delivered reminder", () => {
+        const value = reminder({ id: "1770000000000-health-followup-12345678-24" });
+        const keyboard = buildReminderNotificationKeyboard(value);
+        assert.deepEqual(rows(keyboard).map((row) => row.map((button) => button.text)), [
+            ["🤖 Помоги выполнить"],
+            ["✅ Выполнено", "⏰ Напомнить позже"],
+            ["✏️ Изменить", "❌ Отменить"],
+        ]);
+        assert.equal(
+            rows(keyboard).flat().every((button) => Buffer.byteLength(button.callback_data, "utf8") <= 64),
+            true,
+        );
+
+        const withoutAssistance = removeReminderAssistanceButton(rows(keyboard), value.id);
+        assert.deepEqual(withoutAssistance.map((row) => row.map((button) => button.text)), [
+            ["✅ Выполнено", "⏰ Напомнить позже"],
+            ["✏️ Изменить", "❌ Отменить"],
+        ]);
+    });
+
+    test("turns a reminder into a safe actionable request", () => {
+        const value = reminder({
+            text: "raw",
+            displayText: "Напоминание: посмотреть билеты в цирк.",
+        });
+        const request = buildReminderAssistanceRequest(value);
+        assert.match(request, /посмотреть билеты в цирк/);
+        assert.match(request, /без внешних последствий/);
+        assert.match(request, /сначала задай один конкретный вопрос/);
+        assert.match(request, /не считай её завершённой автоматически/i);
+        assert.equal(getReminderAssistanceKnowledgeSourceText(value), "посмотреть билеты в цирк.");
+    });
+
     test("reads reminders from the current chat", () => {
         const value = add(reminder({ chatId: 920_001 }));
         const ctx = { chat: { id: 920_001 }, session: {} } as any;

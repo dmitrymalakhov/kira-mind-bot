@@ -6,8 +6,17 @@ import { config } from '../config';
 import { getGramJsForwardSource } from './forwardedMessage';
 import { parseLLMJson } from '../utils';
 import type { MemoryStatus } from '../types';
-import { filterUserFactsForThirdPartyEvents } from './factAttributionFilter';
+import {
+    assessFactEvidenceAttribution,
+    filterFactsForEvidenceAttribution,
+    filterUserFactsForThirdPartyEvents,
+} from './factAttributionFilter';
 import { containsMultipleAssertions } from './atomicAssertion';
+import {
+    PERSON_RELATION_TYPES,
+    normalizePersonRelationDescriptor,
+    type PersonRelationDescriptor,
+} from './personRelation';
 
 const BATCH_SIZE = 100;
 const MAX_MESSAGES = 5000;
@@ -109,6 +118,8 @@ export interface ExtractedFactAboutUser {
     predicate?: string;
     /** Объект того же атомарного утверждения, согласованный с content. */
     object?: string;
+    /** Доказуемая бинарная связь со вторым человеком для social graph. */
+    personRelation?: PersonRelationDescriptor;
 }
 
 /** Forward-only evidence cannot establish a fact about the owner or contact. */
@@ -193,6 +204,17 @@ function normalizeText(value: unknown, max: number): string | undefined {
     return text ? text.slice(0, max) : undefined;
 }
 
+function normalizeEvidence(value: unknown, max: number): string | undefined {
+    const text = String(value ?? '')
+        .replace(/\r\n?/gu, '\n')
+        .split('\n')
+        .map(line => line.replace(/[\t ]+/gu, ' ').trim())
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+    return text ? text.slice(0, max) : undefined;
+}
+
 function normalizeTags(values: unknown): string[] {
     if (!Array.isArray(values)) return [];
     return [...new Set(
@@ -262,13 +284,49 @@ function parseDateMaybe(value: unknown): Date | undefined {
     return Number.isFinite(date.getTime()) ? date : undefined;
 }
 
-function normalizeFactLike(f: any, subject: 'user' | 'contact'): ExtractedFactAboutUser {
+function normalizeSupportedPersonRelation(
+    value: unknown,
+    context: {
+        subject: 'user' | 'contact';
+        content: string;
+        evidence?: string;
+        contactName?: string;
+    },
+): PersonRelationDescriptor | undefined {
+    const relation = normalizePersonRelationDescriptor(value, {
+        subject: context.subject,
+        evidence: context.evidence,
+        ownerName: config.ownerName,
+        contactName: context.contactName,
+    });
+    if (!relation || relation.targetRole === 'third_party') return relation;
+
+    const targetAssessment = assessFactEvidenceAttribution({
+        content: context.content,
+        subject: relation.targetRole,
+        evidence: context.evidence,
+        personRelation: relation,
+    }, config.ownerName, context.contactName);
+    return targetAssessment.status === 'supported' ? relation : undefined;
+}
+
+function normalizeFactLike(
+    f: any,
+    subject: 'user' | 'contact',
+    contactName?: string,
+): ExtractedFactAboutUser {
     const confidence = clamp01(f?.confidence, 0.62);
     const tags = normalizeTags(f?.tags);
     const content = String(f.content).replace(/\s+/g, ' ').trim();
-    const evidence = normalizeText(f.evidence, MAX_EVIDENCE_CHARS);
+    const evidence = normalizeEvidence(f.evidence, MAX_EVIDENCE_CHARS);
     const inferenceLevel = normalizeInferenceLevel(f?.inferenceLevel, confidence, evidence);
-    const temporalScope = normalizeTemporalScope(f?.temporalScope, content);
+    const personRelation = normalizeSupportedPersonRelation(f?.personRelation, {
+        subject,
+        content,
+        evidence,
+        contactName,
+    });
+    const temporalScope = personRelation ? 'relationship' : normalizeTemporalScope(f?.temporalScope, content);
     const status = normalizeStatus(f?.status, temporalScope, content);
     if (confidence < 0.55) tags.push('weak-evidence');
     if (confidence >= 0.78) tags.push('supported');
@@ -278,8 +336,12 @@ function normalizeFactLike(f: any, subject: 'user' | 'contact'): ExtractedFactAb
     if (status && status !== 'active') tags.push(`status:${status}`);
     return {
         content,
-        predicate: normalizeText(f?.predicate, 100) ?? normalizeDomain(f.domain),
-        object: normalizeText(f?.object, 320) ?? content,
+        predicate: personRelation?.type ?? normalizeText(f?.predicate, 100) ?? normalizeDomain(f.domain),
+        object: personRelation
+            ? personRelation.targetName
+                ?? (personRelation.targetRole === 'contact' ? contactName : config.ownerName)
+                ?? content
+            : normalizeText(f?.object, 320) ?? content,
         subject,
         domain: normalizeDomain(f.domain),
         importance: clamp01(f.importance, 0.5),
@@ -291,6 +353,7 @@ function normalizeFactLike(f: any, subject: 'user' | 'contact'): ExtractedFactAb
         validFrom: parseDateMaybe(f?.validFrom),
         validTo: parseDateMaybe(f?.validTo),
         tags: [...new Set(tags)],
+        personRelation,
     };
 }
 
@@ -322,7 +385,9 @@ function splitIntoChunks(text: string): string[] {
 // ─── Извлечение сырых фактов из одного чанка — два отдельных прохода ──────────
 //
 // Ключевой принцип: каждый проход извлекает факты только об ОДНОМ человеке.
-// Это полностью устраняет проблему смешивания атрибуции между участниками:
+// Это снижает риск смешивания атрибуции между участниками, но не заменяет
+// deterministic evidence-gate: модель всё равно может вернуть факт не в тот
+// проход, поэтому speaker label проверяется до синтеза и после critic-а.
 //  - Проход 1: только факты о владельце (subject всегда 'user')
 //  - Проход 2: только факты о собеседнике (subject всегда 'contact')
 // Оба запроса выполняются параллельно.
@@ -331,6 +396,33 @@ const EXTRACTION_SYSTEM = `Ты анализируешь переписку и �
 Отвечай ТОЛЬКО валидным JSON с полем facts. Никакого текста вне JSON.`;
 
 const DOMAIN_LIST = 'work|health|family|finance|education|hobbies|travel|social|home|personal|entertainment|general';
+const PERSON_RELATION_TYPES_FOR_PROMPT = PERSON_RELATION_TYPES.join('|');
+
+function buildEvidenceAttributionRules(ownerName: string, contactName: string): string {
+    return `
+КРИТИЧНО ПРО АВТОРА И EVIDENCE:
+- Каждая строка переписки имеет собственного автора. Соседняя реплика не наследует автора предыдущей.
+- evidence копируй как 1–3 минимальные исходные строки целиком, обязательно вместе с датой и speaker label: "[дата] Я: ..." или "[дата] ${contactName}: ...". Несколько строк оставляй на отдельных строках.
+- Никогда не удаляй, не меняй и не придумывай speaker label; не переписывай первое лицо от имени другого участника.
+- "${contactName}: я/мне/у меня ..." доказывает факт о ${contactName}, но не о ${ownerName}.
+- "Я: я/мне/у меня ..." доказывает факт о ${ownerName}, но не о ${contactName}.
+- "${contactName}: ты/тебе/у тебя ..." может доказывать факт о ${ownerName}; "Я: ты/тебе/у тебя ..." — о ${contactName}.
+- "мой брат", "моя мама", "твой коллега" описывает третье лицо. Не превращай событие родственника/коллеги в событие говорящего или адресата.
+- Если ни одна сохранённая строка evidence однозначно не поддерживает нужного человека, не возвращай факт.`;
+}
+
+function buildPersonRelationExtractionRules(ownerName: string, contactName: string): string {
+    return `
+СВЯЗИ МЕЖДУ ЛЮДЬМИ:
+- Если атомарный факт явно описывает, кем один человек приходится другому, добавь personRelation.
+- type используй только из списка: ${PERSON_RELATION_TYPES_FOR_PROMPT}.
+- targetRole=user означает ${ownerName}; targetRole=contact означает ${contactName}; targetRole=third_party означает другого названного человека.
+- Для third_party поле targetName обязательно и должно быть дословно скопировано из evidence. Не создавай человека по роли без имени ("брат", "коллега").
+- Не добавляй personRelation для организаций, проектов, городов или абстрактных групп.
+- Связь должна быть прямо поддержана evidence; совместное упоминание двух людей само по себе не означает знакомство.
+- Примеры типов: супруги=spouse_of, партнёры=partner_of, родитель=parent_of, ребёнок=child_of, друг=friend_of, коллега=coworker_of, руководитель=manager_of, подчинённый=reports_to, познакомились через человека=introduced_by.
+- predicate для такого факта должен совпадать с personRelation.type, temporalScope должен быть relationship.`;
+}
 
 function buildReflectionExtractionRules(ownerName: string, contactName: string): string {
     return `
@@ -348,8 +440,7 @@ function buildReflectionExtractionRules(ownerName: string, contactName: string):
 - временное местонахождение вида "пока в городе", если это не переезд, поездка с явными датами или важное событие;
 - одноразовое настроение/стресс из-за текущей задачи, если нет устойчивого паттерна или риска.
 
-Если сомневаешься, не извлекай факт. Для слабых одноразовых наблюдений ставь importance ниже 0.45, чтобы они не попали в память.
-Поле evidence копируй вместе с датой и именем автора исходной строки, например "[дата] ${contactName}: я работаю...". Не убирай speaker label и не заменяй его местоимением.`;
+Если сомневаешься, не извлекай факт. Для слабых одноразовых наблюдений ставь importance ниже 0.45, чтобы они не попали в память.`;
 }
 
 /** Промпт для извлечения фактов о владельце бота ("Я") */
@@ -373,6 +464,8 @@ function buildUserFactsPrompt(
 2. Строки "[дата] ${contactName}: ..." — когда контакт говорит о ${ownerName} или обращается к нему
    Примеры: "ты всегда задерживаешься", "${ownerName}, ты же программист?", "ты столько работаешь"
 3. Строки с пометкой "переслал сообщение от ..." — чужой пересланный материал; используй его только для понимания соседних реплик и никогда как доказательство факта о ${ownerName}
+${buildEvidenceAttributionRules(ownerName, contactName)}
+${buildPersonRelationExtractionRules(ownerName, contactName)}
 
 Имена/обращения к ${ownerName}: "${ownerName}", сокращения его имени, "ты" в контексте обращения к нему.
 
@@ -419,6 +512,11 @@ JSON:
       "content": "Факт о ${ownerName}, одно предложение от третьего лица",
       "predicate": "один атомарный предикат",
       "object": "объект этого предиката",
+      "personRelation": {
+        "type": "${PERSON_RELATION_TYPES_FOR_PROMPT}",
+        "targetRole": "contact|third_party",
+        "targetName": "точное имя из evidence; только для third_party"
+      },
       "domain": "work",
       "importance": 0.0-1.0,
       "confidence": 0.0-1.0,
@@ -457,6 +555,8 @@ function buildContactFactsPrompt(
 2. Строки "[дата] Я: ..." — когда ${ownerName} говорит о ${contactName} или обращается к нему/ней
    Примеры: "ты постоянно переживаешь", "ты же работаешь в X?", "ты всегда так делаешь"
 3. Строки с пометкой "переслал сообщение от ..." — чужой пересланный материал; используй его только для понимания соседних реплик и никогда как доказательство факта о ${contactName}
+${buildEvidenceAttributionRules(ownerName, contactName)}
+${buildPersonRelationExtractionRules(ownerName, contactName)}
 
 Что искать о ${contactName}:
 - Работа и занятия
@@ -502,6 +602,11 @@ JSON:
       "content": "Факт о ${contactName}, одно предложение от третьего лица",
       "predicate": "один атомарный предикат",
       "object": "объект этого предиката",
+      "personRelation": {
+        "type": "${PERSON_RELATION_TYPES_FOR_PROMPT}",
+        "targetRole": "user|third_party",
+        "targetName": "точное имя из evidence; только для third_party"
+      },
       "domain": "work",
       "importance": 0.0-1.0,
       "confidence": 0.0-1.0,
@@ -518,12 +623,16 @@ JSON:
 Если фактов нет — {"facts": []}.`;
 }
 
-function parseFacts(text: string, subject: 'user' | 'contact'): ExtractedFactAboutUser[] {
+function parseFacts(
+    text: string,
+    subject: 'user' | 'contact',
+    contactName: string,
+): ExtractedFactAboutUser[] {
     const data = parseLLMJson<{ facts?: unknown[] }>(text);
     if (!data || !Array.isArray(data.facts)) return [];
     return data.facts
         .filter((f: any) => f?.content && f?.domain)
-        .map((f: any) => normalizeFactLike(f, subject))
+        .map((f: any) => normalizeFactLike(f, subject, contactName))
         .filter((fact) => fact.content.length >= 8);
 }
 
@@ -571,11 +680,11 @@ async function extractRawFactsFromChunk(
     }
 
     const userFacts = userResp.status === 'fulfilled'
-        ? parseFacts(userResp.value.choices[0]?.message?.content?.trim() || '', 'user')
+        ? parseFacts(userResp.value.choices[0]?.message?.content?.trim() || '', 'user', contactName)
         : [];
 
     const contactFacts = contactResp.status === 'fulfilled'
-        ? parseFacts(contactResp.value.choices[0]?.message?.content?.trim() || '', 'contact')
+        ? parseFacts(contactResp.value.choices[0]?.message?.content?.trim() || '', 'contact', contactName)
         : [];
 
     return {
@@ -603,6 +712,8 @@ function buildSynthesisPrompt(facts: ExtractedFactAboutUser[], personName: strin
             `temporalScope=${f.temporalScope ?? 'unknown'}`,
             `status=${f.status ?? 'active'}`,
             `content="${f.content}"`,
+            f.predicate ? `predicate="${f.predicate}"` : '',
+            f.object ? `object="${f.object}"` : '',
             f.evidence ? `evidence="${f.evidence}"` : '',
             f.validFrom ? `validFrom=${f.validFrom.toISOString()}` : '',
             f.validTo ? `validTo=${f.validTo.toISOString()}` : '',
@@ -624,6 +735,8 @@ ${factsText}
 7. Не превращай одноразовое настроение в черту характера.
 8. Сохраняй temporalScope/status: план не должен стать устойчивой чертой, а past_event не должен стать current_state.
 9. Сохраняй inferenceLevel: direct можно укреплять, inferred/ambiguous требуют меньшей confidence и осторожной формулировки.
+10. evidence копируй из кандидатов без изменения: сохрани исходные даты, speaker label и переносы строк. Не меняй автора и не объединяй реплики разных людей в одну безымянную фразу.
+11. Если evidence не содержит строки, которая однозначно подтверждает факт именно о ${personName}, отбрось кандидат.
 
 Домены: ${DOMAIN_LIST}
 
@@ -632,6 +745,8 @@ JSON:
   "facts": [
     {
       "content": "Финальный факт, одним предложением",
+      "predicate": "один атомарный предикат",
+      "object": "объект этого предиката",
       "domain": "${DOMAIN_LIST}",
       "importance": 0.0-1.0,
       "confidence": 0.0-1.0,
@@ -654,22 +769,30 @@ async function synthesizeGroup(
     personName: string
 ): Promise<ExtractedFactAboutUser[]> {
     if (facts.length === 0) return [];
+    // Бинарные связи уже атомарны и несут проверенные endpoint-ы. Не отдаём их
+    // генеративному синтезу, который может потерять targetRole/targetName или
+    // незаметно поменять направление связи.
+    const relationFacts = deduplicatePersonRelations(facts.filter(fact => fact.personRelation));
+    const synthesisCandidates = facts.filter(fact => !fact.personRelation);
+    if (synthesisCandidates.length === 0) return relationFacts;
     // Запускаем синтез даже для небольших групп — он сливает семантически похожие факты
     // и поднимает importance для повторяющихся паттернов
-    if (facts.length === 1) return facts;
+    if (synthesisCandidates.length === 1) return [...relationFacts, ...synthesisCandidates];
 
     try {
         const resp = await createChatCompletionForTask('messageAnalysis', {
             messages: [
                 { role: 'system', content: SYNTHESIS_SYSTEM },
-                { role: 'user', content: buildSynthesisPrompt(facts, personName) },
+                { role: 'user', content: buildSynthesisPrompt(synthesisCandidates, personName) },
             ],
             temperature: 1,
         });
 
         const text = resp.choices[0]?.message?.content?.trim() || '';
         const data = parseLLMJson<{ facts?: unknown[] }>(text);
-        if (!data || !Array.isArray(data.facts)) return deduplicateExact(facts);
+        if (!data || !Array.isArray(data.facts)) {
+            return [...relationFacts, ...deduplicateExact(synthesisCandidates)];
+        }
 
         const synthesized = data.facts
             .filter((f: any) => f?.content && f?.domain)
@@ -677,12 +800,13 @@ async function synthesizeGroup(
             .filter((fact) => fact.content.length >= 8);
         // При нарушении атомарности не теряем исходные проверяемые факты и не
         // сохраняем склейку, придуманную этапом синтеза.
-        return synthesized.some(fact => containsMultipleAssertions(fact.content))
-            ? deduplicateExact(facts)
+        const ordinaryFacts = synthesized.some(fact => containsMultipleAssertions(fact.content))
+            ? deduplicateExact(synthesisCandidates)
             : synthesized;
+        return [...relationFacts, ...ordinaryFacts];
     } catch (e) {
         console.error(`synthesizeGroup(${subject}) error:`, e);
-        return deduplicateExact(facts);
+        return [...relationFacts, ...deduplicateExact(synthesisCandidates)];
     }
 }
 
@@ -722,6 +846,27 @@ function deduplicateExact(facts: ExtractedFactAboutUser[]): ExtractedFactAboutUs
     });
 }
 
+function deduplicatePersonRelations(facts: ExtractedFactAboutUser[]): ExtractedFactAboutUser[] {
+    const byRelation = new Map<string, ExtractedFactAboutUser>();
+    for (const fact of facts) {
+        const relation = fact.personRelation;
+        if (!relation) continue;
+        const key = [
+            fact.subject,
+            relation.type,
+            relation.targetRole,
+            relation.targetName?.toLocaleLowerCase('ru-RU') ?? '',
+        ].join('|');
+        const existing = byRelation.get(key);
+        if (!existing || (fact.confidence ?? 0) > (existing.confidence ?? 0)) {
+            byRelation.set(key, fact);
+        } else if (fact.importance > existing.importance) {
+            byRelation.set(key, { ...existing, importance: fact.importance });
+        }
+    }
+    return [...byRelation.values()];
+}
+
 type FactCriticAction = 'keep' | 'rewrite' | 'drop';
 
 interface FactCriticDecision {
@@ -754,14 +899,28 @@ function isTooGenericForLongTermMemory(fact: ExtractedFactAboutUser): boolean {
     return false;
 }
 
-function deterministicQualityGate(facts: ExtractedFactAboutUser[], contactName?: string): ExtractedFactAboutUser[] {
+function deterministicQualityGate(
+    facts: ExtractedFactAboutUser[],
+    contactName?: string,
+): ExtractedFactAboutUser[] {
     return filterUserFactsForThirdPartyEvents(
-        deduplicateExact(facts),
+        filterFactsForEvidenceAttribution(
+            deduplicateExact(facts),
+            config.ownerName,
+            contactName,
+            { requireSupport: true },
+        ),
         config.ownerName,
         contactName,
     )
         .map((fact) => {
             const confidence = clamp01(fact.confidence, 0.62);
+            const personRelation = normalizeSupportedPersonRelation(fact.personRelation, {
+                subject: fact.subject,
+                content: fact.content,
+                evidence: fact.evidence,
+                contactName,
+            });
             const warnings = [...(fact.qualityWarnings ?? [])];
             if (!fact.evidence && confidence < 0.75) warnings.push('no-evidence');
             if (isTooGenericForLongTermMemory(fact)) warnings.push('too-generic');
@@ -779,6 +938,7 @@ function deterministicQualityGate(facts: ExtractedFactAboutUser[], contactName?:
                 ...fact,
                 confidence,
                 tags,
+                personRelation,
                 qualityWarnings: warnings.length > 0 ? warnings : undefined,
             };
         })
@@ -815,6 +975,9 @@ function buildCriticPrompt(
         `temporalScope=${fact.temporalScope ?? 'unknown'}`,
         `status=${fact.status ?? 'active'}`,
         `content="${fact.content}"`,
+        fact.personRelation
+            ? `personRelation=${fact.personRelation.type}->${fact.personRelation.targetRole}:${fact.personRelation.targetName ?? ''}`
+            : '',
         fact.evidence ? `evidence="${fact.evidence}"` : '',
         fact.validFrom ? `validFrom=${fact.validFrom.toISOString()}` : '',
         fact.validTo ? `validTo=${fact.validTo.toISOString()}` : '',
@@ -833,12 +996,16 @@ ${factsText}
 - keep: факт явно поддержан перепиской и полезен в будущем.
 - rewrite: факт поддержан, но формулировка слишком широкая/путает атрибуцию/нужна осторожность.
 - drop: факт не поддержан, слишком общий, тривиальный, пересказывает сам факт переписки, путает ${ownerName} и ${contactName}, или превращает один эпизод в черту характера.
+- evidence обязано сохранять исходную строку вместе с датой и speaker label. Не удаляй и не меняй автора при keep/rewrite.
+- Проверяй местоимение только внутри строки его автора: "${contactName}: я ..." относится к ${contactName}, "Я: я ..." — к ${ownerName}; "мой родственник" остаётся третьим лицом.
+- Если evidence поддерживает другого участника или не позволяет доказать subject кандидата, делай drop, а не исправляй автора догадкой.
 - КРИТИЧНО для subject=user: если факт описывает событие/праздник/ДР/годовщину/встречу/игру/поездку, проверь, ЧЕЙ это праздник/инициатива. Если инициатор и «именинник» — ${contactName}, а ${ownerName} лишь приглашён/вписан — это факт о ${contactName}, для subject=user делай drop (или rewrite в «приглашён на событие собеседника» с понижением confidence).
 - Нельзя выводить устойчивую черту из одного слабого намёка. Лучше rewrite в узкий временный факт или lower confidence.
 - Факты о планах, настроении и текущем состоянии должны иметь lower confidence, если не ясно, актуальны ли они после периода.
 - Проверяй временную природу: future_plan=status planned, past_event=status done, current_state=актуально только на момент переписки.
 - Если факт был правдой только во время переписки, не превращай его в stable.
 - Проверяй inferenceLevel: direct сильнее, reported требует осторожности, inferred/ambiguous нельзя усиливать до высокой уверенности.
+- Для personRelation проверяй оба конца связи. Не угадывай targetName и не меняй type/targetRole: если они не доказаны, делай drop.
 - Верни решение для каждого index.
 ${reflectionRules}
 
@@ -903,7 +1070,7 @@ function applyCriticDecision(
         domain: normalizeDomain(decision.domain ?? fact.domain),
         importance: clamp01(decision.importance, fact.importance),
         confidence,
-        evidence: normalizeText(decision.evidence, MAX_EVIDENCE_CHARS) ?? fact.evidence,
+        evidence: normalizeEvidence(decision.evidence, MAX_EVIDENCE_CHARS) ?? fact.evidence,
         inferenceLevel,
         temporalScope,
         status,
@@ -1133,12 +1300,21 @@ export async function extractFactsAboutUserFromConversation(
         throw new Error(firstChunkError);
     }
 
-    console.log(`[studyChatFlow] Сырых фактов извлечено: ${rawFacts.length}`);
-    await emitProgress({ stage: 'raw_facts_ready', rawFactsCount: rawFacts.length });
+    const attributableRawFacts = filterFactsForEvidenceAttribution(
+        rawFacts,
+        config.ownerName,
+        contactName,
+        { requireSupport: true },
+    ).filter(fact => (fact.confidence ?? 0.62) >= 0.35);
+    console.log(
+        `[studyChatFlow] Сырых фактов извлечено: ${rawFacts.length}; ` +
+        `после проверки автора: ${attributableRawFacts.length}`,
+    );
+    await emitProgress({ stage: 'raw_facts_ready', rawFactsCount: attributableRawFacts.length });
 
     // Синтез: консолидация + умная дедупликация
-    await emitProgress({ stage: 'synthesis_start', rawFactsCount: rawFacts.length });
-    const finalFacts = await synthesizeFacts(rawFacts, contactName, { sequential: sequentialSynthesis });
+    await emitProgress({ stage: 'synthesis_start', rawFactsCount: attributableRawFacts.length });
+    const finalFacts = await synthesizeFacts(attributableRawFacts, contactName, { sequential: sequentialSynthesis });
     console.log(`[studyChatFlow] Финальных фактов после синтеза: ${finalFacts.length}`);
     await emitProgress({ stage: 'synthesis_done', factsCount: finalFacts.length });
 

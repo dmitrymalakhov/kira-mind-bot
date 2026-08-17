@@ -7,6 +7,11 @@ import { llmCache, LLM_CACHE_TTL } from './llmCache';
 import { detectEmotionalTag } from './emotionalTagger';
 import { PREDEFINED_DOMAINS } from '../constants/domains';
 import { getActiveMemoryBotId } from './botIdentity';
+import { arePersonRelationTagScopesCompatible } from './personRelation';
+import {
+    fuseMemoryRetrievalCandidates,
+    HybridMemoryRetrievalResult,
+} from './memoryRetrieval';
 
 function vectorService() {
     return getVectorService();
@@ -383,6 +388,7 @@ function chooseDedupContent(existingContent: string, newContent: string): string
 }
 
 function isSameContactScope(newTags: string[], existingTags: string[] | undefined): boolean {
+    if (!arePersonRelationTagScopesCompatible(newTags, existingTags)) return false;
     const newSubject = subjectFromTags(newTags);
     const existingSubject = subjectFromTags(existingTags);
     if (newSubject && existingSubject && newSubject !== existingSubject) return false;
@@ -1250,6 +1256,43 @@ export async function searchAllDomainsMemories(ctx: BotContext, query: string, l
         console.error('Cross-domain vector search error', e);
         return [];
     }
+}
+
+/**
+ * Conversational retrieval: dense candidates + Qdrant full-text candidates,
+ * объединённые нормализованными lexical/entity сигналами. Raw cosine остаётся
+ * доступен как `scoreDetails.semanticScore`.
+ */
+export async function searchHybridAllDomainsMemories(
+    ctx: BotContext,
+    query: string,
+    limit = 5
+): Promise<Array<HybridMemoryRetrievalResult<SearchResult>>> {
+    const svc = vectorService();
+    if (!svc) return [];
+
+    const semanticLimit = Math.max(12, limit * 3);
+    const lexicalLimit = Math.max(20, limit * 4);
+    const [semantic, lexical] = await Promise.all([
+        svc.searchAllDomains(query, String(ctx.from?.id), semanticLimit).catch((error) => {
+            console.error('Cross-domain vector search error', error);
+            return [] as SearchResult[];
+        }),
+        svc.searchLexicalAllDomains
+            ? svc.searchLexicalAllDomains(query, String(ctx.from?.id), lexicalLimit).catch((error) => {
+                devLog('Cross-domain lexical search unavailable:', error);
+                return [] as SearchResult[];
+            })
+            : Promise.resolve([] as SearchResult[]),
+    ]);
+
+    const results = fuseMemoryRetrievalCandidates(query, semantic, lexical, limit);
+    devLog('Hybrid cross-domain retrieval:', {
+        semanticCandidates: semantic.length,
+        lexicalCandidates: lexical.length,
+        fusedCandidates: results.length,
+    });
+    return results;
 }
 
 type MemorySearchResultLike = SearchResult;

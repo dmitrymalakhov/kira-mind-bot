@@ -8,6 +8,8 @@ import type {
   AiPresetName,
   AiPresetResponse,
   MemoryFormPayload,
+  MemoryGraphQuery,
+  MemoryGraphResponse,
   MemoryQuery,
   MemoryResponse,
   MonitoringHealthResponse,
@@ -172,13 +174,24 @@ export function buildHealthExportUrl(format: HealthExportFormat, query: HealthLo
   return `/api/health/export?${params}`;
 }
 
-export async function fetchMemories(query: MemoryQuery = {}): Promise<MemoryResponse> {
+export async function fetchMemories(query: MemoryQuery = {}, signal?: AbortSignal): Promise<MemoryResponse> {
   const params = toSearchParams(query);
   const url = params.toString() ? `/api/memory?${params}` : '/api/memory';
-  const r = await apiFetch(url);
+  const r = await apiFetch(url, { signal });
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
     throw new Error(body.error || 'Failed to load memories');
+  }
+  return r.json();
+}
+
+export async function fetchMemoryGraph(query: MemoryGraphQuery = {}, signal?: AbortSignal): Promise<MemoryGraphResponse> {
+  const params = toSearchParams(query);
+  const url = params.toString() ? `/api/memory/graph?${params}` : '/api/memory/graph';
+  const r = await apiFetch(url, { signal });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body.error || 'Failed to load memory graph');
   }
   return r.json();
 }

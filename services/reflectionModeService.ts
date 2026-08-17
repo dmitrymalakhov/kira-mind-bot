@@ -40,7 +40,7 @@ import { getVectorService } from './VectorServiceFactory';
 import { runMemorySchemaConsolidationForUser } from './MemorySchemaConsolidationService';
 import { runMemorySleepCycleForUser } from './MemorySleepCycleService';
 import {
-    isReflectionContactAttributionSupported,
+    isReflectionFactAttributionSupported,
     isReflectionFactWorthSaving,
     isReflectionMemoryNoiseCandidate,
 } from '../utils/reflectionMemoryFilter';
@@ -680,7 +680,7 @@ function normalizeDomain(domain: string): string {
 function filterReflectionFacts(facts: ExtractedFactAboutUser[], contactName: string): ExtractedFactAboutUser[] {
     return facts
         .filter(fact => !isForwardOnlyEvidence(fact.evidence))
-        .filter(fact => isReflectionContactAttributionSupported(fact, contactName, config.ownerName || 'Я'))
+        .filter(fact => isReflectionFactAttributionSupported(fact, contactName, config.ownerName || 'Я'))
         .filter(fact => !isReflectionMemoryNoiseCandidate(fact))
         .filter(isReflectionFactWorthSaving)
         .map(fact => ({

@@ -1,5 +1,10 @@
 import { BotContext, MemoryRelation, MemoryRelationType } from '../types';
-import { searchAllDomainsMemories, getAnchorMemories, getRecentMemories } from './enhancedDomainMemory';
+import {
+    searchAllDomainsMemories,
+    searchHybridAllDomainsMemories,
+    getAnchorMemories,
+    getRecentMemories,
+} from './enhancedDomainMemory';
 import { devLog } from '../utils';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { getVectorService } from '../services/VectorServiceFactory';
@@ -12,6 +17,7 @@ import {
     resolveContactIdentityScope,
 } from './contactMemory';
 import { isTodayImportanceRequest } from './todayImportanceIntent';
+import { MemoryRetrievalScoreDetails } from './memoryRetrieval';
 
 const ANSWER_RESULTS_PER_QUERY = 5;
 const CONTEXT_RESULTS_PER_QUERY = 2;
@@ -800,9 +806,11 @@ export interface SearchResultLike {
     relationType?: MemoryRelationType;
     relationWeight?: number;
     cueResonance?: number;
+    /** Explainable hybrid retrieval signals; dense cosine lives in semanticScore. */
+    scoreDetails?: MemoryRetrievalScoreDetails;
 }
 
-type RecallSource =
+export type RecallSource =
     | 'direct'
     | 'context'
     | 'associative'
@@ -828,11 +836,37 @@ export interface RecalledMemoryRef {
     status?: string;
     sourceEpisodeId?: string;
     sourceMemoryIds?: string[];
+    recallSources?: RecallSource[];
+    scoreDetails?: MemoryRetrievalScoreDetails;
+}
+
+export interface MemoryRetrievalTrace {
+    memoryNeed: MemoryNeed;
+    queries: {
+        answer: string[];
+        context: string[];
+        associative: string[];
+    };
+    candidates: number;
+    afterThreshold: number;
+    selected: Array<{
+        id: string;
+        domain: string;
+        score: number;
+        recallSources: RecallSource[];
+        scoreDetails?: MemoryRetrievalScoreDetails;
+    }>;
 }
 
 export interface MultiQueryMemoryContextResult {
     context: string;
     recalledMemories: RecalledMemoryRef[];
+    /** Возвращается только при `{ explain: true }` или MEMORY_RETRIEVAL_EXPLAIN=true. */
+    retrievalTrace?: MemoryRetrievalTrace;
+}
+
+export interface MultiQueryMemoryOptions {
+    explain?: boolean;
 }
 
 function addCandidate(
@@ -849,6 +883,15 @@ function addCandidate(
         domain: candidate.domain,
         tags: candidate.tags,
         recallSources,
+        scoreDetails: candidate.scoreDetails
+            ? {
+                ...candidate.scoreDetails,
+                queryWeight: candidate.score > 0
+                    ? (scoreOverride ?? candidate.score) / candidate.score
+                    : 1,
+                weightedRetrievalScore: scoreOverride ?? candidate.score,
+            }
+            : undefined,
     };
 
     const existing = seen.get(candidate.id);
@@ -1211,9 +1254,15 @@ function formatLayeredMemoryContext(memories: RankedMemory[], budget: number): L
 /** Количество предыдущих сообщений для резолвинга местоимений */
 const HISTORY_CONTEXT_MESSAGES = 3;
 
-export async function getMultiQueryMemoryContextDetailed(ctx: BotContext, userMessage: string, memoryNeed?: MemoryNeed): Promise<MultiQueryMemoryContextResult> {
+export async function getMultiQueryMemoryContextDetailed(
+    ctx: BotContext,
+    userMessage: string,
+    memoryNeed?: MemoryNeed,
+    options?: MultiQueryMemoryOptions
+): Promise<MultiQueryMemoryContextResult> {
     // Если memoryNeed не передан — классифицируем
     const need = memoryNeed ?? await classifyMemoryNeed(userMessage);
+    const explain = options?.explain ?? process.env.MEMORY_RETRIEVAL_EXPLAIN === 'true';
 
     // Даже если memory need = none, проверяем short-term буфер:
     // пользователь мог только что сказать «запомни X» и сразу спросить про X
@@ -1225,11 +1274,31 @@ export async function getMultiQueryMemoryContextDetailed(ctx: BotContext, userMe
     if (need === 'none') {
         if (recentSessionFacts.length === 0) {
             devLog('Memory need: none — skipping memory retrieval');
-            return { context: '', recalledMemories: [] };
+            return {
+                context: '',
+                recalledMemories: [],
+                retrievalTrace: explain ? {
+                    memoryNeed: need,
+                    queries: { answer: [], context: [], associative: [] },
+                    candidates: 0,
+                    afterThreshold: 0,
+                    selected: [],
+                } : undefined,
+            };
         }
         // Есть недавние факты — возвращаем только их, без vector search
         devLog('Memory need: none, but injecting recent facts:', recentSessionFacts.length);
-        return { context: '[Только что запомнила]:\n' + recentSessionFacts.join('\n'), recalledMemories: [] };
+        return {
+            context: '[Только что запомнила]:\n' + recentSessionFacts.join('\n'),
+            recalledMemories: [],
+            retrievalTrace: explain ? {
+                memoryNeed: need,
+                queries: { answer: [], context: [], associative: [] },
+                candidates: 0,
+                afterThreshold: 0,
+                selected: [],
+            } : undefined,
+        };
     }
 
     const inventoryRequest = isMemoryInventoryRequest(userMessage);
@@ -1378,7 +1447,7 @@ export async function getMultiQueryMemoryContextDetailed(ctx: BotContext, userMe
     // Answer-запросы: приоритетный поиск, полный score
     await Promise.all(
         answerQueries.map(async (query) => {
-            const results = await searchAllDomainsMemories(ctx, query, ANSWER_RESULTS_PER_QUERY);
+            const results = await searchHybridAllDomainsMemories(ctx, query, ANSWER_RESULTS_PER_QUERY);
             for (const r of results) {
                 addScopedCandidate({ ...r, recallSources: ['direct'] });
             }
@@ -1518,11 +1587,30 @@ export async function getMultiQueryMemoryContextDetailed(ctx: BotContext, userMe
     const sorted = Array.from(seen.values())
         .map((r) => {
             const conf = r.confidence ?? 0.6;
-            const baseScore = r.score * (0.6 + 0.2 * (r.importance ?? 0.5) + 0.1 * conf);
+            const importanceConfidence = 0.6 + 0.2 * (r.importance ?? 0.5) + 0.1 * conf;
+            const baseScore = r.score * importanceConfidence;
             // Anchor-факты получают буст при ранжировании (но не включаются безусловно)
             const anchorMul = anchorIds.has(r.id) ? ANCHOR_SCORE_BOOST : 1.0;
             const familiarityMul = 1 + Math.min(0.10, Math.log1p(Math.max(0, r.retrievalCount ?? 0)) * 0.02);
-            return { ...r, _finalScore: baseScore * anchorMul * familiarityMul * humanRecallMultiplier(r, userMessage, activeRecallCues) };
+            const recallMul = humanRecallMultiplier(r, userMessage, activeRecallCues);
+            const finalScore = baseScore * anchorMul * familiarityMul * recallMul;
+            return {
+                ...r,
+                _finalScore: finalScore,
+                scoreDetails: r.scoreDetails
+                    ? {
+                        ...r.scoreDetails,
+                        weightedRetrievalScore: r.score,
+                        finalScore,
+                        rankingFactors: {
+                            importanceConfidence,
+                            anchor: anchorMul,
+                            familiarity: familiarityMul,
+                            humanRecall: recallMul,
+                        },
+                    }
+                    : undefined,
+            };
         })
         .filter((r) => r._finalScore >= MIN_FINAL_SCORE_THRESHOLD)
         .sort((a, b) => b._finalScore - a._finalScore);
@@ -1630,8 +1718,33 @@ export async function getMultiQueryMemoryContextDetailed(ctx: BotContext, userMe
             status: fact.status,
             sourceEpisodeId: fact.sourceEpisodeId,
             sourceMemoryIds: fact.sourceMemoryIds,
+            recallSources: fact.recallSources,
+            scoreDetails: fact.scoreDetails,
         }));
-    return { context, recalledMemories };
+    const retrievalTrace: MemoryRetrievalTrace | undefined = explain
+        ? {
+            memoryNeed: need,
+            queries: {
+                answer: answerQueries,
+                context: contextQueries,
+                associative: associativeQueries,
+            },
+            candidates: seen.size,
+            afterThreshold: sorted.length,
+            selected: layeredMemory.includedMemories.map(fact => ({
+                id: fact.id,
+                domain: fact.domain || 'general',
+                score: fact._finalScore ?? fact.score,
+                recallSources: fact.recallSources ?? [],
+                scoreDetails: fact.scoreDetails,
+            })),
+        }
+        : undefined;
+    if (retrievalTrace) {
+        // Opt-in diagnostics: no memory content, embeddings or payloads are logged.
+        devLog('Memory retrieval ranking trace:', retrievalTrace);
+    }
+    return { context, recalledMemories, retrievalTrace };
 }
 
 export async function getMultiQueryMemoryContext(ctx: BotContext, userMessage: string, memoryNeed?: MemoryNeed): Promise<string> {

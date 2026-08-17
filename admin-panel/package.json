@@ -13,17 +13,24 @@
     "@emotion/styled": "^11.13.0",
     "@mui/icons-material": "^5.16.7",
     "@mui/material": "^5.16.7",
-    "express": "~4.21.2",
+    "compression": "^1.8.1",
+    "express": "~4.22.2",
     "express-session": "^1.18.0",
+    "graphology": "^0.26.0",
+    "graphology-layout-forceatlas2": "^0.10.1",
     "pg": "^8.13.1",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "sigma": "^3.0.3"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.1",
+    "@vitejs/plugin-react": "^6.0.5",
     "typescript": "^5.5.3",
-    "vite": "^5.4.2"
+    "vite": "^8.2.1"
+  },
+  "overrides": {
+    "path-to-regexp": "0.1.13"
   }
 }

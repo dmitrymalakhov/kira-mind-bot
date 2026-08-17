@@ -343,14 +343,39 @@ function markRichUnsupported(): void {
     }
 }
 
+function telegramApiErrorText(error: unknown): string {
+    if (error && typeof error === "object") {
+        const description = (error as { description?: unknown }).description;
+        if (typeof description === "string" && description.trim()) {
+            return description;
+        }
+    }
+    return error instanceof Error ? error.message : String(error);
+}
+
 function isRichDisabledByError(error: unknown): boolean {
-    const msg = error instanceof Error ? error.message : String(error);
+    // У GrammyError message всегда начинается с `Call to 'sendRichMessage' failed`,
+    // даже если сервер вернул обычную ошибку валидации конкретного payload.
+    // Поэтому для API-ошибок классифицируем именно Telegram description, иначе
+    // любая опечатка в одном rich-сообщении навсегда выключит rich до рестарта.
+    const msg = telegramApiErrorText(error);
     return (
         /method not found/i.test(msg) ||
         /not supported/i.test(msg) ||
         /unknown method/i.test(msg) ||
-        /sendrichmessage/i.test(msg) ||
+        /sendrichmessage.*not a function/i.test(msg) ||
         /bad request.*method/i.test(msg)
+    );
+}
+
+function shouldRetryWithoutHtml(error: unknown): boolean {
+    const msg = telegramApiErrorText(error);
+    return (
+        /can'?t parse (?:entities|message text)/i.test(msg) ||
+        /unsupported (?:start|end) tag/i.test(msg) ||
+        /entity.*(?:offset|end|parse)/i.test(msg) ||
+        /parse[_ -]?mode/i.test(msg) ||
+        /message.*too long/i.test(msg)
     );
 }
 
@@ -436,7 +461,13 @@ export async function sendStructured(
     }
 
     const other = buildSendOther(opts);
-    return sendFallbackBlocks(api, chatId, blocks, { ...other, parse_mode: "HTML" });
+    try {
+        return await sendFallbackBlocks(api, chatId, blocks, { ...other, parse_mode: "HTML" });
+    } catch (error) {
+        if (!shouldRetryWithoutHtml(error)) throw error;
+        console.warn("[richMessage] HTML fallback отклонён Telegram, повторяем без форматирования");
+        return sendPlainFallbackBlocks(api, chatId, blocks, other);
+    }
 }
 
 /**
@@ -494,7 +525,21 @@ async function performStructuredEdit(
     const other: Record<string, unknown> = { parse_mode: "HTML" };
     if (opts.replyMarkup !== undefined) other.reply_markup = opts.replyMarkup;
     if (opts.extra) Object.assign(other, opts.extra);
-    const result = await api.editMessageText(chatId, messageId, html, other);
+    let result: unknown;
+    try {
+        result = await api.editMessageText(chatId, messageId, html, other);
+    } catch (error) {
+        if (!shouldRetryWithoutHtml(error)) throw error;
+        console.warn("[richMessage] HTML edit отклонён Telegram, повторяем без форматирования");
+        const plainOther = { ...other };
+        delete plainOther.parse_mode;
+        result = await api.editMessageText(
+            chatId,
+            messageId,
+            fitPlainText(blocks, FALLBACK_MAX_LENGTH),
+            plainOther,
+        );
+    }
     if (opts.replyMarkup !== undefined) {
         recordReplyMarkupState(chatId, messageId, opts.replyMarkup);
     }
@@ -523,6 +568,55 @@ async function sendFallbackBlocks(
         result = await api.sendMessage(chatId, renderFallbackHtml(chunkedBlocks[i]), partOther);
     }
     return result;
+}
+
+async function sendPlainFallbackBlocks(
+    api: ApiLike,
+    chatId: number | string,
+    blocks: RichBlock[],
+    other: Record<string, unknown>,
+): Promise<unknown> {
+    const chunkedBlocks = splitBlocksForFallback(blocks, FALLBACK_MAX_LENGTH);
+    let result: unknown;
+    for (let i = 0; i < chunkedBlocks.length; i++) {
+        const isLast = i === chunkedBlocks.length - 1;
+        const partOther = isLast ? other : {};
+        result = await api.sendMessage(chatId, renderPlainText(chunkedBlocks[i]), partOther);
+    }
+    return result;
+}
+
+function renderPlainText(blocks: RichBlock[]): string {
+    return decodeKnownHtmlEntities(
+        renderFallbackHtml(blocks)
+            .replace(/<br\s*\/?>/gi, "\n")
+            .replace(/<\/(?:p|blockquote|pre|li|ul|ol|h[1-6])>/gi, "\n")
+            .replace(/<[^>]+>/g, ""),
+    ).trim();
+}
+
+function fitPlainText(blocks: RichBlock[], maxLength: number): string {
+    const plain = renderPlainText(blocks);
+    return plain.length <= maxLength ? plain : truncatePlainText(plain, maxLength);
+}
+
+function decodeKnownHtmlEntities(text: string): string {
+    const named: Record<string, string> = {
+        amp: "&",
+        lt: "<",
+        gt: ">",
+        quot: '"',
+        apos: "'",
+        nbsp: " ",
+        hellip: "…",
+        mdash: "—",
+        ndash: "–",
+        lsquo: "‘",
+        rsquo: "’",
+        ldquo: "“",
+        rdquo: "”",
+    };
+    return text.replace(/&([a-z]+);/gi, (full, name: string) => named[name.toLowerCase()] ?? full);
 }
 
 function fitFallbackHtml(blocks: RichBlock[], maxLength: number): string {
@@ -818,5 +912,13 @@ export async function editStructuredCtx(
     const other: Record<string, unknown> = { parse_mode: "HTML" };
     if (opts.replyMarkup !== undefined) other.reply_markup = opts.replyMarkup;
     if (opts.extra) Object.assign(other, opts.extra);
-    return ctx.editMessageText(html, other);
+    try {
+        return await ctx.editMessageText(html, other);
+    } catch (error) {
+        if (!shouldRetryWithoutHtml(error)) throw error;
+        console.warn("[richMessage] callback HTML edit отклонён Telegram, повторяем без форматирования");
+        const plainOther = { ...other };
+        delete plainOther.parse_mode;
+        return ctx.editMessageText(fitPlainText(blocks, FALLBACK_MAX_LENGTH), plainOther);
+    }
 }
