@@ -109,6 +109,15 @@ function statusLabel(status?: ReminderStatus): string {
     }
 }
 
+function statusIcon(status?: ReminderStatus): string {
+    switch (status) {
+        case ReminderStatus.Postponed: return '⏰';
+        case ReminderStatus.Sent:      return '🔔';
+        case ReminderStatus.Expired:   return '⚠️';
+        default:                       return '⏳';
+    }
+}
+
 function isAttention(reminder: Reminder): boolean {
     return reminder.status === ReminderStatus.Sent || reminder.status === ReminderStatus.Expired;
 }
@@ -267,15 +276,15 @@ export function buildReminderCard(
     });
 
     const body = r.displayText || r.text;
-    const metaItems: string[] = [`🗓 ${esc(dueTime)}`, `📌 ${statusLabel(r.status)}`];
+    const metaItems: string[] = [`⏰ <b>${esc(dueTime)}</b> · ${statusLabel(r.status)}`];
     if (r.recurrence) metaItems.push(recurrenceLabel(r.recurrence));
     const target = targetChatHumanLabelSafe(r);
     if (target) metaItems.push(`📨 ${target}`);
 
     const blocks: RichBlock[] = [
-        heading(`📋 Напоминание ${num} из ${total}`, 3),
+        heading(`🗓 Напоминание · ${num}/${total}`, 3),
         blockquote(esc(body)),
-        list(metaItems),
+        paragraph(metaItems.join('<br/>')),
     ];
 
     const suffix = callbackOriginSuffix(origin);
@@ -289,7 +298,6 @@ export function buildReminderCard(
         .text('⏰ Отложить', `reminder_postpone_${reminderRef}${suffix}`)
         .row()
         .text('✏️ Изменить', `reminder_edit_${reminderRef}${suffix}`)
-        .row()
         .text('❌ Отменить', `reminder_cancel_${reminderRef}${suffix}`)
         .row()
         .text(safeIndex > 0 ? '⏮' : '·', firstCb)
@@ -359,16 +367,16 @@ function compactDueLabel(reminder: Reminder, now: Date): string {
 
 function addFilterButtons(keyboard: InlineKeyboard, stats: ReminderListStats, active: ReminderListFilter): void {
     const button = (filter: ReminderListFilter, label: string, count: number) => {
-        const prefix = filter === active ? '• ' : '';
+        const prefix = filter === active ? '✓ ' : '';
         keyboard.text(`${prefix}${label} ${count}`, filter === active ? 'reminders_nav_noop' : `reminders_filter_${filter}`);
     };
     button('all', 'Все', stats.total);
-    button('attention', '⚠️', stats.attention);
+    button('attention', '⚠️ Внимание', stats.attention);
     button('today', 'Сегодня', stats.today);
     keyboard.row();
     button('week', '7 дней', stats.week);
     button('later', 'Позже', stats.later);
-    button('recurring', '🔁', stats.recurring);
+    button('recurring', '🔁 Повторы', stats.recurring);
 }
 
 function pageWindow(page: number, totalPages: number): number[] {
@@ -405,35 +413,39 @@ export function buildRemindersList(
         later: 'позже',
         recurring: 'повторяются',
     };
+    const attentionSummary = stats.attention > 0
+        ? `⚠️ <b>${stats.attention}</b> требуют решения`
+        : '✅ Нет напоминаний, требующих решения';
+    const horizonSummary = `Сегодня <b>${stats.today}</b> · 7 дней <b>${stats.week}</b> · Позже <b>${stats.later}</b> · 🔁 <b>${stats.recurring}</b>`;
+    const pageSummary = `<i>Фильтр</i> · <b>${filterNames[filter]}</b>${filtered.length > 0 ? ` · <b>${page + 1}/${totalPages}</b>` : ''}`;
     const blocks: RichBlock[] = [
-        heading(`📋 Напоминания · ${stats.total}`, 3),
-        paragraph(`⚠️ Требуют решения: <b>${stats.attention}</b> · Сегодня: <b>${stats.today}</b> · 7 дней: <b>${stats.week}</b> · Позже: <b>${stats.later}</b> · 🔁 <b>${stats.recurring}</b>`),
-        paragraph(`Фильтр: <b>${filterNames[filter]}</b>${filtered.length > 0 ? ` · страница ${page + 1} из ${totalPages}` : ''}`),
+        heading(`🗓 Напоминания · ${stats.total}`, 3),
+        paragraph(attentionSummary),
+        paragraph(`<i>${horizonSummary}</i>`),
+        paragraph(pageSummary),
     ];
 
     if (pageItems.length === 0) {
         blocks.push(paragraph('В этой категории пока нет напоминаний.'));
     } else {
-        blocks.push(list(pageItems.map((reminder, index) => {
+        blocks.push(paragraph(pageItems.map((reminder, index) => {
             const number = page * REMINDERS_PAGE_SIZE + index + 1;
-            return `<b>${number}.</b> ${esc(compactDueLabel(reminder, now))} · ${statusLabel(reminder.status)}\n${esc(truncateListText(reminder.displayText || reminder.text))}`;
-        })));
+            return `<b>${number}</b> · <b>${statusLabel(reminder.status)}</b><br/><i>${esc(compactDueLabel(reminder, now))}</i> · ${esc(truncateListText(reminder.displayText || reminder.text))}`;
+        }).join('<br/><br/>')));
+        blocks.push(paragraph('<i>Нажми номер, чтобы открыть карточку.</i>'));
     }
 
     const keyboard = new InlineKeyboard();
     addFilterButtons(keyboard, stats, filter);
-    for (let index = 0; index < pageItems.length; index += 2) {
+    for (let index = 0; index < pageItems.length; index += 3) {
         keyboard.row();
         const firstIndex = page * REMINDERS_PAGE_SIZE + index;
-        keyboard.text(
-            `${firstIndex + 1} · Открыть`,
-            `reminders_card_${firstIndex}${callbackOriginSuffix(origin)}`,
-        );
-        const secondIndex = firstIndex + 1;
-        if (index + 1 < pageItems.length) {
+        for (let offset = 0; offset < 3 && index + offset < pageItems.length; offset += 1) {
+            const itemIndex = index + offset;
+            const reminder = pageItems[itemIndex];
             keyboard.text(
-                `${secondIndex + 1} · Открыть`,
-                `reminders_card_${secondIndex}${callbackOriginSuffix(origin)}`,
+                `${firstIndex + offset + 1} ${statusIcon(reminder.status)}`,
+                `reminders_card_${firstIndex + offset}${callbackOriginSuffix(origin)}`,
             );
         }
     }
