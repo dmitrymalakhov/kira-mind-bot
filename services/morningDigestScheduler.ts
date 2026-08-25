@@ -62,6 +62,8 @@ function formatReminderTime(dueDate: string | Date): string {
 }
 
 async function buildDigestGreeting(reminderCount: number): Promise<string> {
+    const fallbackGreeting = buildDigestFallbackGreeting(reminderCount);
+
     try {
         const response = await createChatCompletionForTask('messageAnalysis', {
             messages: [
@@ -79,10 +81,16 @@ async function buildDigestGreeting(reminderCount: number): Promise<string> {
             ],
             temperature: 0.85,
         });
-        return response.choices[0]?.message?.content?.trim() || "Привет! Начинаем день.";
+        return response.choices[0]?.message?.content?.trim() || fallbackGreeting;
     } catch {
-        return "Привет! Вот что у тебя сегодня:";
+        return fallbackGreeting;
     }
+}
+
+export function buildDigestFallbackGreeting(reminderCount: number): string {
+    return reminderCount > 0
+        ? "Привет! Вот что у тебя сегодня:"
+        : "Привет! Сегодня напоминаний нет.";
 }
 
 async function runDigest(bot: Bot<BotContext>): Promise<void> {
