@@ -41,11 +41,11 @@ withPreset('hybrid-gemini-gpt', () => {
     });
     assert.deepStrictEqual(resolveModelForTask('messageAnalysis'), {
         provider: 'gemini',
-        model: 'gemini-3.6-flash',
+        model: 'gemini-3.5-flash-lite',
     });
     assert.deepStrictEqual(resolveModelForTask('memoryExtraction'), {
         provider: 'openai',
-        model: 'gpt-5.4-nano',
+        model: 'gpt-5.4-mini',
     });
     assert.deepStrictEqual(resolveModelForTask('intentClassification'), {
         provider: 'openai',
@@ -128,8 +128,8 @@ withPreset('glm-balanced', () => {
         model: 'glm-5.2',
     });
     assert.deepStrictEqual(resolveModelForTask('browserPlanning'), {
-        provider: 'zai',
-        model: 'glm-5.2',
+        provider: 'openai',
+        model: 'gpt-5.4-nano',
     });
     assert.deepStrictEqual(resolveModelForTask('browserVision'), {
         provider: 'openai',
@@ -207,13 +207,13 @@ assert.strictEqual(aiPresets['glm-balanced'].title, buildPresetTitle(aiPresets['
 
 assert.deepStrictEqual(
     getGenerativeProviderCounts(aiPresets['hybrid-gemini-gpt'].models).map(({ label, count }) => `${label}:${count}`),
-    ['Gemini:5', 'GPT:5'],
+    ['Gemini:6', 'GPT:6'],
 );
 assert.deepStrictEqual(
     getGenerativeProviderCounts(aiPresets['hybrid-openrouter-gpt'].models).map(({ label, count }) => `${label}:${count}`),
-    ['GPT:6', 'OpenRouter Auto:4'],
+    ['GPT:8', 'OpenRouter Auto:4'],
 );
-assert.strictEqual(formatGenerativeUsageSummary(aiPresets['hybrid-gemini-gpt'].models), 'Gemini 5 · GPT 5');
+assert.strictEqual(formatGenerativeUsageSummary(aiPresets['hybrid-gemini-gpt'].models), 'Gemini 6 · GPT 6');
 assert.strictEqual(formatServiceSummary(aiPresets['hybrid-gemini-gpt'].models), 'OpenAI Embeddings · OpenAI Transcription');
 assert.strictEqual(formatServiceSummary(aiPresets['gemini-full'].models), 'Gemini Embeddings · Gemini Transcription');
 assert.strictEqual(formatServiceSummary(aiPresets['glm-full'].models), 'OpenAI Embeddings · Z.ai Transcription');

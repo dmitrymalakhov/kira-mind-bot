@@ -26,6 +26,7 @@ const OPENROUTER_CAPABILITIES: AiProviderCapabilities = {
 const openrouterClient = new OpenAI({
     apiKey: process.env.OPENROUTER_API_KEY || 'missing-openrouter-api-key',
     baseURL: 'https://openrouter.ai/api/v1',
+    maxRetries: 0,
 });
 
 export const openrouterProviderAdapter: AiProviderAdapter = {

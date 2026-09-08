@@ -288,7 +288,7 @@ async function synthesizeUserSchemas(sources: MemoryEntry[], periodDays: number)
     const sourceText = selected.map(formatSource).join('\n');
 
     try {
-        const resp = await createChatCompletionForTask('memoryConsolidation', {
+        const resp = await createChatCompletionForTask('complexReasoning', {
             messages: [
                 {
                     role: 'system',

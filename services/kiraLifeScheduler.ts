@@ -180,7 +180,7 @@ async function maybeGenerateLifeEvent(
     ].join("\n")
     : "Актуальной веб-опоры нет. Не добавляй никакие якобы текущие или проверенные внешние факты. Поставь groundingUsed=false.";
 
-  const response = await createChatCompletionForTask('conversation', {
+  const response = await createChatCompletionForTask(purpose === 'inner' ? 'messageAnalysis' : 'conversation', {
     messages: [
       {
         role: "system",
@@ -275,7 +275,7 @@ async function reviewKiraLifeOwnerAttribution(
   selfEvents: string[],
 ): Promise<Extract<KiraLifeReviewStatus, 'safe' | 'semantic_rejection' | 'review_error' | 'invalid_review'>> {
   try {
-    const response = await createChatCompletionForTask('messageAnalysis', {
+    const response = await createChatCompletionForTask('complexReasoning', {
       messages: [
         {
           role: 'system',

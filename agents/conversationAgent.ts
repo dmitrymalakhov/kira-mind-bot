@@ -6,6 +6,7 @@ import { AgentMemoryContext } from "../utils/agentMemoryContext";
 import { getBotPersona, getCommunicationStyle, getBotBiography } from "../persona";
 import { config } from "../config";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
+import { selectConversationTask } from "../ai/taskRouting";
 import {
     getKiraSelfMemoryState,
     getRecentKiraSelfEvents,
@@ -273,7 +274,7 @@ ${historyContext}
         }
 
         // Отправка запроса к API OpenAI
-        const response = await createChatCompletionForTask('conversation', {
+        const response = await createChatCompletionForTask(selectConversationTask(classification, isMedicalContextMessage(message)), {
             messages: [
                 {
                     role: "system",

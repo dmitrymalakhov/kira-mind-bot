@@ -171,6 +171,11 @@ export async function createPlan(input: PlanningInput): Promise<Plan> {
         return postProcessPlan({ steps: [{ agentId: 'reminder' }] }, classification);
     }
 
+    // This single-action route always used the deterministic plan after the LLM.
+    if (intent === 'ПРОВЕРКА_СООБЩЕНИЙ' && !classification.subIntents?.length) {
+        return postProcessPlan(fallbackPlan(intent, message), classification);
+    }
+
     const cacheKey = `plan:${intent}:${message.slice(0, 200)}`;
     const cached = llmCache.get<Plan>(cacheKey);
     if (cached) {
@@ -210,7 +215,7 @@ ${AVAILABLE_STEPS}
 - Минимум один шаг. params можно опустить или передать пустой объект.`;
 
     try {
-        const resp = await createChatCompletionForTask('browserPlanning', {
+        const resp = await createChatCompletionForTask('complexReasoning', {
             messages: [
                 {
                     role: 'system',

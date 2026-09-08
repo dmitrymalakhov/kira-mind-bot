@@ -1,9 +1,11 @@
 {
   "defaultText": { "provider": "openai", "model": "gpt-5.4-mini" },
+  "lightweightText": { "provider": "openai", "model": "gpt-5.4-nano" },
+  "complexReasoning": { "provider": "openai", "model": "gpt-5.4" },
   "intentClassification": { "provider": "openai", "model": "gpt-5.4-nano" },
   "intentDedup": { "provider": "openai", "model": "gpt-5.4-nano" },
   "conversation": { "provider": "openai", "model": "gpt-5.4-mini" },
-  "memoryExtraction": { "provider": "openai", "model": "gpt-5.4-nano" },
+  "memoryExtraction": { "provider": "openai", "model": "gpt-5.4-mini" },
   "memoryConsolidation": { "provider": "openai", "model": "gpt-5.4-mini" },
   "messageAnalysis": { "provider": "openai", "model": "gpt-5.4-mini" },
   "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4-mini" },

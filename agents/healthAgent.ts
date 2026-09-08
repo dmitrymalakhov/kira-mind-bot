@@ -912,7 +912,8 @@ async function extractDiscomfortLevel(message: string): Promise<DiscomfortExtrac
     }
 
     try {
-        const response = await createChatCompletionForTask('memoryExtraction', {
+        const response = await createChatCompletionForTask('lightweightText', {
+            max_completion_tokens: 512,
             messages: [
                 {
                     role: 'system',
@@ -970,7 +971,7 @@ async function buildAIHealthAnalysis(
     }));
 
     try {
-        const response = await createChatCompletionForTask('memoryExtraction', {
+        const response = await createChatCompletionForTask('complexReasoning', {
             messages: [
                 {
                     role: 'system',

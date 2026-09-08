@@ -504,7 +504,7 @@ async function isStateChangeFact(content: string): Promise<boolean> {
 
     const prompt = `Факт: "${content}"\nЭто факт смены состояния? (человек что-то сделал/изменил: приехал, переехал, уволился, купил, вернулся, начал/закончил работу, получил диагноз и т.п.)\nJSON: {"state_change": true/false}`;
     try {
-        const resp = await createChatCompletionForTask('memoryExtraction', {
+        const resp = await createChatCompletionForTask('lightweightText', {
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -533,7 +533,7 @@ async function isPlanningFact(content: string): Promise<boolean> {
 
     const prompt = `Факт: "${content}"\nЭто планировочный/будущий факт? (человек планирует, собирается, хочет, намерен что-то сделать — но ещё не сделал)\nJSON: {"planning": true/false}`;
     try {
-        const resp = await createChatCompletionForTask('memoryExtraction', {
+        const resp = await createChatCompletionForTask('lightweightText', {
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -613,7 +613,7 @@ async function checkContradiction(
 {"verdict": "contradicts|updates|complements", "mergedContent": "обязательно для contradicts и updates"}`;
 
     try {
-        const resp = await createChatCompletionForTask('memoryExtraction', {
+        const resp = await createChatCompletionForTask('complexReasoning', {
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -1638,7 +1638,7 @@ export async function generateMemoryInsights(ctx: BotContext): Promise<string> {
         .join('\n');
 
     try {
-        const resp = await createChatCompletionForTask('memoryExtraction', {
+        const resp = await createChatCompletionForTask('complexReasoning', {
             messages: [
                 {
                     role: 'system',

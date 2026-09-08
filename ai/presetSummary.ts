@@ -3,6 +3,8 @@ import { getAiProviderDescriptor } from './providerMetadata';
 
 export const GENERATIVE_TASK_KEYS: readonly AiTaskKey[] = [
     'defaultText',
+    'lightweightText',
+    'complexReasoning',
     'intentClassification',
     'intentDedup',
     'conversation',

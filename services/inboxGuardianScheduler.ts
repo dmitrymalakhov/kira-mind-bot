@@ -301,7 +301,7 @@ async function analyzeThreads(
     if (threads.length === 0) return [];
 
     try {
-        const response = await createChatCompletionForTask('memoryExtraction', {
+        const response = await createChatCompletionForTask('complexReasoning', {
             messages: [
                 {
                     role: "system",

@@ -16,7 +16,8 @@ export async function reactionAgent(userReaction: string, botMessage: string): P
             `Нужно решить, стоит ли ответить ему текстом и нужно ли поставить ответную реакцию на его сообщение.\n` +
             `Ответ верни строго в JSON формате {"reply":"текст или пустая строка","botReaction":"эмодзи или пустая строка"}`;
 
-        const response = await createChatCompletionForTask('memoryExtraction', {
+        const response = await createChatCompletionForTask('lightweightText', {
+            max_completion_tokens: 160,
             messages: [{ role: "user", content: prompt }],
             temperature: 0.7,
         });

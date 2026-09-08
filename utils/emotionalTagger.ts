@@ -20,7 +20,7 @@ export async function detectEmotionalTag(content: string): Promise<EmotionalTag 
     if (cached) return cached;
 
     try {
-        const resp = await createChatCompletionForTask('memoryExtraction', {
+        const resp = await createChatCompletionForTask('lightweightText', {
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON без пояснений.' },
                 {

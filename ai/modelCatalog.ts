@@ -107,6 +107,16 @@ export const AI_MODEL_CATALOG: Readonly<Record<string, AiModelCatalogEntry>> = {
         supportsCaching: true,
         preferredApi: 'chat.completions',
     },
+    'zai:glm-4.7-flashx': {
+        provider: 'zai',
+        model: 'glm-4.7-flashx',
+        modalities: ['text'],
+        maxContextTokens: 200000,
+        maxOutputTokens: 128000,
+        supportsReasoning: true,
+        supportsCaching: true,
+        preferredApi: 'chat.completions',
+    },
 };
 
 export function getModelCatalogEntry(provider: string, model: string): AiModelCatalogEntry | null {
