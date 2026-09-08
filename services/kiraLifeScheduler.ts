@@ -39,6 +39,7 @@ import {
   KiraLifeWebGrounding,
   parseKiraLifeWebGrounding,
 } from "../utils/kiraLifeWebGrounding";
+import { getKiraResidence } from "./kiraResidenceService";
 
 let proactiveTimer: NodeJS.Timeout | undefined;
 let innerTimer: NodeJS.Timeout | undefined;
@@ -107,6 +108,7 @@ function inQuietHours(now: Date): boolean {
 async function researchKiraLifeWebGrounding(input: {
   personalitySnapshot: string;
   recentTopics: string;
+  currentResidence: string;
 }): Promise<KiraLifeWebGrounding | undefined> {
   if (!config.kiraLifeWebGroundingEnabled) return undefined;
 
@@ -114,6 +116,7 @@ async function researchKiraLifeWebGrounding(input: {
     characterName: config.characterName,
     currentDateTime: formatPromptDateTime(new Date(), USER_TIMEZONE),
     timezone: USER_TIMEZONE,
+    currentResidence: input.currentResidence,
     biography: getBotBiography(),
     personalitySnapshot: input.personalitySnapshot,
     recentTopics: input.recentTopics,
@@ -141,6 +144,7 @@ async function maybeGenerateLifeEvent(
 ): Promise<GeneratedKiraLifeEvent> {
   const recentEvents = await getRecentKiraSelfEvents(10);
   const memoryState = await getKiraSelfMemoryState();
+  const currentResidence = await getKiraResidence();
   const dayCtx = getDayContext();
   const personalitySnapshot = formatKiraPersonalitySnapshot(memoryState);
   const purposeHint = purpose === "inner"
@@ -165,6 +169,7 @@ async function maybeGenerateLifeEvent(
     ? await researchKiraLifeWebGrounding({
       personalitySnapshot,
       recentTopics: usedTopics.join(", "),
+      currentResidence: currentResidence.city,
     })
     : undefined;
   const webGroundingPrompt = webGrounding
@@ -180,7 +185,7 @@ async function maybeGenerateLifeEvent(
     ].join("\n")
     : "Актуальной веб-опоры нет. Не добавляй никакие якобы текущие или проверенные внешние факты. Поставь groundingUsed=false.";
 
-  const response = await createChatCompletionForTask('conversation', {
+  const response = await createChatCompletionForTask(purpose === 'inner' ? 'messageAnalysis' : 'conversation', {
     messages: [
       {
         role: "system",
@@ -196,6 +201,7 @@ async function maybeGenerateLifeEvent(
           `Контекст: ${dayCtx.weekday}, ${dayCtx.timeOfDay}, ${dayCtx.season}. ` +
           `${dayCtx.isWeekend ? "Сегодня выходной — возможны другие активности, чем в будни." : "Будний день."}\n\n` +
           `Самомодель ${config.characterName}:\n${personalitySnapshot}\n\n` +
+          `Текущее место жизни: ${currentResidence.city}. Для локальных событий используй только этот город. Санкт-Петербург или другой город из происхождения, учёбы и старых глав не является текущим после переезда.\n\n` +
           `Последние события (для непрерывности, похожее НЕ повторяй): ${recentDescriptions || "нет"}.\n` +
           `Темы которых надо ИЗБЕГАТЬ — уже были недавно: ${usedTopics.join(", ") || "нет"}.\n\n` +
           `${webGroundingPrompt}\n\n` +
@@ -206,7 +212,7 @@ async function maybeGenerateLifeEvent(
           `mood — из набора: ${(config.moodVariants ?? ["спокойное", "уставшее", "задумчивое", "воодушевлённое", "нейтральное", "скептичное"]).join(", ")}. Утром — живее, вечером — спокойнее/${genderForms.tired}.\n` +
           `thought — внутренняя реакция, короткая (1 предложение, опционально).\n` +
           `arc — какую долгую линию жизни это продолжает или создаёт; не больше 7 слов.\n` +
-          `biographyPatch — объект для осторожного уточнения прошлого: timeline, education, workHistory, formativeExperiences, openPastQuestions, evolvingInterpretation, stableFacts. timeline — массив глав { title, period, place, summary, lessons, emotionalTone }. Не переписывай origin, не противоречь stableFacts/continuityRules и не добавляй фантастические или цифровые элементы.\n` +
+          `biographyPatch — объект для осторожного уточнения прошлого: timeline, education, workHistory, formativeExperiences, openPastQuestions, evolvingInterpretation, stableFacts. timeline — массив глав { title, period, place, summary, lessons, emotionalTone }. Не переписывай origin, не противоречь stableFacts/continuityRules, не меняй текущее место жизни автономно и не добавляй фантастические или цифровые элементы.\n` +
           `innerWorld — объект { lifePurpose, currentFocus, emotionalUndercurrent, selfNarrative, desires, developmentNeeds, unresolvedQuestions, privateBeliefs, growthEdges, relationshipNeeds } для развития сознания.\n` +
           `lifeArc — объект { title, summary, currentStage, nextStep, emotionalTone, topics } для сохранения развития линии.\n` +
           `personalityPatch — объект с 0-2 маленькими изменениями: activeArcs, habits, preferences, longTermDesires, conversationImprints, voicePatterns. Не переписывай всю личность.\n` +
@@ -275,7 +281,7 @@ async function reviewKiraLifeOwnerAttribution(
   selfEvents: string[],
 ): Promise<Extract<KiraLifeReviewStatus, 'safe' | 'semantic_rejection' | 'review_error' | 'invalid_review'>> {
   try {
-    const response = await createChatCompletionForTask('messageAnalysis', {
+    const response = await createChatCompletionForTask('complexReasoning', {
       messages: [
         {
           role: 'system',

@@ -2,7 +2,8 @@ import assert from 'assert';
 import fs from 'fs';
 import path from 'path';
 import type OpenAI from 'openai';
-import type { AiModelRef } from '../ai/modelPresets';
+import type { AiModelRef, AiTaskKey } from '../ai/modelPresets';
+import { selectConversationTask } from '../ai/taskRouting';
 
 process.env.KIRA_BOT_TOKEN = process.env.KIRA_BOT_TOKEN || 'test-token';
 process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'test-openai-key';
@@ -110,7 +111,7 @@ async function main() {
     const { createResponseForTask } = await import('../ai/responseCompletion');
     const { createEmbeddingForTask } = await import('../ai/embedding');
     const { createTranscriptionForTask } = await import('../ai/transcription');
-    const { openaiClient, geminiClient, zaiClient } = await import('../ai/aiClients');
+    const { openaiClient, geminiClient, zaiClient, openrouterClient } = await import('../ai/aiClients');
     const { geminiProviderAdapter } = await import('../ai/providers/gemini');
     const { aiPresets } = await import('../ai/modelPresets');
 
@@ -119,6 +120,9 @@ async function main() {
     const zaiMutableClient = zaiClient as unknown as MutableAiClient;
 
     assert.strictEqual(geminiMutableClient.maxRetries, 0, 'Gemini SDK retries must be disabled');
+    for (const client of [openaiMutableClient, zaiMutableClient, openrouterClient]) {
+        assert.strictEqual(client.maxRetries, 0, 'Only the runtime may retry provider calls');
+    }
     assert.strictEqual(geminiMutableClient.timeout, 12345, 'Gemini SDK must use the configured request timeout');
 
     const originalOpenAiChatCreate = openaiMutableClient.chat.completions.create;
@@ -202,6 +206,37 @@ async function main() {
                 },
             },
         };
+        // End-to-end selection -> preset -> actual request, without an extra routing call.
+        for (const [preset, task, provider, model] of [
+            ['gpt-balanced', 'lightweightText', 'openai', 'gpt-5.4-nano'],
+            ['gpt-balanced', 'memoryExtraction', 'openai', 'gpt-5.4-mini'],
+            ['gpt-balanced', selectConversationTask({ details: { responseComplexity: 'routine' } }), 'openai', 'gpt-5.4-mini'],
+            ['gpt-balanced', selectConversationTask({ details: { responseComplexity: 'complex' } }), 'openai', 'gpt-5.4'],
+            ['gpt-lean', selectConversationTask(undefined, true), 'openai', 'gpt-5.4'],
+            ['gpt-balanced', selectConversationTask({ subIntents: [{ intent: 'ВЕБ_ПОИСК' }] }), 'openai', 'gpt-5.4'],
+            ['gpt-balanced', selectConversationTask(), 'openai', 'gpt-5.4-mini'],
+            ['gemini-full', 'lightweightText', 'gemini', 'gemini-3.5-flash-lite'],
+            ['gemini-full', 'complexReasoning', 'gemini', 'gemini-3.6-flash'],
+            ['glm-full', 'lightweightText', 'zai', 'glm-4.7-flashx'],
+            ['glm-full', 'complexReasoning', 'zai', 'glm-5.2'],
+        ]) {
+            calls.length = 0;
+            await withPreset(preset, () => createChatCompletionForTask(task as AiTaskKey, {
+                messages: [{ role: 'user', content: 'synthetic routing case' }],
+            }));
+            assert.strictEqual(calls.length, 1, `${preset}:${task} must not call a separate router`);
+            assert.strictEqual(lastCall().provider, provider);
+            assert.strictEqual(lastCall().body.model, model);
+            assert.deepStrictEqual(lastCall().body.thinking, model === 'glm-4.7-flashx' ? { type: 'disabled' } : undefined);
+        }
+        calls.length = 0;
+        await withPreset('glm-full', () => createChatCompletionForTask('lightweightText', {
+            messages: [{ role: 'user', content: 'explicit thinking override' }],
+            thinking: { type: 'enabled' },
+        }));
+        assert.deepStrictEqual(lastCall().body.thinking, { type: 'enabled' });
+        calls.length = 0;
+
         globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
             const url = String(input);
             const parsedBody = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
@@ -930,7 +965,7 @@ async function main() {
 
         calls.length = 0;
         await withPreset('gemini-full', async () => {
-            await createChatCompletionForTask('browserPlanning', {
+            await createChatCompletionForTask('complexReasoning', {
                 messages: [{ role: 'user', content: 'plan resiliently' }],
             } satisfies ChatParamsWithoutModel);
         });

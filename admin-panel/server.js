@@ -26,6 +26,12 @@ const {
   normalizeGenderDefaults,
 } = require('./personalityDefaults');
 const {
+  KIRA_RESIDENCE_DB_KEY,
+  normalizeKiraResidenceCity,
+  parseKiraResidence,
+  buildKiraResidenceUpdate,
+} = require('./kiraResidence');
+const {
   normalizeRecurringSchedule,
   computeNextRecurringRun,
 } = require('./recurringTasks');
@@ -2340,20 +2346,63 @@ function writePersonality(data) {
   fs.writeFileSync(PERSONALITY_FILE, JSON.stringify(data, null, 2));
 }
 
-app.get('/api/personality', requireAuth, (_, res) => {
-  res.json(readPersonality());
+async function readKiraResidenceFromDb(pool, fallbackCity) {
+  await ensureBotSettingsTable(pool);
+  const result = await pool.query('SELECT value FROM bot_settings WHERE key = $1', [KIRA_RESIDENCE_DB_KEY]);
+  return parseKiraResidence(result.rows[0]?.value, fallbackCity);
+}
+
+async function writeKiraResidenceToDb(pool, current, nextCity) {
+  const residence = buildKiraResidenceUpdate(current, nextCity);
+  if (!residence) throw new Error('Укажите корректное название города');
+  await ensureBotSettingsTable(pool);
+  await pool.query(
+    'INSERT INTO bot_settings (key, value, "updatedAt") VALUES ($1, $2, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = now()',
+    [KIRA_RESIDENCE_DB_KEY, JSON.stringify(residence)]
+  );
+  return residence;
+}
+
+app.get('/api/personality', requireAuth, async (_, res) => {
+  const personality = readPersonality();
+  const fallbackCity = normalizeKiraResidenceCity(personality.KiraMindBot.currentCity) || 'Санкт-Петербург';
+  const pool = createDbPool();
+  try {
+    const residence = await readKiraResidenceFromDb(pool, fallbackCity);
+    personality.KiraMindBot.currentCity = residence.city;
+    res.json(personality);
+  } catch (err) {
+    console.error('[admin] Failed to read Kira residence:', err.message);
+    personality.KiraMindBot.currentCity = fallbackCity;
+    res.json(personality);
+  } finally {
+    await pool.end().catch(() => {});
+  }
 });
 
-app.post('/api/personality', requireAuth, (req, res) => {
+app.post('/api/personality', requireAuth, async (req, res) => {
+  const pool = createDbPool();
   try {
     const { KiraMindBot } = req.body;
     if (!KiraMindBot) {
       return res.status(400).json({ error: 'Неверный формат данных' });
     }
-    writePersonality({ KiraMindBot: sanitizeLegacyPersonality(KiraMindBot) });
-    res.json({ success: true, message: '✅ Личность сохранена. Перезапустите бота для применения.' });
+    const hasCurrentCity = Object.prototype.hasOwnProperty.call(KiraMindBot, 'currentCity');
+    const requestedCity = normalizeKiraResidenceCity(KiraMindBot.currentCity);
+    if (hasCurrentCity && !requestedCity) {
+      return res.status(400).json({ error: 'Укажите корректный текущий город' });
+    }
+    const fallbackCity = requestedCity || 'Санкт-Петербург';
+    const currentResidence = await readKiraResidenceFromDb(pool, fallbackCity);
+    const currentCity = requestedCity || currentResidence.city;
+    const sanitized = sanitizeLegacyPersonality({ ...KiraMindBot, currentCity });
+    await writeKiraResidenceToDb(pool, currentResidence, currentCity);
+    writePersonality({ KiraMindBot: sanitized });
+    res.json({ success: true, message: '✅ Личность сохранена. Текущий город применится сразу, остальные поля — после перезапуска.' });
   } catch (err) {
     res.status(500).json({ error: `Ошибка: ${err.message}` });
+  } finally {
+    await pool.end().catch(() => {});
   }
 });
 

@@ -19,6 +19,8 @@ export type AiProvider = 'openai' | 'openrouter' | 'gemini' | 'zai';
  */
 export type AiTaskKey =
     | 'defaultText'
+    | 'lightweightText'
+    | 'complexReasoning'
     | 'intentClassification'
     | 'intentDedup'
     | 'conversation'

@@ -102,7 +102,7 @@ export async function classifyMemoryNeed(message: string): Promise<MemoryNeed> {
     if (cached) return cached;
 
     try {
-        const resp = await createChatCompletionForTask('memoryExtraction', {
+        const resp = await createChatCompletionForTask('lightweightText', {
             messages: [
                 { role: 'system', content: 'Отвечай только одним словом: none, light или full.' },
                 {

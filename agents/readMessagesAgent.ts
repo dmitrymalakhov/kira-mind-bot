@@ -804,7 +804,7 @@ export async function getAnswerFromMessages(
             };
             if (voiceReplyRequested) completionOptions.max_completion_tokens = 450;
 
-            const response = await createChatCompletionForTask('messageAnalysis', completionOptions);
+            const response = await createChatCompletionForTask('complexReasoning', completionOptions);
 
             const analysisResult = response.choices[0]?.message?.content;
 
@@ -1063,7 +1063,7 @@ async function studyGroupChatAndSaveFacts(
     if (voiceReplyRequested) analysisCompletionOptions.max_completion_tokens = 450;
 
     const [analysisResult, factsResult] = await Promise.allSettled([
-        createChatCompletionForTask('messageAnalysis', analysisCompletionOptions),
+        createChatCompletionForTask('complexReasoning', analysisCompletionOptions),
         extractFactsAboutUserFromConversation(
             formatGroupMessages((messages as Api.Message[]).filter((message) => !message.fwdFrom)),
             group.title as string,
@@ -1160,7 +1160,7 @@ ${conversationText}`;
     };
     if (voiceReplyRequested) completionOptions.max_completion_tokens = 450;
 
-    const response = await createChatCompletionForTask('messageAnalysis', completionOptions);
+    const response = await createChatCompletionForTask('complexReasoning', completionOptions);
 
     return response.choices[0]?.message?.content?.trim() || "Не удалось проанализировать сообщения чата.";
 }
@@ -1232,7 +1232,7 @@ ${chatSections}${notFoundNote}`;
     };
     if (voiceReplyRequested) completionOptions.max_completion_tokens = 500;
 
-    const response = await createChatCompletionForTask('messageAnalysis', completionOptions);
+    const response = await createChatCompletionForTask('complexReasoning', completionOptions);
 
     return response.choices[0]?.message?.content?.trim() || "Не удалось проанализировать сообщения чатов.";
 }

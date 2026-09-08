@@ -32,6 +32,8 @@ import {
     guardRecurringTaskPlan,
 } from "./utils/recurringTaskPrompt";
 import { isAssistantSelfPhotoRequest } from "./utils/assistantSelfPhoto";
+import { looksLikeKiraRelocationRequest } from "./utils/kiraResidence";
+import { config } from "./config";
 import type { RichBlock } from './utils/richMessage';
 
 // Загрузка переменных окружения
@@ -71,6 +73,8 @@ export interface MessageClassification {
         category?: string;
         keywords?: string[];
         emotionalTone?: string;
+        /** Complexity of the requested answer, assessed in the existing intent call. */
+        responseComplexity?: 'routine' | 'complex';
         urgency?: "ВЫСОКАЯ" | "СРЕДНЯЯ" | "НИЗКАЯ";
         timeReferences?: string[];
         imageDescription?: string; // Описание изображения, которое нужно сгенерировать
@@ -697,6 +701,11 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
           «напиши Артёму про встречу и поставь напоминание на 18:00» → intent: ОТПРАВКА_СООБЩЕНИЯ, subIntents: [{intent: "НАПОМИНАНИЕ", details: {timeReferences: ["18:00"]}}]
           «найди адрес клиники и поставь напоминание на завтра в 9» → intent: ВЕБ_ПОИСК, subIntents: [{intent: "НАПОМИНАНИЕ", details: {timeReferences: ["завтра 9:00"]}}]
 
+        Оцени также сложность ответа в details.responseComplexity:
+        - complex: многошаговое рассуждение, сравнение вариантов с ограничениями, поиск причин и противоречий, сложные расчёты/код, стратегия, решение с медицинскими/правовыми/финансовыми последствиями;
+        - routine: повседневный диалог, короткое объяснение, пересказ, извлечение явных данных, простая команда.
+        Оценивай задачу НОВОЙ реплики, используя историю только для разрешения ссылок вроде «сравни их» или «продолжи расчёт». Длина истории, цитаты и низкая уверенность в интенте сами по себе не означают complex. Это поле не меняет intent и источник знаний.
+
         Ответ предоставь в формате JSON:
         {
           "intent": "НАПОМИНАНИЕ | РАЗГОВОР | ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ | КАРТЫ_ЛОКАЦИИ | НЕОПРЕДЕЛЕНО | ПРОВЕРКА_СООБЩЕНИЙ | ВЕБ_ПОИСК | ОТПРАВКА_СООБЩЕНИЯ | ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ | ВОЗМОЖНОСТИ_БОТА | САМОИЗУЧЕНИЕ | БРАУЗЕР_ЗАДАЧА | ЗДОРОВЬЕ",
@@ -717,6 +726,7 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
             }
           ],
           "details": {
+            "responseComplexity": "routine | complex",
             "category": "категория сообщения (например, медицина, работа, личное)",
             "keywords": ["ключевые слова из сообщения"],
             "emotionalTone": "эмоциональный тон сообщения",
@@ -751,7 +761,7 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
             return normalizeIntentScores(cached);
         }
 
-        // Отправка запроса к API OpenAI (gpt-5.2 — для максимально точного определения интента)
+        // Intent и сложность ответа определяются одним task-aware вызовом.
         const parsedResponse = await createJsonChatCompletionForTask<MessageClassification>('intentClassification', {
             messages: [
                 {
@@ -1013,7 +1023,29 @@ export async function processMessage(
                     },
                 }
                 : null;
-        const contextualFollowUp = !deterministicReminderClassification && !deterministicSelfPhotoClassification && !explicitRemember
+        const deterministicRelocationClassification: MessageClassification | null =
+            !deterministicReminderClassification &&
+            !deterministicSelfPhotoClassification &&
+            !BROWSER_CONTINUATION_RE.test(message) &&
+            !explicitRemember &&
+            ctx?.from?.id === config.allowedUserId &&
+            looksLikeKiraRelocationRequest(originalMessage)
+                ? {
+                    intent: "РАЗГОВОР",
+                    confidenceLevel: "ВЫСОКИЙ",
+                    intentScores: [{
+                        intent: "РАЗГОВОР",
+                        score: 1,
+                        reason: "Владелец просит персонажа сменить текущее место жизни.",
+                    }],
+                    details: {
+                        category: "жизнь персонажа и переезд",
+                        knowledgeSource: "assistant_self",
+                        requestedFacets: [],
+                    },
+                }
+                : null;
+        const contextualFollowUp = !deterministicReminderClassification && !deterministicSelfPhotoClassification && !deterministicRelocationClassification && !explicitRemember
             ? decideContextualFollowUp(originalMessage, messageHistory)
             : null;
         const deterministicContextualClassification: MessageClassification | null = contextualFollowUp
@@ -1033,11 +1065,13 @@ export async function processMessage(
             : null;
         let classification = deterministicReminderClassification
             ?? deterministicSelfPhotoClassification
+            ?? deterministicRelocationClassification
             ?? deterministicContextualClassification
             ?? await classifyMessage(originalMessage, isForwarded, forwardFrom, messageHistory, knownChatGroups);
         let deterministicOverrideApplied = Boolean(
             deterministicReminderClassification ||
             deterministicSelfPhotoClassification ||
+            deterministicRelocationClassification ||
             deterministicContextualClassification
         );
         if (deterministicReminderClassification) {
@@ -1045,6 +1079,9 @@ export async function processMessage(
         }
         if (deterministicSelfPhotoClassification) {
             devLog("Assistant self-photo fast-path: routing to ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ");
+        }
+        if (deterministicRelocationClassification) {
+            devLog("Assistant relocation fast-path: routing to РАЗГОВОР");
         }
         if (deterministicContextualClassification) {
             devLog(
@@ -1054,7 +1091,7 @@ export async function processMessage(
             );
         }
 
-        if (knowledgeDecision.requiresWeb && !isBrowserTaskLike && !explicitRemember) {
+        if (knowledgeDecision.requiresWeb && !isBrowserTaskLike && !explicitRemember && !deterministicRelocationClassification) {
             const routedKnowledge = applyKnowledgeSourceDecision(classification, knowledgeDecision);
             classification = routedKnowledge.classification;
             if (routedKnowledge.primaryIntentOverridden) deterministicOverrideApplied = true;

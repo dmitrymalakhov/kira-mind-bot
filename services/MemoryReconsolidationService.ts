@@ -78,7 +78,7 @@ async function askReconsolidationLlm(
     recalled: RecalledMemoryRef[]
 ): Promise<ReconsolidationDecision[]> {
     const memories = recalled.map(compactMemoryForPrompt).join('\n');
-    const resp = await createChatCompletionForTask('memoryExtraction', {
+    const resp = await createChatCompletionForTask('complexReasoning', {
         messages: [
             {
                 role: 'system',

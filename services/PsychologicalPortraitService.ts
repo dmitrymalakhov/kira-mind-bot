@@ -114,7 +114,7 @@ async function buildPortraitFromText(
         : BUILD_PORTRAIT_PROMPT(contactName, conversationText);
 
     try {
-        const resp = await createChatCompletionForTask('memoryConsolidation', {
+        const resp = await createChatCompletionForTask('complexReasoning', {
             messages: [
                 {
                     role: 'system',

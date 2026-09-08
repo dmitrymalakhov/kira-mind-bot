@@ -31,4 +31,24 @@ assert.equal(customPersona.persona, 'Пользовательский мужск
 assert.equal(customPersona.biography, 'Пользовательская биография');
 assert.equal(customPersona.proactiveMessageHint, maleDefaults.proactiveMessageHint);
 
+const {
+  normalizeKiraResidenceCity,
+  parseKiraResidence,
+  buildKiraResidenceUpdate,
+} = require('../admin-panel/kiraResidence');
+
+assert.equal(normalizeKiraResidenceCity('  город Казань  '), 'Казань');
+assert.equal(normalizeKiraResidenceCity('https://example.com'), null);
+const moved = buildKiraResidenceUpdate(
+  parseKiraResidence(null, 'Санкт-Петербург'),
+  'Москва',
+  '2026-09-01T10:00:00.000Z'
+);
+assert.deepEqual(moved, {
+  city: 'Москва',
+  previousCity: 'Санкт-Петербург',
+  movedAt: '2026-09-01T10:00:00.000Z',
+  source: 'admin',
+});
+
 console.log('admin personality gender defaults checks passed');

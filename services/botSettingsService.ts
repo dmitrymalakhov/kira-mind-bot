@@ -64,3 +64,14 @@ export async function setGlobalSetting(key: string, value: string): Promise<void
         console.error('[botSettings] Failed to persist global setting:', e);
     }
 }
+
+/**
+ * Вариант для пользовательских мутаций, где нельзя сообщать об успехе,
+ * если значение осталось только в process-cache и не попало в БД.
+ */
+export async function setGlobalSettingStrict(key: string, value: string): Promise<void> {
+    const scopedKey = globalKey(key);
+    const repo = AppDataSource.getRepository(BotSettingEntity);
+    await repo.upsert({ key: scopedKey, value }, ['key']);
+    globalCache.set(scopedKey, { value, expiresAt: Date.now() + GLOBAL_CACHE_TTL_MS });
+}

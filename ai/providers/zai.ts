@@ -34,6 +34,7 @@ const ZAI_CAPABILITIES: AiProviderCapabilities = {
 const zaiClient = new OpenAI({
     apiKey: process.env.ZAI_API_KEY || 'missing-zai-api-key',
     baseURL: 'https://api.z.ai/api/paas/v4/',
+    maxRetries: 0,
 });
 
 export const zaiProviderAdapter: AiProviderAdapter = {
@@ -46,7 +47,12 @@ export const zaiProviderAdapter: AiProviderAdapter = {
     },
     normalizeChatParams(model, params) {
         const capabilities = this.getModelCapabilities(model);
-        return applyChatTokenParamMode(params, capabilities.chatTokenParam);
+        const normalized = applyChatTokenParamMode(params, capabilities.chatTokenParam);
+        // FlashX handles bounded utility tasks; avoid spending its output budget on thinking.
+        if (model === 'glm-4.7-flashx' && params.thinking === undefined) {
+            normalized.thinking = { type: 'disabled' };
+        }
+        return normalized;
     },
     async createChatCompletion(model, params) {
         return this.client.chat.completions.create({

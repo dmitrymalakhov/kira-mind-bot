@@ -1,12 +1,14 @@
 import * as dotenv from "dotenv";
 import * as fs from "fs";
 import { parseAiPresetName } from "./ai/modelPresets";
+import { normalizeKiraResidenceCity } from "./utils/kiraResidence";
 const { hasLegacyDigitalBiography } = require("./utils/legacyPersonalitySanitizer");
 
 // ── Загрузка personality.json (редактируется через admin panel) ───────────────
 interface PersonalityOverride {
   characterName?: string;
   characterGender?: "женский" | "мужской";
+  currentCity?: string;
   persona?: string;
   communicationStyle?: string;
   biography?: string;
@@ -63,6 +65,8 @@ interface AssistantConfig {
   /** Telegram-никнейм владельца без @ (например: "dmitrii"). Используется в публичном режиме групп для распознавания упоминаний. */
   ownerUsername?: string;
   characterName: string;
+  /** Текущее место жизни персонажа; место происхождения остаётся частью biography. */
+  currentCity: string;
   userName: string;
   userBirthDate: string;
   botUsername: string;
@@ -237,6 +241,7 @@ function assistants(activeAssistant: string): AssistantConfig {
       ownerName: kiraP.ownerName || "владелец",
       ownerUsername: kiraP.ownerUsername || undefined,
       characterName: kiraP.characterName || "Кира",
+      currentCity: normalizeKiraResidenceCity(kiraP.currentCity) || "Санкт-Петербург",
       userName: kiraP.userName || "владелец",
       userBirthDate: kiraP.userBirthDate || "16.07.1988",
       botUsername: "KiraMindBot",
