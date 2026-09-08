@@ -204,14 +204,16 @@ describe("session memory helpers", () => {
         assert.equal(ctx.session.domains.work.facts.length, 10);
     });
 
-    test("detects a fresh pending implicit reminder", () => {
+    test("detects a fresh pending implicit reminder", (t) => {
         const now = Date.now();
+        t.mock.method(Date, 'now', () => now);
         const ctx = { session: { pendingImplicitReminder: { createdAt: now - 299_999 } } } as any;
         assert.equal(hasFreshPendingReminder(ctx), true);
     });
 
-    test("rejects a pending reminder exactly at the TTL boundary", () => {
+    test("rejects a pending reminder exactly at the TTL boundary", (t) => {
         const now = Date.now();
+        t.mock.method(Date, 'now', () => now);
         const ctx = { session: { pendingImplicitReminder: { createdAt: now - 300_000 } } } as any;
         assert.equal(hasFreshPendingReminder(ctx), false);
     });

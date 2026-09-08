@@ -28,6 +28,7 @@ interface Props {
 }
 
 const CRITICAL_TASK_KEYS = new Set([
+  'complexReasoning',
   'intentClassification',
   'memoryExtraction',
   'browserPlanning',

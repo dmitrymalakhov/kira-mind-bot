@@ -37,6 +37,7 @@ const OPENAI_CAPABILITIES: AiProviderCapabilities = {
 
 const openaiClient = new OpenAI({
     apiKey: config.openAiApiKey || process.env.OPENAI_API_KEY,
+    maxRetries: 0,
 });
 
 export const openaiProviderAdapter: AiProviderAdapter = {

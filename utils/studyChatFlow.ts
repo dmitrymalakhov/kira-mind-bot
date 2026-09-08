@@ -780,7 +780,7 @@ async function synthesizeGroup(
     if (synthesisCandidates.length === 1) return [...relationFacts, ...synthesisCandidates];
 
     try {
-        const resp = await createChatCompletionForTask('messageAnalysis', {
+        const resp = await createChatCompletionForTask('complexReasoning', {
             messages: [
                 { role: 'system', content: SYNTHESIS_SYSTEM },
                 { role: 'user', content: buildSynthesisPrompt(synthesisCandidates, personName) },

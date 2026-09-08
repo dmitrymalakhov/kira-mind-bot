@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { createPlan, postProcessPlan } from "../orchestration/planner";
+import * as chatCompletion from "../ai/chatCompletion";
+import { classifyMessage } from "../orchestrator";
+import { selectConversationTask } from "../ai/taskRouting";
+import type { AiTaskKey } from "../ai/modelPresets";
+import type { ChatCompletionParamsWithoutModel } from "../ai/providers/types";
 import { llmCache, LLM_CACHE_TTL } from "../utils/llmCache";
 import {
     getReflectionMemoryNoiseReasons,
@@ -19,6 +24,45 @@ function input(message: string, intent: string, subIntents?: Array<{ intent: str
 }
 
 describe("deterministic planner routes", () => {
+    test("does not pay for a plan that message analysis would discard", async (t) => {
+        const completion = t.mock.method(chatCompletion, 'createChatCompletionForTask', async () => {
+            throw new Error('Unexpected planning call');
+        });
+        assert.deepEqual(await createPlan(input('Проанализируй сообщения', 'ПРОВЕРКА_СООБЩЕНИЙ')), {
+            steps: [{ agentId: 'readMessages' }],
+        });
+        assert.deepEqual(await createPlan(input('Проанализируй переписку с мамой', 'ПРОВЕРКА_СООБЩЕНИЙ')), {
+            steps: [{ agentId: 'resolveContact', params: { relationship: 'мама' } }, { agentId: 'readMessages' }],
+        });
+        assert.equal(completion.mock.callCount(), 0);
+    });
+
+    test("uses the strong route once for a compound action plan", async (t) => {
+        const completion = t.mock.method(chatCompletion, 'createChatCompletionForTask', async (task: AiTaskKey) => {
+            assert.equal(task, 'complexReasoning');
+            return { choices: [{ message: { content: JSON.stringify({ steps: [
+                { agentId: 'webSearch' }, { agentId: 'sendMessage' },
+            ] }) } }] } as any;
+        });
+        const result = await createPlan(input('Найди условия доставки и отправь в тестовый чат', 'ОТПРАВКА_СООБЩЕНИЯ', [{ intent: 'ВЕБ_ПОИСК' }]));
+        assert.deepEqual(result.steps.map((step) => step.agentId), ['webSearch', 'sendMessage']);
+        assert.equal(completion.mock.callCount(), 1);
+    });
+
+    test("preserves semantic answer complexity through intent normalization and caching", async (t) => {
+        const completion = t.mock.method(chatCompletion, 'createJsonChatCompletionForTask', async (task: AiTaskKey, params: ChatCompletionParamsWithoutModel) => {
+            assert.equal(task, 'intentClassification');
+            assert.match(JSON.stringify(params.messages), /responseComplexity/);
+            return { intent: 'РАЗГОВОР', confidenceLevel: 'ВЫСОКИЙ', details: { responseComplexity: 'complex' } } as any;
+        });
+        const message = 'Сравни два синтетических проекта по срокам, бюджету и ограничениям';
+        const classification = await classifyMessage(message);
+        assert.equal(classification.intent, 'РАЗГОВОР');
+        assert.equal(selectConversationTask(classification), 'complexReasoning');
+        assert.equal(selectConversationTask(await classifyMessage(message)), 'complexReasoning');
+        assert.equal(completion.mock.callCount(), 1);
+    });
+
     test("routes browser continuations before their stale classification", async () => {
         assert.deepEqual(await createPlan(input("Продолжи задачу в браузере через Playwright. шаг 2", "РАЗГОВОР")), {
             steps: [{ agentId: "browserTask" }],

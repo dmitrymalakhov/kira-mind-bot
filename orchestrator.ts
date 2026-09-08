@@ -71,6 +71,8 @@ export interface MessageClassification {
         category?: string;
         keywords?: string[];
         emotionalTone?: string;
+        /** Complexity of the requested answer, assessed in the existing intent call. */
+        responseComplexity?: 'routine' | 'complex';
         urgency?: "ВЫСОКАЯ" | "СРЕДНЯЯ" | "НИЗКАЯ";
         timeReferences?: string[];
         imageDescription?: string; // Описание изображения, которое нужно сгенерировать
@@ -697,6 +699,11 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
           «напиши Артёму про встречу и поставь напоминание на 18:00» → intent: ОТПРАВКА_СООБЩЕНИЯ, subIntents: [{intent: "НАПОМИНАНИЕ", details: {timeReferences: ["18:00"]}}]
           «найди адрес клиники и поставь напоминание на завтра в 9» → intent: ВЕБ_ПОИСК, subIntents: [{intent: "НАПОМИНАНИЕ", details: {timeReferences: ["завтра 9:00"]}}]
 
+        Оцени также сложность ответа в details.responseComplexity:
+        - complex: многошаговое рассуждение, сравнение вариантов с ограничениями, поиск причин и противоречий, сложные расчёты/код, стратегия, решение с медицинскими/правовыми/финансовыми последствиями;
+        - routine: повседневный диалог, короткое объяснение, пересказ, извлечение явных данных, простая команда.
+        Оценивай задачу НОВОЙ реплики, используя историю только для разрешения ссылок вроде «сравни их» или «продолжи расчёт». Длина истории, цитаты и низкая уверенность в интенте сами по себе не означают complex. Это поле не меняет intent и источник знаний.
+
         Ответ предоставь в формате JSON:
         {
           "intent": "НАПОМИНАНИЕ | РАЗГОВОР | ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ | КАРТЫ_ЛОКАЦИИ | НЕОПРЕДЕЛЕНО | ПРОВЕРКА_СООБЩЕНИЙ | ВЕБ_ПОИСК | ОТПРАВКА_СООБЩЕНИЯ | ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ | ВОЗМОЖНОСТИ_БОТА | САМОИЗУЧЕНИЕ | БРАУЗЕР_ЗАДАЧА | ЗДОРОВЬЕ",
@@ -717,6 +724,7 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
             }
           ],
           "details": {
+            "responseComplexity": "routine | complex",
             "category": "категория сообщения (например, медицина, работа, личное)",
             "keywords": ["ключевые слова из сообщения"],
             "emotionalTone": "эмоциональный тон сообщения",
@@ -751,7 +759,7 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
             return normalizeIntentScores(cached);
         }
 
-        // Отправка запроса к API OpenAI (gpt-5.2 — для максимально точного определения интента)
+        // Intent и сложность ответа определяются одним task-aware вызовом.
         const parsedResponse = await createJsonChatCompletionForTask<MessageClassification>('intentClassification', {
             messages: [
                 {

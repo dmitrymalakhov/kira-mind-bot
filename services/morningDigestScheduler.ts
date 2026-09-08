@@ -65,7 +65,8 @@ async function buildDigestGreeting(reminderCount: number): Promise<string> {
     const fallbackGreeting = buildDigestFallbackGreeting(reminderCount);
 
     try {
-        const response = await createChatCompletionForTask('messageAnalysis', {
+        const response = await createChatCompletionForTask('lightweightText', {
+            max_completion_tokens: 160,
             messages: [
                 {
                     role: "system",

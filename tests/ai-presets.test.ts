@@ -11,6 +11,8 @@ import { getEnvAiPresetName } from "../services/aiRuntimeConfigService";
 
 const TASK_KEYS: AiTaskKey[] = [
     "defaultText",
+    "lightweightText",
+    "complexReasoning",
     "intentClassification",
     "intentDedup",
     "conversation",
@@ -83,7 +85,7 @@ describe("AI preset registry", () => {
 
 describe("AI model fallback and environment selection", () => {
     test("uses nano for lightweight structured tasks", () => {
-        for (const task of ["intentClassification", "intentDedup", "memoryExtraction", "browserPlanning"] as AiTaskKey[]) {
+        for (const task of ["lightweightText", "intentClassification", "intentDedup", "browserPlanning"] as AiTaskKey[]) {
             assert.deepEqual(getFallbackModel(task), { provider: "openai", model: "gpt-5.4-nano" });
         }
     });
@@ -93,10 +95,14 @@ describe("AI model fallback and environment selection", () => {
     });
 
     test("uses mini for remaining text task types", () => {
-        const nanoTasks = new Set<AiTaskKey>(["intentClassification", "intentDedup", "memoryExtraction", "browserPlanning"]);
-        for (const task of TASK_KEYS.filter((key) => !nanoTasks.has(key) && !["browserVision", "embedding", "transcription"].includes(key))) {
+        const nanoTasks = new Set<AiTaskKey>(["lightweightText", "intentClassification", "intentDedup", "browserPlanning"]);
+        for (const task of TASK_KEYS.filter((key) => !nanoTasks.has(key) && !["complexReasoning", "browserVision", "embedding", "transcription"].includes(key))) {
             assert.deepEqual(getFallbackModel(task), { provider: "openai", model: "gpt-5.4-mini" }, task);
         }
+    });
+
+    test("preserves a strong fallback for complex reasoning", () => {
+        assert.deepEqual(getFallbackModel("complexReasoning"), { provider: "openai", model: "gpt-5.4" });
     });
 
     test("uses task-specific fallbacks for embeddings and transcription", () => {

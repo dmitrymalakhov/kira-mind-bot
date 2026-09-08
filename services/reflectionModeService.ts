@@ -300,7 +300,7 @@ async function triageForHighPriority(chatId: string, senderName: string, text: s
 JSON: {"urgent": true/false}`;
 
     try {
-        const resp = await createChatCompletionForTask('memoryExtraction', {
+        const resp = await createChatCompletionForTask('lightweightText', {
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -494,7 +494,7 @@ ${snippet}
 JSON: {"useful": true/false, "emotion": "neutral|stress|conflict|grief|joy|anxiety"}`;
 
     try {
-        const resp = await createChatCompletionForTask('memoryExtraction', {
+        const resp = await createChatCompletionForTask('lightweightText', {
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },
@@ -582,7 +582,7 @@ async function classifyChat(chatId: string, chatTitle: string, messages: Buffere
     const prompt = `Чат с "${chatTitle}". Примеры сообщений:\n${snippet}\n\nОпредели домен (work/personal/family/health/finance/general) и тип отношений (коллега/друг/партнёр/родственник/знакомый/другое).\nJSON: {"domain": "...", "relationship": "..."}`;
 
     try {
-        const resp = await createChatCompletionForTask('memoryExtraction', {
+        const resp = await createChatCompletionForTask('lightweightText', {
             messages: [
                 { role: 'system', content: 'Отвечай только валидным JSON.' },
                 { role: 'user', content: prompt },

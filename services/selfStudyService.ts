@@ -347,7 +347,7 @@ export async function runKiraSelfStudy(options: RunSelfStudyOptions): Promise<Ki
 
   let payload: NormalizedSelfStudyPayload;
   try {
-    const response = await createChatCompletionForTask('conversation', {
+    const response = await createChatCompletionForTask('complexReasoning', {
       messages: [
         {
           role: "system",

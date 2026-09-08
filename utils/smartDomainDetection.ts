@@ -20,7 +20,8 @@ export class SmartDomainDetector {
 
         try {
             devLog('Domain detection prompt:', prompt);
-            const resp = await createChatCompletionForTask('memoryExtraction', {
+            const resp = await createChatCompletionForTask('lightweightText', {
+                max_completion_tokens: 32,
                 messages: [
                     { role: 'system', content: 'Ты определяешь домен для сообщения по ключевым словам' },
                     { role: 'user', content: prompt }

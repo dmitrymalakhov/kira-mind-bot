@@ -205,7 +205,7 @@ ${doneText}
 Ответь только JSON:
 {"shouldSend": true/false, "message": "текст сообщения для пользователя или пустая строка", "sourceIndexes": [номера пунктов из списка планов, на которых основано сообщение]}`;
 
-    const resp = await createChatCompletionForTask('messageAnalysis', {
+    const resp = await createChatCompletionForTask('complexReasoning', {
         messages: [
             { role: 'system', content: `${getBotPersona()}\nСтиль: ${getCommunicationStyle()}\nОтвечай только валидным JSON.` },
             { role: 'user', content: prompt },
