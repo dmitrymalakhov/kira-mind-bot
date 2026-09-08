@@ -10,6 +10,7 @@ const query = buildKiraLifeWebGroundingQuery({
   characterName: "Алиса",
   currentDateTime: "28 июля 2026 года, вторник, 18:30",
   timezone: "Europe/Moscow",
+  currentResidence: "Казань",
   biography: "Алиса живёт в Казани, бегает длинные дистанции, выращивает орхидеи и чинит плёночные камеры.",
   personalitySnapshot: [
     "Предпочтения: индустриальная архитектура, итальянский язык.",
@@ -24,7 +25,8 @@ assert.match(query, /Казани/u);
 assert.match(query, /выращивает орхидеи/u);
 assert.match(query, /плёночные камеры/u);
 assert.match(query, /итальянский язык/u);
-assert.match(query, /текущее место жизни явно следует из биографии/u);
+assert.match(query, /Текущее место жизни персонажа: Казань/u);
+assert.match(query, /город происхождения.+не считай текущими/u);
 assert.match(query, /сам определи тип внешней опоры/u);
 assert.match(query, /НЕ закрытый список категорий/u);
 assert.match(query, /лишь возможные примеры/u);

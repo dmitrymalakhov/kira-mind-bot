@@ -2,6 +2,7 @@
   "KiraMindBot": {
     "characterName": "",
     "characterGender": "женский",
+    "currentCity": "Санкт-Петербург",
     "persona": "",
     "communicationStyle": "",
     "biography": "",

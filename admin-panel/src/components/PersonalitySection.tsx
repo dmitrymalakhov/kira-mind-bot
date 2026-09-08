@@ -20,6 +20,7 @@ import type { PersonalityConfig, PersonalityProfile } from '../types';
 const EMPTY_PROFILE: PersonalityProfile = {
   characterName: '',
   characterGender: 'женский',
+  currentCity: 'Санкт-Петербург',
   persona: '',
   communicationStyle: '',
   biography: '',
@@ -89,6 +90,17 @@ function ProfileEditor({ icon, title, values, onChange, onSave, saving }: Profil
               fullWidth
               placeholder="например, Эни"
               helperText="Имя персонажа задаётся вручную. Если оставить пустым, используется имя по умолчанию."
+              FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px' } }}
+            />
+          </Grid>
+          <Grid item xs={12} sm={3}>
+            <TextField
+              label="Текущий город"
+              value={values.currentCity}
+              onChange={(e) => onChange('currentCity', e.target.value)}
+              fullWidth
+              placeholder="Санкт-Петербург"
+              helperText="Меняется сразу и используется для афиши, мест и городской линии жизни"
               FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px' } }}
             />
           </Grid>
@@ -282,7 +294,7 @@ export function PersonalitySection({ onToast }: Props) {
         severity="info"
         sx={{ mb: 2, bgcolor: '#0a1628', border: '1px solid #1e3a5f', color: '#93c5fd', fontSize: '13px' }}
       >
-        Изменения применяются после перезапуска бота. Пустые поля используют значения из кода.
+        Текущий город применяется без перезапуска. Остальные изменения — после перезапуска бота. Пустые поля используют значения из кода.
       </Alert>
 
       <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.8 }}>

@@ -32,6 +32,8 @@ import {
     guardRecurringTaskPlan,
 } from "./utils/recurringTaskPrompt";
 import { isAssistantSelfPhotoRequest } from "./utils/assistantSelfPhoto";
+import { looksLikeKiraRelocationRequest } from "./utils/kiraResidence";
+import { config } from "./config";
 import type { RichBlock } from './utils/richMessage';
 
 // Загрузка переменных окружения
@@ -1021,7 +1023,29 @@ export async function processMessage(
                     },
                 }
                 : null;
-        const contextualFollowUp = !deterministicReminderClassification && !deterministicSelfPhotoClassification && !explicitRemember
+        const deterministicRelocationClassification: MessageClassification | null =
+            !deterministicReminderClassification &&
+            !deterministicSelfPhotoClassification &&
+            !BROWSER_CONTINUATION_RE.test(message) &&
+            !explicitRemember &&
+            ctx?.from?.id === config.allowedUserId &&
+            looksLikeKiraRelocationRequest(originalMessage)
+                ? {
+                    intent: "РАЗГОВОР",
+                    confidenceLevel: "ВЫСОКИЙ",
+                    intentScores: [{
+                        intent: "РАЗГОВОР",
+                        score: 1,
+                        reason: "Владелец просит персонажа сменить текущее место жизни.",
+                    }],
+                    details: {
+                        category: "жизнь персонажа и переезд",
+                        knowledgeSource: "assistant_self",
+                        requestedFacets: [],
+                    },
+                }
+                : null;
+        const contextualFollowUp = !deterministicReminderClassification && !deterministicSelfPhotoClassification && !deterministicRelocationClassification && !explicitRemember
             ? decideContextualFollowUp(originalMessage, messageHistory)
             : null;
         const deterministicContextualClassification: MessageClassification | null = contextualFollowUp
@@ -1041,11 +1065,13 @@ export async function processMessage(
             : null;
         let classification = deterministicReminderClassification
             ?? deterministicSelfPhotoClassification
+            ?? deterministicRelocationClassification
             ?? deterministicContextualClassification
             ?? await classifyMessage(originalMessage, isForwarded, forwardFrom, messageHistory, knownChatGroups);
         let deterministicOverrideApplied = Boolean(
             deterministicReminderClassification ||
             deterministicSelfPhotoClassification ||
+            deterministicRelocationClassification ||
             deterministicContextualClassification
         );
         if (deterministicReminderClassification) {
@@ -1053,6 +1079,9 @@ export async function processMessage(
         }
         if (deterministicSelfPhotoClassification) {
             devLog("Assistant self-photo fast-path: routing to ГЕНЕРАЦИЯ_ИЗОБРАЖЕНИЯ");
+        }
+        if (deterministicRelocationClassification) {
+            devLog("Assistant relocation fast-path: routing to РАЗГОВОР");
         }
         if (deterministicContextualClassification) {
             devLog(
@@ -1062,7 +1091,7 @@ export async function processMessage(
             );
         }
 
-        if (knowledgeDecision.requiresWeb && !isBrowserTaskLike && !explicitRemember) {
+        if (knowledgeDecision.requiresWeb && !isBrowserTaskLike && !explicitRemember && !deterministicRelocationClassification) {
             const routedKnowledge = applyKnowledgeSourceDecision(classification, knowledgeDecision);
             classification = routedKnowledge.classification;
             if (routedKnowledge.primaryIntentOverridden) deterministicOverrideApplied = true;

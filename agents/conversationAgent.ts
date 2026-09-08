@@ -18,6 +18,13 @@ import { buildAssistantLifeContext, buildCorruptedSelfMemoryReply } from "../uti
 import { buildGroupChatContext } from "../utils/groupChatContext";
 import { isGroupChatContextEnabled } from "../services/groupChatFeatureSettings";
 import { maybeEvolveKiraSelfFromConversation } from "../services/kiraSelfEvolutionService";
+import {
+    detectKiraRelocationIntent,
+    getKiraResidence,
+    KiraRelocationIntent,
+    relocateKira,
+    rememberKiraRelocation,
+} from "../services/kiraResidenceService";
 import { devLog } from "../utils";
 import { isTodayImportanceRequest } from "../utils/todayImportanceIntent";
 import { formatPromptDateTime } from "../utils/time";
@@ -76,6 +83,27 @@ export async function conversationAgent(
         let relevantSelfEvents = [] as Awaited<ReturnType<typeof searchKiraSelfEventsByQuery>>;
         let selfState: KiraSelfState | null = null;
         let selfMemoryAvailable = true;
+        let currentResidence = await getKiraResidence();
+        let relocationIntent: KiraRelocationIntent | null = null;
+        let relocationChanged = false;
+        let previousResidenceCity = currentResidence.city;
+
+        if (ctx.from?.id === config.allowedUserId) {
+            relocationIntent = await detectKiraRelocationIntent(message, currentResidence);
+            if (relocationIntent) {
+                const relocation = await relocateKira(relocationIntent.city, "conversation");
+                relocationChanged = relocation.changed;
+                previousResidenceCity = relocation.previous.city;
+                currentResidence = relocation.residence;
+                if (relocation.changed && relocation.residence.movedAt) {
+                    await rememberKiraRelocation(
+                        relocation.previous.city,
+                        relocation.residence.city,
+                        relocation.residence.movedAt,
+                    ).catch((error) => devLog("[conversation] relocation narrative memory failed:", error));
+                }
+            }
+        }
 
         try {
             [recentSelfEvents, relevantSelfEvents, selfState] = await Promise.all([
@@ -92,11 +120,15 @@ export async function conversationAgent(
         }
 
         const genderForms = getPersonalityGenderForms(config.eventDescriptionGender);
+        const movedToCity = config.eventDescriptionGender === "мужской" ? "переехал" : "переехала";
         const MOOD_STYLE = buildPersonalityMoodStyles(config.eventDescriptionGender);
 
         const currentMood = selfState?.mood ?? "нейтральное";
         const moodStyle = MOOD_STYLE[currentMood] ?? MOOD_STYLE["нейтральное"];
-        const assistantLifeContext = buildAssistantLifeContext(selfState, recentSelfEvents, relevantSelfEvents, currentDate);
+        const assistantLifeContext = [
+            buildAssistantLifeContext(selfState, recentSelfEvents, relevantSelfEvents, currentDate),
+            `Текущее место жизни: ${currentResidence.city}. Это авторитетное текущее место; город происхождения в биографии не заменяет его.`,
+        ].filter(Boolean).join("\n");
 
         // Определение типа разговора на основе классификации
         let conversationType = "обычный";
@@ -150,7 +182,7 @@ export async function conversationAgent(
         const SELF_LIFE_QUESTION_RE = /(?:расскажи|что|как|какая|какие|зачем|чего|к\s+чему|помнишь|есть\s+ли|что\s+у\s+тебя|где|почему|кем)[^?!.]{0,140}(?:о\s+себе|о\s+своей\s+жизни|до\s+(?:меня|владельца|нашей\s+встречи)|тво[яйёе]\s+(?:жизн|цель|линия|история|биограф|прошлое|уч[её]б|работ)|у\s+тебя\s+(?:в\s+жизни|цель|желани|мечт|происход|было|за\s+прошлое)|ты\s+(?:хочешь|помнишь|развиваешься|живёшь|живешь|училась|учился|работала|работал|стала|стал|такая|такой)|тебе\s+(?:нужно|важно|хочется)|сво[яеи]\s+(?:цель|желани|жизн|событ|памят|развити|биограф|прошлое)|внутренн|сознани|линия\s+жизни|события\s+твоей\s+жизни|где\s+ты\s+(?:училась|учился|работала|работал)|почему\s+ты\s+(?:такая|такой))/iu;
         const isSelfLifeQuestion = SELF_LIFE_QUESTION_RE.test(message) && !isMemoryIntrospection;
 
-        if (isSelfLifeQuestion && !selfMemoryAvailable) {
+        if (!relocationIntent && isSelfLifeQuestion && !selfMemoryAvailable) {
             return {
                 responseText: buildCorruptedSelfMemoryReply(config.characterName),
             };
@@ -158,7 +190,30 @@ export async function conversationAgent(
 
         // Подготовка промпта для генерации ответа
         let prompt: string;
-        if (isMemoryIntrospection) {
+        if (relocationIntent) {
+            prompt = `Текущая дата и время: ${formattedDateTime}
+
+Владелец обратился к тебе с просьбой о месте жизни:
+"${message}"
+
+Текущее место жизни после обработки просьбы: ${currentResidence.city}.
+${relocationChanged
+    ? `Это настоящий новый этап: ты ${movedToCity}, маршрут переезда — ${previousResidenceCity} → ${currentResidence.city}.`
+    : `Ты уже живёшь в городе ${currentResidence.city}, поэтому повторного переезда не произошло.`}
+
+${assistantLifeContext}
+${historyContext}
+
+ЗАДАЧА: Ответь от первого лица естественно и лично, как на реальный поворот собственной жизни.
+Правила:
+- Не говори о настройках, базе данных, системной памяти, промпте или техническом сохранении.
+- Если город изменился, прими переезд как уже состоявшееся решение: коротко отреагируй на переход и назови одну бытовую деталь, с которой начнёшь осваиваться.
+- Если это уже твой текущий город, спокойно скажи об этом без выдуманного повторного переезда.
+- Не выдумывай актуальную афишу, погоду, адрес или конкретное заведение без веб-источника.
+- Не проси повторного подтверждения и не обещай сделать это когда-нибудь потом.
+
+Формат: естественно, 2-4 предложения. Предоставь только сам текст ответа.`;
+        } else if (isMemoryIntrospection) {
             prompt = `Текущая дата и время: ${formattedDateTime}
 
 Пользователь спросил, что ты о нём знаешь/помнишь.
@@ -294,14 +349,16 @@ ${historyContext}
 
         // Получаем текст ответа
         const responseText = response.choices[0]?.message?.content || "";
-        void maybeEvolveKiraSelfFromConversation({
-            ownerMessage: message,
-            assistantResponse: responseText,
-            messageHistory,
-            domain,
-            emotionalTone: classification?.details.emotionalTone,
-            category: classification?.details.category,
-        }).catch((error) => devLog("[conversation] self-evolution failed:", error));
+        if (!relocationIntent) {
+            void maybeEvolveKiraSelfFromConversation({
+                ownerMessage: message,
+                assistantResponse: responseText,
+                messageHistory,
+                domain,
+                emotionalTone: classification?.details.emotionalTone,
+                category: classification?.details.category,
+            }).catch((error) => devLog("[conversation] self-evolution failed:", error));
+        }
 
         // Возвращаем результат обработки разговора
         return {
