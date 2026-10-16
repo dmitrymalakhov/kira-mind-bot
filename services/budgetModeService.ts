@@ -1,6 +1,6 @@
 import { AppDataSource } from '../data-source';
 import { BotSettingEntity } from '../entity/BotSettingEntity';
-import { BUDGET_MODE_SETTING_KEY, resolveBudgetMode, type BudgetMode } from '../utils/budgetMode';
+import { BUDGET_MODE_SETTING_KEY, resolveBudgetMode, type BudgetMode } from '../ai/budgetMode';
 
 const CACHE_TTL_MS = 5000;
 let cached: { mode: BudgetMode; expiresAt: number } | undefined;

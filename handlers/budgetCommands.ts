@@ -2,7 +2,7 @@ import { Bot, InlineKeyboard } from 'grammy';
 import { config } from '../config';
 import type { BotContext } from '../types';
 import { getBudgetMode, setBudgetMode } from '../services/budgetModeService';
-import { BUDGET_MODE_COPY, BUDGET_MODES, parseBudgetMode, type BudgetMode } from '../utils/budgetMode';
+import { BUDGET_MODE_COPY, BUDGET_MODES, parseBudgetMode, type BudgetMode } from '../ai/budgetMode';
 import { editStructuredCtx, esc, heading, paragraph, sendStructured, type RichBlock } from '../utils/richMessage';
 
 export function buildBudgetMenu(mode: BudgetMode) {

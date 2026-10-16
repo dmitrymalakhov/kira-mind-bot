@@ -4,7 +4,7 @@ import {
   FormControlLabel, Stack, Switch, Typography,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import { BUDGET_MODE_COPY, BUDGET_MODES, type BudgetMode } from '../../../utils/budgetMode';
+import { BUDGET_MODE_COPY, BUDGET_MODES, type BudgetMode } from '../../../ai/budgetMode';
 import { fetchBudgetMode, saveBudgetMode } from '../api';
 
 interface Props {

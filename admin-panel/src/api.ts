@@ -18,7 +18,7 @@ import type {
   RecurringTaskSchedule,
   RecurringTaskStatus,
 } from './types';
-import type { BudgetMode } from '../../utils/budgetMode';
+import type { BudgetMode } from '../../ai/budgetMode';
 
 export const AUTH_REQUIRED_EVENT = 'kira:auth-required';
 

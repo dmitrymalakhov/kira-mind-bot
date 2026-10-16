@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AppDataSource } from '../data-source';
 import { getBudgetMode, isMaximumSavingsEnabled, setBudgetMode } from '../services/budgetModeService';
-import { BUDGET_MODE_SETTING_KEY, parseBudgetMode, resolveBudgetMode } from '../utils/budgetMode';
+import { BUDGET_MODE_SETTING_KEY, parseBudgetMode, resolveBudgetMode } from '../ai/budgetMode';
 import { registerBudgetCommands } from '../handlers/budgetCommands';
 import { config } from '../config';
 import * as chat from '../ai/chatCompletion';

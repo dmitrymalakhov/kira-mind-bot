@@ -1,4 +1,4 @@
-import registry from '../ai/budget-modes.json';
+import registry from './budget-modes.json';
 
 export type BudgetMode = keyof typeof registry.modes;
 export const BUDGET_MODE_SETTING_KEY = registry.settingKey;
