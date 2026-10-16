@@ -39,6 +39,8 @@ import { isStatusCommandArg, parseBooleanCommandArg } from "../utils/booleanComm
 import { buildHelpOverviewBlocks, buildHelpTopicBlocks } from "../utils/helpMessage";
 import { sendRecurringTasksMenu } from "../services/recurringTaskService";
 import { getBotGenderedText } from "../persona";
+import { registerBudgetCommands } from "./budgetCommands";
+import { isMaximumSavingsEnabled } from "../services/budgetModeService";
 
 
 function parseCommandArgument(text: string | undefined, command: string): string {
@@ -51,6 +53,7 @@ function formatToggleState(enabled: boolean): string {
 }
 
 export function registerCommandHandlers(bot: Bot<BotContext>) {
+    registerBudgetCommands(bot);
     registerMemoryCommands(bot);
     registerChatPromptWatchCommands(bot);
     registerChatGroupCommands(bot);
@@ -510,7 +513,7 @@ bot.command("self_study", async (ctx) => {
 bot.command("reflection", async (ctx) => {
     const enabled = isReflectionModeEnabled();
     const stats = getReflectionStats();
-    await ctx.reply(buildReflectionStatusMessage(enabled, stats), {
+    await ctx.reply(buildReflectionStatusMessage(enabled, stats, await isMaximumSavingsEnabled()), {
         parse_mode: "Markdown",
         reply_markup: buildReflectionKeyboard(enabled),
     });
@@ -523,7 +526,7 @@ bot.callbackQuery("reflection_toggle", async (ctx) => {
     const next = !current;
     await setReflectionModeEnabled(next);
     const stats = getReflectionStats();
-    await ctx.editMessageText(buildReflectionStatusMessage(next, stats), {
+    await ctx.editMessageText(buildReflectionStatusMessage(next, stats, await isMaximumSavingsEnabled()), {
         parse_mode: "Markdown",
         reply_markup: buildReflectionKeyboard(next),
     });
@@ -534,7 +537,7 @@ bot.callbackQuery("reflection_refresh", async (ctx) => {
     await ctx.answerCallbackQuery("Обновлено");
     const enabled = isReflectionModeEnabled();
     const stats = getReflectionStats();
-    await ctx.editMessageText(buildReflectionStatusMessage(enabled, stats), {
+    await ctx.editMessageText(buildReflectionStatusMessage(enabled, stats, await isMaximumSavingsEnabled()), {
         parse_mode: "Markdown",
         reply_markup: buildReflectionKeyboard(enabled),
     });
@@ -542,10 +545,11 @@ bot.callbackQuery("reflection_refresh", async (ctx) => {
 
 function buildReflectionStatusMessage(
     enabled: boolean,
-    stats: ReturnType<typeof getReflectionStats>
+    stats: ReturnType<typeof getReflectionStats>,
+    savingsEnabled = false,
 ): string {
     const statusIcon = enabled ? "🟢" : "⚫";
-    const statusText = enabled ? "включён" : "выключен";
+    const statusText = savingsEnabled ? "приостановлен экономией бюджета (/budget)" : enabled ? "включён" : "выключен";
 
     const prescreenRate = stats.prescreenTotal > 0
         ? Math.round((stats.prescreenPassed / stats.prescreenTotal) * 100)

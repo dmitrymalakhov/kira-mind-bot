@@ -40,6 +40,7 @@ import {
   parseKiraLifeWebGrounding,
 } from "../utils/kiraLifeWebGrounding";
 import { getKiraResidence } from "./kiraResidenceService";
+import { isMaximumSavingsEnabled } from "./budgetModeService";
 
 let proactiveTimer: NodeJS.Timeout | undefined;
 let innerTimer: NodeJS.Timeout | undefined;
@@ -423,6 +424,7 @@ async function runInnerDevelopmentCycle(): Promise<void> {
 
   isInnerRunning = true;
   try {
+    if (await isMaximumSavingsEnabled()) return;
     lastInnerDevelopmentAt = Math.max(lastInnerDevelopmentAt, await loadLastInnerDevelopmentAt());
     if (lastInnerDevelopmentAt > 0 && Date.now() - lastInnerDevelopmentAt < config.kiraLifeInnerDevelopmentIntervalMs) {
       return;
@@ -445,6 +447,7 @@ async function runProactiveCycle(bot: Bot<BotContext>): Promise<void> {
 
   isProactiveRunning = true;
   try {
+    if (await isMaximumSavingsEnabled()) return;
     const now = new Date();
     if (inQuietHours(now)) {
       return;

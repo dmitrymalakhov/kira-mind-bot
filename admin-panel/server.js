@@ -9,6 +9,7 @@ const path = require('path');
 const http = require('http');
 const { Pool } = require('pg');
 const { AI_PRESETS, AI_PRESET_NAMES, parseAiPresetName } = require('./aiPresetRegistry');
+const { registerBudgetModeRoutes } = require('./budgetMode');
 const {
   DEFAULT_MEMORY_EMBEDDING_PROFILE,
   getMemoryEmbeddingProfile,
@@ -390,6 +391,8 @@ async function readMemoryEmbeddingProfileState(pool, vars) {
     profile,
   };
 }
+
+registerBudgetModeRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable });
 
 app.get('/api/ai-preset', requireAuth, async (_req, res) => {
   const vars = readEnvFile();

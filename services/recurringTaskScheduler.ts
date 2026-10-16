@@ -20,6 +20,7 @@ import {
     normalizeRecurringExecutionPrompt,
 } from "../utils/recurringTaskPrompt";
 import { esc, footer, heading, paragraph, sendStructured } from "../utils/richMessage";
+import { isMaximumSavingsEnabled } from "./budgetModeService";
 
 const POLL_INTERVAL_MS = 30_000;
 const MAX_RESULT_LENGTH = 20_000;
@@ -274,6 +275,7 @@ async function poll(bot: Bot<BotContext>): Promise<void> {
     if (polling) return;
     polling = true;
     try {
+        if (await isMaximumSavingsEnabled()) return;
         const availableSlots = Math.max(0, MAX_CONCURRENT_TASKS - runningTaskIds.size);
         if (availableSlots === 0) return;
         const tasks = await RecurringTaskRepository.claimDue(new Date(), availableSlots);

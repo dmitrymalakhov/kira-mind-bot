@@ -21,6 +21,7 @@ import { runMemorySchemaConsolidationForUser } from './MemorySchemaConsolidation
 import { runMemorySleepCycleForUser } from './MemorySleepCycleService';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { RUNTIME_DATA_DIR } from '../utils/runtimeData';
+import { isMaximumSavingsEnabled } from './budgetModeService';
 
 const DATA_DIR = RUNTIME_DATA_DIR;
 const STATE_PATH = path.join(DATA_DIR, `${config.botUsername.toLowerCase()}-personal-chat-memory-index.json`);
@@ -705,7 +706,7 @@ export async function getPersonalChatMemoryIndexStatus(): Promise<string> {
 
     const lines = [
         '📚 Фоновое изучение личных переписок',
-        `Статус: ${config.personalChatMemoryEnabled ? 'включено' : 'выключено'}`,
+        `Статус: ${await isMaximumSavingsEnabled() ? 'приостановлено экономией бюджета (/budget)' : config.personalChatMemoryEnabled ? 'включено' : 'выключено'}`,
         `Чатов с watermark: ${chats.length}`,
         `Обработано сообщений: ${totals.messages}`,
         `Сохранено фактов: ${totals.facts}`,
@@ -728,6 +729,7 @@ export async function getPersonalChatMemoryIndexStatus(): Promise<string> {
 }
 
 async function runScheduledCycle(): Promise<void> {
+    if (await isMaximumSavingsEnabled()) return;
     const result = await runPersonalChatMemoryIndexingCycle();
     console.log('[personal-chat-memory] cycle completed:', result);
 }

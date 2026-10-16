@@ -6,6 +6,7 @@ import { USER_TIMEZONE } from "../constants";
 import { getProactiveChatId } from "../utils/allowedUserChatStore";
 import { getBotPersona, getCommunicationStyle } from "../persona";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
+import { isMaximumSavingsEnabled } from "./budgetModeService";
 import { getZonedDateKey, getZonedDateTimeParts } from "../utils/time";
 import { esc, paragraph, table, heading, RichBlock, sendStructured } from "../utils/richMessage";
 
@@ -61,8 +62,9 @@ function formatReminderTime(dueDate: string | Date): string {
     });
 }
 
-async function buildDigestGreeting(reminderCount: number): Promise<string> {
+export async function buildDigestGreeting(reminderCount: number): Promise<string> {
     const fallbackGreeting = buildDigestFallbackGreeting(reminderCount);
+    if (await isMaximumSavingsEnabled()) return fallbackGreeting;
 
     try {
         const response = await createChatCompletionForTask('lightweightText', {

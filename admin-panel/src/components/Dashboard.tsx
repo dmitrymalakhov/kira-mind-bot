@@ -132,7 +132,8 @@ const SETTINGS_GROUPS: SidebarSectionGroup[] = [
     title: 'Интеграции',
     items: [
       { targetId: 'api', shortLabel: 'API', icon: <KeyIcon fontSize="small" />, caption: 'API Ключи' },
-      { targetId: 'model-presets', shortLabel: 'AI Presets', icon: <FlareIcon fontSize="small" />, caption: 'Пресеты моделей' },
+      { targetId: 'budget-settings', shortLabel: 'Бюджет AI', icon: <FlareIcon fontSize="small" />, caption: 'Максимальная экономия' },
+      { targetId: 'model-presets', shortLabel: 'AI Presets', icon: <SmartToyIcon fontSize="small" />, caption: 'Пресеты моделей' },
       { targetId: 'elevenlabs', shortLabel: 'Voice', icon: <GraphicEqIcon fontSize="small" />, caption: 'ElevenLabs Voice' },
       { targetId: 'bots', shortLabel: 'Telegram', icon: <SmartToyIcon fontSize="small" />, caption: 'Telegram Боты' },
       { targetId: 'telegram', shortLabel: 'Клиент', icon: <SmartphoneIcon fontSize="small" />, caption: 'Telegram Клиент' },

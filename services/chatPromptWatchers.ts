@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { createJsonChatCompletionForTask } from "../ai/chatCompletion";
 import { config } from "../config";
 import { getSetting, setSetting } from "./botSettingsService";
+import { isMaximumSavingsEnabled } from "./budgetModeService";
 import { initTelegramClient } from "./telegram";
 import { getProactiveChatId } from "../utils/allowedUserChatStore";
 
@@ -803,6 +804,7 @@ export function __stopPollSchedulerForTests(): void {
 }
 
 async function pollChatPromptWatchersOnceImpl(api: Api): Promise<void> {
+    if (await isMaximumSavingsEnabled()) return;
     const watchers = (await loadWatchers()).filter((watcher) => watcher.enabled);
     if (!watchers.length) return;
 
@@ -830,6 +832,7 @@ async function pollChatPromptWatchersOnceImpl(api: Api): Promise<void> {
 
     for (const watcher of watchers) {
         const sourceTitle = watcher.sourceChatTitle || watcher.sourceChatId;
+        if (await isMaximumSavingsEnabled()) return;
         const prevId = watcher.lastReadMessageId ?? pollWatermarks.get(watcher.id);
         if (!messagesBySource.has(watcher.sourceChatId)) {
             try {

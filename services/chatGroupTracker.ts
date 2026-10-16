@@ -5,6 +5,7 @@ import { initTelegramClient, searchGroupByTitle } from './telegram';
 import { analyzeTrackedMessages, TrackedMessage } from '../agents/trackingAnalysisAgent';
 import { getProactiveChatId } from '../utils/allowedUserChatStore';
 import { esc, heading, blockquote, footer, RichBlock, sendStructured } from '../utils/richMessage';
+import { isMaximumSavingsEnabled } from './budgetModeService';
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 минут
 
@@ -25,6 +26,7 @@ export function notifyChatGroupTrackerChange(): void {
 }
 
 async function pollOnce(): Promise<void> {
+    if (await isMaximumSavingsEnabled()) return;
     const groups = await ChatGroupRepository.findAllTracking();
     if (!groups.length) return;
 
@@ -36,6 +38,7 @@ async function pollOnce(): Promise<void> {
     for (const group of groups) {
         for (const chatName of group.chatNames) {
             try {
+                if (await isMaximumSavingsEnabled()) return;
                 const found = await searchGroupByTitle(client, chatName);
                 if (!found) continue;
 

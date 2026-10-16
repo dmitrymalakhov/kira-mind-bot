@@ -15,6 +15,7 @@ import {
   KiraSelfPersonality,
 } from "../utils/kiraSelfMemory";
 import { getKiraResidence } from "./kiraResidenceService";
+import { isMaximumSavingsEnabled } from "./budgetModeService";
 
 interface ConversationEvolutionPayload {
   shouldUpdate?: boolean;
@@ -135,6 +136,7 @@ function hasPatch(value: unknown): boolean {
 
 export async function maybeEvolveKiraSelfFromConversation(input: ConversationEvolutionInput): Promise<boolean> {
   try {
+    if (await isMaximumSavingsEnabled()) return false;
     const selfState = await getKiraSelfMemoryState();
     if (!shouldAnalyzeConversation(input.ownerMessage, selfState.personality.lastEvolutionAt)) {
       return false;

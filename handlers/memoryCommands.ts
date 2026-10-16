@@ -21,6 +21,8 @@ function isAdmin(ctx: BotContext): boolean {
 
 function getMemoryAdminKeyboard() {
     return new Keyboard()
+        .text('/budget')
+        .row()
         .text('/memory_stats')
         .text('/memory_cleanup')
         .text('/memory_last_insight')
@@ -118,6 +120,7 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
                 '🛠 Административное меню памяти и проверок',
                 '',
                 'Команды раздела:',
+                '/budget — режим максимальной экономии AI-бюджета',
                 '/memory_stats — статистика + последние 5 сохраненных фактов',
                 '/memory_search <запрос> — ручная проверка поиска памяти (векторный + текстовый fallback)',
                 '/memory_last_insight — последнее проактивное сообщение и его источники',

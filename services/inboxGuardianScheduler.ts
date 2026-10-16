@@ -9,6 +9,7 @@ import { parseLLMJson } from "../utils";
 import { getProactiveChatId } from "../utils/allowedUserChatStore";
 import { getActiveBotProfile } from "../utils/botIdentity";
 import { getSetting, setSetting } from "./botSettingsService";
+import { isMaximumSavingsEnabled } from "./budgetModeService";
 import { esc, heading, paragraph, footer, RichBlock, sendStructured, checklist } from "../utils/richMessage";
 
 const CHECK_INTERVAL_MS = 60_000;
@@ -499,6 +500,7 @@ async function runGuardian(bot: Bot<BotContext>): Promise<void> {
     isRunning = true;
 
     try {
+        if (await isMaximumSavingsEnabled()) return;
         const dateKey = todayDateKey();
         const lastRunDate = await getSetting(LAST_RUN_SETTING_KEY, "");
         if (lastRunDate === dateKey) return;

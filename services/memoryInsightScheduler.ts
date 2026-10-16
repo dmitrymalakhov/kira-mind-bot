@@ -23,6 +23,7 @@ import { config } from '../config';
 import { getVectorService } from './VectorServiceFactory';
 import { getProactiveChatId } from '../utils/allowedUserChatStore';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
+import { isMaximumSavingsEnabled } from './budgetModeService';
 import { parseLLMJson } from '../utils';
 import { getBotPersona, getCommunicationStyle } from '../persona';
 import { appendPersistedHistory, appendPersistedSentMessageContext, saveProactiveInsight } from './SessionStorage';
@@ -239,6 +240,7 @@ async function runCycle(bot: Bot<BotContext>): Promise<void> {
     isRunning = true;
 
     try {
+        if (await isMaximumSavingsEnabled()) return;
         const now = new Date();
         if (inQuietHours(now)) return;
         if (Date.now() - lastSentAt < MIN_BETWEEN_MS) return;

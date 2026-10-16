@@ -15,6 +15,7 @@ import { AppDataSource } from "./data-source";
 import { ReminderRepository } from "./services/ReminderRepository";
 import { getTelegramMenuCommands } from "./capabilities";
 import { warmAiPresetCache } from "./services/aiRuntimeConfigService";
+import { getBudgetMode } from "./services/budgetModeService";
 import { startRuntimeHealthServer } from "./services/runtimeHealthServer";
 import { startKiraLifeScheduler } from "./services/kiraLifeScheduler";
 import { startDmReportScheduler } from "./services/dmReportScheduler";
@@ -103,6 +104,7 @@ async function startBot() {
         console.log("🤖 Загрузка runtime AI preset...");
         const activeAiPreset = await warmAiPresetCache();
         console.log("✅ Runtime AI preset загружен:", activeAiPreset);
+        console.log("💰 Режим бюджета:", await getBudgetMode(true));
 
         console.log("📅 Загрузка активных напоминаний из БД...");
         const activeReminders = await ReminderRepository.loadActive();

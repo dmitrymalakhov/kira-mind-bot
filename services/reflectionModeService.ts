@@ -35,6 +35,7 @@ import { searchAllDomainsMemories } from '../utils/enhancedDomainMemory';
 import { getSetting, setSetting } from './botSettingsService';
 import { devLog, parseLLMJson } from '../utils';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
+import { isMaximumSavingsEnabled } from './budgetModeService';
 import { MessageStore } from '../stores/MessageStore';
 import { getVectorService } from './VectorServiceFactory';
 import { runMemorySchemaConsolidationForUser } from './MemorySchemaConsolidationService';
@@ -288,6 +289,7 @@ function scheduleAsyncTriage(chatId: string, senderName: string, text: string): 
  * Если да — помечает буфер как highPriority для немедленного анализа.
  */
 async function triageForHighPriority(chatId: string, senderName: string, text: string): Promise<void> {
+    if (await isMaximumSavingsEnabled()) return;
     const buf = chatBuffers.get(chatId);
     if (!buf || buf.highPriority) return;
 
@@ -363,6 +365,7 @@ export function getReflectionStats(): {
  */
 export async function processBuffers(bot: Bot<BotContext>): Promise<void> {
     if (!enabled) return;
+    if (await isMaximumSavingsEnabled()) return;
     resetHourWindowIfNeeded();
 
     if (analysesThisHour >= HOURLY_ANALYSIS_LIMIT) {
@@ -383,6 +386,7 @@ export async function processBuffers(bot: Bot<BotContext>): Promise<void> {
     const perChatLimit = Math.max(1, Math.ceil(HOURLY_ANALYSIS_LIMIT / Math.max(1, activeChats)));
 
     for (const [chatId, buf] of entries) {
+        if (await isMaximumSavingsEnabled()) break;
         if (analysesThisHour >= HOURLY_ANALYSIS_LIMIT) break;
         if (!isBufferReady(buf)) continue;
 

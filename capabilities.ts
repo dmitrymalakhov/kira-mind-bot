@@ -30,6 +30,14 @@ export interface CapabilitiesAnswerOptions {
 
 export const BOT_COMMANDS: BotCommandDescription[] = [
     {
+        command: "budget",
+        description: "Режим экономии AI-бюджета",
+        scope: "owner",
+        usage: "/budget [on|off|status]",
+        examples: ["/budget", "/budget on", "/budget off"],
+        showInTelegramMenu: true,
+    },
+    {
         command: "help",
         description: "Спросить о возможностях бота",
         scope: "public",

@@ -18,6 +18,7 @@ import type {
   RecurringTaskSchedule,
   RecurringTaskStatus,
 } from './types';
+import type { BudgetMode } from '../../utils/budgetMode';
 
 export const AUTH_REQUIRED_EVENT = 'kira:auth-required';
 
@@ -64,6 +65,24 @@ export async function fetchAiPreset(): Promise<AiPresetResponse> {
     throw new Error(body.error || 'Failed to load AI preset');
   }
   return r.json();
+}
+
+export async function fetchBudgetMode(): Promise<{ mode: BudgetMode }> {
+  const response = await apiFetch('/api/budget-mode');
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || 'Не удалось загрузить режим бюджета');
+  return body;
+}
+
+export async function saveBudgetMode(mode: BudgetMode): Promise<{ mode: BudgetMode; message: string }> {
+  const response = await apiFetch('/api/budget-mode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || 'Не удалось сохранить режим бюджета');
+  return body;
 }
 
 export async function fetchMonitoringHealth(): Promise<MonitoringHealthResponse> {

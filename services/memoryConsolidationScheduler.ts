@@ -2,6 +2,7 @@ import { config } from '../config';
 import { runMemoryConsolidationForUser } from './MemoryConsolidationService';
 import { runMemorySchemaConsolidationForUser } from './MemorySchemaConsolidationService';
 import { runMemorySleepCycleForUser } from './MemorySleepCycleService';
+import { isMaximumSavingsEnabled } from './budgetModeService';
 
 const INTERVAL_MS = config.memoryConsolidationIntervalMs ?? 24 * 60 * 60 * 1000;
 
@@ -13,6 +14,7 @@ async function runCycle(): Promise<void> {
     isRunning = true;
 
     try {
+        if (await isMaximumSavingsEnabled()) return;
         const userId = String(config.allowedUserId);
         const result = await runMemoryConsolidationForUser(userId, {
             minFacts: config.memoryConsolidationMinFacts,

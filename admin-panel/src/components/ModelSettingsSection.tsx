@@ -20,6 +20,7 @@ import { formatGenerativeUsageSummary, formatServiceSummary } from '../../../ai/
 import { fetchAiPreset, saveAiPreset } from '../api';
 import type { AiModelRef, AiPresetConfig, AiPresetName, AiPresetResponse, ConfigResponse } from '../types';
 import type { ConfigSectionHandle } from './ConfigSection';
+import { BudgetSettingsSection } from './BudgetSettingsSection';
 
 interface Props {
   config: ConfigResponse;
@@ -228,6 +229,8 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
     };
 
     return (
+      <>
+      <BudgetSettingsSection onToast={onToast} />
       <Card id="model-presets" sx={{ mb: 2 }}>
         <CardHeader
           title="🧩 AI Presets"
@@ -369,6 +372,7 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
           </Stack>
         </CardContent>
       </Card>
+      </>
     );
   }
 );
