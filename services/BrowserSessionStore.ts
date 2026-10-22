@@ -1,8 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { BrowserContext, Cookie } from 'playwright';
+import { RUNTIME_DATA_DIR } from '../utils/runtimeData';
 
-const SESSIONS_DIR = path.join(__dirname, '..', 'data', 'browser-sessions');
+const SESSIONS_DIR = path.join(RUNTIME_DATA_DIR, 'browser-sessions');
 const SECOND_LEVEL_PUBLIC_SUFFIXES = new Set([
     'co.uk', 'com.au', 'com.br', 'com.tr', 'com.ua', 'com.cn', 'com.hk',
     'co.jp', 'co.kr', 'co.nz', 'co.za', 'com.mx', 'com.sg', 'com.tw',
@@ -91,10 +92,12 @@ export class BrowserSessionStore {
         try {
             const state = await context.storageState();
             if (!state.cookies.length && !state.origins.length) return;
-            fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+            fs.mkdirSync(SESSIONS_DIR, { recursive: true, mode: 0o700 });
             const serialized = JSON.stringify(state, null, 2);
             for (const candidate of candidateDomains(domain)) {
-                fs.writeFileSync(sessionPath(userId, candidate), serialized);
+                const file = sessionPath(userId, candidate);
+                fs.writeFileSync(file, serialized, { mode: 0o600 });
+                fs.chmodSync(file, 0o600);
             }
         } catch (e) {
             console.warn('[BrowserSession] Failed to save browser state:', e);

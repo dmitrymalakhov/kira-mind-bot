@@ -21,7 +21,7 @@ import { runMemorySchemaConsolidationForUser } from './MemorySchemaConsolidation
 import { runMemorySleepCycleForUser } from './MemorySleepCycleService';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { RUNTIME_DATA_DIR } from '../utils/runtimeData';
-import { isMaximumSavingsEnabled } from './budgetModeService';
+import { isBackgroundFeatureEnabled, getBackgroundFeaturePreference } from './backgroundFeatureService';
 
 const DATA_DIR = RUNTIME_DATA_DIR;
 const STATE_PATH = path.join(DATA_DIR, `${config.botUsername.toLowerCase()}-personal-chat-memory-index.json`);
@@ -509,7 +509,7 @@ function updateWatermark(
 }
 
 export async function runPersonalChatMemoryIndexingCycle(options: { force?: boolean; maxChats?: number } = {}): Promise<PersonalChatMemoryCycleResult> {
-    if (!config.personalChatMemoryEnabled && !options.force) {
+    if (!options.force && !await isBackgroundFeatureEnabled('personalChatMemory')) {
         return {
             enabled: false,
             scannedDialogs: 0,
@@ -524,7 +524,7 @@ export async function runPersonalChatMemoryIndexingCycle(options: { force?: bool
     }
     if (isRunning) {
         return {
-            enabled: config.personalChatMemoryEnabled,
+            enabled: await getBackgroundFeaturePreference('personalChatMemory'),
             scannedDialogs: 0,
             processedChats: 0,
             skippedChats: 0,
@@ -538,7 +538,7 @@ export async function runPersonalChatMemoryIndexingCycle(options: { force?: bool
 
     isRunning = true;
     const result: PersonalChatMemoryCycleResult = {
-        enabled: config.personalChatMemoryEnabled,
+        enabled: await getBackgroundFeaturePreference('personalChatMemory'),
         scannedDialogs: 0,
         processedChats: 0,
         skippedChats: 0,
@@ -661,7 +661,7 @@ export async function runPersonalChatMemoryIndexingCycle(options: { force?: bool
             }
         }
 
-        if ((result.factsSaved > 0 || result.episodesCreated > 0) && config.memoryConsolidationEnabled) {
+        if ((result.factsSaved > 0 || result.episodesCreated > 0) && (options.force ? true : await isBackgroundFeatureEnabled('memoryConsolidation'))) {
             try {
                 const userId = String(config.allowedUserId);
                 const [schemas, sleep] = await Promise.all([
@@ -706,7 +706,7 @@ export async function getPersonalChatMemoryIndexStatus(): Promise<string> {
 
     const lines = [
         '📚 Фоновое изучение личных переписок',
-        `Статус: ${await isMaximumSavingsEnabled() ? 'приостановлено экономией бюджета (/budget)' : config.personalChatMemoryEnabled ? 'включено' : 'выключено'}`,
+        `Статус: ${!await isBackgroundFeatureEnabled('personalChatMemory') ? 'приостановлено настройками фона или бюджета' : 'включено'}`,
         `Чатов с watermark: ${chats.length}`,
         `Обработано сообщений: ${totals.messages}`,
         `Сохранено фактов: ${totals.facts}`,
@@ -729,13 +729,13 @@ export async function getPersonalChatMemoryIndexStatus(): Promise<string> {
 }
 
 async function runScheduledCycle(): Promise<void> {
-    if (await isMaximumSavingsEnabled()) return;
+    if (!await isBackgroundFeatureEnabled('personalChatMemory')) return;
     const result = await runPersonalChatMemoryIndexingCycle();
     console.log('[personal-chat-memory] cycle completed:', result);
 }
 
 export function startPersonalChatMemoryIndexer(): void {
-    if (!config.personalChatMemoryEnabled) return;
+
     if (timer) clearInterval(timer);
 
     timer = setInterval(() => {

@@ -21,7 +21,8 @@
         "supportsReasoningEffort": false,
         "supportsPromptCaching": true,
         "supportsOpenAiCompatibleTransport": true
-      }
+      },
+      "baseURLEnvKey": "OPENAI_BASE_URL"
     },
     "openrouter": {
       "id": "openrouter",
@@ -89,6 +90,32 @@
         "supportsThinkingMode": true,
         "supportsReasoningEffort": true,
         "supportsPromptCaching": true,
+        "supportsOpenAiCompatibleTransport": true
+      }
+    },
+    "lmstudio": {
+      "id": "lmstudio",
+      "label": "LM Studio",
+      "envKey": "LM_STUDIO_API_KEY",
+      "configurationEnvKey": "LM_STUDIO_MODEL",
+      "optionalApiKey": true,
+      "baseURLEnvKey": "LM_STUDIO_BASE_URL",
+      "baseURL": "http://host.docker.internal:1234/v1",
+      "monitoring": {
+        "kind": "openai-models",
+        "url": "http://host.docker.internal:1234/v1/models",
+        "auth": "bearer"
+      },
+      "capabilities": {
+        "supportsChatCompletions": true,
+        "supportsResponsesApi": false,
+        "supportsEmbedding": false,
+        "supportsTranscription": false,
+        "supportsVision": false,
+        "supportsFunctionCalling": true,
+        "supportsThinkingMode": false,
+        "supportsReasoningEffort": false,
+        "supportsPromptCaching": false,
         "supportsOpenAiCompatibleTransport": true
       }
     }

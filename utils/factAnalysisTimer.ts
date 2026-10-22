@@ -1,7 +1,7 @@
 import { BotContext } from '../types';
 import { extractAndSaveFactsFromConversation } from './enhancedFactExtraction';
 import { persistSessionNow } from '../services/SessionStorage';
-import { isMaximumSavingsEnabled } from '../services/budgetModeService';
+import { isBackgroundFeatureEnabled } from '../services/backgroundFeatureService';
 
 interface PendingAnalysis {
     /** Контекст нужен для доступа к ctx.session при отложенном анализе (session обновляется по ссылке при MemorySessionStorage) */
@@ -81,7 +81,7 @@ class FactAnalysisManager {
         }
 
         try {
-            if (await isMaximumSavingsEnabled()) return;
+            if (!await isBackgroundFeatureEnabled('deferredFacts')) return;
             console.log(`🧠 Запуск анализа фактов для ${userId}. Причина: ${reason}. Сообщений накоплено: ${analysis.messageCount}`);
             await extractAndSaveFactsFromConversation(
                 analysis.ctx,

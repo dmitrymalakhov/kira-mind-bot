@@ -26,6 +26,7 @@ const GENERATIVE_PROVIDER_LABELS: Readonly<Record<AiProvider, string>> = {
     gemini: 'Gemini',
     zai: 'GLM',
     openrouter: 'OpenRouter Auto',
+    lmstudio: 'LM Studio',
 };
 
 export interface PresetProviderCount {

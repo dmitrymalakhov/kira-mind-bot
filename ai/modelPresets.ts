@@ -6,7 +6,7 @@ import modelPresetRegistry from '../admin-panel/src/ai-model-presets.json';
  * Значение используется в task-aware резолвере, чтобы выбрать нужный клиент
  * и понять, требуется ли OpenAI fallback для API, которые пока не абстрагированы.
  */
-export type AiProvider = 'openai' | 'openrouter' | 'gemini' | 'zai';
+export type AiProvider = 'openai' | 'openrouter' | 'gemini' | 'zai' | 'lmstudio';
 
 /**
  * Ключ задачи, для которой подбирается модель из preset registry.
@@ -42,6 +42,9 @@ export type AiTaskKey =
 export interface AiModelRef {
     provider: AiProvider;
     model: string;
+    modelEnvKey?: string;
+    localRole?: import('./localModelRouting').LocalModelRole;
+    generation?: { maxTokens: number; reasoningEffort: 'none' | 'low' | 'medium' | 'high'; temperature?: number };
 }
 
 /**
@@ -58,7 +61,9 @@ export type AiPresetName =
     | 'hybrid-gemini-gpt'
     | 'gemini-full'
     | 'glm-full'
-    | 'glm-balanced';
+    | 'glm-balanced'
+    | 'lmstudio-local'
+    | 'hybrid-lmstudio-gpt';
 
 /**
  * Полная конфигурация одного AI preset-а.
@@ -109,6 +114,7 @@ export const aiPresets = registry.presets;
 const TRUE_FULL_AI_PRESETS = new Set<AiPresetName>([
     'gemini-full',
     'glm-full',
+    'lmstudio-local',
 ]);
 
 /** Готовый shortcut к preset-у `gpt-max`. */

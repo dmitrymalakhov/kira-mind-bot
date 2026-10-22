@@ -64,6 +64,7 @@ export interface AiProviderAdapter {
     createChatCompletion(
         model: string,
         params: ChatCompletionParamsWithoutModel,
+        generation?: AiModelRef['generation'],
     ): Promise<ChatCompletion>;
     createResponse(
         model: string,

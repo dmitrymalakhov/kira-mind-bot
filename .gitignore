@@ -15,6 +15,8 @@ docker-compose.override.yml
 # Environment variables
 .env
 .env.*
+!.env.example
+!.env.production.example
 .kira-admin-state
 
 # VS Code
@@ -32,3 +34,32 @@ personality.json
 # Local production backups
 backups/
 runtime-data/
+
+# Instance data, local tools and exports
+/data/
+/tmp/
+/temp/
+/handlers/temp/
+/coverage/
+/.codex/
+/.zcode/
+/.aws/
+/.ssh/
+*.dump
+*.snapshot
+*.sqlite
+*.sqlite3
+*.db
+*.tar.gz
+*.tgz
+*.bak
+*.pem
+*.key
+*.p12
+*.pfx
+*.session
+*.session-journal
+id_rsa
+id_ed25519
+known_hosts
+browser-credentials.json

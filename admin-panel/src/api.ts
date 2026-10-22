@@ -19,6 +19,7 @@ import type {
   RecurringTaskStatus,
 } from './types';
 import type { BudgetMode } from '../../ai/budgetMode';
+import type { BackgroundFeature, BackgroundFeatureState } from '../../ai/backgroundFeatures';
 
 export const AUTH_REQUIRED_EVENT = 'kira:auth-required';
 
@@ -71,6 +72,22 @@ export async function fetchBudgetMode(): Promise<{ mode: BudgetMode }> {
   const response = await apiFetch('/api/budget-mode');
   const body = await response.json();
   if (!response.ok) throw new Error(body.error || 'Не удалось загрузить режим бюджета');
+  return body;
+}
+
+export async function fetchBackgroundFeatures(): Promise<{ mode: BudgetMode; features: BackgroundFeatureState[] }> {
+  const response = await apiFetch('/api/background-features');
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || 'Не удалось загрузить фоновые функции');
+  return body;
+}
+
+export async function saveBackgroundFeature(feature: BackgroundFeature, enabled: boolean): Promise<{ message: string }> {
+  const response = await apiFetch('/api/background-features', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ feature, enabled }),
+  });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || 'Не удалось сохранить функцию');
   return body;
 }
 

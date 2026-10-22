@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { RUNTIME_DATA_DIR } from '../utils/runtimeData';
 
 interface SiteCredentials {
     login: string;
@@ -9,7 +10,7 @@ interface SiteCredentials {
 
 type CredStore = Record<string, SiteCredentials>; // ключ: `${userId}_${domain}`
 
-const CREDS_FILE = path.join(__dirname, '..', 'data', 'browser-credentials.json');
+const CREDS_FILE = path.join(RUNTIME_DATA_DIR, 'browser-credentials.json');
 const SECOND_LEVEL_PUBLIC_SUFFIXES = new Set([
     'co.uk', 'com.au', 'com.br', 'com.tr', 'com.ua', 'com.cn', 'com.hk',
     'co.jp', 'co.kr', 'co.nz', 'co.za', 'com.mx', 'com.sg', 'com.tw',
@@ -26,8 +27,9 @@ function readStore(): CredStore {
 }
 
 function writeStore(store: CredStore): void {
-    fs.mkdirSync(path.dirname(CREDS_FILE), { recursive: true });
-    fs.writeFileSync(CREDS_FILE, JSON.stringify(store, null, 2), 'utf8');
+    fs.mkdirSync(path.dirname(CREDS_FILE), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(CREDS_FILE, JSON.stringify(store, null, 2), { encoding: 'utf8', mode: 0o600 });
+    fs.chmodSync(CREDS_FILE, 0o600);
 }
 
 function storeKey(userId: number, domain: string): string {
@@ -100,7 +102,7 @@ export class BrowserCredentialService {
 
     /**
      * Пытается распознать сохранение учётных данных в тексте сообщения.
-     * Пример: «запомни мои данные для sport.ru: логин vasya@mail.ru, пароль qwerty123»
+     * Пример: «запомни мои данные для example.com: логин user@example.invalid, пароль example-password»
      * Если распознано — сохраняет и возвращает { domain, login }; иначе null.
      */
     static parseAndSave(userId: number, text: string): { domain: string; login: string } | null {

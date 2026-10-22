@@ -51,7 +51,7 @@ export interface ConfigSourceInfo {
   appliesImmediately?: boolean;
 }
 
-export type AiProvider = 'openai' | 'openrouter' | 'gemini' | 'zai';
+export type AiProvider = 'openai' | 'openrouter' | 'gemini' | 'zai' | 'lmstudio';
 export type AiPresetName =
   | 'gpt-max'
   | 'gpt-balanced'
@@ -60,11 +60,14 @@ export type AiPresetName =
   | 'hybrid-gemini-gpt'
   | 'gemini-full'
   | 'glm-full'
-  | 'glm-balanced';
+  | 'glm-balanced'
+  | 'lmstudio-local'
+  | 'hybrid-lmstudio-gpt';
 
 export interface AiModelRef {
   provider: AiProvider;
   model: string;
+  modelEnvKey?: string;
 }
 
 export interface AiPresetConfig {

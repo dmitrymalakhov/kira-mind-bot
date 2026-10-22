@@ -1,0 +1,42 @@
+# docker compose -f docker-compose.server.yml -f docker-compose.local.yml …
+services:
+  lmrouter-tunnel:
+    profiles: [lmrouter]
+    build:
+      context: .
+      dockerfile: scripts/ops/lmrouter-tunnel.Dockerfile
+    restart: unless-stopped
+    environment:
+      LMROUTER_SSH_HOST: ${LMROUTER_SSH_HOST:-}
+      LMROUTER_SSH_USER: ${LMROUTER_SSH_USER:-root}
+    volumes:
+      - ./runtime-data/lmrouter-ssh:/run/ssh:ro
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --max-time, '5', http://127.0.0.1:8080/readyz]
+      interval: 15s
+      timeout: 7s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+  qdrant:
+    image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.17.1}
+  kira-mind-bot:
+    depends_on:
+      lmrouter-tunnel:
+        condition: service_healthy
+        required: false
+    extra_hosts:
+      - host.docker.internal:host-gateway
+  admin-panel:
+    depends_on:
+      lmrouter-tunnel:
+        condition: service_healthy
+        required: false
+    ports: !override
+      - "127.0.0.1:${ADMIN_PORT:-8649}:3000"
+    extra_hosts:
+      - host.docker.internal:host-gateway

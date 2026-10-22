@@ -21,24 +21,24 @@ async function main() {
         const text = "А ты что думаешь? @KiraMindBot";
 
         pushGroupChatMessage(chatId, {
-            senderName: "OuroborosWithLove",
-            text: "Наказание должно быть банковское, бюрократическое и максимально безболезненное.",
+            senderName: "SyntheticHelperBot",
+            text: "Для синтетического проекта нужен короткий план и понятные сроки.",
             date: new Date(),
             messageId: 10,
             senderId: 100,
             isBot: true,
         });
         pushGroupChatMessage(chatId, {
-            senderName: "Дим",
+            senderName: "Тестовый участник",
             text,
             date: new Date(),
             messageId: 11,
-            senderId: 92174505,
+            senderId: 100001,
         });
 
         const ctx: any = {
             chat: { id: chatId, type: "supergroup" },
-            from: { id: 92174505, first_name: "Дим" },
+            from: { id: 100001, first_name: "Тестовый участник" },
             message: {
                 message_id: 11,
                 text,
@@ -51,8 +51,8 @@ async function main() {
         assert.equal(snapshot.isGroupChat, true);
         assert.equal(snapshot.isContextDependent, true);
         assert(snapshot.triggerReasons.includes("mention"));
-        assert(snapshot.promptBlock.includes("OuroborosWithLove (бот)"));
-        assert(snapshot.promptBlock.includes("банковское"));
+        assert(snapshot.promptBlock.includes("SyntheticHelperBot (бот)"));
+        assert(snapshot.promptBlock.includes("синтетического проекта"));
         assert(!snapshot.recentMessages.some(m => m.messageId === 11));
     }
 

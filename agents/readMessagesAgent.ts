@@ -28,6 +28,7 @@ import {
 import { resolveRelationshipFromMemory } from "../utils/resolveRelationshipFromMemory";
 import { runUpdateLongTermMemoryAgent } from "./updateLongTermMemoryAgent";
 import { queueMessage as queueForReflection, markChatAsBot } from "../services/reflectionModeService";
+import { isBackgroundFeatureEnabled } from '../services/backgroundFeatureService';
 import { ChatGroupRepository } from "../services/ChatGroupRepository";
 import { persistSessionNow } from "../services/SessionStorage";
 import { createIncomingTelegramQueue, type IncomingTelegramQueueJob } from "../services/IncomingTelegramQueue";
@@ -365,6 +366,10 @@ function handleIncomingMessageEvent(event: { message?: TelegramMessageLike; isPr
 }
 
 async function processIncomingTelegramMessage(job: IncomingTelegramQueueJob<TelegramMessageLike>): Promise<void> {
+    if (!await isBackgroundFeatureEnabled('telegramReading')) {
+        messageStore.removeMessage(String(job.chatId), job.message.id);
+        return;
+    }
     const message = job.message;
     const chatId = job.chatId;
     const senderId = getTelegramMessageSenderId(message);
@@ -405,7 +410,7 @@ async function processIncomingTelegramMessage(job: IncomingTelegramQueueJob<Tele
     messageStore.addMessage(String(chatId), storedMessage);
 
     if (storedMessage.text) {
-        queueForReflection(String(chatId), senderName, storedMessage.text, storedMessage.date, false, storedMessage.id, {
+        await queueForReflection(String(chatId), senderName, storedMessage.text, storedMessage.date, false, storedMessage.id, {
             isForwarded: storedMessage.isForwarded,
             forwardSource: storedMessage.forwardSource,
         });
@@ -546,8 +551,9 @@ async function forwardReplyToOwner(
  * Сохраняет их в MessageStore и добавляет в очередь рефлексии, разделяя
  * переносчика и исходного автора у пересланных сообщений.
  */
-function handleOutgoingMessage(event: { message?: TelegramMessageLike; isPrivate?: boolean }): void {
+async function handleOutgoingMessage(event: { message?: TelegramMessageLike; isPrivate?: boolean }): Promise<void> {
     try {
+        if (!await isBackgroundFeatureEnabled('telegramReading')) return;
         const message = event.message;
         if (!event.isPrivate || !message || !message.chatId) return;
 
@@ -575,7 +581,7 @@ function handleOutgoingMessage(event: { message?: TelegramMessageLike; isPrivate
 
         messageStore.addMessage(String(chatId), storedMessage);
 
-        queueForReflection(String(chatId), ownerName, text, date, true, storedMessage.id, {
+        await queueForReflection(String(chatId), ownerName, text, date, true, storedMessage.id, {
             isForwarded,
             forwardSource,
         });

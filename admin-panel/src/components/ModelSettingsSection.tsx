@@ -1,26 +1,16 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
 import {
-  Alert,
-  Box,
-  Button,
-  Card,
-  CardContent,
-  CardHeader,
-  Chip,
-  CircularProgress,
-  Divider,
-  Grid,
-  MenuItem,
-  Stack,
-  TextField,
-  Typography,
+  Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Card,
+  CardContent, Chip, CircularProgress, MenuItem, Stack, TextField, Typography,
 } from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import SaveIcon from '@mui/icons-material/Save';
-import { formatGenerativeUsageSummary, formatServiceSummary } from '../../../ai/presetSummary';
 import { fetchAiPreset, saveAiPreset } from '../api';
-import type { AiModelRef, AiPresetConfig, AiPresetName, AiPresetResponse, ConfigResponse } from '../types';
+import type { AiModelRef, AiPresetName, AiPresetResponse, ConfigResponse } from '../types';
 import type { ConfigSectionHandle } from './ConfigSection';
 import { BudgetSettingsSection } from './BudgetSettingsSection';
+import { getAiProviderDescriptor } from '../../../ai/providerMetadata';
+import { LocalModelSettings } from './LocalModelSettings';
 
 interface Props {
   config: ConfigResponse;
@@ -28,350 +18,134 @@ interface Props {
   onToast: (message: string, severity: 'success' | 'error') => void;
 }
 
-const CRITICAL_TASK_KEYS = new Set([
-  'complexReasoning',
-  'intentClassification',
-  'memoryExtraction',
-  'browserPlanning',
-  'webSearchReasoning',
-]);
-
-function getProviderLabel(provider: string): string {
-  switch (provider) {
-    case 'openai':
-      return 'GPT';
-    case 'openrouter':
-      return 'OpenRouter Auto';
-    case 'gemini':
-      return 'Gemini';
-    case 'zai':
-      return 'GLM';
-    default:
-      return provider;
-  }
-}
-
-function getPresetTitle(data: AiPresetResponse | null, presetName: AiPresetName | null | undefined): string {
-  if (!data || !presetName) return 'Не определён';
-  return data.availablePresets.find((preset) => preset.name === presetName)?.title ?? presetName;
-}
-
-function ActivePresetStatus({ data }: { data: AiPresetResponse | null }) {
-  if (!data) return null;
-
-  const configuredPresetTitle = getPresetTitle(data, data.configuredPresetName);
-  const basePresetTitle = getPresetTitle(data, data.envDefaultPreset);
-
-  return (
-    <Alert
-      severity={data.hasRuntimeOverride ? 'info' : 'success'}
-      variant="outlined"
-      sx={{
-        alignItems: 'flex-start',
-        '& .MuiAlert-message': { width: '100%' },
-      }}
-    >
-      <Stack spacing={0.75}>
-        <Typography variant="body2">
-          Сохранённый preset: <b>{configuredPresetTitle}</b>
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Базовое значение: <b>{basePresetTitle}</b>
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          {data.activeSourceSummary}
-        </Typography>
-        <Typography variant="caption" color="text.disabled">
-          Технический источник: {data.activeSourceTechnicalPath}
-        </Typography>
-      </Stack>
-    </Alert>
-  );
-}
-
-function MemoryProfileStatus({ data }: { data: AiPresetResponse | null }) {
-  if (!data) return null;
-
-  const profile = data.memoryEmbeddingProfile;
-  const compatibilitySeverity = profile.compatibility.status === 'mismatch'
-    ? 'error'
-    : profile.compatibility.status === 'unavailable'
-      ? 'warning'
-    : profile.providerKeyConfigured
-      ? 'info'
-      : 'warning';
-
-  return (
-    <Alert
-      severity={compatibilitySeverity}
-      variant="outlined"
-      sx={{
-        alignItems: 'flex-start',
-        '& .MuiAlert-message': { width: '100%' },
-      }}
-    >
-      <Stack spacing={0.75}>
-        <Typography variant="body2">
-          Память использует отдельный profile: <b>{profile.title}</b> ({profile.provider}:{profile.model}, {profile.outputDimension}d, {profile.distance})
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          Переключение AI preset влияет на генерацию, но не меняет memory embeddings и не должно ломать Qdrant-коллекции.
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          {profile.activeSourceSummary}
-        </Typography>
-        <Typography variant="body2" color={profile.providerKeyConfigured ? 'text.secondary' : 'warning.main'}>
-          {profile.providerAvailabilitySummary}
-        </Typography>
-        <Typography variant="body2" color={profile.compatibility.status === 'mismatch' ? 'error.main' : 'text.secondary'}>
-          {profile.compatibility.summary}
-        </Typography>
-      </Stack>
-    </Alert>
-  );
-}
-
-function compareModels(left: AiModelRef, right: AiModelRef): boolean {
-  return left.provider === right.provider && left.model === right.model;
+const TASK_LABELS: Record<string, string> = {
+  conversation: 'Обычный диалог', complexReasoning: 'Сложные ответы',
+  defaultText: 'Повседневный текст', lightweightText: 'Короткие проверки',
+  intentClassification: 'Понимание запроса', intentDedup: 'Проверка повторов',
+  memoryExtraction: 'Извлечение фактов', memoryConsolidation: 'Упорядочивание памяти',
+  messageAnalysis: 'Анализ сообщений', webSearchReasoning: 'Веб-поиск',
+  browserPlanning: 'Планирование в браузере', browserVision: 'Распознавание экрана',
+  embedding: 'Векторы памяти', transcription: 'Распознавание голоса',
+};
+function modelLabel(ref?: AiModelRef) {
+  return ref ? `${getAiProviderDescriptor(ref.provider).label} · ${ref.model}` : 'Не определена';
 }
 
 export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
   function ModelSettingsSection({ onToast }, ref) {
-    const [aiPresetData, setAiPresetData] = useState<AiPresetResponse | null>(null);
-    const [selectedAiPreset, setSelectedAiPreset] = useState<AiPresetName>('gpt-balanced');
-    const [savingAiPreset, setSavingAiPreset] = useState(false);
+    const [data, setData] = useState<AiPresetResponse | null>(null);
+    const [selected, setSelected] = useState<AiPresetName>('gpt-balanced');
     const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
+    const [showLocalModels, setShowLocalModels] = useState(false);
+    useImperativeHandle(ref, () => ({ getUpdates: () => ({}) }));
 
-    useImperativeHandle(ref, () => ({
-      getUpdates() {
-        return {};
-      },
-    }));
-
-    const loadAiPreset = async () => {
+    async function load() {
       setLoading(true);
       try {
-        const response = await fetchAiPreset();
-        setAiPresetData(response);
-        setSelectedAiPreset(response.configuredPresetName);
+        const result = await fetchAiPreset();
+        setData(result);
+        setSelected(result.configuredPresetName);
       } catch {
-        setAiPresetData(null);
-        onToast('Не удалось загрузить AI preset', 'error');
-      } finally {
-        setLoading(false);
-      }
-    };
+        onToast('Не удалось загрузить модель Киры', 'error');
+      } finally { setLoading(false); }
+    }
+    useEffect(() => { void load(); }, []);
 
-    useEffect(() => {
-      void loadAiPreset();
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    const active = data?.availablePresets.find(preset => preset.name === data.configuredPresetName);
+    const preview = data?.availablePresets.find(preset => preset.name === selected);
+    const changed = selected !== data?.configuredPresetName;
 
-    const activeAiPreset = useMemo(
-      () => aiPresetData?.availablePresets.find((preset) => preset.name === selectedAiPreset) ?? null,
-      [aiPresetData, selectedAiPreset]
-    );
-
-    const configuredAiPreset = useMemo(
-      () => aiPresetData?.availablePresets.find((preset) => preset.name === aiPresetData.configuredPresetName) ?? null,
-      [aiPresetData]
-    );
-
-    const presetDiff = useMemo(() => {
-      if (!activeAiPreset || !configuredAiPreset) return [];
-
-      return Object.entries(activeAiPreset.models)
-        .filter(([taskKey, modelRef]) => {
-          const previousModel = configuredAiPreset.models[taskKey];
-          return previousModel ? !compareModels(previousModel, modelRef) : true;
-        })
-        .map(([taskKey, modelRef]) => ({
-          taskKey,
-          next: modelRef,
-          previous: configuredAiPreset.models[taskKey],
-          critical: CRITICAL_TASK_KEYS.has(taskKey),
-        }));
-    }, [activeAiPreset, configuredAiPreset]);
-
-    const criticalDiffs = useMemo(
-      () => presetDiff.filter((item) => item.critical),
-      [presetDiff]
-    );
-
-    const handleAiPresetSave = async () => {
-      if (criticalDiffs.length > 0) {
-        const confirmationText = [
-          'Изменяются критичные задачи:',
-          ...criticalDiffs.map((item) => `${item.taskKey}: ${getProviderLabel(item.previous?.provider || '—')} ${item.previous?.model || '—'} -> ${getProviderLabel(item.next.provider)} ${item.next.model}`),
-          '',
-          'Подтвердить переключение preset?',
-        ].join('\n');
-
-        if (!window.confirm(confirmationText)) {
-          return;
-        }
-      }
-
-      setSavingAiPreset(true);
+    async function save() {
+      setSaving(true);
       try {
-        const result = await saveAiPreset(selectedAiPreset);
-        if (!result.success) {
-          onToast(result.error || 'Ошибка сохранения AI preset', 'error');
-          return;
-        }
-        await loadAiPreset();
-        onToast(result.message || 'AI preset сохранён', 'success');
-      } catch {
-        onToast('Ошибка соединения', 'error');
-      } finally {
-        setSavingAiPreset(false);
-      }
-    };
+        const result = await saveAiPreset(selected);
+        if (!result.success) throw new Error(result.error || 'Не удалось сохранить модель');
+        await load();
+        onToast('Модель сохранена. Кира подхватит выбор в течение 5 секунд.', 'success');
+      } catch (error) {
+        onToast(error instanceof Error ? error.message : 'Ошибка соединения', 'error');
+      } finally { setSaving(false); }
+    }
 
     return (
       <>
-      <BudgetSettingsSection onToast={onToast} />
-      <Card id="model-presets" sx={{ mb: 2 }}>
-        <CardHeader
-          title="🧩 AI Presets"
-          titleTypographyProps={{ variant: 'subtitle1', fontWeight: 600, color: 'secondary.main' }}
-          sx={{ pb: 0 }}
-        />
-        <CardContent>
-          <Stack spacing={2}>
-            <Box sx={{ p: 2, border: '1px solid', borderColor: 'primary.dark', borderRadius: 1.5, bgcolor: 'rgba(37, 99, 235, 0.08)' }}>
-              <Stack spacing={1.5}>
-                <MemoryProfileStatus data={aiPresetData} />
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', sm: 'center' }}>
-                  <TextField
-                    select
-                    label="Активный AI preset"
-                    value={selectedAiPreset}
-                    onChange={(event) => setSelectedAiPreset(event.target.value as AiPresetName)}
-                    helperText="Базовое значение берётся из env/default. Сохранение обновляет runtime-настройку, которую бот подхватывает без перезапуска."
-                    sx={{ flex: 1 }}
-                    disabled={loading || !aiPresetData}
-                  >
-                    {(aiPresetData?.availablePresets ?? []).map((preset: AiPresetConfig) => (
-                      <MenuItem key={preset.name} value={preset.name} disabled={preset.enabled === false}>
-                        {preset.title}{preset.enabled === false ? ' · недоступен' : ''}
-                      </MenuItem>
-                    ))}
-                  </TextField>
-                  <Button
-                    variant="contained"
-                    onClick={handleAiPresetSave}
-                    disabled={loading || savingAiPreset || !aiPresetData || selectedAiPreset === aiPresetData.configuredPresetName || activeAiPreset?.enabled === false}
-                    startIcon={savingAiPreset ? <CircularProgress size={14} color="inherit" /> : <SaveIcon fontSize="small" />}
-                  >
-                    Применить
-                  </Button>
-                </Stack>
-
-                {activeAiPreset && (
-                  <>
-                    <Typography variant="body2" color="text.secondary">
-                      {activeAiPreset.description}
-                    </Typography>
-                    {activeAiPreset.enabled === false && activeAiPreset.unavailableReason && (
-                      <Typography variant="body2" color="error.main">
-                        {activeAiPreset.unavailableReason}
-                      </Typography>
-                    )}
-
-                    <Stack direction="row" spacing={1} flexWrap="wrap">
-                      <Chip
-                        size="small"
-                        color={selectedAiPreset === aiPresetData?.configuredPresetName ? 'success' : 'warning'}
-                        label={selectedAiPreset === aiPresetData?.configuredPresetName ? 'Совпадает с сохранённым значением' : 'Есть несохранённое изменение'}
-                      />
-                      <Chip
-                        size="small"
-                        variant="outlined"
-                        label={aiPresetData?.hasRuntimeOverride ? 'Переопределено в админке' : 'Используется базовое значение'}
-                      />
-                      {activeAiPreset.enabled === false && (
-                        <Chip size="small" color="error" variant="outlined" label="Недоступен без API ключей" />
-                      )}
-                      <Chip size="small" variant="outlined" label={`LLM: ${formatGenerativeUsageSummary(activeAiPreset.models)}`} />
-                      <Chip size="small" variant="outlined" label={`Сервисы: ${formatServiceSummary(activeAiPreset.models)}`} />
-                    </Stack>
-
-                    {activeAiPreset.characteristics && (
-                      <Stack direction="row" spacing={1} flexWrap="wrap">
-                        <Chip size="small" color="primary" variant="outlined" label={`Качество: ${activeAiPreset.characteristics.quality}`} />
-                        <Chip size="small" color="primary" variant="outlined" label={`Стоимость: ${activeAiPreset.characteristics.cost}`} />
-                        <Chip size="small" color="primary" variant="outlined" label={`Стабильность: ${activeAiPreset.characteristics.stability}`} />
-                        <Chip size="small" color="primary" variant="outlined" label={`Зависимость от GPT: ${activeAiPreset.characteristics.gptDependency}`} />
-                      </Stack>
-                    )}
-
-                    <Divider />
-
-                    <Box>
-                      <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1 }}>
-                        Diff c сохранённым preset
-                      </Typography>
-                      {presetDiff.length === 0 ? (
-                        <Typography variant="body2" color="text.secondary">
-                          Изменений по task mapping нет.
-                        </Typography>
-                      ) : (
-                        <Stack spacing={0.75}>
-                          {presetDiff.map((item) => (
-                            <Box
-                              key={item.taskKey}
-                              sx={{
-                                p: 1,
-                                borderRadius: 1.25,
-                                border: '1px solid',
-                                borderColor: item.critical ? 'warning.main' : 'divider',
-                                bgcolor: item.critical ? 'rgba(245, 158, 11, 0.10)' : 'rgba(15, 23, 42, 0.18)',
-                              }}
-                            >
-                              <Typography variant="caption" color={item.critical ? 'warning.light' : 'text.secondary'}>
-                                {item.critical ? 'Критичная задача' : 'Обычная задача'}
-                              </Typography>
-                              <Typography variant="body2">
-                                <b>{item.taskKey}</b>: {getProviderLabel(item.previous?.provider || '—')} · {item.previous?.model || '—'} → {getProviderLabel(item.next.provider)} · {item.next.model}
-                              </Typography>
-                            </Box>
-                          ))}
-                        </Stack>
-                      )}
-                    </Box>
-
-                    <Grid container spacing={1}>
-                      {Object.entries(activeAiPreset.models).map(([taskKey, modelRef]) => (
-                        <Grid item xs={12} sm={6} md={4} key={taskKey}>
-                          <Box
-                            sx={{
-                              p: 1,
-                              height: '100%',
-                              borderRadius: 1.25,
-                              border: '1px solid',
-                              borderColor: CRITICAL_TASK_KEYS.has(taskKey) ? 'warning.main' : 'divider',
-                              bgcolor: CRITICAL_TASK_KEYS.has(taskKey) ? 'rgba(245, 158, 11, 0.08)' : 'rgba(15, 23, 42, 0.12)',
-                            }}
-                          >
-                            <Typography variant="caption" color="text.secondary" component="div">
-                              {taskKey}
-                            </Typography>
-                            <Typography variant="body2">
-                              <b>{getProviderLabel(modelRef.provider)}</b> · {modelRef.model}
-                            </Typography>
-                          </Box>
-                        </Grid>
-                      ))}
-                    </Grid>
-                  </>
-                )}
-                <ActivePresetStatus data={aiPresetData} />
+        <Card id="model-presets" sx={{ mb: 2 }}>
+          <CardContent>
+            <Stack spacing={2}>
+              <Typography variant="subtitle1" component="h2" fontWeight={600}>Модель общения Киры</Typography>
+              {active && (
+                <Alert severity="success">
+                  <Typography variant="body2">Сейчас Кира отвечает: <b>{modelLabel(active.models.conversation)}</b></Typography>
+                  <Typography variant="body2">Сложные запросы: <b>{modelLabel(active.models.complexReasoning)}</b></Typography>
+                </Alert>
+              )}
+              <Typography variant="body2" color="text.secondary">
+                Выберите профиль и нажмите «Применить». Профиль задаёт модели для общения и служебных задач.
+                Самостоятельные фоновые функции включаются отдельно ниже.
+              </Typography>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', sm: 'flex-start' }}>
+                <TextField
+                  select fullWidth label="Модель и режим работы" value={selected}
+                  onChange={event => setSelected(event.target.value as AiPresetName)}
+                  disabled={loading || saving || !data}
+                  helperText="GPT работает через настроенный lmrouter. LM Studio использует модель на вашем компьютере. Гибрид сочетает оба варианта."
+                >
+                  {(data?.availablePresets ?? []).map(preset => (
+                    <MenuItem key={preset.name} value={preset.name} disabled={!preset.enabled}>
+                      {preset.title}{!preset.enabled ? ' · не настроен' : ''}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <Button variant="contained" onClick={() => void save()}
+                  disabled={loading || saving || !changed || !preview?.enabled}
+                  startIcon={saving ? <CircularProgress size={14} color="inherit" /> : <SaveIcon />}
+                >Применить</Button>
               </Stack>
-            </Box>
-          </Stack>
-        </CardContent>
-      </Card>
+              {preview && (
+                <>
+                  <Stack direction="row" spacing={1} flexWrap="wrap">
+                    <Chip size="small" color={changed ? 'warning' : 'success'} label={changed ? 'Предпросмотр — нажмите «Применить»' : 'Этот профиль сохранён'} />
+                  </Stack>
+                  <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
+                    {(['conversation', 'complexReasoning'] as const).map(task => (
+                      <Box key={task} sx={{ flex: 1, p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                        <Typography variant="caption" color="text.secondary">{TASK_LABELS[task]}</Typography>
+                        <Typography variant="body2" fontWeight={600}>{modelLabel(preview.models[task])}</Typography>
+                      </Box>
+                    ))}
+                  </Stack>
+                  <Typography variant="body2" color="text.secondary">{preview.description}</Typography>
+                  {!preview.enabled && <Alert severity="warning">{preview.unavailableReason}</Alert>}
+                  <Accordion disableGutters sx={{ bgcolor: 'transparent', '&:before': { display: 'none' } }}>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Typography variant="body2">Модели по задачам и профиль памяти</Typography>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Stack spacing={1}>
+                        {data && <Alert severity={data.memoryEmbeddingProfile.compatibility.status === 'mismatch' ? 'error' : 'info'}>
+                          Память: {data.memoryEmbeddingProfile.title} · {data.memoryEmbeddingProfile.model}. {data.memoryEmbeddingProfile.compatibility.summary}
+                          {' '}Смена профиля общения не меняет сохранённые векторы памяти.
+                        </Alert>}
+                        {Object.entries(preview.models).map(([task, model]) => (
+                          <Typography key={task} variant="body2"><b>{TASK_LABELS[task] || task}:</b> {modelLabel(model)}</Typography>
+                        ))}
+                      </Stack>
+                    </AccordionDetails>
+                  </Accordion>
+                </>
+              )}
+              {loading && <CircularProgress size={20} aria-label="Загрузка модели" />}
+              {(selected === 'lmstudio-local' || selected === 'hybrid-lmstudio-gpt')
+                ? <LocalModelSettings onToast={onToast} onSaved={() => void load()} />
+                : <Accordion expanded={showLocalModels} onChange={(_, expanded) => setShowLocalModels(expanded)}>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography variant="body2">Настроить локальные модели LM Studio</Typography></AccordionSummary>
+                    <AccordionDetails>{showLocalModels && <LocalModelSettings onToast={onToast} onSaved={() => void load()} />}</AccordionDetails>
+                  </Accordion>}
+            </Stack>
+          </CardContent>
+        </Card>
+        <BudgetSettingsSection onToast={onToast} />
       </>
     );
   }

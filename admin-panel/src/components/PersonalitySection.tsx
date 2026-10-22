@@ -141,7 +141,7 @@ function ProfileEditor({ icon, title, values, onChange, onSave, saving }: Profil
               value={values.userBirthDate}
               onChange={(e) => onChange('userBirthDate', e.target.value)}
               fullWidth
-              placeholder="16.07.1988"
+              placeholder="ДД.ММ.ГГГГ"
               helperText="Формат: ДД.ММ.ГГГГ"
               FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px' } }}
             />

@@ -11,10 +11,22 @@ export function buildAssistantLifeContext(
   recentSelfEvents: SelfEventList,
   relevantSelfEvents: SelfEventList,
   currentDate: Date,
+    options: { compact?: boolean } = {},
 ): string {
   if (!selfState) {
     return "";
   }
+
+    // A self-contained greeting or general question needs current tone, not
+    // the entire evolving personality archive and every active life thread.
+    if (options.compact) {
+        return [
+            `Текущее настроение: ${selfState.mood}.`,
+            recentSelfEvents[0] ? `Недавнее событие твоей жизни: ${recentSelfEvents[0].description.slice(0, 320)}` : '',
+            selfState.recentThoughts[0] ? `Недавняя мысль: ${selfState.recentThoughts[0].slice(0, 160)}` : '',
+            'Не придумывай дополнительные события своей жизни.',
+        ].filter(Boolean).join('\n');
+    }
 
   function relativeTimeLabel(dateStr: string): string {
     const now = currentDate;

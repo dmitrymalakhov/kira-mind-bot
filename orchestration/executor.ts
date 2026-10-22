@@ -429,11 +429,13 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
 
     /** Контекст из долговременной памяти: либо передан оркестратором, либо донасыщаем здесь. */
     let enrichedContextFromMemory = passedContext ?? '';
-    if (enrichedContextFromMemory === '') {
+    if (passedContext === undefined) {
         // Параллельно загружаем память и резолвим роль из сообщения
         const [initialMemory, roleInMessage] = await Promise.all([
-            fetchAgentMemoryContext(ctx, message),
-            detectRelationshipInMessage(message),
+            fetchAgentMemoryContext(ctx, message, { memoryNeed: classification.details?.memoryNeed }),
+            classification.details?.relationshipRole !== undefined
+                ? Promise.resolve(classification.details.relationshipRole)
+                : detectRelationshipInMessage(message),
         ]);
         const initialBlock = buildMemoryContextBlock(initialMemory);
         if (initialBlock) enrichedContextFromMemory = initialBlock + '\n\n';
@@ -561,9 +563,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
                         return summaryResult;
                     }
                 }
-                const sharedMemoryContext = enrichedContextFromMemory.trim()
-                    ? { domain: 'personal' as const, context: enrichedContextFromMemory.trim() }
-                    : await fetchAgentMemoryContext(ctx, message).then((m) => ({ domain: m.domain as 'personal', context: m.context }));
+                const sharedMemoryContext = { domain: 'personal', context: enrichedContextFromMemory.trim() };
                 const conv = await safeStep('conversation', () => conversationAgent(
                     ctx, message, isForwarded, forwardFrom, messageHistory, classification, sharedMemoryContext
                 ));
@@ -779,9 +779,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
     // План выполнен, но ни один шаг не вернул ответ (только memory/resolveContact). Логируем и пробуем conversation как fallback.
     const stepIds = steps.map((s) => s.agentId);
     console.warn('[ORCH] executor: no response from plan steps:', stepIds.join(' → '), '| fallback to conversation');
-    const sharedMemoryContext = enrichedContextFromMemory.trim()
-        ? { domain: 'personal' as const, context: enrichedContextFromMemory.trim() }
-        : await fetchAgentMemoryContext(ctx, message).then((m) => ({ domain: m.domain as 'personal', context: m.context }));
+    const sharedMemoryContext = { domain: 'personal', context: enrichedContextFromMemory.trim() };
     const conv = await conversationAgent(
         ctx,
         message,

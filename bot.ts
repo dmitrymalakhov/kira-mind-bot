@@ -15,6 +15,7 @@ import { isBotMentioned, isMessageReplyToBot } from "./utils/groupChatContext";
 import { GroupChatMessageRepository } from "./services/GroupChatMessageRepository";
 import { isGroupChatContextEnabled, isGroupReplyToBotEnabled } from "./services/groupChatFeatureSettings";
 import { getForwardedMessageInfo } from "./utils/forwardedMessage";
+import { resolveRuntimeIdentity } from './utils/runtimeIdentity';
 
 const DISMISSAL_VARIANTS = [
   "занята важными делами",
@@ -73,7 +74,6 @@ function ensureConfigLoaded() {
     console.log("- botToken exists:", !!config.botToken);
     console.log("- botToken length:", config.botToken?.length || 0);
     console.log("- characterName:", config.characterName);
-    console.log("- allowedUserId:", config.allowedUserId);
 
     if (!config.botToken) {
       throw new Error("Config loaded but botToken is empty!");
@@ -96,7 +96,7 @@ function ensureConfigLoaded() {
     return {
       botToken,
       characterName: "Кира",
-      allowedUserId: 92174505,
+      allowedUserId: resolveRuntimeIdentity(process.env).allowedUserId,
       openAiApiKey: process.env.OPENAI_API_KEY || "",
     };
   }
@@ -134,15 +134,6 @@ export function createBot() {
   console.log("ASSISTANT_PROFILE:", process.env.ASSISTANT_PROFILE);
   console.log("KIRA_BOT_TOKEN exists:", !!process.env.KIRA_BOT_TOKEN);
 
-  // Маскируем токены для безопасности
-  const maskToken = (token: string) => {
-    if (!token) return "EMPTY";
-    if (token.length < 10) return "TOO_SHORT";
-    return `${token.substring(0, 4)}...${token.substring(token.length - 4)}`;
-  };
-
-  console.log("KIRA_BOT_TOKEN value:", maskToken(process.env.KIRA_BOT_TOKEN || ""));
-  console.log("config.botToken:", maskToken(config.botToken));
   console.log("config object keys:", Object.keys(config));
   console.log("config.characterName:", config.characterName);
   console.log("config.botUsername:", config.botUsername);
@@ -153,7 +144,6 @@ export function createBot() {
     console.error("Config summary:", JSON.stringify({
       characterName: config.characterName,
       botUsername: config.botUsername,
-      allowedUserId: config.allowedUserId,
       botTokenExists: Boolean(config.botToken),
       openAiApiKeyExists: Boolean(config.openAiApiKey),
     }, null, 2));
@@ -165,7 +155,7 @@ export function createBot() {
     // Попробуем использовать токен напрямую из env
     const directToken = process.env.KIRA_BOT_TOKEN;
 
-    console.error("Попытка использовать токен напрямую:", maskToken(directToken || ""));
+    console.error("Токен напрямую из env настроен:", Boolean(directToken));
 
     if (directToken) {
       console.log("✅ Найден токен напрямую из env, используем его");
@@ -233,7 +223,7 @@ function setupBot(bot: Bot<BotContext>, config: any) {
         return;
       }
 
-      const botUsername = config.botUsername.toLowerCase();
+      const botUsername = (ctx.me?.username || config.botUsername || '').toLowerCase();
 
       // Сохраняем групповые сообщения только если явно включён групповой контекст.
       const groupChatContextEnabled = await isGroupChatContextEnabled();

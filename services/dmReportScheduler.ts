@@ -1,3 +1,4 @@
+import { isBackgroundFeatureEnabled } from './backgroundFeatureService';
 import * as fs from "fs/promises";
 import * as path from "path";
 import { Bot } from "grammy";
@@ -149,6 +150,7 @@ async function runCycle(bot: Bot<BotContext>): Promise<void> {
   if (isRunning) return;
   isRunning = true;
   try {
+    if (!await isBackgroundFeatureEnabled('dmReport')) return;
     const now = new Date();
     if (inQuietHours(now)) return;
 
@@ -185,7 +187,7 @@ async function runCycle(bot: Bot<BotContext>): Promise<void> {
 }
 
 export function startDmReportScheduler(bot: Bot<BotContext>): void {
-  if (getActiveBotProfile() !== "KiraMindBot" || !config.dmReportEnabled) return;
+  if (getActiveBotProfile() !== "KiraMindBot") return;
   if (timer) clearInterval(timer);
   timer = setInterval(() => void runCycle(bot), CHECK_INTERVAL_MS);
   setTimeout(() => void runCycle(bot), 30_000);

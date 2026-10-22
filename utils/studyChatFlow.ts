@@ -78,7 +78,7 @@ export function formatConversation(
         // принадлежит автору исходного сообщения. Forward никогда не должен
         // становиться репликой владельца или доказательством его факта.
         const isForwarded = Boolean((msg as Api.Message & { fwdFrom?: unknown }).fwdFrom);
-        const carrierIsOwn = Boolean(msg.out || fromId === ownerId);
+        const carrierIsOwn = Boolean(msg.out || (ownerId && fromId === ownerId));
         const isOwn = !isForwarded && carrierIsOwn;
         const sender = isForwarded
             ? `${carrierIsOwn ? 'Я' : contactName} (переслал сообщение от ${getGramJsForwardSource((msg as Api.Message & { fwdFrom?: unknown }).fwdFrom)})`

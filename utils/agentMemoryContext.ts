@@ -10,6 +10,7 @@ export interface AgentMemoryContext {
 }
 
 export interface AgentMemoryContextOptions {
+    memoryNeed?: 'none' | 'light' | 'full';
     /** Детерминированная дневная сводка строит snapshot отдельно и не должна читать его дважды. */
     includeTodayImportance?: boolean;
 }
@@ -36,7 +37,8 @@ export async function fetchAgentMemoryContext(
     }
 
     // Классифицируем потребность в памяти до запуска тяжёлого retrieval
-    const memoryNeed = await classifyMemoryNeed(trimmed);
+    const memoryNeed = options.memoryNeed && ['none', 'light', 'full'].includes(options.memoryNeed)
+        ? options.memoryNeed : await classifyMemoryNeed(trimmed);
     if (memoryNeed === 'none') {
         devLog('Memory need: none — skipping retrieval for this message');
         return { domain: 'personal', context: '' };

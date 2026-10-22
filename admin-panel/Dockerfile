@@ -20,6 +20,7 @@ COPY admin-panel/src/ai-model-presets.json ./src/ai-model-presets.json
 COPY admin-panel/src/timezones.json ./src/timezones.json
 COPY ai/*.json /app/ai/
 COPY ai/memoryEmbeddingHttp.js /app/ai/memoryEmbeddingHttp.js
+COPY ai/localModelRouting.js /app/ai/localModelRouting.js
 COPY ai/memoryEmbeddingProviderSupport.js /app/ai/memoryEmbeddingProviderSupport.js
 COPY utils/legacyPersonalitySanitizer.js /app/utils/legacyPersonalitySanitizer.js
 EXPOSE 3000

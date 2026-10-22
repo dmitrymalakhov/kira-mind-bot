@@ -96,6 +96,19 @@ async function testUnsupportedProviderFailsExplicitly() {
 }
 
 async function main() {
+  let gatewayRequest;
+  await createMemoryEmbeddingHttp('synthetic text', {
+    provider: 'openai', model: 'text-embedding-3-small', outputDimension: 1536,
+  }, {
+    env: { OPENAI_BASE_URL: 'https://gateway.example/v1/' },
+    resolveApiKey: () => 'synthetic-key',
+    fetchImpl: async (url, init) => {
+      gatewayRequest = { url, init };
+      return createJsonResponse(200, { data: [{ embedding: [0.1] }] });
+    },
+  });
+  assert.strictEqual(gatewayRequest.url, 'https://gateway.example/v1/embeddings');
+  assert.strictEqual(gatewayRequest.init.headers.Authorization, 'Bearer synthetic-key');
   await testOpenAiTransport();
   await testGeminiTransport();
   await testUnsupportedProviderFailsExplicitly();

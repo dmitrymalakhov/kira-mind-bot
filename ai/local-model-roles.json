@@ -1,0 +1,5 @@
+{
+  "fast": {"label": "Быстрый диалог", "description": "Обычные ответы, короткий текст и реакции.", "maxTokens": 768, "reasoningEffort": "none", "temperature": 0.7},
+  "analysis": {"label": "Быстрый анализ", "description": "Понимание запроса, JSON, извлечение фактов и короткие проверки.", "maxTokens": 1536, "reasoningEffort": "none", "temperature": 0},
+  "deep": {"label": "Глубокий анализ", "description": "Сложный ответ, многошаговый план и обобщение памяти.", "maxTokens": 4096, "reasoningEffort": "low", "temperature": 0.2}
+}

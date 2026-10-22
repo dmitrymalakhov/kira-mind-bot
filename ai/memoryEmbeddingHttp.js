@@ -94,7 +94,8 @@ async function createMemoryEmbeddingHttp(text, memoryProfile, options = {}) {
     return parseEmbeddingResponse(response, 'gemini');
   }
 
-  const baseURL = String(descriptor.baseURL || 'https://api.openai.com/v1').replace(/\/+$/, '');
+  const env = options.env || process.env;
+  const baseURL = String(env[descriptor.baseURLEnvKey] || descriptor.baseURL || 'https://api.openai.com/v1').replace(/\/+$/, '');
   const response = await fetchImpl(`${baseURL}/embeddings`, {
     method: 'POST',
     headers: {

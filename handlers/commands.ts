@@ -511,7 +511,7 @@ bot.command("self_study", async (ctx) => {
 
 // ── Команда /reflection — режим рефлексии и накопления знаний ────────────────
 bot.command("reflection", async (ctx) => {
-    const enabled = isReflectionModeEnabled();
+    const enabled = await isReflectionModeEnabled();
     const stats = getReflectionStats();
     await ctx.reply(buildReflectionStatusMessage(enabled, stats, await isMaximumSavingsEnabled()), {
         parse_mode: "Markdown",
@@ -522,7 +522,7 @@ bot.command("reflection", async (ctx) => {
 // Callback: переключить режим рефлексии
 bot.callbackQuery("reflection_toggle", async (ctx) => {
     await ctx.answerCallbackQuery();
-    const current = isReflectionModeEnabled();
+    const current = await isReflectionModeEnabled();
     const next = !current;
     await setReflectionModeEnabled(next);
     const stats = getReflectionStats();
@@ -535,7 +535,7 @@ bot.callbackQuery("reflection_toggle", async (ctx) => {
 // Callback: обновить статистику без смены режима
 bot.callbackQuery("reflection_refresh", async (ctx) => {
     await ctx.answerCallbackQuery("Обновлено");
-    const enabled = isReflectionModeEnabled();
+    const enabled = await isReflectionModeEnabled();
     const stats = getReflectionStats();
     await ctx.editMessageText(buildReflectionStatusMessage(enabled, stats, await isMaximumSavingsEnabled()), {
         parse_mode: "Markdown",

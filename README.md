@@ -765,6 +765,8 @@ Telegram Bot API / Telegram User Client
 - `docker-compose.server.yml`, `scripts/ops/server-install.sh`, `scripts/ops/server-deploy.sh` — основной VPS-first поток;
 - `docker-compose.yml`, `scripts/ops/install.sh`, `scripts/ops/deploy.sh` — путь для удалённого деплоя с локальной машины на VPS.
 
+Для запуска на компьютере используйте `./scripts/ops/local.sh up -d`: PostgreSQL, Qdrant, бот и админка работают в Docker Desktop. Админка доступна только на localhost. Настройка lmrouter, LM Studio, переключение AI-режимов и порядок переноса данных описаны в [инструкции локального запуска](docs/local-run.md).
+
 ---
 
 ## Ограничения и важные замечания

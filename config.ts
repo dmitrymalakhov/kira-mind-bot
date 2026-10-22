@@ -2,6 +2,7 @@ import * as dotenv from "dotenv";
 import * as fs from "fs";
 import { parseAiPresetName } from "./ai/modelPresets";
 import { normalizeKiraResidenceCity } from "./utils/kiraResidence";
+import { resolveRuntimeIdentity } from './utils/runtimeIdentity';
 const { hasLegacyDigitalBiography } = require("./utils/legacyPersonalitySanitizer");
 
 // ── Загрузка personality.json (редактируется через admin panel) ───────────────
@@ -226,6 +227,7 @@ function normalizePersonalityText(value: string | undefined, fallback: string): 
 }
 
 function assistants(activeAssistant: string): AssistantConfig {
+  const identity = resolveRuntimeIdentity(process.env);
   // Load personality overrides from personality.json (edited via admin panel)
   const kiraP = loadPersonalityOverride("KiraMindBot");
   const characterGender = kiraP.characterGender === "мужской" ? "мужской" : "женский";
@@ -238,15 +240,15 @@ function assistants(activeAssistant: string): AssistantConfig {
   const assistantsObj: Record<"KiraMindBot", AssistantConfig> = {
     KiraMindBot: {
       botToken: process.env.KIRA_BOT_TOKEN || "",
-      ownerName: kiraP.ownerName || "владелец",
-      ownerUsername: kiraP.ownerUsername || undefined,
+      ownerName: kiraP.ownerName || identity.ownerName,
+      ownerUsername: kiraP.ownerUsername || identity.ownerUsername,
       characterName: kiraP.characterName || "Кира",
       currentCity: normalizeKiraResidenceCity(kiraP.currentCity) || "Санкт-Петербург",
-      userName: kiraP.userName || "владелец",
-      userBirthDate: kiraP.userBirthDate || "16.07.1988",
-      botUsername: "KiraMindBot",
-      allowedUserId: toNumber(process.env.KIRA_ALLOWED_USER_ID, 92174505),
-      adminUserId: toNumber(process.env.KIRA_ALLOWED_USER_ID, 92174505),
+      userName: kiraP.userName || identity.userName,
+      userBirthDate: kiraP.userBirthDate || identity.userBirthDate,
+      botUsername: identity.botUsername,
+      allowedUserId: identity.allowedUserId,
+      adminUserId: identity.adminUserId,
       reactionsEnabled: false,
       allowedReactions: [
         "👍", "👎", "❤️", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱",
@@ -326,8 +328,6 @@ function assistants(activeAssistant: string): AssistantConfig {
   }
 
   console.log("🔍 Assistant configuration loaded for:", selectedAssistant)
-  console.log("👤 ownerName:", assistantsObj[selectedAssistant].ownerName)
-  console.log("🔖 ownerUsername:", assistantsObj[selectedAssistant].ownerUsername ?? "(не задан)")
 
   return assistantsObj[selectedAssistant];
 };
@@ -346,16 +346,7 @@ function createConfig() {
 
   const selectedConfig = assistants(activeAssistant);
 
-  // Отладка токенов (показываем только первые и последние символы для безопасности)
-  const maskToken = (token: string) => {
-    if (!token) return "EMPTY";
-    if (token.length < 10) return "TOO_SHORT";
-    return `${token.substring(0, 4)}...${token.substring(token.length - 4)}`;
-  };
-
-  console.log("🔑 Token validation:");
-  console.log("- KIRA_BOT_TOKEN:", maskToken(process.env.KIRA_BOT_TOKEN || ""));
-  console.log("- Selected bot token:", maskToken(selectedConfig.botToken));
+  console.log("- Bot token configured:", Boolean(selectedConfig.botToken));
 
   // Критическая проверка токена
   if (!selectedConfig.botToken) {

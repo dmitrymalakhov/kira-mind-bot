@@ -573,7 +573,7 @@ export function registerTextMessageHandler(bot: Bot<BotContext>, options: { imme
                     let identityGapCandidate: Awaited<ReturnType<typeof detectMemoryGapCandidate>>;
                     let proactiveCandidate: ProactiveHintCandidate | undefined;
                     if (
-                        shouldRunProactiveHint(result, messageForProcessing) &&
+                        !result.skipOptionalFollowups && shouldRunProactiveHint(result, messageForProcessing) &&
                         !decideKnowledgeSource(message, turn.replyContext, turn.currentTopic).requiresWeb &&
                         !result.keyboard &&
                         !ctx.session.pendingContactMemory

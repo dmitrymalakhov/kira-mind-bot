@@ -127,7 +127,7 @@ async function createChatCompletionWithModel(
     const fallbackUsed = stage === 'fallback';
 
     try {
-        const result = await providerAdapter.createChatCompletion(modelRef.model, params);
+        const result = await providerAdapter.createChatCompletion(modelRef.model, params, modelRef.generation);
 
         recordAiUsage({
             taskKey,

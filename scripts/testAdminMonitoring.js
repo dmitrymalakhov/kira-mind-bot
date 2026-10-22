@@ -169,6 +169,21 @@ async function testCustomBotContainerName() {
 }
 
 async function main() {
+  const configuredEndpoints = createService({
+    vars: {
+      OPENAI_API_KEY: 'synthetic-cloud-key',
+      OPENAI_BASE_URL: 'https://gateway.example/v1/',
+      LM_STUDIO_BASE_URL: 'http://local-model.example:1234/v1',
+      LM_STUDIO_MODEL: 'synthetic-model',
+    },
+    routes: {
+      'https://gateway.example/v1/models': createJsonResponse(200, { data: [] }),
+      'http://local-model.example:1234/v1/models': createJsonResponse(200, { data: [] }),
+    },
+  });
+  assert.strictEqual((await configuredEndpoints.checkOpenAiHealth()).status, 'ok');
+  assert.strictEqual((await configuredEndpoints.checkLmStudioHealth()).status, 'ok');
+  assert.strictEqual((await createService({}).checkLmStudioHealth()).status, 'disabled');
   await testAggregateOverallStatus();
   await testDisabledChecks();
   await testSnapshotStatuses();

@@ -1,7 +1,8 @@
 import type { SectionDef } from './types';
 import COMMON_TIMEZONES from './timezones.json';
+import backgroundFeatures from '../../ai/background-features.json';
 
-export const CONFIG_SCHEMA: SectionDef[] = [
+const BASE_CONFIG_SCHEMA: SectionDef[] = [
   {
     id: 'api',
     title: 'API Ключи',
@@ -12,7 +13,33 @@ export const CONFIG_SCHEMA: SectionDef[] = [
         label: 'OpenAI API Key',
         type: 'password',
         required: true,
-        hint: 'Используется для GPT fallback, web reasoning, embeddings, vision и whisper.',
+        hint: 'OpenAI sk-ключ или ключ lmrouter lmr_live_. Для lmrouter также укажите OpenAI Base URL.',
+      },
+      {
+        key: 'OPENAI_BASE_URL',
+        label: 'OpenAI / lmrouter Base URL',
+        type: 'text',
+        placeholder: 'https://api.openai.com/v1',
+        hint: 'Адрес API с /v1. Используется GPT, поиском, embeddings, аудио и мониторингом. Пустое поле — прямой OpenAI. Требуется пересоздание контейнеров.',
+      },
+      {
+        key: 'LM_STUDIO_BASE_URL',
+        label: 'LM Studio Base URL',
+        type: 'text',
+        placeholder: 'http://host.docker.internal:1234/v1',
+        hint: 'Из Docker Desktop адрес вашего компьютера — host.docker.internal. Изменение применяется после пересоздания контейнеров.',
+      },
+      {
+        key: 'LM_STUDIO_MODEL',
+        label: 'Модель LM Studio',
+        type: 'text',
+        hint: 'Точный ID из /v1/models. Используется локальным и гибридным пресетами; требуется пересоздание контейнеров.',
+      },
+      {
+        key: 'LM_STUDIO_API_KEY',
+        label: 'LM Studio API token',
+        type: 'password',
+        hint: 'Заполняйте, если в LM Studio включена авторизация. Применяется после пересоздания контейнеров.',
       },
       {
         key: 'OPENROUTER_API_KEY',
@@ -366,3 +393,9 @@ export const CONFIG_SCHEMA: SectionDef[] = [
     ],
   },
 ];
+
+const backgroundEnvKeys = new Set<string>(Object.values(backgroundFeatures).map(feature => feature.envKey));
+export const CONFIG_SCHEMA: SectionDef[] = BASE_CONFIG_SCHEMA.map(section => ({
+  ...section,
+  fields: section.fields.filter(field => !backgroundEnvKeys.has(field.key)),
+}));

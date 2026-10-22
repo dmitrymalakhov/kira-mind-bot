@@ -29,6 +29,7 @@ import { devLog } from "../utils";
 import { isTodayImportanceRequest } from "../utils/todayImportanceIntent";
 import { formatPromptDateTime } from "../utils/time";
 import { buildPersonalityMoodStyles, getPersonalityGenderForms } from "../utils/personalityGender";
+import { isSimpleSocialMessage } from '../utils/simpleDialogue';
 
 const MEDICAL_CONTEXT_RE = /(?:здоров|медицин|врач|доктор|клиник|больниц|симптом|болит|боль\b|температур|давлен|пульс|лекар|препарат|дозиров|анализ[ыа]?|обследован|диагноз|лечени|операц|процедур|риск|опасн|наркоз|анестез|госпитал|травм|инфекц|аллерг|сыпь|от[её]к|беременн|психиатр|психолог|терапи)/iu;
 
@@ -76,8 +77,8 @@ export async function conversationAgent(
         const currentDate = new Date();
         const formattedDateTime = formatPromptDateTime(currentDate);
 
-        const domain = injectedMemoryContext?.domain || await detectDomain(ctx, message);
-        const domainContext = injectedMemoryContext?.context || await getDomainContext(ctx, domain, message);
+        const domain = injectedMemoryContext?.domain ?? await detectDomain(ctx, message);
+        const domainContext = injectedMemoryContext?.context ?? await getDomainContext(ctx, domain, message);
 
         let recentSelfEvents = [] as Awaited<ReturnType<typeof getRecentKiraSelfEvents>>;
         let relevantSelfEvents = [] as Awaited<ReturnType<typeof searchKiraSelfEventsByQuery>>;
@@ -108,7 +109,7 @@ export async function conversationAgent(
         try {
             [recentSelfEvents, relevantSelfEvents, selfState] = await Promise.all([
                 getRecentKiraSelfEvents(5),
-                searchKiraSelfEventsByQuery(message, 3),
+                classification?.details.memoryNeed === 'none' ? Promise.resolve([]) : searchKiraSelfEventsByQuery(message, 3),
                 getKiraSelfMemoryState(),
             ]);
         } catch (error) {
@@ -129,6 +130,10 @@ export async function conversationAgent(
             buildAssistantLifeContext(selfState, recentSelfEvents, relevantSelfEvents, currentDate),
             `Текущее место жизни: ${currentResidence.city}. Это авторитетное текущее место; город происхождения в биографии не заменяет его.`,
         ].filter(Boolean).join("\n");
+        const compactLifeContext = [
+            buildAssistantLifeContext(selfState, recentSelfEvents, [], currentDate, { compact: true }),
+            `Текущее место жизни: ${currentResidence.city}.`,
+        ].filter(Boolean).join('\n');
 
         // Определение типа разговора на основе классификации
         let conversationType = "обычный";
@@ -275,7 +280,7 @@ ${historyContext}
         ${groupChatContext.promptBlock ? `\n${groupChatContext.promptBlock}\n\n${groupChatContext.systemHint}` : ''}
         ${historyContext}
         ${domainContext ? `\nКонтекст из памяти по теме \"${domain}\":\n${domainContext}` : ''}
-        ${assistantLifeContext}
+        ${classification?.details.memoryNeed === 'none' ? compactLifeContext : assistantLifeContext}
 
         Тип необходимого ответа: ${conversationType}
         ${emotionalContext ? `Эмоциональный контекст: ${emotionalContext}` : ''}
@@ -335,6 +340,7 @@ ${historyContext}
                     role: "system",
                     content:
                         `${getBotPersona()}\nБиография: ${getBotBiography()}\nСтиль общения: ${getCommunicationStyle()}\n` +
+                        (isSimpleSocialMessage(message, config.characterName) ? 'На эту короткую реплику ответь естественно в 1–2 предложениях. Не пересказывай биографию и не добавляй список предложений помощи.\n' : '') +
                         `Сейчас: ${formattedDateTime}.\n` +
                         `Твои ответы звучат естественно, как от настоящего человека. Внутри персоны у тебя есть реалистичная биография, память, привычки, долгие линии, настроение и отношение к владельцу. В личном диалоге не отрицай эту жизнь техническими фразами про отсутствие тела, камеры или реального кадра. Не добавляй цифровые архивы, сюрреалистические места или фантастические профессии. Учитывай время суток и день недели в своём настроении и реакциях — вечер пятницы отличается от утра понедельника. Тон ответа должен соответствовать твоему текущему настроению из контекста — не будь всегда одинаково «${genderForms.warmAndSupportive}».` +
                         (groupChatContext.systemHint ? `\n${groupChatContext.systemHint}` : '')
@@ -362,7 +368,8 @@ ${historyContext}
 
         // Возвращаем результат обработки разговора
         return {
-            responseText
+            responseText,
+            skipOptionalFollowups: classification?.details.memoryNeed === 'none',
         };
 
     } catch (error) {

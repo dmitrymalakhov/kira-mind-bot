@@ -143,11 +143,11 @@ function buildHistoryDigest(messageHistory: MessageHistory[] | undefined): strin
     .join("\n");
 }
 
-function buildReflectionDigest(): string {
+async function buildReflectionDigest(): Promise<string> {
   const stats = getReflectionStats();
   const lastActivity = stats.lastActivityAt ? stats.lastActivityAt.toISOString() : "нет";
   return [
-    `режим: ${isReflectionModeEnabled() ? "включён" : "выключен"}`,
+    `режим: ${await isReflectionModeEnabled() ? "включён" : "выключен"}`,
     `буфер: ${stats.totalChats} чатов, ${stats.totalMessages} сообщений`,
     `анализов за час: ${stats.analysesThisHour}/6`,
     `pre-screen: ${stats.prescreenPassed}/${stats.prescreenTotal}`,
@@ -278,7 +278,7 @@ export async function runKiraSelfStudy(options: RunSelfStudyOptions): Promise<Ki
     `Самомодель:\n${formatKiraPersonalitySnapshot(selfState)}`,
     `Недавние self-events: ${recentEvents.map((event) => `${event.date} [${event.type}] ${event.description}`).join(" | ") || "нет"}`,
     `Недавние self-study отчёты: ${recentReports.map((report) => `${report.date}: ${report.summary}`).join(" | ") || "нет"}`,
-    `Статистика режима рефлексии: ${buildReflectionDigest()}`,
+    `Статистика режима рефлексии: ${await buildReflectionDigest()}`,
     `Ошибки фоновых задач: ${buildAsyncErrorsDigest()}`,
     `Контекст из памяти для текущего запроса: ${options.memoryContext?.slice(0, 3000) || "нет"}`,
     `Недавняя история диалога:\n${buildHistoryDigest(options.messageHistory)}`,

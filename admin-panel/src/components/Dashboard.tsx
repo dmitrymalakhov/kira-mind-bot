@@ -99,7 +99,7 @@ const SIDEBAR_TABS: SidebarTabItem[] = [
 const TAB_META: Record<number, { title: string; caption: string }> = {
   0: {
     title: 'Настройки бота',
-    caption: 'Изменения применяются после перезапуска контейнера',
+    caption: 'Модель и фон меняются без перезапуска. Для параметров API и сервисов пересоздайте контейнеры.',
   },
   1: {
     title: 'Управление личностью',
@@ -131,9 +131,9 @@ const SETTINGS_GROUPS: SidebarSectionGroup[] = [
   {
     title: 'Интеграции',
     items: [
+      { targetId: 'model-presets', shortLabel: 'Модель Киры', icon: <SmartToyIcon fontSize="small" />, caption: 'Кто отвечает в диалоге' },
+      { targetId: 'budget-settings', shortLabel: 'Фон и экономия', icon: <FlareIcon fontSize="small" />, caption: 'Выбор отдельных функций' },
       { targetId: 'api', shortLabel: 'API', icon: <KeyIcon fontSize="small" />, caption: 'API Ключи' },
-      { targetId: 'budget-settings', shortLabel: 'Бюджет AI', icon: <FlareIcon fontSize="small" />, caption: 'Максимальная экономия' },
-      { targetId: 'model-presets', shortLabel: 'AI Presets', icon: <SmartToyIcon fontSize="small" />, caption: 'Пресеты моделей' },
       { targetId: 'elevenlabs', shortLabel: 'Voice', icon: <GraphicEqIcon fontSize="small" />, caption: 'ElevenLabs Voice' },
       { targetId: 'bots', shortLabel: 'Telegram', icon: <SmartToyIcon fontSize="small" />, caption: 'Telegram Боты' },
       { targetId: 'telegram', shortLabel: 'Клиент', icon: <SmartphoneIcon fontSize="small" />, caption: 'Telegram Клиент' },
@@ -218,7 +218,7 @@ const SIDEBAR_INTRO_CARDS: Record<number, SidebarIntroCard[]> = {
 export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-  const [activeSection, setActiveSection] = useState(CONFIG_SCHEMA[0].id);
+  const [activeSection, setActiveSection] = useState('model-presets');
   const [activeTab, setActiveTab] = useState(0);
   const [toast, setToast] = useState<Toast | null>(null);
   const [savingAll, setSavingAll] = useState(false);
@@ -294,7 +294,7 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
 
   const selectTab = (value: number) => {
     setActiveTab(value);
-    setActiveSection(value === 5 ? 'monitor-overview' : value === 0 ? CONFIG_SCHEMA[0].id : '');
+    setActiveSection(value === 5 ? 'monitor-overview' : value === 0 ? 'model-presets' : '');
     if (isMobile) {
       setMobileOpen(false);
     }
@@ -889,6 +889,12 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
         {/* Settings tab */}
         {activeTab === 0 && (
           <>
+            <ModelSettingsSection
+              ref={(el) => { sectionRefs.current['model-presets'] = el; }}
+              config={config}
+              onUpdate={onConfigUpdate}
+              onToast={showToast}
+            />
             {CONFIG_SCHEMA.map((section) => (
               <Box key={section.id}>
                 <ConfigSection
@@ -900,16 +906,6 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
                   onUpdate={onConfigUpdate}
                   onToast={showToast}
                 />
-                {section.id === 'api' && (
-                  <ModelSettingsSection
-                    ref={(el) => {
-                      sectionRefs.current['model-presets'] = el;
-                    }}
-                    config={config}
-                    onUpdate={onConfigUpdate}
-                    onToast={showToast}
-                  />
-                )}
               </Box>
             ))}
           </>

@@ -48,7 +48,7 @@ describe("AI preset registry", () => {
     });
 
     test("uses only supported providers and non-empty model IDs", () => {
-        const providers = new Set(["openai", "openrouter", "gemini", "zai"]);
+        const providers = new Set(["openai", "openrouter", "gemini", "zai", "lmstudio"]);
         for (const preset of Object.values(aiPresets)) {
             for (const [task, ref] of Object.entries(preset.models)) {
                 assert.equal(providers.has(ref.provider), true, `${preset.name}:${task}:${ref.provider}`);

@@ -27,6 +27,9 @@ export interface AiProviderDescriptor {
     label: string;
     envKey: string;
     baseURL: string | null;
+    baseURLEnvKey?: string;
+    optionalApiKey?: boolean;
+    configurationEnvKey?: string;
     monitoring: AiProviderMonitoringConfig;
     capabilities: AiCapabilityMap;
 }

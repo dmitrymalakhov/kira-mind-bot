@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+node_bin="${KIRA_NODE_BIN:-node}"
+if ! command -v "$node_bin" >/dev/null 2>&1; then
+    node_bin="$(git config --local --get kira.nodePath || true)"
+fi
+if [ -z "$node_bin" ] || ! command -v "$node_bin" >/dev/null 2>&1; then
+    echo 'Privacy check needs Node.js. Install Node.js or set KIRA_NODE_BIN.' >&2
+    exit 1
+fi
+exec "$node_bin" scripts/checkPrivacy.js --staged

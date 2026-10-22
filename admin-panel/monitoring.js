@@ -175,22 +175,26 @@ function trimDetails(text, limit = 280) {
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
 }
 
-function buildProviderRequestOptions(providerId, apiKey) {
+function buildProviderRequestOptions(providerId, apiKey, vars = {}) {
   const descriptor = AI_PROVIDER_REGISTRY[providerId];
   if (!descriptor) {
     throw new Error(`Unknown AI provider: ${providerId}`);
   }
 
   const monitoring = descriptor.monitoring || {};
+  const baseURL = vars[descriptor.baseURLEnvKey] || descriptor.baseURL;
+  const url = descriptor.baseURLEnvKey && baseURL
+    ? `${String(baseURL).replace(/\/+$/, '')}/models`
+    : monitoring.url;
   if (monitoring.auth === 'query_key') {
     return {
-      url: `${monitoring.url}?key=${encodeURIComponent(apiKey)}`,
+      url: `${url}?key=${encodeURIComponent(apiKey)}`,
       options: {},
     };
   }
 
   return {
-    url: monitoring.url,
+    url,
     options: {
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -224,8 +228,14 @@ function createMonitoringService({
       });
     }
 
+    if (descriptor.configurationEnvKey && !(vars[descriptor.configurationEnvKey] || env[descriptor.configurationEnvKey])) {
+      return buildCheck({
+        key: providerId, label: descriptor.label, category: 'ai', status: 'disabled',
+        summary: `Проверка отключена: ${descriptor.configurationEnvKey} не задан.`, checkedAt,
+      });
+    }
     const apiKey = String(vars[descriptor.envKey] || env[descriptor.envKey] || '').trim();
-    if (!apiKey) {
+    if (!apiKey && !descriptor.optionalApiKey) {
       return buildCheck({
         key: providerId,
         label: descriptor.label,
@@ -238,7 +248,7 @@ function createMonitoringService({
     }
 
     try {
-      const request = buildProviderRequestOptions(providerId, apiKey);
+      const request = buildProviderRequestOptions(providerId, apiKey, { ...env, ...vars });
       const result = await fetchWithMeta(fetchImpl, request.url, request.options);
       const providerStatus = buildProviderStatus({
         httpStatus: result.response.status,
@@ -562,6 +572,10 @@ function createMonitoringService({
     return checkAiProviderHealth('zai');
   }
 
+  async function checkLmStudioHealth() {
+    return checkAiProviderHealth('lmstudio');
+  }
+
   async function getMonitoringSnapshot() {
     const checks = await Promise.all([
       checkKiraContainerHealth(),
@@ -573,6 +587,7 @@ function createMonitoringService({
       checkGeminiHealth(),
       checkOpenRouterHealth(),
       checkZaiHealth(),
+      checkLmStudioHealth(),
     ]);
 
     return {
@@ -593,6 +608,7 @@ function createMonitoringService({
     checkGeminiHealth,
     checkOpenRouterHealth,
     checkZaiHealth,
+    checkLmStudioHealth,
   };
 }
 

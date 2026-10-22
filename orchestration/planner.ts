@@ -72,7 +72,7 @@ export function postProcessPlan(plan: Plan, classification: PlanningInput['class
 
     if (
         intent === 'РАЗГОВОР' &&
-        classification.confidenceLevel === 'ВЫСОКИЙ' &&
+        classification.details?.knowledgeSource !== 'external_current' &&
         !classification.subIntents?.length
     ) {
         return { steps: [{ agentId: 'conversation' }] };
@@ -145,7 +145,7 @@ export async function createPlan(input: PlanningInput): Promise<Plan> {
 
     if (
         intent === 'РАЗГОВОР' &&
-        classification.confidenceLevel === 'ВЫСОКИЙ' &&
+        classification.details?.knowledgeSource !== 'external_current' &&
         !classification.subIntents?.length
     ) {
         return { steps: [{ agentId: 'conversation' }] };

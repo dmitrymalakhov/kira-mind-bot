@@ -10,6 +10,8 @@ const http = require('http');
 const { Pool } = require('pg');
 const { AI_PRESETS, AI_PRESET_NAMES, parseAiPresetName } = require('./aiPresetRegistry');
 const { registerBudgetModeRoutes } = require('./budgetMode');
+const { registerBackgroundFeatureRoutes } = require('./backgroundFeatures');
+const { registerLocalModelRoutes, readLocalRoutes, resolveLocalPreset } = require('./localModels');
 const {
   DEFAULT_MEMORY_EMBEDDING_PROFILE,
   getMemoryEmbeddingProfile,
@@ -73,6 +75,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 10 * 60 * 1000;
 
 const SENSITIVE_KEYS = new Set([
+  'LM_STUDIO_API_KEY',
   'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN',
   'KIRA_ALLOWED_USER_ID',
   'DB_PASSWORD', 'QDRANT_API_KEY', 'TELEGRAM_API_HASH',
@@ -85,6 +88,7 @@ const ALLOWED_TIMEZONES = new Set(COMMON_TIMEZONES.map((item) => item.value));
 const MEMORY_EMBEDDING_PROFILE_SETTING_KEY = 'MEMORY_EMBEDDING_PROFILE';
 
 const EDITABLE_KEYS = new Set([
+  'OPENAI_BASE_URL', 'LM_STUDIO_BASE_URL', 'LM_STUDIO_MODEL', 'LM_STUDIO_API_KEY',
   'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'KIRA_BOT_TOKEN',
   'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID', 'ELEVENLABS_VOICE_NAME',
   'ELEVENLABS_MODEL_ID', 'ELEVENLABS_OUTPUT_FORMAT',
@@ -162,11 +166,15 @@ function buildMemoryProfileSource(technicalPath, appliesImmediately, description
   );
 }
 
-function buildAiPresetResponseEntry(name, vars, memoryProfileName) {
-  const preset = AI_PRESETS[name];
+function buildAiPresetResponseEntry(name, vars, memoryProfileName, localRoutes) {
+  const preset = resolveLocalPreset(AI_PRESETS[name], localRoutes);
   const availability = getPresetAvailabilityForMemoryProfile(preset, vars, memoryProfileName);
   return {
     ...preset,
+    models: Object.fromEntries(Object.entries(preset.models).map(([task, ref]) => [task, {
+      ...ref,
+      model: localRoutes?.[ref.localRole]?.model || (ref.modelEnvKey && (vars[ref.modelEnvKey] || process.env[ref.modelEnvKey])) || ref.model,
+    }])),
     ...availability,
   };
 }
@@ -393,6 +401,8 @@ async function readMemoryEmbeddingProfileState(pool, vars) {
 }
 
 registerBudgetModeRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable });
+registerBackgroundFeatureRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
+registerLocalModelRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
 
 app.get('/api/ai-preset', requireAuth, async (_req, res) => {
   const vars = readEnvFile();
@@ -403,7 +413,8 @@ app.get('/api/ai-preset', requireAuth, async (_req, res) => {
     const result = await pool.query('SELECT value FROM bot_settings WHERE key = $1', ['AI_MODEL_PRESET']);
     const storedPreset = parseAiPresetName(result.rows[0]?.value);
     const memoryEmbeddingProfile = await buildMemoryEmbeddingProfileStatus(pool, vars);
-    const availablePresets = AI_PRESET_NAMES.map((name) => buildAiPresetResponseEntry(name, vars, memoryEmbeddingProfile.name));
+    const localRoutes = await readLocalRoutes(pool, { ...process.env, ...vars });
+    const availablePresets = AI_PRESET_NAMES.map((name) => buildAiPresetResponseEntry(name, vars, memoryEmbeddingProfile.name, localRoutes));
     const hasRuntimeOverride = Boolean(storedPreset);
     const configuredPresetName = storedPreset || envDefaultPreset;
     const activeSourceSummary = hasRuntimeOverride
@@ -444,7 +455,8 @@ app.post('/api/ai-preset', requireAuth, async (req, res) => {
   try {
     await ensureBotSettingsTable(pool);
     const memoryProfileState = await readMemoryEmbeddingProfileState(pool, vars);
-    const availability = getPresetAvailabilityForMemoryProfile(AI_PRESETS[preset], vars, memoryProfileState.profile.name);
+    const localRoutes = await readLocalRoutes(pool, { ...process.env, ...vars });
+    const availability = getPresetAvailabilityForMemoryProfile(resolveLocalPreset(AI_PRESETS[preset], localRoutes), vars, memoryProfileState.profile.name);
     if (!availability.enabled) {
       return res.status(400).json({ error: availability.unavailableReason || 'AI preset недоступен без обязательных API ключей' });
     }
@@ -1006,6 +1018,7 @@ async function createMemoryEmbedding(text, memoryProfile) {
   const vars = readEnvFile();
   return createMemoryEmbeddingHttp(text, memoryProfile, {
     fetchImpl: fetch,
+    env: { ...process.env, ...vars },
     resolveApiKey(provider) {
       return getMemoryEmbeddingProviderKey(provider, vars);
     },

@@ -35,7 +35,7 @@ import { searchAllDomainsMemories } from '../utils/enhancedDomainMemory';
 import { getSetting, setSetting } from './botSettingsService';
 import { devLog, parseLLMJson } from '../utils';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
-import { isMaximumSavingsEnabled } from './budgetModeService';
+import { isBackgroundFeatureEnabled, getBackgroundFeaturePreference, setBackgroundFeatureEnabled } from './backgroundFeatureService';
 import { MessageStore } from '../stores/MessageStore';
 import { getVectorService } from './VectorServiceFactory';
 import { runMemorySchemaConsolidationForUser } from './MemorySchemaConsolidationService';
@@ -156,12 +156,11 @@ let lastActivityAt: Date | null = null;
 
 export async function initReflectionMode(): Promise<void> {
     try {
-        const stored = await getSetting(SETTING_KEY, 'true');
-        enabled = stored === 'true';
+        enabled = await getBackgroundFeaturePreference('reflection');
         console.log(`[reflection] Initialized: ${enabled ? 'ON' : 'OFF'}`);
     } catch {
-        enabled = true;
-        console.log('[reflection] Could not load setting, defaulting to ON');
+        enabled = false;
+        console.log('[reflection] Could not load setting, temporarily OFF');
     }
 
     // Fix 5: Загружаем кумулятивную статистику
@@ -183,8 +182,8 @@ export async function initReflectionMode(): Promise<void> {
 
 // ── Публичный API ─────────────────────────────────────────────────────────────
 
-export function isReflectionModeEnabled(): boolean {
-    return enabled;
+export async function isReflectionModeEnabled(): Promise<boolean> {
+    return getBackgroundFeaturePreference('reflection');
 }
 
 /**
@@ -201,6 +200,7 @@ export function markChatAsBot(chatId: string): void {
 }
 
 export async function setReflectionModeEnabled(value: boolean): Promise<void> {
+    await setBackgroundFeatureEnabled('reflection', value);
     enabled = value;
     await setSetting(SETTING_KEY, String(value));
     if (!value) chatBuffers.clear();
@@ -209,11 +209,11 @@ export async function setReflectionModeEnabled(value: boolean): Promise<void> {
 
 /**
  * Добавляет сообщение (входящее или исходящее) в буфер для последующего анализа.
- * Вызывается синхронно — не блокирует обработку сообщений.
+ * Проверяет runtime-переключатели до добавления в буфер и запуска AI-triage.
  *
  * @param isOwn true = исходящее сообщение от владельца бота
  */
-export function queueMessage(
+export async function queueMessage(
     chatId: string,
     senderName: string,
     text: string,
@@ -221,8 +221,8 @@ export function queueMessage(
     isOwn = false,
     messageId?: number,
     options: { isForwarded?: boolean; forwardSource?: string } = {},
-): void {
-    if (!enabled) return;
+): Promise<void> {
+    if (!await isBackgroundFeatureEnabled('reflection')) return;
     if (botChatIds.has(chatId)) return;
 
     const trimmed = text?.trim();
@@ -289,7 +289,7 @@ function scheduleAsyncTriage(chatId: string, senderName: string, text: string): 
  * Если да — помечает буфер как highPriority для немедленного анализа.
  */
 async function triageForHighPriority(chatId: string, senderName: string, text: string): Promise<void> {
-    if (await isMaximumSavingsEnabled()) return;
+    if (!await isBackgroundFeatureEnabled('reflection')) return;
     const buf = chatBuffers.get(chatId);
     if (!buf || buf.highPriority) return;
 
@@ -364,8 +364,7 @@ export function getReflectionStats(): {
  * Основной цикл обработки буферов — вызывается планировщиком каждые 5 минут.
  */
 export async function processBuffers(bot: Bot<BotContext>): Promise<void> {
-    if (!enabled) return;
-    if (await isMaximumSavingsEnabled()) return;
+    if (!await isBackgroundFeatureEnabled('reflection')) return;
     resetHourWindowIfNeeded();
 
     if (analysesThisHour >= HOURLY_ANALYSIS_LIMIT) {
@@ -386,7 +385,7 @@ export async function processBuffers(bot: Bot<BotContext>): Promise<void> {
     const perChatLimit = Math.max(1, Math.ceil(HOURLY_ANALYSIS_LIMIT / Math.max(1, activeChats)));
 
     for (const [chatId, buf] of entries) {
-        if (await isMaximumSavingsEnabled()) break;
+        if (!await isBackgroundFeatureEnabled('reflection')) break;
         if (analysesThisHour >= HOURLY_ANALYSIS_LIMIT) break;
         if (!isBufferReady(buf)) continue;
 
@@ -1005,7 +1004,7 @@ async function analyzeBatch(
 
         devLog(`[reflection] Saved ${savedCount} facts from "${buf.chatTitle}"`);
 
-        if (savedCount > 0 && config.memoryConsolidationEnabled) {
+        if (savedCount > 0 && await isBackgroundFeatureEnabled('memoryConsolidation')) {
             Promise.allSettled([
                 runMemorySchemaConsolidationForUser(String(config.allowedUserId), {
                     minSources: Math.max(config.memoryConsolidationMinFacts, 12),

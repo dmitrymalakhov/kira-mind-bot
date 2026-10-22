@@ -7,7 +7,9 @@
     "hybrid-gemini-gpt",
     "gemini-full",
     "glm-full",
-    "glm-balanced"
+    "glm-balanced",
+    "lmstudio-local",
+    "hybrid-lmstudio-gpt"
   ],
   "presets": {
     "gpt-max": {
@@ -179,6 +181,50 @@
         "memoryExtraction": { "provider": "zai", "model": "glm-5.2" },
         "memoryConsolidation": { "provider": "zai", "model": "glm-5.2" },
         "messageAnalysis": { "provider": "zai", "model": "glm-5.2" },
+        "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "browserPlanning": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "browserVision": { "provider": "openai", "model": "gpt-4o" },
+        "embedding": { "provider": "openai", "model": "text-embedding-3-small" },
+        "transcription": { "provider": "openai", "model": "whisper-1" }
+      }
+    },
+    "lmstudio-local": {
+      "name": "lmstudio-local",
+      "title": "LM Studio · Локальный текст",
+      "description": "Диалог, классификация, извлечение фактов и планирование в LM Studio без облачного fallback при отказе. Поиск, vision, аудио и прежняя память используют OpenAI через настроенный gateway.",
+      "characteristics": { "quality": "Зависит от локальной модели", "cost": "Локальный текст + облачные сервисы", "stability": "Зависит от LM Studio", "gptDependency": "Память, поиск, vision и аудио" },
+      "models": {
+        "defaultText": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "fast" },
+        "lightweightText": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "analysis" },
+        "complexReasoning": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "deep" },
+        "intentClassification": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "analysis" },
+        "intentDedup": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "analysis" },
+        "conversation": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "fast" },
+        "memoryExtraction": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "analysis" },
+        "memoryConsolidation": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "deep" },
+        "messageAnalysis": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "analysis" },
+        "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4-mini" },
+        "browserPlanning": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "analysis" },
+        "browserVision": { "provider": "openai", "model": "gpt-4o" },
+        "embedding": { "provider": "openai", "model": "text-embedding-3-small" },
+        "transcription": { "provider": "openai", "model": "whisper-1" }
+      }
+    },
+    "hybrid-lmstudio-gpt": {
+      "name": "hybrid-lmstudio-gpt",
+      "title": "LM Studio + GPT · Гибрид",
+      "description": "Повседневный текст и фоновая обработка в LM Studio; сложное рассуждение, поиск, vision и браузерное планирование в OpenAI. При отказе локальной модели разрешён GPT fallback.",
+      "characteristics": { "quality": "Зависит от локальной модели", "cost": "Локальный текст + облачные сервисы", "stability": "Зависит от LM Studio", "gptDependency": "Сложные задачи и сервисы" },
+      "models": {
+        "defaultText": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "fast" },
+        "lightweightText": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "analysis" },
+        "complexReasoning": { "provider": "openai", "model": "gpt-5.4" },
+        "intentClassification": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "analysis" },
+        "intentDedup": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "analysis" },
+        "conversation": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "fast" },
+        "memoryExtraction": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "analysis" },
+        "memoryConsolidation": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "deep" },
+        "messageAnalysis": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "analysis" },
         "webSearchReasoning": { "provider": "openai", "model": "gpt-5.4-mini" },
         "browserPlanning": { "provider": "openai", "model": "gpt-5.4-nano" },
         "browserVision": { "provider": "openai", "model": "gpt-4o" },

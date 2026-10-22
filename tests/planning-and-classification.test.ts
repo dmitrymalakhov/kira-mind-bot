@@ -182,7 +182,7 @@ describe("reflection memory quality thresholds", () => {
 
     test("keeps durable routines despite technical keywords", () => {
         assert.equal(isReflectionMemoryNoiseCandidate({
-            content: "Дмитрий регулярно использует ChatGPT для черновой расшифровки",
+            content: "Синтетический пользователь регулярно использует ChatGPT для черновой расшифровки",
             temporalScope: "routine",
             importance: 0.7,
         }), false);
