@@ -15,6 +15,7 @@ const SESSION_SNAPSHOT = Symbol('persistedSessionSnapshot');
 
 /** Подмножество SessionData, которое мы сохраняем в БД. */
 interface PersistedSession {
+    apiActionVersion?: string;
     messageHistory: SessionData['messageHistory'];
     dialogueSummary: SessionData['dialogueSummary'];
     lastSummarizedIndex: SessionData['lastSummarizedIndex'];
@@ -208,6 +209,7 @@ async function ensureSessionRow(rawQuery: RawQuery, key: string): Promise<void> 
 function extract(data: SessionData): PersistedSession {
     const now = Date.now();
     return {
+        apiActionVersion: data.apiActionVersion,
         // messageHistory is stored newest-first; keep the head or we persist the oldest messages.
         messageHistory: (data.messageHistory ?? []).slice(0, MAX_HISTORY),
         dialogueSummary: data.dialogueSummary ?? '',
@@ -391,6 +393,7 @@ function pruneChatPromptWatchState(
  * Non-serializable fields (Map, timers) and reminders are excluded — reminders live in ReminderRegistry/DB.
  */
 export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
+    constructor(private readonly strict = false) {}
     private get repo() {
         return AppDataSource.getRepository(SessionEntity);
     }
@@ -452,6 +455,7 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
             return persisted as unknown as SessionData;
         } catch (e) {
             console.error('[SessionStorage] read error:', e);
+            if (this.strict) throw e;
             return undefined;
         }
     }
@@ -491,6 +495,7 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
             attachSessionSnapshot(value, current);
         } catch (e) {
             console.error('[SessionStorage] write error:', e);
+            if (this.strict) throw e;
         }
     }
 
@@ -505,9 +510,9 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
 }
 
 export async function persistSessionNow(ctx: BotContext): Promise<void> {
-    const key = ctx.chat?.id != null ? String(ctx.chat.id) : undefined;
+    const key = ctx.sessionStorageKey ?? (ctx.chat?.id != null ? String(ctx.chat.id) : undefined);
     if (!key || !ctx.session) return;
-    await new TypeORMSessionStorage().write(key, ctx.session);
+    await new TypeORMSessionStorage(Boolean(ctx.sessionStorageKey)).write(key, ctx.session);
 }
 
 /**

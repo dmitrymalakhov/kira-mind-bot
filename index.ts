@@ -17,6 +17,7 @@ import { getTelegramMenuCommands } from "./capabilities";
 import { warmAiPresetCache } from "./services/aiRuntimeConfigService";
 import { getBudgetMode } from "./services/budgetModeService";
 import { startRuntimeHealthServer } from "./services/runtimeHealthServer";
+import { startExternalApiServer } from "./services/externalApiServer";
 import { startKiraLifeScheduler } from "./services/kiraLifeScheduler";
 import { startDmReportScheduler } from "./services/dmReportScheduler";
 import { startMemoryInsightScheduler } from "./services/memoryInsightScheduler";
@@ -115,6 +116,8 @@ async function startBot() {
 
         console.log("🔗 Инициализация векторного сервиса...");
         await initializeVectorService();
+
+        await startExternalApiServer(bot);
 
         console.log("🎯 Запуск прослушивания событий...");
         startKiraLifeScheduler(bot);

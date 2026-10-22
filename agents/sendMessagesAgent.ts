@@ -42,7 +42,7 @@ export interface MessageDraft {
 }
 
 // Хранилище черновиков сообщений по ID чата
-const messageDrafts = new Map<number, MessageDraft>();
+const messageDrafts = new Map<number | string, MessageDraft>();
 
 const OUTBOUND_VOICE_RE = /(?:голосом|голосов(?:ое|ым|ую|ого)(?:\s+сообщени(?:е|ем|я|ю))?|войсом|войс|аудио(?:сообщени(?:е|ем|я|ю))?|voice|audio)/iu;
 
@@ -282,7 +282,8 @@ export function saveMessageDraft(
     notifyOnReply: boolean = false,
     isGroup: boolean = false,
     groupTitle?: string,
-    deliveryMode: MessageDeliveryMode = "text"
+    deliveryMode: MessageDeliveryMode = "text",
+    draftKey: number | string = chatId,
 ): boolean {
     try {
         const expiresAt = new Date();
@@ -301,7 +302,7 @@ export function saveMessageDraft(
             groupTitle
         };
 
-        messageDrafts.set(chatId, draft);
+        messageDrafts.set(draftKey, draft);
         return true;
     } catch (error) {
         console.error("Ошибка при сохранении черновика:", error);
@@ -314,8 +315,8 @@ export function saveMessageDraft(
  * @param chatId ID чата
  * @returns Черновик сообщения или undefined
  */
-export function getMessageDraft(chatId: number): MessageDraft | undefined {
-    const draft = messageDrafts.get(chatId);
+export function getMessageDraft(chatId: number, draftKey: number | string = chatId): MessageDraft | undefined {
+    const draft = messageDrafts.get(draftKey);
 
     // Если черновик найден и срок его действия не истек
     if (draft && draft.expiresAt > new Date()) {
@@ -324,7 +325,7 @@ export function getMessageDraft(chatId: number): MessageDraft | undefined {
 
     // Удаляем просроченный черновик
     if (draft) {
-        messageDrafts.delete(chatId);
+        messageDrafts.delete(draftKey);
     }
 
     return undefined;
@@ -335,8 +336,8 @@ export function getMessageDraft(chatId: number): MessageDraft | undefined {
  * @param chatId ID чата
  * @returns true при успешном удалении
  */
-export function deleteMessageDraft(chatId: number): boolean {
-    return messageDrafts.delete(chatId);
+export function deleteMessageDraft(chatId: number, draftKey: number | string = chatId): boolean {
+    return messageDrafts.delete(draftKey);
 }
 
 export interface DraftSendResult {
@@ -350,9 +351,9 @@ export interface DraftSendResult {
  * @param chatId ID чата
  * @returns Детальный результат отправки
  */
-export async function sendMessageFromDraftDetailed(chatId: number): Promise<DraftSendResult> {
+export async function sendMessageFromDraftDetailed(chatId: number, draftKey: number | string = chatId): Promise<DraftSendResult> {
     try {
-        const draft = getMessageDraft(chatId);
+        const draft = getMessageDraft(chatId, draftKey);
 
         if (!draft) {
             return { success: false, deliveryMode: "text", errorMessage: "Черновик сообщения не найден или устарел." };
@@ -362,7 +363,7 @@ export async function sendMessageFromDraftDetailed(chatId: number): Promise<Draf
             try {
                 const voiceResult = await sendVoiceDraft(draft);
                 if (voiceResult.success) {
-                    messageDrafts.delete(chatId);
+                    messageDrafts.delete(draftKey);
                 }
                 return {
                     success: voiceResult.success,
@@ -409,7 +410,7 @@ export async function sendMessageFromDraftDetailed(chatId: number): Promise<Draf
             success = sendResult.success;
         }
 
-        messageDrafts.delete(chatId);
+        messageDrafts.delete(draftKey);
         return { success, deliveryMode: "text" };
     } catch (error) {
         console.error("Ошибка при отправке сообщения из черновика:", error);
@@ -493,7 +494,8 @@ export async function sendMessagesAgent(
                     false,
                     true,
                     group.title,
-                    deliveryMode
+                    deliveryMode,
+                    ctx.sessionStorageKey,
                 );
             }
 
@@ -582,7 +584,8 @@ export async function sendMessagesAgent(
                 notifyOnReply,
                 false,
                 undefined,
-                deliveryMode
+                deliveryMode,
+                ctx.sessionStorageKey,
             );
         }
 

@@ -15,7 +15,7 @@ interface PendingAnalysis {
 
 class FactAnalysisManager {
     private static instance: FactAnalysisManager;
-    private pendingAnalyses = new Map<number, PendingAnalysis>();
+    private pendingAnalyses = new Map<number | string, PendingAnalysis>();
     private readonly ANALYSIS_DELAY = 2 * 60 * 1000; // 2 минуты тишины
     private readonly MAX_WAIT = 5 * 60 * 1000; // максимум 5 минут с первого сообщения
     private readonly MESSAGE_THRESHOLD = 5; // или каждые 5 пользовательских сообщений
@@ -28,7 +28,7 @@ class FactAnalysisManager {
     }
 
     public scheduleAnalysis(ctx: BotContext): void {
-        const userId = ctx.from?.id;
+        const userId = ctx.sessionStorageKey ?? ctx.from?.id;
         if (!userId) return;
 
         const existing = this.pendingAnalyses.get(userId);
@@ -60,7 +60,7 @@ class FactAnalysisManager {
         this.pendingAnalyses.set(userId, pending);
     }
 
-    private createDebounceTimer(userId: number): NodeJS.Timeout {
+    private createDebounceTimer(userId: number | string): NodeJS.Timeout {
         return setTimeout(() => {
             void this.executeAnalysis(userId, 'debounce');
         }, this.ANALYSIS_DELAY);
@@ -71,7 +71,7 @@ class FactAnalysisManager {
         return index >= ctx.session.messageHistory.length ? 0 : index;
     }
 
-    private async executeAnalysis(userId: number, reason: 'debounce' | 'max-wait' | 'message-threshold'): Promise<void> {
+    private async executeAnalysis(userId: number | string, reason: 'debounce' | 'max-wait' | 'message-threshold'): Promise<void> {
         const analysis = this.pendingAnalyses.get(userId);
         if (!analysis) return;
 
@@ -95,7 +95,7 @@ class FactAnalysisManager {
         }
     }
 
-    public cancelAnalysis(userId: number): void {
+    public cancelAnalysis(userId: number | string): void {
         const analysis = this.pendingAnalyses.get(userId);
         if (analysis) {
             clearTimeout(analysis.debounceTimerId);
@@ -106,7 +106,7 @@ class FactAnalysisManager {
         }
     }
 
-    public getPendingAnalysis(userId?: number): PendingAnalysis | undefined {
+    public getPendingAnalysis(userId?: number | string): PendingAnalysis | undefined {
         if (!userId) return undefined;
         return this.pendingAnalyses.get(userId);
     }

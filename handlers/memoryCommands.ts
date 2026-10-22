@@ -418,7 +418,7 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
     });
 
     bot.command('debug_facts', async (ctx) => {
-        const analysis = factAnalysisManager.getPendingAnalysis(ctx.from?.id);
+        const analysis = factAnalysisManager.getPendingAnalysis(ctx.sessionStorageKey ?? ctx.from?.id);
         const lastIndex = ctx.session.lastFactAnalysisIndex ?? 0;
         const vectorSvc = getVectorService();
 

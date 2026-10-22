@@ -88,15 +88,20 @@ validate_remote_deploy_directory() {
 }
 
 resolve_compose_cmd() {
+    local compose_args=(-f "$SERVER_COMPOSE_FILE")
+    if [ -n "${SERVER_COMPOSE_OVERRIDE:-}" ]; then
+        [ -f "$SERVER_COMPOSE_OVERRIDE" ] || return 1
+        compose_args+=(-f "$SERVER_COMPOSE_OVERRIDE")
+    fi
     if docker compose version >/dev/null 2>&1; then
         DOCKER_CMD=(docker)
-        COMPOSE_CMD=(docker compose -f "$SERVER_COMPOSE_FILE")
+        COMPOSE_CMD=(docker compose "${compose_args[@]}")
         return 0
     fi
 
     if command -v sudo >/dev/null 2>&1 && sudo -n docker compose version >/dev/null 2>&1; then
         DOCKER_CMD=(sudo docker)
-        COMPOSE_CMD=(sudo docker compose -f "$SERVER_COMPOSE_FILE")
+        COMPOSE_CMD=(sudo docker compose "${compose_args[@]}")
         return 0
     fi
 
@@ -263,13 +268,14 @@ load_compose_env_if_present() {
     local value=""
     while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in
-            ADMIN_PORT=*|ADMIN_USERNAME=*|ADMIN_PASSWORD=*)
+            ADMIN_PORT=*|ADMIN_USERNAME=*|ADMIN_PASSWORD=*|API_PORT=*)
                 key="${line%%=*}"
                 value="${line#*=}"
                 case "$key" in
                     ADMIN_PORT) ADMIN_PORT="$value" ;;
                     ADMIN_USERNAME) ADMIN_USERNAME="$value" ;;
                     ADMIN_PASSWORD) ADMIN_PASSWORD="$value" ;;
+                    API_PORT) [ -n "${API_PORT:-}" ] || API_PORT="$value" ;;
                 esac
                 ;;
         esac
@@ -349,6 +355,17 @@ write_compose_env() {
     ensure_instance_not_owned_by_other_directory || return 1
     verify_existing_storage_bindings || return 1
 
+    if [ -n "${API_PORT:-}" ]; then
+        if ! [[ "$API_PORT" =~ ^[0-9]{1,5}$ ]] || [ "$API_PORT" -lt 1 ] || [ "$API_PORT" -gt 65535 ]; then
+            echo "Ошибка: API_PORT должен быть целым числом от 1 до 65535." >&2
+            return 1
+        fi
+        if [ "$API_PORT" = "$ADMIN_PORT" ] || ! admin_port_is_available_for_instance "$API_PORT"; then
+            echo "Ошибка: API_PORT=$API_PORT уже занят. Выбери отдельный свободный порт." >&2
+            return 1
+        fi
+    fi
+
     temp_file="$(mktemp "${COMPOSE_ENV_FILE}.tmp.XXXXXX")" || return 1
     if ! (umask 077 && cat > "$temp_file" << EOF
 KIRA_INSTANCE_NAME=${KIRA_INSTANCE_NAME}
@@ -363,6 +380,7 @@ NODE_ENV=production
 ADMIN_PORT=${ADMIN_PORT}
 ADMIN_USERNAME=${ADMIN_USERNAME}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
+API_PORT=${API_PORT:-}
 EOF
     ); then
         rm -f "$temp_file"

@@ -10,6 +10,7 @@ import { GroupChatMessageEntity } from './entity/GroupChatMessageEntity';
 import { AiUsageLogEntity } from './entity/AiUsageLogEntity';
 import { PersonIdentityEntity } from './entity/PersonIdentityEntity';
 import { RecurringTaskEntity } from './entity/RecurringTaskEntity';
+import { ApiOperationEntity } from './entity/ApiOperationEntity';
 
 export const AppDataSource = new DataSource({
   type: 'postgres',
@@ -20,6 +21,6 @@ export const AppDataSource = new DataSource({
   database: process.env.DB_NAME ?? 'KiraMind',
   synchronize: true,
   logging: process.env.NODE_ENV === 'development',
-  entities: [ReminderEntity, ChatEntity, BotSettingEntity, ChatGroupEntity, SessionEntity, HealthLogEntity, GroupChatMessageEntity, AiUsageLogEntity, PersonIdentityEntity, RecurringTaskEntity],
+  entities: [ReminderEntity, ChatEntity, BotSettingEntity, ChatGroupEntity, SessionEntity, HealthLogEntity, GroupChatMessageEntity, AiUsageLogEntity, PersonIdentityEntity, RecurringTaskEntity, ApiOperationEntity],
   migrations: [],
 });

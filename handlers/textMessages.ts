@@ -215,7 +215,7 @@ export function registerForwardedTextGuard(bot: Bot<BotContext>): void {
 
 // ── Регистрация обработчика текстовых сообщений ───────────
 
-export function registerTextMessageHandler(bot: Bot<BotContext>): void {
+export function registerTextMessageHandler(bot: Bot<BotContext>, options: { immediate?: boolean } = {}): void {
     bot.on("message:text", async (ctx, next) => {
         try {
             devLog('📨 Получено текстовое сообщение от пользователя:', ctx.from?.id);
@@ -243,7 +243,7 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
 
             if (ctx.session.messageEditing && ctx.chat) {
                 ctx.session.messageEditing = false;
-                const draft = getMessageDraft(ctx.chat.id);
+                const draft = getMessageDraft(ctx.chat.id, ctx.sessionStorageKey);
                 if (!draft) {
                     await replyAndStore(ctx, "❌ Черновик сообщения не найден или устарел. Создай сообщение заново.");
                     return;
@@ -260,7 +260,8 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
                     draft.notifyOnReply,
                     draft.isGroup ?? false,
                     draft.groupTitle,
-                    draft.deliveryMode
+                    draft.deliveryMode,
+                    ctx.sessionStorageKey,
                 );
 
                 const confirmKeyboard = new InlineKeyboard()
@@ -411,7 +412,7 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
             if (pendingGap) ctx.session.pendingMemoryGap = undefined;
 
             // Устанавливаем таймер для обработки одиночного сообщения
-            setTimeout(async () => {
+            const processText = async () => {
                 try {
                 if (ctx.session.lastUserMessage &&
                     ctx.session.lastUserMessage.text === message &&
@@ -652,7 +653,10 @@ export function registerTextMessageHandler(bot: Bot<BotContext>): void {
                 } finally {
                     await flushSessionAfterAsyncWork(ctx, 'message:text delayed processing');
                 }
-            }, 2000);
+            };
+            // HTTP callers must await the same complete flow, including its session flush.
+            if (options.immediate) await processText();
+            else setTimeout(processText, 2000);
         } catch (error) {
             console.error("Ошибка при обработке сообщения:", error);
             await ctx.reply("Что-то пошло не так... Давай попробуем еще раз? 💫");

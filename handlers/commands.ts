@@ -205,7 +205,7 @@ bot.command("clear", async (ctx) => {
     const userId = ctx.from?.id;
 
     if (userId) {
-        factAnalysisManager.cancelAnalysis(userId);
+        factAnalysisManager.cancelAnalysis(ctx.sessionStorageKey ?? userId);
     }
 
     let savedCount = 0;

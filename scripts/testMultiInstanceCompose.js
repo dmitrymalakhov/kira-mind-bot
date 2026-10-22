@@ -15,10 +15,12 @@ function cleanup() {
   fs.rmSync(tempDir, { recursive: true, force: true });
 }
 
-function render(instanceName, adminPort, storageNames = {}) {
+function render(instanceName, adminPort, storageNames = {}, apiPort) {
   const result = spawnSync(
     'docker',
-    ['compose', '-f', composeFile, 'config', '--format', 'json'],
+    ['compose', '-f', composeFile,
+      ...(apiPort ? ['-f', path.join(repoRoot, 'docker-compose.api.yml')] : []),
+      'config', '--format', 'json'],
     {
       cwd: tempDir,
       encoding: 'utf8',
@@ -29,6 +31,7 @@ function render(instanceName, adminPort, storageNames = {}) {
         ...(storageNames.qdrant ? { QDRANT_VOLUME_NAME: storageNames.qdrant } : {}),
         ADMIN_PORT: String(adminPort),
         DB_PASSWORD: 'test-password',
+        ...(apiPort ? { API_PORT: String(apiPort) } : {}),
       },
     }
   );
@@ -141,6 +144,15 @@ try {
     assert.strictEqual(renamed.services['kira-mind-bot'].container_name, 'aurora-mind-bot');
     assert.strictEqual(renamed.volumes.postgres_data.name, 'kira-mind-bot_postgres_data');
     assert.strictEqual(renamed.volumes.qdrant_storage.name, 'kira-mind-bot_qdrant_storage');
+    const withApi = render('nova-mind-bot', 7876, {}, 8320);
+    const apiService = withApi.services['kira-mind-bot'];
+    assert.strictEqual(apiService.environment.KIRA_API_HOST, '0.0.0.0');
+    assert.strictEqual(String(apiService.environment.KIRA_API_PORT), '3200');
+    assert.strictEqual(apiService.ports[0].host_ip, '127.0.0.1');
+    assert.strictEqual(apiService.ports[0].published, '8320');
+    assert.strictEqual(apiService.ports[0].target, 3200);
+    assert.strictEqual(withApi.volumes.postgres_data.name, secondary.volumes.postgres_data.name);
+    assert.strictEqual(withApi.volumes.qdrant_storage.name, secondary.volumes.qdrant_storage.name);
     console.log('multi-instance compose isolation checks passed');
   }
 } finally {

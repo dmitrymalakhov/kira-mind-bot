@@ -125,12 +125,18 @@ DB_PASSWORD="db-password"
 ADMIN_PORT="7999"
 ADMIN_USERNAME="legacy-admin"
 ADMIN_PASSWORD="legacy-password"
+API_PORT="8320"
 DOCKER_CMD=()
 write_compose_env
 COMPOSE_ENV_MODE="$(stat -c '%a' "$COMPOSE_ENV_FILE" 2>/dev/null || stat -f '%Lp' "$COMPOSE_ENV_FILE")"
 [ "$COMPOSE_ENV_MODE" = "600" ]
 grep -q '^POSTGRES_VOLUME_NAME=kira-mind-bot_postgres_data$' "$COMPOSE_ENV_FILE"
 grep -q '^QDRANT_VOLUME_NAME=kira-mind-bot_qdrant_storage$' "$COMPOSE_ENV_FILE"
+grep -q '^API_PORT=8320$' "$COMPOSE_ENV_FILE"
+unset API_PORT
+load_compose_env_if_present
+[ "$API_PORT" = "8320" ]
+unset API_PORT
 DOCKER_CMD=(fake-docker)
 
 cat > "$ADMIN_STATE_FILE" <<'EOF'

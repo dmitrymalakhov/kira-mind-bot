@@ -1256,7 +1256,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
             } else if (callbackData === "send_message") {
                 // Если нажата кнопка "Отправить", отправляем сообщение
                 if (ctx.chat) {
-                    const sendResult = await sendMessageFromDraftDetailed(ctx.chat.id);
+                    const sendResult = await sendMessageFromDraftDetailed(ctx.chat.id, ctx.sessionStorageKey);
 
                     if (sendResult.success) {
                         const sentLabel = sendResult.deliveryMode === "voice" ? "Голосовое отправлено!" : "Сообщение отправлено!";
@@ -1294,7 +1294,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
             } else if (callbackData === "toggle_notify") {
                 // Обработка переключения уведомлений о получении ответа
                 if (ctx.chat) {
-                    const draft = getMessageDraft(ctx.chat.id);
+                    const draft = getMessageDraft(ctx.chat.id, ctx.sessionStorageKey);
 
                     if (!draft) {
                         await ctx.answerCallbackQuery({ text: "Ошибка: черновик не найден" });
@@ -1314,7 +1314,8 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         newNotifyValue,
                         draft.isGroup ?? false,
                         draft.groupTitle,
-                        draft.deliveryMode
+                        draft.deliveryMode,
+                        ctx.sessionStorageKey,
                     );
 
                     // Получаем информацию о контакте (для группы не применимо)
@@ -1402,7 +1403,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
             } else if (callbackData === "cancel_message") {
                 // Если нажата кнопка "Отмена", удаляем черновик
                 if (ctx.chat) {
-                    deleteMessageDraft(ctx.chat.id);
+                    deleteMessageDraft(ctx.chat.id, ctx.sessionStorageKey);
                 }
 
                 await ctx.answerCallbackQuery({ text: "Отправка отменена" });
@@ -1411,7 +1412,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 // Обработка выбора времени отправки
                 if (ctx.chat) {
                     // Получаем текущий черновик
-                    const draft = getMessageDraft(ctx.chat.id);
+                    const draft = getMessageDraft(ctx.chat.id, ctx.sessionStorageKey);
 
                     if (!draft) {
                         await ctx.answerCallbackQuery({ text: "Ошибка: черновик не найден" });
@@ -1461,7 +1462,8 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         draft.notifyOnReply,
                         draft.isGroup ?? false,
                         draft.groupTitle,
-                        draft.deliveryMode
+                        draft.deliveryMode,
+                        ctx.sessionStorageKey,
                     );
 
                     // Получаем информацию о контакте

@@ -1,0 +1,8 @@
+# Opt-in overlay. API_PORT must be free and unique for this instance.
+services:
+  kira-mind-bot:
+    environment:
+      KIRA_API_HOST: 0.0.0.0
+      KIRA_API_PORT: 3200
+    ports:
+      - "127.0.0.1:${API_PORT:?Set a free API_PORT in the compose .env}:3200"

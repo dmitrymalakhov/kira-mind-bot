@@ -42,6 +42,8 @@ export interface ChatPromptWatchWizardState {
 }
 
 export interface SessionData {
+    /** Last mobile interaction; invalidates buttons from earlier API turns. */
+    apiActionVersion?: string;
     reminders: Reminder[];
     messageEditing?: boolean;
     messageHistory: MessageHistory[]; // Хранение истории сообщений
@@ -354,7 +356,10 @@ export interface ForwardedMessageGroup {
     processed: boolean;
 }
 
-export type BotContext = Context & SessionFlavor<SessionData>;
+export type BotContext = Context & SessionFlavor<SessionData> & {
+    /** Server-assigned channel key; never accepted from an external request. */
+    sessionStorageKey?: string;
+};
 
 // Интерфейс для хранения истории сообщений
 export interface MessageHistory {
