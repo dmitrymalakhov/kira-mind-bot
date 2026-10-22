@@ -60,10 +60,16 @@ const BASE_CONFIG_SCHEMA: SectionDef[] = [
         hint: 'Нужен для пресета GLM Balanced и обычного Z.ai API endpoint. Применяется после рестарта процесса.',
       },
       {
-        key: 'IDEOGRAM_API_KEY',
-        label: 'Ideogram API Key',
+        key: 'OPENAI_IMAGE_API_KEY',
+        label: 'Отдельный ключ OpenAI Image (необязательно)',
         type: 'password',
-        hint: 'Для генерации изображений через Ideogram',
+        hint: 'Пустое поле использует OPENAI_API_KEY. Применяется после пересоздания контейнеров. Модель и референс выбираются в разделе «Модели».',
+      },
+      {
+        key: 'OPENAI_IMAGE_BASE_URL',
+        label: 'Отдельный OpenAI Image Base URL (необязательно)',
+        type: 'text',
+        hint: 'Пустое поле использует OPENAI_BASE_URL, включая ваш lmrouter. Адрес должен включать /v1. Применяется после пересоздания контейнеров.',
       },
       {
         key: 'GOOGLE_MAPS_API_KEY',

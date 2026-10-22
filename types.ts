@@ -337,6 +337,7 @@ export interface SessionData {
             description?: string;
             imageGenerated?: boolean;
             generatedImageUrl?: string;
+            generatedImagePath?: string;
             icsFilePath?: string;
             messageDraft?: { contactId: number; text: string; scheduledTime?: Date };
             contactSelected?: boolean;

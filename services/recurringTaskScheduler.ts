@@ -1,3 +1,4 @@
+import { generatedImageInput } from "../utils/generatedImage";
 import fs from "fs";
 import path from "path";
 import { Bot, InputFile } from "grammy";
@@ -142,8 +143,8 @@ async function sendRecurringResult(
         });
     }
 
-    if (result.imageGenerated && result.generatedImageUrl) {
-        await bot.api.sendPhoto(task.chatId, result.generatedImageUrl);
+    if (result.imageGenerated && generatedImageInput(result)) {
+        await bot.api.sendPhoto(task.chatId, generatedImageInput(result)!);
     }
     if (result.documentFilePath) {
         const filename = result.documentFilename || path.basename(result.documentFilePath);

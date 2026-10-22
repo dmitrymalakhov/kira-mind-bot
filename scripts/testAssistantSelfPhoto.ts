@@ -11,6 +11,7 @@ assert.equal(isAssistantSelfPhotoRequest("покажи, как ты сейчас
 assert.equal(isAssistantSelfPhotoRequest("сфоткайся"), true);
 assert.equal(isAssistantSelfPhotoRequest("скинь фотку кота"), false);
 assert.equal(isAssistantSelfPhotoRequest("покажи фото моей жены"), false);
+assert.equal(isAssistantSelfPhotoRequest("сделай фото без тебя, только кот"), false);
 assert.equal(isAssistantSelfPhotoRequest("расскажи, где ты сейчас"), false);
 
 const prompt = buildAssistantSelfPhotoPromptBrief({

@@ -12,6 +12,7 @@ const { AI_PRESETS, AI_PRESET_NAMES, parseAiPresetName } = require('./aiPresetRe
 const { registerBudgetModeRoutes } = require('./budgetMode');
 const { registerBackgroundFeatureRoutes } = require('./backgroundFeatures');
 const { registerLocalModelRoutes, readLocalRoutes, resolveLocalPreset } = require('./localModels');
+const { registerImageGenerationRoutes } = require('./imageGeneration');
 const {
   DEFAULT_MEMORY_EMBEDDING_PROFILE,
   getMemoryEmbeddingProfile,
@@ -75,6 +76,7 @@ const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 10 * 60 * 1000;
 
 const SENSITIVE_KEYS = new Set([
+  'OPENAI_IMAGE_API_KEY',
   'LM_STUDIO_API_KEY',
   'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN',
   'KIRA_ALLOWED_USER_ID',
@@ -88,6 +90,7 @@ const ALLOWED_TIMEZONES = new Set(COMMON_TIMEZONES.map((item) => item.value));
 const MEMORY_EMBEDDING_PROFILE_SETTING_KEY = 'MEMORY_EMBEDDING_PROFILE';
 
 const EDITABLE_KEYS = new Set([
+  'OPENAI_IMAGE_API_KEY', 'OPENAI_IMAGE_BASE_URL',
   'OPENAI_BASE_URL', 'LM_STUDIO_BASE_URL', 'LM_STUDIO_MODEL', 'LM_STUDIO_API_KEY',
   'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'KIRA_BOT_TOKEN',
   'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID', 'ELEVENLABS_VOICE_NAME',
@@ -403,6 +406,7 @@ async function readMemoryEmbeddingProfileState(pool, vars) {
 registerBudgetModeRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable });
 registerBackgroundFeatureRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
 registerLocalModelRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
+registerImageGenerationRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
 
 app.get('/api/ai-preset', requireAuth, async (_req, res) => {
   const vars = readEnvFile();

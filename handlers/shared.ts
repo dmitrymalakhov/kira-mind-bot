@@ -1,3 +1,4 @@
+import { generatedImageInput } from "../utils/generatedImage";
 import { InlineKeyboard, InputFile } from "grammy";
 import { BotContext, ConversationReplyContext, SentMessageContext } from "../types";
 import * as fs from 'fs';
@@ -118,7 +119,7 @@ export function canSendResultAsVoice(result: ProcessingResult): boolean {
         !result.icsFilePath &&
         !result.documentFilePath &&
         !result.imageGenerated &&
-        !result.generatedImageUrl;
+        !result.generatedImageUrl && !result.generatedImagePath;
 }
 
 export function shouldRunProactiveHint(result: ProcessingResult, processedMessage: string): boolean {
@@ -126,7 +127,7 @@ export function shouldRunProactiveHint(result: ProcessingResult, processedMessag
     if (result.reminderAction || result.reminderCreationFailures?.length) return false;
     if (result.reminderCreated) return false;
     if (result.messageDraft) return false;
-    if (result.imageGenerated || result.generatedImageUrl) return false;
+    if (result.imageGenerated || generatedImageInput(result)) return false;
     if (result.icsFilePath || result.documentFilePath) return false;
     if (result.negotiationSummarySent) return false;
     if (/^Продолжи задачу в браузере через Playwright\.|browserSessionId:/i.test(processedMessage)) return false;
@@ -420,15 +421,15 @@ export async function sendResultToUser(
     }
 
     // Сгенерированное изображение
-    if (result.imageGenerated && result.generatedImageUrl) {
+    if (result.imageGenerated && generatedImageInput(result)) {
         const sent = await replyAndStore(ctx, result.responseText, result.keyboard ? {
             reply_markup: result.keyboard
         } : {});
 
         try {
             await ctx.api.sendChatAction(ctx.chat!.id, "upload_photo");
-            await ctx.replyWithPhoto(result.generatedImageUrl);
-            await addToHistory(ctx, 'bot', `[Сгенерированное изображение: ${result.generatedImageUrl}]`);
+            await ctx.replyWithPhoto(generatedImageInput(result)!);
+            await addToHistory(ctx, 'bot', '[Сгенерированное изображение отправлено]');
         } catch (imageError) {
             console.error("Ошибка при отправке сгенерированного изображения:", imageError);
             await ctx.reply("К сожалению, не удалось отправить сгенерированное изображение. Возможно, проблема с URL или сервисом генерации изображений.");

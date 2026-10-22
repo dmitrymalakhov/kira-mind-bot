@@ -1,10 +1,10 @@
-import axios from "axios";
-import * as dotenv from "dotenv";
 import { MessageHistory } from "../types";
 import { ProcessingResult } from "../orchestrator";
 import { devLog } from "../utils";
 import { getBotGenderedText, getBotPersona, getCommunicationStyle, getBotBiography } from "../persona";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
+import { generateOpenAiImage, getImageSettings, CharacterReferenceRequiredError } from "../services/imageGenerationService";
+import { parseImagePromptPlan, characterImagePlanningInstruction } from "../utils/imagePromptPlan";
 import { formatPromptDateTime } from "../utils/time";
 import { config } from "../config";
 import {
@@ -17,90 +17,6 @@ import {
     buildAssistantSelfPhotoPromptBrief,
     isAssistantSelfPhotoRequest,
 } from "../utils/assistantSelfPhoto";
-
-// Загрузка переменных окружения
-dotenv.config({ path: `.env.${process.env.NODE_ENV}` });
-
-// Интерфейс для запроса на генерацию изображения
-interface ImageGenerationRequest {
-    image_request: {
-        prompt: string;
-        aspect_ratio: string;
-        model: string;
-        magic_prompt_option: string;
-        style_type: string;
-    };
-}
-
-// Интерфейс для ответа от API Ideogram
-interface IdeogramResponse {
-    created: string;
-    data: {
-        prompt: string;
-        resolution: string;
-        is_image_safe: boolean;
-        seed: number;
-        url: string;
-        style_type?: string;
-    }[];
-}
-
-/**
- * Генерирует изображение с помощью API Ideogram
- * @param prompt Запрос для генерации изображения
- * @returns URL сгенерированного изображения или null при ошибке
- */
-async function generateImage(prompt: string): Promise<string | null> {
-    try {
-        const apiKey = process.env.IDEOGRAM_API_KEY;
-
-        if (!apiKey) {
-            console.error("IDEOGRAM_API_KEY не указан в переменных окружения");
-            return null;
-        }
-
-        const request: ImageGenerationRequest = {
-            image_request: {
-                prompt,
-                aspect_ratio: "ASPECT_10_16", // Портретный режим хорошо подходит для большинства случаев
-                model: "V_2",
-                magic_prompt_option: "AUTO",
-                style_type: "REALISTIC",
-            },
-        };
-
-        const response = await axios.post<IdeogramResponse>(
-            "https://api.ideogram.ai/generate",
-            request,
-            {
-                headers: {
-                    "Api-Key": apiKey,
-                    "Content-Type": "application/json",
-                },
-            }
-        );
-
-        if (response.data && response.data.data && response.data.data.length > 0) {
-            const imageData = response.data.data[0];
-
-            if (imageData.is_image_safe && imageData.url) {
-                return imageData.url;
-            } else if (!imageData.is_image_safe) {
-                console.error("Сгенерированное изображение не прошло проверку безопасности");
-                return null;
-            } else {
-                console.error("URL изображения отсутствует в ответе");
-                return null;
-            }
-        } else {
-            console.error("Некорректный формат ответа от API Ideogram");
-            return null;
-        }
-    } catch (error) {
-        console.error("Ошибка при генерации изображения с помощью API Ideogram:", error);
-        return null;
-    }
-}
 
 /**
  * Агент для генерации изображений на основе запроса пользователя
@@ -118,6 +34,9 @@ export async function imageGenerationAgent(
     memoryContext: string = ""
 ): Promise<ProcessingResult> {
     try {
+        if (!(await getImageSettings()).enabled) {
+            return { responseText: 'Генерация изображений выключена. Включи её в админке: «Настройки → Генерация изображений».', imageGenerated: false };
+        }
         const isSelfPhotoRequest = isAssistantSelfPhotoRequest(message);
 
         // Подготовка истории сообщений для контекста
@@ -148,7 +67,7 @@ export async function imageGenerationAgent(
                     currentDate,
                 );
             } catch (error) {
-                devLog("[imageGeneration] self-memory unavailable, using stable biography:", error);
+                devLog("[imageGeneration] self-memory unavailable, using stable biography");
             }
         }
 
@@ -172,7 +91,7 @@ export async function imageGenerationAgent(
         ${historyContext}
         ${memoryContext ? `Контекст из долговременной памяти (используй для персонализации изображения):\n${memoryContext}` : ''}
 
-        Создай оптимальный промпт для генерации изображения с помощью Ideogram AI на основе запроса пользователя.
+        Создай оптимальный промпт для генерации изображения с помощью OpenAI GPT Image на основе запроса пользователя.
         Промпт должен:
         1. Быть детальным и красочным
         2. Содержать стилистические указания
@@ -180,43 +99,31 @@ export async function imageGenerationAgent(
         4. Включать ключевые элементы из запроса пользователя
         5. Быть на английском языке для лучших результатов генерации
 
-        Предоставь только текст промпта без дополнительных пояснений или кавычек.
+        Верни промпт и признак присутствия персонажа в JSON по указанной системной схеме.
         `;
 
-        const response = await createChatCompletionForTask('conversation', {
+        const response = await createChatCompletionForTask('lightweightText', {
             messages: [
                 {
                     role: "system",
-                    content: isSelfPhotoRequest
-                        ? `${getBotPersona()}\nБиография: ${getBotBiography()}\nСтиль общения: ${getCommunicationStyle()}\nТы переводишь личный контекст ${config.characterName} в точный английский промпт для Ideogram AI. Сохраняй одну и ту же внешность из биографии и визуально продолжай текущую жизненную ситуацию персонажа.`
-                        : `${getBotPersona()} Стиль общения: ${getCommunicationStyle()} Ты - эксперт по составлению промптов для генерации изображений. Твоя задача - создать оптимальный промпт для Ideogram AI, который точно отразит запрос пользователя и даст наилучший результат. Ты превращаешь простые запросы в детальные описания на английском языке.`
+                    content: (isSelfPhotoRequest
+                        ? `${getBotPersona()}\nБиография: ${getBotBiography()}\nСтиль общения: ${getCommunicationStyle()}\nТы переводишь личный контекст ${config.characterName} в точный английский промпт для OpenAI GPT Image. Сохраняй одну и ту же внешность из биографии и визуально продолжай текущую жизненную ситуацию персонажа.`
+                        : `${getBotPersona()} Стиль общения: ${getCommunicationStyle()} Ты - эксперт по составлению промптов для генерации изображений. Твоя задача - создать оптимальный промпт для OpenAI GPT Image, который точно отразит запрос пользователя и даст наилучший результат. Ты превращаешь простые запросы в детальные описания на английском языке.`) + '\n' + characterImagePlanningInstruction(config.characterName)
                 },
                 {
                     role: "user",
                     content: promptOptimizationQuery
                 }
             ],
-            temperature: 0.7,
+            temperature: 0.3,
+            max_tokens: 1200,
+            response_format: { type: "json_object" },
         });
 
-        // Получаем оптимизированный промпт
-        const optimizedPrompt = response.choices[0]?.message?.content || message;
-        devLog("Оптимизированный промпт для генерации изображения:", optimizedPrompt);
-
-        // Генерируем изображение с помощью полученного промпта
-        const imageUrl = await generateImage(optimizedPrompt);
-
-        if (!imageUrl) {
-            return {
-                responseText: isSelfPhotoRequest
-                    ? "Не получилось сейчас отправить фото — генерация сорвалась. Попробуй попросить ещё раз чуть позже."
-                    : getBotGenderedText(
-                        "Я попыталась сгенерировать изображение по твоему запросу,",
-                        "Я попытался сгенерировать изображение по твоему запросу,",
-                    ) + " но, к сожалению, возникла техническая проблема. Пожалуйста, попробуй сформулировать запрос иначе или попробуй позже. 🎨",
-                imageGenerated: false
-            };
-        }
+        const plan = parseImagePromptPlan(response.choices[0]?.message?.content);
+        // A direct self-photo request cannot silently lose the canonical identity.
+        const includesCharacter = isSelfPhotoRequest || plan.includesCharacter;
+        const imagePath = await generateOpenAiImage(plan.prompt, includesCharacter);
 
         // Успешно сгенерировали изображение
         return {
@@ -227,11 +134,15 @@ export async function imageGenerationAgent(
                     "Вот изображение, которое я создал по твоему запросу ✨",
                 ) + " Надеюсь, оно тебе понравится!",
             imageGenerated: true,
-            generatedImageUrl: imageUrl
+            generatedImagePath: imagePath
         };
 
     } catch (error) {
-        console.error("Ошибка в агенте генерации изображений:", error);
+        if (error instanceof CharacterReferenceRequiredError) {
+            return { responseText: error.message, imageGenerated: false };
+        }
+        // Provider errors may contain request bodies or credentials; never log them.
+        console.error("[imageGeneration] generation failed");
 
         // В случае ошибки возвращаем сообщение об ошибке
         return {

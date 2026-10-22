@@ -339,6 +339,7 @@ export function mergeProcessingResults(results: ProcessingResult[], botReaction?
         if (r.imageGenerated) {
             merged.imageGenerated = true;
             merged.generatedImageUrl = r.generatedImageUrl;
+            merged.generatedImagePath = r.generatedImagePath;
         }
         if (r.documentFilePath) {
             merged.documentFilePath = r.documentFilePath;

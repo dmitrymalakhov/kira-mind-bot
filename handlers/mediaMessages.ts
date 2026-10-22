@@ -1,3 +1,4 @@
+import { generatedImageInput } from "../utils/generatedImage";
 import { Bot } from "grammy";
 import { BotContext } from "../types";
 import { processMessage } from "../orchestrator";
@@ -43,14 +44,14 @@ async function handleCaptionedMedia(
 
         await saveRemindersFromResult(ctx, result);
 
-        if (result.imageGenerated && result.generatedImageUrl) {
+        if (result.imageGenerated && generatedImageInput(result)) {
             responseText = `${responsePrefix}. ${result.responseText}`;
             await ctx.reply(responseText);
 
             try {
                 await ctx.api.sendChatAction(ctx.chat!.id, "upload_photo");
-                await ctx.replyWithPhoto(result.generatedImageUrl);
-                await addToHistory(ctx, 'bot', `[Сгенерированное изображение: ${result.generatedImageUrl}]`);
+                await ctx.replyWithPhoto(generatedImageInput(result)!);
+                await addToHistory(ctx, 'bot', '[Сгенерированное изображение отправлено]');
             } catch (imageError) {
                 console.error("Ошибка при отправке сгенерированного изображения:", imageError);
                 await ctx.reply("К сожалению, не удалось отправить сгенерированное изображение. Возможно, проблема с URL или сервисом генерации изображений.");
