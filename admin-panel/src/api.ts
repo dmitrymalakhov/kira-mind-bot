@@ -27,7 +27,7 @@ export interface ImageGenerationConfig {
   settings: { enabled: boolean; model: string; size: string; quality: string };
   models: string[]; sizes: string[]; qualities: string[];
   connection: { configured: boolean; baseUrlSource: string; keySource: string };
-  reference: { present: boolean; sha256?: string };
+  reference: { present: boolean; sha256?: string; source?: 'default' | 'custom' };
 }
 async function imageApi(path: string, init?: RequestInit) {
   const response = await apiFetch(`/api/image-generation${path}`, init);

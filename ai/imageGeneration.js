@@ -8,6 +8,7 @@ const MODELS = ['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare', 'gpt-image-2', 
 const SIZES = ['1024x1024', '1024x1536', '1536x1024'];
 const QUALITIES = ['low', 'medium', 'high'];
 const MAX_REFERENCE_BYTES = 10 * 1024 * 1024;
+const DEFAULT_REFERENCE_PATH = path.join(__dirname, '..', 'assets', 'characters', 'kira', 'reference.png');
 const IDENTITY_INSTRUCTION = 'The attached reference depicts the assistant character. Whenever this character appears, preserve the exact same facial identity, apparent adult age, body build, height proportions, skin tone, hair and distinctive features. The reference is the identity source of truth. Change only pose, expression, clothes, lighting and scene as requested. Do not copy the reference background or framing. Do not substitute a different person. Other people must remain distinct. Do not add this character to scenes that do not call for them.';
 
 function parseImageSettings(raw) {
@@ -43,12 +44,17 @@ function imageMime(data) {
   throw new Error('Загрузите изображение PNG, JPEG или WebP');
 }
 function referencePath(runtimeDir) { return path.join(runtimeDir, 'image-generation', 'character-reference.image'); }
-async function readReference(runtimeDir) {
-  let data;
+async function readReference(runtimeDir, defaultFile = DEFAULT_REFERENCE_PATH) {
+  let data, source = 'custom';
   try { data = await fs.readFile(referencePath(runtimeDir)); }
-  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    if (!defaultFile) return null;
+    try { data = await fs.readFile(defaultFile); source = 'default'; }
+    catch (defaultError) { if (defaultError.code === 'ENOENT') return null; throw defaultError; }
+  }
   if (data.length > MAX_REFERENCE_BYTES) throw new Error('Референс превышает 10 MiB');
-  return { data, mime: imageMime(data), sha256: crypto.createHash('sha256').update(data).digest('hex') };
+  return { data, mime: imageMime(data), sha256: crypto.createHash('sha256').update(data).digest('hex'), source };
 }
 async function saveReference(runtimeDir, data) {
   if (!data.length || data.length > MAX_REFERENCE_BYTES) throw new Error('Референс должен быть не больше 10 MiB');
@@ -94,6 +100,6 @@ async function requestImage({ settings, prompt, reference, env = process.env, fe
   const data = Buffer.from(encoded, 'base64');
   return { data, mime: imageMime(data), usage: result.usage };
 }
-module.exports = { SETTING_KEY, MODELS, SIZES, QUALITIES, MAX_REFERENCE_BYTES, IDENTITY_INSTRUCTION,
+module.exports = { SETTING_KEY, MODELS, SIZES, QUALITIES, MAX_REFERENCE_BYTES, DEFAULT_REFERENCE_PATH, IDENTITY_INSTRUCTION,
   parseImageSettings, defaultImageSettings, imageConnection, imageMime, readReference, saveReference,
   deleteReference, buildImageRequest, requestImage };

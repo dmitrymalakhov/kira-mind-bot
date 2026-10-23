@@ -22,7 +22,7 @@ function registerImageGenerationRoutes(app, { requireAuth, createDbPool, ensureB
       res.set('Cache-Control', 'no-store').json({ settings, models: MODELS, sizes: SIZES, qualities: QUALITIES,
         connection: { configured, baseUrlSource: vars.OPENAI_IMAGE_BASE_URL ? 'OPENAI_IMAGE_BASE_URL' : vars.OPENAI_BASE_URL ? 'OPENAI_BASE_URL' : 'OpenAI',
           keySource: vars.OPENAI_IMAGE_API_KEY ? 'OPENAI_IMAGE_API_KEY' : 'OPENAI_API_KEY' },
-        reference: { present: Boolean(reference), sha256: reference?.sha256 } });
+        reference: { present: Boolean(reference), sha256: reference?.sha256, source: reference?.source } });
     } catch { res.status(500).json({ error: 'Не удалось прочитать настройки изображений' }); }
     finally { await pool.end(); }
   });
