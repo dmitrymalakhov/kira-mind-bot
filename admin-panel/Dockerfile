@@ -22,6 +22,7 @@ COPY ai/*.json /app/ai/
 COPY ai/memoryEmbeddingHttp.js /app/ai/memoryEmbeddingHttp.js
 COPY ai/localModelRouting.js /app/ai/localModelRouting.js
 COPY ai/imageGeneration.js /app/ai/imageGeneration.js
+COPY assets/characters/kira /app/assets/characters/kira
 COPY ai/memoryEmbeddingProviderSupport.js /app/ai/memoryEmbeddingProviderSupport.js
 COPY utils/legacyPersonalitySanitizer.js /app/utils/legacyPersonalitySanitizer.js
 EXPOSE 3000

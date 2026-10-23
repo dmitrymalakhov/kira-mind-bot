@@ -7,6 +7,7 @@ const sanitizerModule = require("../dist/utils/legacyPersonalitySanitizer.js");
 const localModels = require('../dist/ai/localModelRouting.js');
 assert.equal(localModels.defaultLocalRoutes('synthetic/model').fast.reasoningEffort, 'none');
 assert.equal(require('../dist/ai/imageGeneration.js').defaultImageSettings({}).model, 'gpt-image-2.5-sunburst');
+assert.ok(require('node:fs').existsSync(require('../dist/ai/imageGeneration.js').DEFAULT_REFERENCE_PATH), 'Built runtime must include the default Kira reference');
 
 assert.ok(configModule, "dist/config.js should load successfully");
 assert.equal(typeof sanitizerModule.hasLegacyDigitalBiography, "function");

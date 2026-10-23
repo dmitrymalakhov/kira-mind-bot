@@ -24,7 +24,7 @@
     "test:memory-embedding-http": "node scripts/testMemoryEmbeddingHttp.js",
     "test:server-common": "bash scripts/testServerCommon.sh && bash scripts/testInstanceMigration.sh",
     "test:multi-instance-compose": "node scripts/testMultiInstanceCompose.js",
-    "build:server": "tsc --project tsconfig.server.json && mkdir -p dist/utils dist/ai && cp utils/legacyPersonalitySanitizer.js dist/utils/legacyPersonalitySanitizer.js && cp ai/localModelRouting.js ai/local-model-roles.json ai/imageGeneration.js dist/ai/",
+    "build:server": "tsc --project tsconfig.server.json && mkdir -p dist/utils dist/ai && cp utils/legacyPersonalitySanitizer.js dist/utils/legacyPersonalitySanitizer.js && cp ai/localModelRouting.js ai/local-model-roles.json ai/imageGeneration.js dist/ai/ && mkdir -p dist/assets/characters/kira && cp assets/characters/kira/reference.png dist/assets/characters/kira/reference.png",
     "test:built-server-runtime": "node scripts/testBuiltServerRuntime.js",
     "build:admin": "npm --prefix admin-panel run build",
     "build:all": "npm run build:server && npm run build:admin",

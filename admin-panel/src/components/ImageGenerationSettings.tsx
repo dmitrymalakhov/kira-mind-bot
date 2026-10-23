@@ -57,13 +57,14 @@ export function ImageGenerationSettings({ onToast }: { onToast: (message: string
       {!data.connection.configured && <Alert severity="warning">Укажите ключ OpenAI и адрес lmrouter в разделе «API Ключи».</Alert>}
       {connection && <Alert severity="info">{connection}</Alert>}
       <Typography variant="subtitle2">Референс Киры</Typography>
+      {data.reference.present && <Alert severity="info">{data.reference.source === 'custom' ? 'Используется ваш референс. Его можно заменить или вернуться к стандартному образу Киры.' : 'Используется стандартный образ Киры, который поставляется с продуктом.'}</Alert>}
       <Typography variant="body2" color="text.secondary">Единый эталон лица, возраста и пропорций тела. Он автоматически передаётся модели, когда Кира присутствует в сцене: селфи, портрет или фото с другими людьми. Для остальных картинок референс не используется. Один и тот же эталон улучшает постоянство внешности, хотя небольшие отличия между генерациями возможны.</Typography>
       {preview && <Box component="img" src={preview} alt="Текущий эталон внешности Киры" sx={{ maxHeight: 400, maxWidth: '100%', alignSelf: 'flex-start', objectFit: 'contain', borderRadius: 1 }} />}
       {!data.reference.present && <Alert severity="warning">Эталон ещё не задан. Добавьте изображение, чтобы Кира могла присылать свои фото с постоянной внешностью.</Alert>}
-      <Typography variant="caption" color="text.secondary">Лучше использовать чёткий портрет вместе с видом в полный рост в одном изображении. PNG, JPEG или WebP, до 10 MiB. Хранится в приватных runtime-данных, вне Git и Docker-образа.</Typography>
+      <Typography variant="caption" color="text.secondary">Для замены используйте чёткий портрет вместе с видом в полный рост в одном изображении. PNG, JPEG или WebP, до 10 MiB. Ваши замены сохраняются в приватных runtime-данных и не попадают в Git или Docker-образ. Стандартный образ остаётся доступен для восстановления.</Typography>
       <Stack direction="row" spacing={1}>
         <Button component="label" variant="outlined" disabled={busy}>{data.reference.present ? 'Заменить референс' : 'Загрузить референс'}<input hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; if (!file) return; if (file.size > 10 * 1024 * 1024) { setError('Файл должен быть не больше 10 MiB'); return; } void act(() => uploadCharacterReference(file), 'Эталон внешности сохранён'); }} /></Button>
-        {data.reference.present && <Button color="error" disabled={busy} onClick={() => void act(removeCharacterReference, 'Эталон удалён')}>Удалить референс</Button>}
+        {data.reference.source === 'custom' && <Button disabled={busy} onClick={() => void act(removeCharacterReference, 'Восстановлен стандартный образ Киры')}>Вернуть стандартный образ</Button>}
       </Stack>
     </>}
   </Stack></CardContent></Card>;

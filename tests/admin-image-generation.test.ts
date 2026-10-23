@@ -32,7 +32,9 @@ test('image admin authenticates uploads, hides secrets, persists settings and se
   assert.equal((await fetch(base + '/reference', { method: 'POST', body: png })).status, 401);
   const first = await request();
   const body = await first.json();
-  assert.equal(body.reference.present, false);
+  assert.equal(body.reference.present, true);
+  assert.equal(body.reference.source, 'default');
+  const defaultHash = body.reference.sha256;
   assert.equal(body.connection.configured, true);
   assert.doesNotMatch(JSON.stringify(body), /synthetic-private-api-key/);
   const settings = { ...body.settings, quality: 'high', size: '1024x1024' };
@@ -43,8 +45,12 @@ test('image admin authenticates uploads, hides secrets, persists settings and se
   assert.equal(reference.headers.get('cache-control'), 'no-store');
   assert.deepEqual(Buffer.from(await reference.arrayBuffer()), png);
   assert.equal((await (await request()).json()).reference.present, true);
+  assert.equal((await (await request()).json()).reference.source, 'custom');
   assert.equal((await request('/reference', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: '<svg>bad</svg>' })).status, 400);
   assert.deepEqual(Buffer.from(await (await request('/reference')).arrayBuffer()), png);
   assert.equal((await request('/reference', { method: 'DELETE' })).status, 200);
-  assert.equal((await request('/reference')).status, 404);
+  assert.equal((await request('/reference')).status, 200);
+  const reset = await (await request()).json();
+  assert.equal(reset.reference.source, 'default');
+  assert.equal(reset.reference.sha256, defaultHash);
 });
