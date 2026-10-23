@@ -23,6 +23,28 @@ import type { BackgroundFeature, BackgroundFeatureState } from '../../ai/backgro
 
 export const AUTH_REQUIRED_EVENT = 'kira:auth-required';
 
+export interface ImageGenerationConfig {
+  settings: { enabled: boolean; model: string; size: string; quality: string };
+  models: string[]; sizes: string[]; qualities: string[];
+  connection: { configured: boolean; baseUrlSource: string; keySource: string };
+  reference: { present: boolean; sha256?: string };
+}
+async function imageApi(path: string, init?: RequestInit) {
+  const response = await apiFetch(`/api/image-generation${path}`, init);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Ошибка настройки изображений');
+  return data;
+}
+export function fetchImageGeneration(): Promise<ImageGenerationConfig> { return imageApi(''); }
+export function saveImageGeneration(settings: ImageGenerationConfig['settings']) {
+  return imageApi('', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings }) });
+}
+export function uploadCharacterReference(file: File) {
+  return imageApi('/reference', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+}
+export function removeCharacterReference() { return imageApi('/reference', { method: 'DELETE' }); }
+export function checkImageConnection(): Promise<{ success: boolean; models: string[] }> { return imageApi('/connection'); }
+
 export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const response = await fetch(input, init);
   if (response.status === 401) {

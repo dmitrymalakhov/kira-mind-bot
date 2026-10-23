@@ -1,3 +1,4 @@
+import { generatedImageInput } from "../utils/generatedImage";
 /**
  * Group Public Agent
  *
@@ -121,8 +122,8 @@ export async function handleGroupPublicUserMessage(ctx: BotContext): Promise<voi
         if (intent === "IMAGE_GENERATION") {
             const result = await imageGenerationAgent(message, false, "", []);
             let replyText: string;
-            if (result.generatedImageUrl) {
-                await ctx.replyWithPhoto(result.generatedImageUrl, {
+            if (generatedImageInput(result)) {
+                await ctx.replyWithPhoto(generatedImageInput(result)!, {
                     caption: result.responseText || undefined,
                 });
                 replyText = result.responseText || "[изображение]";

@@ -6,6 +6,7 @@ const configModule = require("../dist/config.js");
 const sanitizerModule = require("../dist/utils/legacyPersonalitySanitizer.js");
 const localModels = require('../dist/ai/localModelRouting.js');
 assert.equal(localModels.defaultLocalRoutes('synthetic/model').fast.reasoningEffort, 'none');
+assert.equal(require('../dist/ai/imageGeneration.js').defaultImageSettings({}).model, 'gpt-image-2.5-sunburst');
 
 assert.ok(configModule, "dist/config.js should load successfully");
 assert.equal(typeof sanitizerModule.hasLegacyDigitalBiography, "function");

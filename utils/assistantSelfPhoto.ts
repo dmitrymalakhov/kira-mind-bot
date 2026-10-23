@@ -12,6 +12,8 @@ const SHOW_APPEARANCE_RE =
 export function isAssistantSelfPhotoRequest(message: string): boolean {
   const text = message.trim();
   if (!text) return false;
+  // Excluding the assistant must not force the identity reference into the scene.
+  if (/(?:без\s+(?:тебя|вас)|не\s+(?:тебя|себя)|without\s+(?:you|yourself))/iu.test(text)) return false;
   if (DIRECT_SELFIE_RE.test(text) || SHOW_APPEARANCE_RE.test(text)) return true;
   return PHOTO_REQUEST_RE.test(text) &&
     PHOTO_WORD_RE.test(text) &&
@@ -57,10 +59,10 @@ Requirements:
 - If no exact current place is stored, choose a modest everyday setting consistent with the biography; do not invent a trip, event, workplace or landmark.
 - Make it feel like a spontaneous phone selfie sent during an ongoing private chat: natural perspective, ordinary framing, plausible skin texture and small photographic imperfections.
 - Keep the person fully clothed and the scene non-sexual.
-- Show one adult person. No collage, split screen, captions, UI, logos, watermarks or written text.
+- Depict the same adult character from the supplied identity reference; preserve apparent age, face and body proportions. Other people may appear only when explicitly requested. No collage, split screen, captions, UI, logos, watermarks or written text.
 - Do not depict an AI, robot, avatar, virtual interface, fantasy setting or professional studio shoot.
 - Respect any concrete visual detail in the user's request unless it contradicts stable identity or current self-memory.
 
-Return only the final English image-generation prompt, without quotes, markdown or explanation.
+Return the final English scene prompt and character-presence flag in the JSON format required by the system, without markdown or explanation.
 `.trim();
 }

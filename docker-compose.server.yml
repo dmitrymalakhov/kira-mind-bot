@@ -71,12 +71,14 @@ services:
     volumes:
       - ./.env.production:/app/env/bot.env
       - ./personality.json:/app/personality/personality.json
+      - ./runtime-data:/app/runtime-data
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme}
       - BOT_ENV_FILE=/app/env/bot.env
       - PERSONALITY_FILE=/app/personality/personality.json
+      - KIRA_RUNTIME_DATA_DIR=/app/runtime-data
       - KIRA_INSTANCE_NAME=${KIRA_INSTANCE_NAME:-kira-mind-bot}
       - KIRA_RUNTIME_HEALTH_URL=http://kira-mind-bot:3100
       - KIRA_BOT_CONTAINER_NAME=${KIRA_INSTANCE_NAME:-kira-mind-bot}

@@ -11,6 +11,7 @@ import type { ConfigSectionHandle } from './ConfigSection';
 import { BudgetSettingsSection } from './BudgetSettingsSection';
 import { getAiProviderDescriptor } from '../../../ai/providerMetadata';
 import { LocalModelSettings } from './LocalModelSettings';
+import { ImageGenerationSettings } from './ImageGenerationSettings';
 
 interface Props {
   config: ConfigResponse;
@@ -145,6 +146,7 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
             </Stack>
           </CardContent>
         </Card>
+        <ImageGenerationSettings onToast={onToast} />
         <BudgetSettingsSection onToast={onToast} />
       </>
     );

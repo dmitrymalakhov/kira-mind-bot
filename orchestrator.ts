@@ -160,6 +160,7 @@ export interface ProcessingResult {
     description?: string; // Описание изображения, если оно было сгенерировано
     imageGenerated?: boolean;  // Флаг успешной генерации изображения
     generatedImageUrl?: string; // URL сгенерированного изображения
+    generatedImagePath?: string; // Приватный runtime-файл OpenAI Image для загрузки в транспорт
     icsFilePath?: string; // Путь к сгенерированному ICS файлу
     documentFilePath?: string; // Путь к сгенерированному документу
     documentFilename?: string; // Имя документа для отправки пользователю

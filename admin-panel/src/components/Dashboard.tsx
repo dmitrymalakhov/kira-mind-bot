@@ -132,6 +132,7 @@ const SETTINGS_GROUPS: SidebarSectionGroup[] = [
     title: 'Интеграции',
     items: [
       { targetId: 'model-presets', shortLabel: 'Модель Киры', icon: <SmartToyIcon fontSize="small" />, caption: 'Кто отвечает в диалоге' },
+      { targetId: 'image-generation', shortLabel: 'Изображения', icon: <SparklesIcon fontSize="small" />, caption: 'GPT Image и эталон Киры' },
       { targetId: 'budget-settings', shortLabel: 'Фон и экономия', icon: <FlareIcon fontSize="small" />, caption: 'Выбор отдельных функций' },
       { targetId: 'api', shortLabel: 'API', icon: <KeyIcon fontSize="small" />, caption: 'API Ключи' },
       { targetId: 'elevenlabs', shortLabel: 'Voice', icon: <GraphicEqIcon fontSize="small" />, caption: 'ElevenLabs Voice' },
