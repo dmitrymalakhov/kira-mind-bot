@@ -22,10 +22,11 @@ import {
     buildReminderConfirmationText,
 } from '../utils/reminderConfirmation';
 import { esc, paragraph } from '../utils/richMessage';
+import { RUNTIME_DATA_DIR } from '../utils/runtimeData';
 
 // ── Константы ──────────────────────────────────────────────
 
-export const TEMP_DIR = path.join(__dirname, 'temp');
+export const TEMP_DIR = process.env.KIRA_TENANT_ID ? path.join(RUNTIME_DATA_DIR, 'temp') : path.join(__dirname, 'temp');
 if (!fs.existsSync(TEMP_DIR)) {
     console.log('📂 Создание временной директории:', TEMP_DIR);
     fs.mkdirSync(TEMP_DIR, { recursive: true });

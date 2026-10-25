@@ -440,6 +440,128 @@
           }
         }
       }
+    },
+    "/settings": {
+      "get": {
+        "operationId": "getUserSettings",
+        "summary": "Get saved preferences, effective background state and personal Telegram availability",
+        "responses": {
+          "200": {
+            "description": "Current settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateUserSettings",
+        "summary": "Atomically change budget mode and selected background functions; no Idempotency-Key required",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "budgetMode": {
+                    "type": "string",
+                    "enum": [
+                      "normal",
+                      "maximum"
+                    ]
+                  },
+                  "background": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "telegramReading": {
+                        "type": "boolean"
+                      },
+                      "reflection": {
+                        "type": "boolean"
+                      },
+                      "personalChatMemory": {
+                        "type": "boolean"
+                      },
+                      "daytimeReflection": {
+                        "type": "boolean"
+                      },
+                      "inboxGuardian": {
+                        "type": "boolean"
+                      },
+                      "dmReport": {
+                        "type": "boolean"
+                      },
+                      "chatGroupTracking": {
+                        "type": "boolean"
+                      },
+                      "chatPromptWatchers": {
+                        "type": "boolean"
+                      },
+                      "deferredFacts": {
+                        "type": "boolean"
+                      },
+                      "memoryConsolidation": {
+                        "type": "boolean"
+                      },
+                      "memoryInsight": {
+                        "type": "boolean"
+                      },
+                      "kiraLife": {
+                        "type": "boolean"
+                      },
+                      "kiraInnerDevelopment": {
+                        "type": "boolean"
+                      },
+                      "kiraSelfEvolution": {
+                        "type": "boolean"
+                      },
+                      "kiraLifeWebSearch": {
+                        "type": "boolean"
+                      },
+                      "recurringTasks": {
+                        "type": "boolean"
+                      },
+                      "morningDigest": {
+                        "type": "boolean"
+                      },
+                      "morningDigestAi": {
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                },
+                "minProperties": 1,
+                "description": "At least one changed setting is required. Missing fields keep their previous values. Enabling a feature does not grant Telegram access."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Persisted settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserSettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -611,6 +733,143 @@
             "format": "uri"
           }
         }
+      },
+      "UserSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "budgetMode": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "maximum"
+            ]
+          },
+          "budgetModes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "enum": [
+                    "normal",
+                    "maximum"
+                  ]
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key",
+                "title"
+              ]
+            }
+          },
+          "telegram": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "personalSessionConfigured": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "personalSessionConfigured"
+            ]
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "enum": [
+                    "telegramReading",
+                    "reflection",
+                    "personalChatMemory",
+                    "daytimeReflection",
+                    "inboxGuardian",
+                    "dmReport",
+                    "chatGroupTracking",
+                    "chatPromptWatchers",
+                    "deferredFacts",
+                    "memoryConsolidation",
+                    "memoryInsight",
+                    "kiraLife",
+                    "kiraInnerDevelopment",
+                    "kiraSelfEvolution",
+                    "kiraLifeWebSearch",
+                    "recurringTasks",
+                    "morningDigest",
+                    "morningDigestAi"
+                  ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "group": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "effective": {
+                  "type": "boolean"
+                },
+                "blockedBy": {
+                  "type": "string",
+                  "nullable": true,
+                  "enum": [
+                    "telegramReading",
+                    "reflection",
+                    "personalChatMemory",
+                    "daytimeReflection",
+                    "inboxGuardian",
+                    "dmReport",
+                    "chatGroupTracking",
+                    "chatPromptWatchers",
+                    "deferredFacts",
+                    "memoryConsolidation",
+                    "memoryInsight",
+                    "kiraLife",
+                    "kiraInnerDevelopment",
+                    "kiraSelfEvolution",
+                    "kiraLifeWebSearch",
+                    "recurringTasks",
+                    "morningDigest",
+                    "morningDigestAi",
+                    "budget",
+                    "telegram",
+                    null
+                  ]
+                }
+              },
+              "required": [
+                "key",
+                "title",
+                "description",
+                "group",
+                "enabled",
+                "effective",
+                "blockedBy"
+              ]
+            }
+          }
+        },
+        "required": [
+          "budgetMode",
+          "budgetModes",
+          "telegram",
+          "features"
+        ]
       }
     }
   }

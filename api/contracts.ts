@@ -1,3 +1,5 @@
+import type { ApiSettings, ApiSettingsPatch } from './settings';
+
 export class ApiError extends Error {
     constructor(public readonly status: number, public readonly code: string, message: string) {
         super(message);
@@ -31,6 +33,8 @@ export interface ApiBackend {
     history(limit: number): Promise<unknown>;
     reminders(): Promise<unknown>;
     tasks(): Promise<unknown>;
+    settings?(): Promise<ApiSettings>;
+    updateSettings?(patch: ApiSettingsPatch): Promise<ApiSettings>;
     message(text: string): Promise<ApiReply>;
     action(token: string): Promise<ApiReply>;
     file(id: string): Promise<{ data: Buffer; filename: string }>;

@@ -7,6 +7,7 @@ import { MessageTracker } from "../MessageTracker";
 import { devLog } from "../utils";
 import { config } from "../config";
 import { Api as GrammyApi } from "grammy";
+const { readTelegramUserCredentials } = require('../utils/telegramAccess');
 
 let botApi: GrammyApi | null = null;
 
@@ -118,24 +119,7 @@ function resolveTelegramHealthState(
 }
 
 function getTelegramUserClientCredentials(): TelegramUserClientCredentials | null {
-    const rawApiId = process.env.TELEGRAM_API_ID?.trim();
-    const apiHash = process.env.TELEGRAM_API_HASH?.trim();
-    const sessionString = process.env.TELEGRAM_SESSION_STRING?.trim();
-
-    if (!rawApiId || !apiHash || !sessionString) {
-        return null;
-    }
-
-    const apiId = Number(rawApiId);
-    if (!Number.isFinite(apiId)) {
-        return null;
-    }
-
-    return {
-        apiId,
-        apiHash,
-        sessionString,
-    };
+    return readTelegramUserCredentials(process.env);
 }
 
 function rememberTelegramClientError(error: unknown): void {

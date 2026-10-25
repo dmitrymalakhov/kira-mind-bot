@@ -3,6 +3,8 @@ import { BotSettingEntity } from '../entity/BotSettingEntity';
 import { BACKGROUND_FEATURES, backgroundFeatureSettingKey, defaultBackgroundFeatureEnabled, type BackgroundFeature } from '../ai/backgroundFeatures';
 import { scopedBotKey } from '../utils/botIdentity';
 import { isMaximumSavingsEnabled } from './budgetModeService';
+const { requiresTelegramSession } = require('../ai/backgroundFeatureState');
+const telegramAccess = require('../utils/telegramAccess');
 
 const cache = new Map<BackgroundFeature, { enabled: boolean; expiresAt: number }>();
 const pending = new Map<BackgroundFeature, Promise<boolean>>();
@@ -41,11 +43,20 @@ export async function setBackgroundFeatureEnabled(feature: BackgroundFeature, en
     await AppDataSource.getRepository(BotSettingEntity).upsert({
         key: backgroundFeatureSettingKey(feature), value: String(enabled),
     }, ['key']);
-    revisions.set(feature, (revisions.get(feature) ?? 0) + 1);
-    cache.set(feature, { enabled, expiresAt: Date.now() + 5000 });
+    cacheBackgroundFeaturePreferences({ [feature]: enabled });
+}
+
+/** Called only after an atomic settings write commits. In-flight older reads cannot undo it. */
+export function cacheBackgroundFeaturePreferences(preferences: Partial<Record<BackgroundFeature, boolean>>): void {
+    for (const [key, enabled] of Object.entries(preferences)) {
+        const feature = key as BackgroundFeature;
+        revisions.set(feature, (revisions.get(feature) ?? 0) + 1);
+        cache.set(feature, { enabled: enabled!, expiresAt: Date.now() + 5000 });
+    }
 }
 
 export async function isBackgroundFeatureEnabled(feature: BackgroundFeature): Promise<boolean> {
+    if (requiresTelegramSession(feature) && !telegramAccess.readTelegramUserCredentials(process.env)) return false;
     const definition = BACKGROUND_FEATURES[feature];
     if (definition.budgetPaused && await isMaximumSavingsEnabled()) return false;
     if (!await getBackgroundFeaturePreference(feature)) return false;

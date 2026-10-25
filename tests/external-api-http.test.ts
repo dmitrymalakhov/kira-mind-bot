@@ -55,6 +55,31 @@ test('API is opt-in and refuses insecure or ownerless configuration', () => {
     assert.equal(readExternalApiOptions({ KIRA_API_ENABLED: 'true', KIRA_API_TOKEN: token }, 730001)?.host, '127.0.0.1');
 });
 
+test('settings require authentication, validate the entire patch and accept idempotent updates without a mutation key', async t => {
+    let calls = 0;
+    let state: any = { budgetMode: 'normal', budgetModes: [], telegram: { personalSessionConfigured: false }, features: [] };
+    const f = await fixture(t, {
+        settings: async () => state,
+        updateSettings: async patch => { calls++; state = { ...state, ...patch }; return state; },
+    });
+    assert.equal((await fetch(f.url + '/settings')).status, 401);
+    assert.equal((await f.request('/settings')).status, 200);
+    for (const patch of [{ background: { reflection: 'false' } }, { budgetMode: 'invalid' },
+        { background: { reflection: false }, userId: 12345 }]) {
+        const response = await f.request('/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
+        assert.equal(response.status, 400);
+    }
+    assert.equal(calls, 0);
+    const response = await f.request('/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ budgetMode: 'maximum', background: { reflection: false } }) });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json() as any).budgetMode, 'maximum');
+    assert.equal(calls, 1);
+    const disallowed = await f.request('/settings', { method: 'DELETE' });
+    assert.equal(disallowed.status, 405);
+    assert.equal(disallowed.headers.get('allow'), 'GET, PATCH');
+});
+
 test('every route including files requires a bearer token; errors carry no private details', async t => {
     const f = await fixture(t);
     for (const path of ['/status', '/history', '/files/12345678-1234-4123-8123-123456789012']) {

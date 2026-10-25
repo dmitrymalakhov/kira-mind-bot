@@ -5,6 +5,8 @@ process.env.KIRA_BOT_TOKEN = process.env.KIRA_BOT_TOKEN || "test-token";
 const configModule = require("../dist/config.js");
 const sanitizerModule = require("../dist/utils/legacyPersonalitySanitizer.js");
 const localModels = require('../dist/ai/localModelRouting.js');
+assert.equal(require('../dist/utils/telegramAccess.js').readTelegramUserCredentials({ KIRA_BOT_TOKEN: 'synthetic-bot-token' }), null);
+assert.equal(require('../dist/ai/backgroundFeatureState.js').requiresTelegramSession('reflection'), true);
 assert.equal(localModels.defaultLocalRoutes('synthetic/model').fast.reasoningEffort, 'none');
 assert.equal(require('../dist/ai/imageGeneration.js').defaultImageSettings({}).model, 'gpt-image-2.5-sunburst');
 assert.ok(require('node:fs').existsSync(require('../dist/ai/imageGeneration.js').DEFAULT_REFERENCE_PATH), 'Built runtime must include the default Kira reference');

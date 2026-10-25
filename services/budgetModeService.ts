@@ -44,6 +44,11 @@ export async function setBudgetMode(mode: BudgetMode): Promise<void> {
     // Успех показывается только после записи в БД; общая настройка доступна админке.
     await AppDataSource.getRepository(BotSettingEntity)
         .upsert({ key: BUDGET_MODE_SETTING_KEY, value: mode }, ['key']);
+    cacheBudgetMode(mode);
+}
+
+/** Refresh the runtime cache after a multi-setting transaction commits. */
+export function cacheBudgetMode(mode: BudgetMode): void {
     revision += 1;
     cached = { mode, expiresAt: Date.now() + CACHE_TTL_MS };
 }

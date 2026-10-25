@@ -114,6 +114,7 @@ export function BudgetSettingsSection({ onToast }: Props) {
                       <Chip size="small" variant="outlined" color={feature.effective ? 'success' : 'default'} label={
                         feature.effective ? 'Включено' : !feature.enabled ? 'Выключено'
                           : feature.blockedBy === 'budget' ? 'Пауза: экономия'
+                            : feature.blockedBy === 'telegram' ? 'Нужна личная Telegram-сессия'
                             : `Пауза: ${feature.blockedBy ? BACKGROUND_FEATURES[feature.blockedBy].title : 'настройки'}`
                       } />
                     </Stack>

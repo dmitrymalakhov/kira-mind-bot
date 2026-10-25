@@ -15,6 +15,8 @@ import { ApiActionTokens } from './actionTokens';
 import { ApiFiles } from './files';
 import { ApiTransport, nextApiMessageId } from './transport';
 import { ExternalApiOptions } from './options';
+import { readUserSettings, updateUserSettings } from '../services/userSettingsService';
+import type { ApiSettingsPatch } from './settings';
 
 /** Same handlers, orchestrator, identity and knowledge; only the delivery and session channel differ. */
 export class BotApiBackend implements ApiBackend {
@@ -45,6 +47,9 @@ export class BotApiBackend implements ApiBackend {
         return { input: ['text', 'actions'], output: ['text', 'photo', 'document', 'voice'],
             capabilities: BOT_CAPABILITIES };
     }
+
+    settings() { return readUserSettings(); }
+    updateSettings(patch: ApiSettingsPatch) { return updateUserSettings(patch); }
 
     async history(limit: number) {
         const session = await this.storage.read(this.sessionKey);

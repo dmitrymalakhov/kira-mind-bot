@@ -12,8 +12,10 @@ import { processBuffers, queueMessage, setReflectionModeEnabled } from '../servi
 import { factAnalysisManager } from '../utils/factAnalysisTimer';
 import { startRecurringTaskScheduler } from '../services/recurringTaskScheduler';
 import { RecurringTaskRepository } from '../services/RecurringTaskRepository';
+const telegramAccess = require('../utils/telegramAccess');
 
 test('budget mode is shared, persistent, fail-closed and gates automatic AI', async (t) => {
+    t.mock.method(telegramAccess, 'readTelegramUserCredentials', () => ({ apiId: 12345, apiHash: 'synthetic-hash', sessionString: 'synthetic-session' }));
     let stored: string | undefined;
     let reads = 0;
     let writes = 0;

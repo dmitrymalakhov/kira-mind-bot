@@ -13,6 +13,7 @@ import { fetchAgentMemoryContext, buildMemoryContextBlock } from '../utils/agent
 import { BrowserSessionStore } from '../services/BrowserSessionStore';
 import { BrowserCredentialService } from '../services/BrowserCredentialService';
 import { looksLikeBrowserTaskCancellation } from '../utils/browserTaskCancellation';
+import { RUNTIME_DATA_DIR } from '../utils/runtimeData';
 
 const MAX_ITERATIONS = 35;
 const MAX_MEMORY_LOOKUPS = 6;
@@ -22,9 +23,10 @@ const NAVIGATION_TIMEOUT_MS = 20_000;
 const SCREENSHOT_INTERVAL = 6;
 const PENDING_BROWSER_TTL_MS = 15 * 60 * 1000;
 const LAST_BROWSER_TASK_TTL_MS = 45 * 60 * 1000;
-const BROWSER_SITE_PATTERNS_FILE = path.join(__dirname, '..', 'data', 'browser-site-patterns.json');
-const BROWSER_PROFILE_ROOT_DIR = path.join(__dirname, '..', 'data', 'browser-profiles');
-const BROWSER_TRAJECTORY_DIR = path.join(__dirname, '..', 'data', 'browser-trajectories');
+const BROWSER_DATA_DIR = process.env.KIRA_TENANT_ID ? RUNTIME_DATA_DIR : path.join(__dirname, '..', 'data');
+const BROWSER_SITE_PATTERNS_FILE = path.join(BROWSER_DATA_DIR, 'browser-site-patterns.json');
+const BROWSER_PROFILE_ROOT_DIR = path.join(BROWSER_DATA_DIR, 'browser-profiles');
+const BROWSER_TRAJECTORY_DIR = path.join(BROWSER_DATA_DIR, 'browser-trajectories');
 const BROWSER_TRAJECTORY_MAX_BYTES = 768 * 1024;
 const BROWSER_TRAJECTORY_EVENT_MAX_BYTES = 16 * 1024;
 const BROWSER_TRAJECTORY_MAX_FILES = 80;
@@ -9934,15 +9936,19 @@ interface BrowserLaunchResources {
 
 async function createBrowserLaunchResources(userId: number, chatId?: number): Promise<BrowserLaunchResources> {
     const chromiumExecutablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim();
+    const tenantProxy = process.env.KIRA_TENANT_ID ? process.env.KIRA_BROWSER_PROXY_URL : undefined;
+    if (process.env.KIRA_TENANT_ID && !tenantProxy) throw new Error('Не настроена изоляция сети браузера.');
     const launchOptions = {
         headless: browserHeadlessMode(),
         executablePath: chromiumExecutablePath || undefined,
+        ...(tenantProxy ? { proxy: { server: tenantProxy } } : {}),
         args: [
             '--no-sandbox',
             '--disable-dev-shm-usage',
             '--disable-blink-features=AutomationControlled',
             '--disable-features=site-per-process',
             '--window-size=1365,900',
+            ...(tenantProxy ? ['--proxy-bypass-list=<-loopback>', '--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'] : []),
         ],
     };
     const contextOptions = {

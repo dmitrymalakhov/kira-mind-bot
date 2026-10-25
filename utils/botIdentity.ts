@@ -6,7 +6,7 @@ export function getActiveBotProfile(): string {
 }
 
 export function getActiveMemoryBotId(): string {
-    return getActiveBotProfile().toLowerCase();
+    return process.env.KIRA_MEMORY_BOT_ID || process.env.KIRA_MEMORY_NAMESPACE || getActiveBotProfile().toLowerCase();
 }
 
 export function scopedBotKey(key: string | number): string {

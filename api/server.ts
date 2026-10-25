@@ -2,13 +2,14 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import * as http from 'node:http';
 import { ApiBackend, ApiError, ApiOperationStore } from './contracts';
 import { ExternalApiOptions } from './options';
+import { parseSettingsPatch } from './settings';
 
 const PREFIX = '/api/v1';
 const MAX_BODY_BYTES = 64 * 1024;
 
 function hash(text: string): string { return createHash('sha256').update(text).digest('hex'); }
 
-async function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+export async function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
     if (req.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json') {
         throw new ApiError(415, 'unsupported_media_type', 'Ожидается application/json.');
     }
@@ -72,6 +73,16 @@ export function createExternalApiServer(
             }
             const url = new URL(req.url ?? '/', 'http://localhost');
             const path = url.pathname;
+            if (path === `${PREFIX}/settings`) {
+                if (req.method === 'GET' && backend.settings) return json(200, await backend.settings());
+                if (req.method === 'PATCH' && backend.updateSettings) {
+                    const patch = parseSettingsPatch(await readBody(req));
+                    return json(200, await backend.updateSettings(patch));
+                }
+                res.setHeader('Allow', 'GET, PATCH');
+                req.resume();
+                throw new ApiError(405, 'method_not_allowed', 'Ожидается GET или PATCH.');
+            }
             if (req.method === 'GET') {
                 if (path === `${PREFIX}/status`) return json(200, await backend.status());
                 if (path === `${PREFIX}/capabilities`) return json(200, await backend.capabilities());

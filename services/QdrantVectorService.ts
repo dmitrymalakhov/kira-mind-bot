@@ -344,8 +344,8 @@ export class QdrantVectorService implements IDomainVectorService {
     constructor(client?: QdrantClient) {
         console.log('🔧 Инициализация QdrantVectorService...');
 
-        // Используем botUsername из конфигурации для уникальной идентификации
-        this.botId = config.botUsername.toLowerCase(); // 'kiramindbot'
+        // Account namespaces stay stable even when a Telegram username changes.
+        this.botId = (process.env.KIRA_MEMORY_NAMESPACE || config.botUsername).toLowerCase();
         this.memoryPrefix = `${this.botId}_memories_`;
         this.configCollection = `${this.botId}_domain_configs`;
         const envThreshold = Number(process.env.VECTOR_SEARCH_THRESHOLD);

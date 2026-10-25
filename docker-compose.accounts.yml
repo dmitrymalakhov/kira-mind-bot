@@ -1,0 +1,38 @@
+services:
+  # In account mode every bot is owned by a registered user and run by the manager.
+  kira-mind-bot:
+    profiles: [legacy]
+  admin-panel:
+    environment:
+      KIRA_BOT_CONTAINER_NAME: "${KIRA_INSTANCE_NAME:-kira-mind-bot}-kira-accounts-1"
+      KIRA_RUNTIME_HEALTH_URL: http://kira-accounts:3100
+  kira-accounts:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    command: ["node", "dist/platform/index.js"]
+    restart: unless-stopped
+    init: true
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    env_file:
+      - ./.env.production
+    environment:
+      NODE_ENV: production
+      KIRA_PLATFORM_HOST: 0.0.0.0
+      KIRA_PLATFORM_PORT: 3300
+      KIRA_PLATFORM_DATA_DIR: /app/accounts
+    ports:
+      - "127.0.0.1:${ACCOUNTS_PORT:-8330}:3300"
+    volumes:
+      - ./runtime-data/accounts:/app/accounts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

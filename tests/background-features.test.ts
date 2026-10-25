@@ -8,8 +8,10 @@ import { processBuffers } from '../services/reflectionModeService';
 import { runPersonalChatMemoryIndexingCycle } from '../services/personalChatMemoryIndexer';
 import * as telegram from '../services/telegram';
 const { resolvePreferences, buildFeatureStates, registerBackgroundFeatureRoutes } = require('../admin-panel/backgroundFeatures');
+const telegramAccess = require('../utils/telegramAccess');
 
 test('feature preferences survive budget changes, propagate live, and gate Telegram reading', async t => {
+  t.mock.method(telegramAccess, 'readTelegramUserCredentials', () => ({ apiId: 12345, apiHash: 'synthetic-hash', sessionString: 'synthetic-session' }));
   const rows = new Map<string, string>([['KiraMindBot:reflection_mode_enabled', 'false']]);
   let failWrite = false;
   let failRead = false;
@@ -85,6 +87,18 @@ test('admin shows saved choices separately from effective budget and dependency 
   assert.equal(selective.find((f: any) => f.key === 'reflection').blockedBy, 'telegramReading');
   assert.equal(selective.find((f: any) => f.key === 'personalChatMemory').enabled, false);
   assert.equal(resolvePreferences([{ key: 'background:reflection', value: 'invalid' }], {}).reflection, false);
+  preferences.telegramReading = true;
+  const withoutSession = buildFeatureStates(preferences, 'normal', false);
+  assert.equal(withoutSession.find((f: any) => f.key === 'reflection').blockedBy, 'telegram');
+  assert.equal(withoutSession.find((f: any) => f.key === 'deferredFacts').effective, true);
+});
+
+test('missing personal credentials prevent background readers from opening Telegram even when preferences are enabled', async t => {
+  t.mock.method(telegramAccess, 'readTelegramUserCredentials', () => null);
+  const init = t.mock.method(telegram, 'initTelegramClient', async () => { throw new Error('must not open personal Telegram'); });
+  await processBuffers({} as any);
+  assert.equal((await runPersonalChatMemoryIndexingCycle()).enabled, false);
+  assert.equal(init.mock.callCount(), 0);
 });
 
 test('feature API validates input, uses auth and never reports a failed write as saved', async () => {

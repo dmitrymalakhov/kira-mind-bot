@@ -21,9 +21,11 @@ COPY admin-panel/src/timezones.json ./src/timezones.json
 COPY ai/*.json /app/ai/
 COPY ai/memoryEmbeddingHttp.js /app/ai/memoryEmbeddingHttp.js
 COPY ai/localModelRouting.js /app/ai/localModelRouting.js
+COPY ai/backgroundFeatureState.js /app/ai/backgroundFeatureState.js
 COPY ai/imageGeneration.js /app/ai/imageGeneration.js
 COPY assets/characters/kira /app/assets/characters/kira
 COPY ai/memoryEmbeddingProviderSupport.js /app/ai/memoryEmbeddingProviderSupport.js
 COPY utils/legacyPersonalitySanitizer.js /app/utils/legacyPersonalitySanitizer.js
+COPY utils/telegramAccess.js /app/utils/telegramAccess.js
 EXPOSE 3000
 CMD ["node", "server.js"]

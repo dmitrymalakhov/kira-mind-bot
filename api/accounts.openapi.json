@@ -1,0 +1,475 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Kira accounts API",
+    "version": "1.0.0",
+    "description": "Регистрация, вход и отдельная Кира для каждого аккаунта. Общие runtime routes используют bearer аккаунта."
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/status": {
+      "$ref": "./openapi.json#/paths/~1status"
+    },
+    "/capabilities": {
+      "$ref": "./openapi.json#/paths/~1capabilities"
+    },
+    "/history": {
+      "$ref": "./openapi.json#/paths/~1history"
+    },
+    "/reminders": {
+      "$ref": "./openapi.json#/paths/~1reminders"
+    },
+    "/tasks": {
+      "$ref": "./openapi.json#/paths/~1tasks"
+    },
+    "/messages": {
+      "$ref": "./openapi.json#/paths/~1messages"
+    },
+    "/actions": {
+      "$ref": "./openapi.json#/paths/~1actions"
+    },
+    "/files/{id}": {
+      "$ref": "./openapi.json#/paths/~1files~1{id}"
+    },
+    "/accounts/register": {
+      "post": {
+        "operationId": "registerAccount",
+        "summary": "Создать отдельный аккаунт",
+        "responses": {
+          "201": {
+            "description": "Создать отдельный аккаунт",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "./openapi.json#/components/responses/Error"
+          }
+        },
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_]{3,40}$"
+                  },
+                  "password": {
+                    "type": "string",
+                    "format": "password",
+                    "minLength": 12,
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "username",
+                  "password"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/accounts/login": {
+      "post": {
+        "operationId": "loginAccount",
+        "summary": "Войти и получить токен на 30 дней",
+        "responses": {
+          "200": {
+            "description": "Войти и получить токен на 30 дней",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "./openapi.json#/components/responses/Error"
+          }
+        },
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_]{3,40}$"
+                  },
+                  "password": {
+                    "type": "string",
+                    "format": "password",
+                    "minLength": 12,
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "username",
+                  "password"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/accounts/logout": {
+      "post": {
+        "operationId": "logoutAccount",
+        "summary": "Отозвать текущий токен",
+        "responses": {
+          "200": {
+            "description": "Отозвать текущий токен",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "./openapi.json#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/account": {
+      "get": {
+        "operationId": "getAccount",
+        "summary": "Получить свой аккаунт и статус Киры",
+        "responses": {
+          "200": {
+            "description": "Получить свой аккаунт и статус Киры",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "account": {
+                      "$ref": "#/components/schemas/Account"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "./openapi.json#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/account/bot": {
+      "put": {
+        "operationId": "connectAccountBot",
+        "summary": "Подключить бота и получить ссылку подтверждения",
+        "responses": {
+          "202": {
+            "description": "Подключить бота и получить ссылку подтверждения",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "awaiting_telegram"
+                      ]
+                    },
+                    "pairingUrl": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "expiresIn": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "./openapi.json#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "botToken": {
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                },
+                "required": [
+                  "botToken"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/telegram": {
+      "put": {
+        "operationId": "connectAccountTelegram",
+        "summary": "Подключить личную Telegram-сессию того же владельца",
+        "responses": {
+          "202": {
+            "description": "Подключить личную Telegram-сессию того же владельца",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "restarting"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "./openapi.json#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "apiId": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "apiHash": {
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "sessionString": {
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                },
+                "required": [
+                  "apiId",
+                  "apiHash",
+                  "sessionString"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "getAccountTelegram",
+        "summary": "Check personal Telegram session configuration without returning credentials",
+        "responses": {
+          "200": {
+            "description": "Own session status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "personalSessionConfigured": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "personalSessionConfigured"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "./openapi.json#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "disconnectAccountTelegram",
+        "summary": "Remove own personal Telegram session and restart the runtime; keep the bot and stored memories",
+        "responses": {
+          "200": {
+            "description": "Already disconnected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "personalSessionConfigured": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "personalSessionConfigured"
+                  ]
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Session removed, runtime restarting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "personalSessionConfigured": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "restarting"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "personalSessionConfigured",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "./openapi.json#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/settings": {
+      "$ref": "./openapi.json#/paths/~1settings"
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Account access token returned by registration/login"
+      }
+    },
+    "schemas": {
+      "Account": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "username": {
+            "type": "string"
+          },
+          "bot": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "username": {
+                "type": "string"
+              },
+              "connected": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "bot"
+        ]
+      },
+      "AuthResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/Account"
+          },
+          "accessToken": {
+            "type": "string"
+          },
+          "tokenType": {
+            "type": "string",
+            "enum": [
+              "Bearer"
+            ]
+          },
+          "expiresIn": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account",
+          "accessToken",
+          "tokenType",
+          "expiresIn"
+        ]
+      }
+    }
+  }
+}

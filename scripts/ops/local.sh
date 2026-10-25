@@ -24,7 +24,13 @@ if [ -z "$api_publish" ] && [ -f .env ]; then
   done < .env
 fi
 compose_args=(-f docker-compose.server.yml -f docker-compose.local.yml)
-if [ -n "${SERVER_COMPOSE_OVERRIDE:-}" ]; then
+accounts_mode="${KIRA_ACCOUNTS_MODE:-}"
+if [ -z "$accounts_mode" ] && [ -f .env ]; then
+  accounts_mode="$(sed -n 's/^KIRA_ACCOUNTS_MODE=//p' .env | tail -n 1 | tr -d '\r\"\047')"
+fi
+if [ "$accounts_mode" = true ]; then
+  compose_args+=(-f docker-compose.accounts.yml)
+elif [ -n "${SERVER_COMPOSE_OVERRIDE:-}" ]; then
   compose_args+=(-f "$SERVER_COMPOSE_OVERRIDE")
 elif [ "$api_publish" = true ]; then
   compose_args+=(-f docker-compose.api.yml)

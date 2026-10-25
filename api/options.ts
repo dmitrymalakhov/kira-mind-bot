@@ -15,6 +15,7 @@ export function readExternalApiOptions(env: NodeJS.ProcessEnv, ownerId: number):
         throw new Error('External API requires a valid KIRA_ALLOWED_USER_ID');
     }
     const port = Number(env.KIRA_API_PORT || 3200);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid KIRA_API_PORT');
+    const minimumPort = env.KIRA_TENANT_ID && process.send ? 0 : 1;
+    if (!Number.isInteger(port) || port < minimumPort || port > 65535) throw new Error('Invalid KIRA_API_PORT');
     return { token, ownerId, host: env.KIRA_API_HOST?.trim() || '127.0.0.1', port };
 }

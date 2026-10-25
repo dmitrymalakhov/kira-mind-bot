@@ -15,9 +15,10 @@ map $http_authorization $kira_api_has_bearer {
 
 map "$request_method:$uri" $kira_api_route_allowed {
     default 0;
-    "~^GET:/api/v1/(status|capabilities|history|reminders|tasks)$" 1;
+    "~^GET:/api/v1/(status|capabilities|history|reminders|tasks|settings)$" 1;
     "~^GET:/api/v1/files/[0-9a-f-]{36}$" 1;
     "~^POST:/api/v1/(messages|actions)$" 1;
+    "PATCH:/api/v1/settings" 1;
 }
 
 map $ssl_client_serial $kira_api_client_revoked {

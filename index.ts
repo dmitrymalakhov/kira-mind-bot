@@ -41,7 +41,7 @@ const bot = createBot();
 setBotRef(bot);
 setBotApi(bot.api);
 console.log('🤖 Бот создан успешно');
-startRuntimeHealthServer();
+if (process.env.KIRA_RUNTIME_HEALTH_DISABLED !== 'true') startRuntimeHealthServer();
 
 // Регистрация всех обработчиков
 registerForwardedTextGuard(bot);
@@ -117,7 +117,7 @@ async function startBot() {
         console.log("🔗 Инициализация векторного сервиса...");
         await initializeVectorService();
 
-        await startExternalApiServer(bot);
+        const apiServer = await startExternalApiServer(bot);
 
         console.log("🎯 Запуск прослушивания событий...");
         startKiraLifeScheduler(bot);
@@ -133,7 +133,21 @@ async function startBot() {
         startChatGroupTracker(bot);
         startChatPromptWatchPolling(bot.api);
         await bot.api.setMyCommands(getTelegramMenuCommands());
-        await bot.start();
+        if (process.env.KIRA_TENANT_ID) {
+            const offset = Number(process.env.KIRA_TELEGRAM_UPDATE_OFFSET);
+            if (Number.isSafeInteger(offset) && offset > 0) {
+                await bot.api.getUpdates({ offset, timeout: 0, limit: 1 });
+            }
+            await bot.start({
+                allowed_updates: ['message', 'edited_message', 'callback_query', 'message_reaction', 'message_reaction_count'],
+                onStart: () => {
+                    const address = apiServer?.address();
+                    if (address && typeof address !== 'string') process.send?.({ type: 'kira-ready', port: address.port });
+                },
+            });
+        } else {
+            await bot.start();
+        }
 
         console.log("✅ Бот успешно запущен и готов к работе!");
         console.log("📡 Бот ожидает сообщения...");
@@ -148,3 +162,20 @@ async function startBot() {
 
 console.log("🔄 Инициализация завершена, запуск бота...");
 startBot();
+
+// Workers must not outlive the account manager that owns their API and polling lease.
+if (process.env.KIRA_TENANT_ID) {
+    let stopping = false;
+    const stop = async () => {
+        if (stopping) return;
+        stopping = true;
+        const timeout = setTimeout(() => process.exit(1), 4000);
+        try {
+            if (bot.isRunning()) await bot.stop();
+            if (AppDataSource.isInitialized) await AppDataSource.destroy();
+        } finally { clearTimeout(timeout); process.exit(0); }
+    };
+    process.once('disconnect', () => { void stop(); });
+    process.once('SIGTERM', () => { void stop(); });
+    process.once('SIGINT', () => { void stop(); });
+}
