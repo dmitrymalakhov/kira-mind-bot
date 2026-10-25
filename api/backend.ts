@@ -15,6 +15,11 @@ import { ApiActionTokens } from './actionTokens';
 import { ApiFiles } from './files';
 import { ApiTransport, nextApiMessageId } from './transport';
 import { ExternalApiOptions } from './options';
+import { ApiModelCatalog, ApiModelSettingsStore, BotSettingsApiModelStore, apiTurnPreset, buildApiModelSettings,
+    saveApiModelSelection } from './modelSettings';
+import { runWithChannelPreset } from '../services/aiRuntimeConfigService';
+import { SceneService, type SceneTurn } from './scene';
+import type { AiPresetName } from '../ai/modelPresets';
 
 /** Same handlers, orchestrator, identity and knowledge; only the delivery and session channel differ. */
 export class BotApiBackend implements ApiBackend {
@@ -25,7 +30,9 @@ export class BotApiBackend implements ApiBackend {
     private readonly sessionKey: string;
     private readonly botInfo: UserFromGetMe;
 
-    constructor(private readonly bot: Bot<BotContext>, private readonly options: ExternalApiOptions) {
+    constructor(private readonly bot: Bot<BotContext>, private readonly options: ExternalApiOptions,
+                private readonly models: ApiModelSettingsStore = new BotSettingsApiModelStore(),
+                private readonly catalog = new ApiModelCatalog()) {
         this.sessionKey = `api:${options.ownerId}`;
         this.actions = new ApiActionTokens(options.token, options.ownerId);
         this.botInfo = bot.botInfo;
@@ -43,8 +50,18 @@ export class BotApiBackend implements ApiBackend {
 
     async capabilities() {
         return { input: ['text', 'actions'], output: ['text', 'photo', 'document', 'voice'],
-            capabilities: BOT_CAPABILITIES };
+            settings: ['modelMode'], scene: { version: 1 }, capabilities: BOT_CAPABILITIES };
     }
+
+    private sceneService?: SceneService;
+    private get scene() { return this.sceneService ??= new SceneService(this.options.ownerId, this.models); }
+    sceneCapabilities() { return this.scene.capabilities(); }
+    sceneReady(turn: SceneTurn) { return this.scene.ready(turn); }
+    sceneTurn(turn: SceneTurn, preset: AiPresetName | null) { return this.scene.turn(turn, preset); }
+    sceneActionResult(body: Record<string, unknown>) { return this.scene.actionResult(body); }
+    modelSettings() { return buildApiModelSettings(this.models, this.catalog); }
+    async turnReady() { await apiTurnPreset(this.models); }
+    saveModelSettings(body: Record<string, unknown>) { return saveApiModelSelection(this.models, this.catalog, body); }
 
     async history(limit: number) {
         const session = await this.storage.read(this.sessionKey);
@@ -113,7 +130,9 @@ export class BotApiBackend implements ApiBackend {
             apiActionVersion: version,
         });
         ctx.sessionStorageKey = this.sessionKey;
-        await this.dispatcher.middleware()(ctx, async () => {});
+        // The app's own text mode, read once per turn; null follows the server's global preset.
+        const preset = await apiTurnPreset(this.models);
+        await runWithChannelPreset(preset, async () => { await this.dispatcher.middleware()(ctx, async () => {}); });
         await this.storage.write(this.sessionKey, ctx.session);
         return transport.result();
     }

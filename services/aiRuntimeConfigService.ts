@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { AppDataSource } from '../data-source';
 import { BotSettingEntity } from '../entity/BotSettingEntity';
 import { parseAiPresetName, type AiPresetName } from '../ai/modelPresets';
@@ -5,6 +6,25 @@ import { parseAiPresetName, type AiPresetName } from '../ai/modelPresets';
 export const AI_MODEL_PRESET_SETTING_KEY = 'AI_MODEL_PRESET';
 export const DEFAULT_AI_MODEL_PRESET: AiPresetName = 'gpt-balanced';
 const PRESET_CACHE_TTL_MS = 5000;
+
+/**
+ * A channel's own preset (the mobile app's, API_AI_MODEL_PRESET) for exactly one turn. Every model choice of the
+ * turn reads it through the getters below, including the fallback policy. Timers and deferred work started during
+ * the turn inherit the async context but see `active: false` once the turn ends, so they run on the global preset.
+ */
+const channelPreset = new AsyncLocalStorage<{ preset: AiPresetName; active: boolean }>();
+
+export async function runWithChannelPreset<T>(preset: AiPresetName | null, work: () => Promise<T>): Promise<T> {
+    if (!preset) return work();
+    const scope = { preset, active: true };
+    try { return await channelPreset.run(scope, work); }
+    finally { scope.active = false; }
+}
+
+function getChannelPresetName(): AiPresetName | null {
+    const scope = channelPreset.getStore();
+    return scope?.active ? scope.preset : null;
+}
 
 let cachedPresetName: AiPresetName | null = null;
 let lastRefreshAt = 0;
@@ -35,6 +55,8 @@ async function loadPresetFromDb(fallback: AiPresetName): Promise<AiPresetName> {
 }
 
 export function getCachedAiPresetName(): AiPresetName {
+    const channel = getChannelPresetName();
+    if (channel) return channel;
     const fallback = cachedPresetName ?? getEnvAiPresetName();
 
     if (!AppDataSource.isInitialized) {
@@ -52,6 +74,8 @@ export function getCachedAiPresetName(): AiPresetName {
 }
 
 export async function getActiveAiPresetName(): Promise<AiPresetName> {
+    const channel = getChannelPresetName();
+    if (channel) return channel;
     const fallback = getEnvAiPresetName();
 
     try {
@@ -76,6 +100,8 @@ export async function getActiveAiPresetName(): Promise<AiPresetName> {
  * повторять запрос по потенциально устаревшему маршруту.
  */
 export async function refreshActiveAiPresetName(): Promise<AiPresetName> {
+    const channel = getChannelPresetName();
+    if (channel) return channel; // fixed for the whole turn; the app changes it only between turns
     const fallback = getEnvAiPresetName();
 
     if (!AppDataSource.isInitialized) return setCachedPresetName(fallback);

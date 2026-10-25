@@ -364,6 +364,40 @@
           },
           "default": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "description": "model_mode_unavailable: the app's selected mode cannot run; refused before any receipt, so the request did not execute",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -404,6 +438,40 @@
           },
           "default": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "description": "model_mode_unavailable: the app's selected mode cannot run; refused before any receipt, so the request did not execute",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -437,6 +505,720 @@
           },
           "default": {
             "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/model-settings": {
+      "get": {
+        "operationId": "getModelSettings",
+        "summary": "The app's own text mode: catalog from the server preset registry with availability, this channel's selection and the global server preset",
+        "responses": {
+          "200": {
+            "description": "Current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "putModelSettings",
+        "summary": "Select a preset for this API channel only (null = as on the server). Compare-and-set on revision; applies from the next turn.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "preset",
+                  "expectedRevision"
+                ],
+                "properties": {
+                  "preset": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "expectedRevision": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Confirmed state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_body / unknown_preset / preset_unavailable (with the reason)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "revision_conflict: the selection changed elsewhere; read it again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scene": {
+      "get": {
+        "operationId": "getScene",
+        "summary": "AR scene capabilities: the vision route of the app's mode (browserVision), frame limits, allowed actions",
+        "responses": {
+          "200": {
+            "description": "Capabilities: version, frame limits, actions, autoSeat (true: sit without targetId lets the phone choose the seat; results may name it), mode, vision route"
+          },
+          "401": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scene/turns": {
+      "post": {
+        "operationId": "postSceneTurn",
+        "summary": "One AR turn: a question with the scene and optionally one current JPEG frame (not stored). Kira may propose actions on ids of the scene; the phone checks and performs them and reports the outcome.",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "text",
+                  "scene"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  "scene": {
+                    "$ref": "#/components/schemas/Scene"
+                  },
+                  "frame": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "mime",
+                      "data",
+                      "capturedAt",
+                      "width",
+                      "height"
+                    ],
+                    "properties": {
+                      "mime": {
+                        "type": "string",
+                        "enum": [
+                          "image/jpeg"
+                        ]
+                      },
+                      "data": {
+                        "type": "string",
+                        "format": "byte",
+                        "description": "≤ 2 MiB decoded"
+                      },
+                      "capturedAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "within 5 s of scene.observedAt"
+                      },
+                      "width": {
+                        "type": "integer"
+                      },
+                      "height": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "messages, actions [{id, kind: sit|stand|approach|lookAtUser, targetId?, roomId, roomVersion}] (sit without targetId: the phone chooses the seat from its own LiDAR scan), rejectedActions, vision {used, provider, model, location}"
+          },
+          "400": {
+            "description": "invalid_scene / idempotency_key_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "stale_scene / stale_frame / tracking_lost / conversation_busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "frame_too_large (body ≤ 3 MiB)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_frame",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "vision_failed / scene_failed / scene_reply_invalid: nothing is answered as if seen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vision_unavailable (refused before any receipt) / model_mode_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scene/action-results": {
+      "post": {
+        "operationId": "postSceneActionResult",
+        "summary": "What actually happened to an action Kira proposed; repeating the same report is harmless",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "actionId",
+                  "status"
+                ],
+                "properties": {
+                  "actionId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "completed",
+                      "rejected",
+                      "interrupted"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 300
+                  },
+                  "targetId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "For a sit without targetId: the object the phone chose (servers with autoSeat)"
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 500,
+                    "description": "The steps the phone actually did (servers with autoSeat)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded"
+          },
+          "401": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown_action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "action_already_reported with another status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -609,6 +1391,324 @@
           "url": {
             "type": "string",
             "format": "uri"
+          }
+        }
+      },
+      "ModelSettings": {
+        "type": "object",
+        "required": [
+          "scope",
+          "scopeNote",
+          "selection",
+          "server",
+          "effectivePreset",
+          "memoryEmbeddingProfile",
+          "presets"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "app"
+            ],
+            "description": "The selection applies only to this API channel; Telegram and background work keep the server preset"
+          },
+          "scopeNote": {
+            "type": "string"
+          },
+          "selection": {
+            "type": "object",
+            "required": [
+              "preset",
+              "revision"
+            ],
+            "properties": {
+              "preset": {
+                "type": "string",
+                "description": "null follows the server preset",
+                "nullable": true
+              },
+              "revision": {
+                "type": "string"
+              }
+            }
+          },
+          "server": {
+            "type": "object",
+            "required": [
+              "preset",
+              "title",
+              "allChannels",
+              "changedIn"
+            ],
+            "properties": {
+              "preset": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "allChannels": {
+                "type": "boolean"
+              },
+              "changedIn": {
+                "type": "string",
+                "enum": [
+                  "admin"
+                ]
+              }
+            }
+          },
+          "effectivePreset": {
+            "type": "string"
+          },
+          "memoryEmbeddingProfile": {
+            "type": "string",
+            "description": "Unchanged by any selection"
+          },
+          "presets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "title",
+                "description",
+                "providers",
+                "runsLocally",
+                "cloudFallback",
+                "available"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "characteristics": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "providers": {
+                  "type": "string"
+                },
+                "runsLocally": {
+                  "type": "boolean",
+                  "description": "Conversation runs on the server's LM Studio, not on the client"
+                },
+                "cloudFallback": {
+                  "type": "boolean",
+                  "description": "false for provider-pure presets: no silent cross-provider fallback"
+                },
+                "available": {
+                  "type": "boolean"
+                },
+                "unavailableReason": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Scene": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "roomId",
+          "roomVersion",
+          "coordinateSpaceId",
+          "tracking",
+          "observedAt",
+          "avatar",
+          "objects",
+          "seats"
+        ],
+        "description": "The phone's confirmed room now: metres, Y up, ARKit world of coordinateSpaceId. Walls stay on the phone.",
+        "properties": {
+          "roomId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "roomVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "coordinateSpaceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tracking": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "limited",
+              "unavailable"
+            ]
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "within 120 s of the server clock"
+          },
+          "camera": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "position",
+              "forward"
+            ],
+            "properties": {
+              "position": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "forward": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              }
+            }
+          },
+          "avatar": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "position",
+              "yaw",
+              "pose"
+            ],
+            "properties": {
+              "position": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "yaw": {
+                "type": "number"
+              },
+              "pose": {
+                "type": "string",
+                "enum": [
+                  "standing",
+                  "seated"
+                ]
+              },
+              "seatId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          },
+          "objects": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "name",
+                "category",
+                "center",
+                "size",
+                "yaw",
+                "source",
+                "present"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                "category": {
+                  "type": "string"
+                },
+                "center": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 3,
+                  "maxItems": 3
+                },
+                "size": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 3,
+                  "maxItems": 3
+                },
+                "yaw": {
+                  "type": "number"
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "scan",
+                    "user"
+                  ]
+                },
+                "present": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "seats": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "objectId",
+                "height",
+                "yaw",
+                "confirmed"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "objectId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "height": {
+                  "type": "number"
+                },
+                "yaw": {
+                  "type": "number"
+                },
+                "confirmed": {
+                  "type": "boolean"
+                }
+              }
+            }
           }
         }
       }
