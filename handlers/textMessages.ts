@@ -35,6 +35,7 @@ import {
 } from "../utils/proactiveMemory";
 import { decideKnowledgeSource } from "../utils/knowledgeSource";
 import { handleRecurringTaskText } from "../services/recurringTaskService";
+import { orchestrationMode, hasCompoundActionRequest, cancelRuntimeContinuation } from '../orchestration/runtime/kernel';
 import { getForwardedMessageInfo } from "../utils/forwardedMessage";
 import {
     MEMORY_HEARS_RE,
@@ -507,7 +508,7 @@ export function registerTextMessageHandler(bot: Bot<BotContext>, options: { imme
                         return;
                     }
 
-                    if (await handleRecurringTaskText(ctx, message, {
+                    if ((orchestrationMode() === 'legacy' || !hasCompoundActionRequest(message) || ctx.session.pendingRecurringTaskEdit) && await handleRecurringTaskText(ctx, message, {
                         messageId: ctx.message.message_id,
                         contextHistory: recurringContextHistory,
                     })) {
@@ -532,6 +533,7 @@ export function registerTextMessageHandler(bot: Bot<BotContext>, options: { imme
                                         .catch(() => {});
                                 }
                                 ctx.session.pendingBrowserTask = undefined;
+                                await cancelRuntimeContinuation(ctx, ['agents.start', 'agents.resume']);
                                 await replyAndStore(ctx, 'Браузерная задача отменена.');
                                 return;
                             }

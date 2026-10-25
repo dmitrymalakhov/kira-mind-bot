@@ -44,6 +44,9 @@ const openaiClient = new OpenAI({
 export const openaiProviderAdapter: AiProviderAdapter = {
     provider: 'openai',
     client: openaiClient,
+    async createDecision(params) {
+        return this.client.post('/decisions', { body: params, timeout: 5_000, maxRetries: 0 });
+    },
     capabilities: OPENAI_CAPABILITIES,
     descriptor: getAiProviderDescriptor('openai'),
     getModelCapabilities(model) {

@@ -19,6 +19,8 @@ import { isSimpleSocialMessage } from './utils/simpleDialogue';
 import { INTENT_CLASSIFIER_INSTRUCTIONS } from './orchestration/intentPrompt';
 import { executePlan } from "./orchestration/executor";
 import { Plan } from "./orchestration/types";
+import { runKiraRuntime, orchestrationMode, hasCompoundActionRequest, continueConfirmedRuntime, mergeRuntimeResults, continueQuestionRuntime, cancelRuntimeContinuation } from './orchestration/runtime/kernel';
+import { classifyWithDecisions, decisionsEnabled } from './ai/decisionRouting';
 import { ChatGroupRepository } from "./services/ChatGroupRepository";
 import { handlePendingContactMemoryText } from "./utils/contactMemory";
 import { handlePendingContactLookupText, maybeStartContactMemoryLookup } from "./utils/contactMemoryLookup";
@@ -145,6 +147,10 @@ export interface ReminderCreationFailure {
 
 export interface ProcessingResult {
     responseText: string;
+    operationStatus?: import('./orchestration/runtime/types').ToolStatus;
+    /** The tool has already committed reminders; transports must only deliver their confirmation. */
+    remindersPersisted?: boolean;
+    artifacts?: Array<{ kind: 'image' | 'document'; path?: string; url?: string; filename?: string; caption?: string }>;
     /** No optional memory-gap/reminder/hint analysis on a self-contained reply. */
     skipOptionalFollowups?: boolean;
     reminderCreated?: boolean;
@@ -232,6 +238,7 @@ const VALID_CLASSIFICATION_INTENTS = new Set<MessageClassification["intent"]>([
 
 function buildExplicitReminderClassification(message: string): MessageClassification | null {
     if (!EXPLICIT_REMINDER_RE.test(message)) return null;
+    if (orchestrationMode() === 'skills' && hasCompoundActionRequest(message)) return null;
 
     return {
         intent: "НАПОМИНАНИЕ",
@@ -541,7 +548,7 @@ ${historyContext}
 
         // Короткие реплики зависят от предыдущих ходов, поэтому история входит
         // в ключ кэша и не может переиспользовать чужую контекстную классификацию.
-        const cacheKey = buildClassificationCacheKey(message, messageHistory, knownChatGroups ?? []);
+        const cacheKey = `${buildClassificationCacheKey(message, messageHistory, knownChatGroups ?? [])}${decisionsEnabled() && orchestrationMode() === 'skills' ? ':decisions' : ''}`;
         const cached = llmCache.get<MessageClassification>(cacheKey);
         if (cached) {
             devLog('classifyMessage: cache hit');
@@ -549,7 +556,7 @@ ${historyContext}
         }
 
         // Intent и сложность ответа определяются одним task-aware вызовом.
-        const parsedResponse = await createJsonChatCompletionForTask<MessageClassification>('intentClassification', {
+        const parsedResponse = (orchestrationMode() === 'skills' ? await classifyWithDecisions(prompt) : null) ?? await createJsonChatCompletionForTask<MessageClassification>('intentClassification', {
             messages: [
                 {
                     role: "system",
@@ -615,6 +622,10 @@ export async function processMessage(
         const forwardContext = options.turn?.forwardContext;
         const internalBrowserContinuation = BROWSER_CONTINUATION_RE.test(message);
         const routingMessage = internalBrowserContinuation ? message : originalMessage;
+        if (orchestrationMode() === 'skills' && !isForwarded && !options.turn?.forwardContext && !internalBrowserContinuation) {
+            const continuation = await continueQuestionRuntime(ctx, originalMessage);
+            if (continuation) return continuation;
+        }
         const knowledgeDecision = decideKnowledgeSource(
             options.knowledgeSourceText ?? originalMessage,
             replyContext,
@@ -633,7 +644,10 @@ export async function processMessage(
         ) {
             devLog("Pending health discomfort input detected, routing to healthAgent");
             console.log("[ORCH] pending health discomfort:", pendingHealthDiscomfort.recordId);
-            return healthAgent(ctx, routingMessage, isForwarded, forwardFrom, messageHistory);
+            const result = await healthAgent(ctx, routingMessage, isForwarded, forwardFrom, messageHistory);
+            if (result.operationStatus === 'failed' && !ctx.session.pendingHealthDiscomfort) await cancelRuntimeContinuation(ctx, ['health.request']);
+            const remaining = result.operationStatus === 'ok' ? await continueConfirmedRuntime(ctx, ['health.request'], result.responseText) : undefined;
+            return remaining ? mergeRuntimeResults([{ ...result, keyboard: undefined }, remaining]) : result;
         }
 
         const pendingHealthLog = ctx?.session?.pendingHealthLog;
@@ -646,7 +660,10 @@ export async function processMessage(
         ) {
             devLog("Pending health log input detected, routing to healthAgent");
             console.log("[ORCH] pending health log:", pendingHealthLog.mode);
-            return healthAgent(ctx, routingMessage, isForwarded, forwardFrom, messageHistory);
+            const result = await healthAgent(ctx, routingMessage, isForwarded, forwardFrom, messageHistory);
+            if (result.operationStatus === 'failed' && !ctx.session.pendingHealthLog) await cancelRuntimeContinuation(ctx, ['health.request']);
+            const remaining = result.operationStatus === 'ok' ? await continueConfirmedRuntime(ctx, ['health.request'], result.responseText) : undefined;
+            return remaining ? mergeRuntimeResults([{ ...result, keyboard: undefined }, remaining]) : result;
         }
 
         const originalLooksLikeNewBrowserTask =
@@ -1070,6 +1087,25 @@ export async function processMessage(
             enrichedContextFromMemory += `Сохранённые группы чатов пользователя: ${groupsLine}.\n\n`;
         }
 
+        if (orchestrationMode() === 'skills') {
+            const suspended = classification.intent === 'БРАУЗЕР_ЗАДАЧА' && ctx.session.agentRuntime?.status === 'waiting' ? ctx.session.agentRuntime : undefined;
+            let result = await runKiraRuntime({
+                ctx, message: executionMessage, isForwarded, forwardFrom, messageHistory, classification,
+                lastLocation, enrichedContextFromMemory,
+                voiceReplyRequested: options.voiceReplyRequested === true,
+                suppressProgress: options.suppressProgress === true,
+                recurringTaskRun: options.recurringTaskRun === true,
+            });
+            if (suspended && (suspended.pendingCalls?.length || suspended.classification?.subIntents?.length || hasCompoundActionRequest(suspended.goal ?? '')) && result.operationStatus === 'ok' && !ctx.session.pendingBrowserTask) {
+                ctx.session.agentRuntime = suspended;
+                const continuation = await continueConfirmedRuntime(ctx, ['agents.start', 'agents.resume'], result.responseText);
+                if (continuation) result = mergeRuntimeResults([result, continuation]);
+            }
+            result.recalledMemories = initialMemory.recalledMemories ?? [];
+            saveSessionDedupSnapshot(ctx, { message, classification, plan: { steps: [] }, result });
+            return result;
+        }
+
         let plan = await createPlan({
             message: executionMessage,
             classification,
@@ -1112,6 +1148,24 @@ export async function processMessage(
     }
 }
 
+async function processRuntimeImages(ctx: any, images: Buffer[], caption: string, messageHistory: MessageHistory[]): Promise<ProcessingResult> {
+    if (!images.length) return { responseText: 'Не получила изображение для анализа.', operationStatus: 'failed' };
+    try {
+        let classification: MessageClassification = caption.trim()
+            ? await classifyMessage(caption, false, '', messageHistory)
+            : { intent: 'РАЗГОВОР', confidenceLevel: 'ВЫСОКИЙ', details: { memoryNeed: 'none', relationshipRole: null, responseComplexity: 'routine' } };
+        const source = decideKnowledgeSource(caption || 'Опиши изображение');
+        if (source.requiresWeb) classification = applyKnowledgeSourceDecision(classification, source).classification;
+        const memory = await fetchAgentMemoryContext(ctx, caption || 'изображение', { memoryNeed: classification.details.memoryNeed });
+        const result = await runKiraRuntime({ ctx, images, message: caption || 'Опиши присланное изображение', isForwarded: false, forwardFrom: '', messageHistory,
+            classification, enrichedContextFromMemory: [buildMemoryContextBlock(memory), buildKnowledgeSourcePrompt(source)].filter(Boolean).join('\n\n') });
+        result.recalledMemories = memory.recalledMemories ?? [];
+        return result;
+    } catch {
+        return { responseText: 'Не удалось обработать изображение. Попробуй ещё раз.', operationStatus: 'failed' };
+    }
+}
+
 /**
  * Обрабатывает изображение и связанный с ним комментарий (если есть)
  * @param imageBuffer Бинарные данные изображения
@@ -1125,6 +1179,7 @@ export async function processImage(
     caption: string = "",
     messageHistory: MessageHistory[] = []
 ): Promise<ProcessingResult> {
+    if (orchestrationMode() === 'skills') return processRuntimeImages(ctx, [imageBuffer], caption, messageHistory);
     try {
         const memoryQuery = caption || 'изображение';
         const sharedMemoryContext = await fetchAgentMemoryContext(ctx, memoryQuery);
@@ -1192,6 +1247,7 @@ export async function processImageGroup(
     caption: string = "",
     messageHistory: MessageHistory[] = []
 ): Promise<ProcessingResult> {
+    if (orchestrationMode() === 'skills') return processRuntimeImages(ctx, imageBuffers, caption, messageHistory);
     try {
         const memoryQuery = caption || 'группа изображений';
         const sharedMemoryContext = await fetchAgentMemoryContext(ctx, memoryQuery);

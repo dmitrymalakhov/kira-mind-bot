@@ -14051,7 +14051,7 @@ async function runBrowserAgent(
             if (decision.action === 'fail') {
                 await sendScreenshot(ctx, page, `❌ ${decision.summary?.slice(0, 200) ?? 'Не удалось выполнить'}`);
                 ctx.session.pendingBrowserTask = undefined;
-                return { responseText: `❌ Не удалось выполнить задачу.\n\n${decision.summary ?? 'Причина неизвестна.'}` };
+                return { operationStatus: 'failed', responseText: `❌ Не удалось выполнить задачу.\n\n${decision.summary ?? 'Причина неизвестна.'}` };
             }
 
             if (decision.action === 'memory_lookup') {
@@ -14696,7 +14696,7 @@ async function runBrowserAgent(
         });
         ctx.session.pendingBrowserTask = undefined;
         ctx.session.activeBrowserTask = undefined;
-        return { responseText: `❌ Ошибка браузера: ${safeErrorMessage(err) || 'неизвестная ошибка'}` };
+        return { operationStatus: 'unknown', responseText: `❌ Ошибка браузера: ${safeErrorMessage(err) || 'неизвестная ошибка'}` };
     } finally {
         if (state && ctx.session.activeBrowserTask?.sessionId === state.id) {
             ctx.session.activeBrowserTask = undefined;

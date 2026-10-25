@@ -15,6 +15,8 @@ const SESSION_SNAPSHOT = Symbol('persistedSessionSnapshot');
 
 /** Подмножество SessionData, которое мы сохраняем в БД. */
 interface PersistedSession {
+    agentRuntime?: SessionData['agentRuntime'];
+    agentRuntimePending?: SessionData['agentRuntimePending'];
     apiActionVersion?: string;
     messageHistory: SessionData['messageHistory'];
     dialogueSummary: SessionData['dialogueSummary'];
@@ -209,6 +211,8 @@ async function ensureSessionRow(rawQuery: RawQuery, key: string): Promise<void> 
 function extract(data: SessionData): PersistedSession {
     const now = Date.now();
     return {
+        agentRuntime: data.agentRuntime,
+        agentRuntimePending: data.agentRuntimePending?.slice(-4),
         apiActionVersion: data.apiActionVersion,
         // messageHistory is stored newest-first; keep the head or we persist the oldest messages.
         messageHistory: (data.messageHistory ?? []).slice(0, MAX_HISTORY),
@@ -273,6 +277,8 @@ function extract(data: SessionData): PersistedSession {
 function merge(initial: SessionData, persisted: PersistedSession): SessionData {
     return {
         ...initial,
+        agentRuntime: persisted.agentRuntime ?? initial.agentRuntime,
+        agentRuntimePending: persisted.agentRuntimePending ?? initial.agentRuntimePending,
         messageHistory: persisted.messageHistory ?? initial.messageHistory,
         dialogueSummary: persisted.dialogueSummary ?? initial.dialogueSummary,
         lastSummarizedIndex: persisted.lastSummarizedIndex ?? initial.lastSummarizedIndex,
@@ -513,6 +519,13 @@ export async function persistSessionNow(ctx: BotContext): Promise<void> {
     const key = ctx.sessionStorageKey ?? (ctx.chat?.id != null ? String(ctx.chat.id) : undefined);
     if (!key || !ctx.session) return;
     await new TypeORMSessionStorage(Boolean(ctx.sessionStorageKey)).write(key, ctx.session);
+}
+
+/** Write-ahead persistence must fail closed before a tool can mutate external state. */
+export async function persistAgentRuntime(ctx: BotContext): Promise<void> {
+    const key = ctx.sessionStorageKey ?? (ctx.chat?.id != null ? String(ctx.chat.id) : undefined);
+    if (!key || !ctx.session) throw new Error('Нет контекста для журнала выполнения');
+    await new TypeORMSessionStorage(true).write(key, ctx.session);
 }
 
 /**

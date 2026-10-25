@@ -19,6 +19,7 @@ export const devLog = (...args: any[]) => {
  * Ошибки при отправке глушатся, чтобы не ломать основной поток.
  */
 export async function notifyUser(ctx: BotContext | any, text: string): Promise<void> {
+    if (ctx?.suppressAgentProgress) return;
     try {
         const chatId = ctx?.chat?.id;
         if (!chatId) return;

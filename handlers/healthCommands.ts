@@ -15,6 +15,8 @@ import {
 import { addToHistory } from '../utils/history';
 import { addTargetNotificationButtons, appendTargetNotificationPrompt, buildDefaultTargetReminderMessage } from '../utils/reminderTargetNotification';
 import { createOrRefreshReminderMemory } from '../services/ReminderMemorySync';
+import { continueConfirmedRuntime, mergeRuntimeResults } from '../orchestration/runtime/kernel';
+import { sendResultToUser } from './shared';
 
 export function registerHealthCommands(bot: Bot<BotContext>): void {
     bot.command('health', async (ctx) => {
@@ -38,6 +40,15 @@ export function registerHealthCommands(bot: Bot<BotContext>): void {
 
         await ctx.answerCallbackQuery().catch(() => {});
         const result = await handleHealthCallback(ctx, data);
+        if (result?.operationStatus === 'ok' && !ctx.session.pendingHealthLog && !ctx.session.pendingHealthDiscomfort) {
+            const remaining = await continueConfirmedRuntime(ctx, ['health.request'], result.responseText);
+            if (remaining) {
+                const combined = mergeRuntimeResults([{ ...result, keyboard: undefined }, remaining]);
+                await addToHistory(ctx, 'bot', combined.responseText);
+                await sendResultToUser(ctx, combined);
+                return;
+            }
+        }
         if (result) await sendHealthProcessingResult(ctx, bot, result);
     });
 }
@@ -67,7 +78,7 @@ async function saveHealthRemindersFromResult(
     bot: Bot<BotContext>,
     result: ProcessingResult
 ): Promise<void> {
-    if (!result.reminderCreated || !ctx.chat) return;
+    if (result.remindersPersisted || !result.reminderCreated || !ctx.chat) return;
     if (!Array.isArray(ctx.session.reminders)) ctx.session.reminders = [];
 
     const list = result.reminderDetailsList ?? (result.reminderDetails ? [result.reminderDetails] : []);

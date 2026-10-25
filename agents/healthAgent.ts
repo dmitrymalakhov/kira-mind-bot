@@ -199,12 +199,12 @@ export async function handleHealthCallback(ctx: BotContext, callbackData: string
 
     if (action === 'export') {
         const days = normalizeExportDays(Number(value) || DEFAULT_EXPORT_DAYS);
-        return createHealthExportResult(ctx, days);
+        return { ...await createHealthExportResult(ctx, days), operationStatus: 'ok' };
     }
 
     if (action === 'analyze') {
         const days = normalizeAnalysisDays(Number(value) || DEFAULT_ANALYSIS_DAYS);
-        return createHealthAnalysisResult(ctx, days);
+        return { ...await createHealthAnalysisResult(ctx, days), operationStatus: 'ok' };
     }
 
     if (action === 'analysis_menu') {
@@ -250,7 +250,7 @@ export async function healthAgent(
 
     if (analysis.action === 'cancel') {
         ctx.session.pendingHealthLog = undefined;
-        return { responseText: 'Отменила ввод в дневник здоровья.', keyboard: buildHealthMenuKeyboard() };
+        return { responseText: 'Отменила ввод в дневник здоровья.', keyboard: buildHealthMenuKeyboard(), operationStatus: 'failed' };
     }
 
     if (analysis.action === 'menu' || analysis.action === 'help') {
@@ -258,15 +258,15 @@ export async function healthAgent(
     }
 
     if (analysis.action === 'export') {
-        return createHealthExportResult(ctx, normalizeExportDays(analysis.periodDays ?? DEFAULT_EXPORT_DAYS));
+        return { ...await createHealthExportResult(ctx, normalizeExportDays(analysis.periodDays ?? DEFAULT_EXPORT_DAYS)), operationStatus: 'ok' };
     }
 
     if (analysis.action === 'analysis') {
-        return createHealthAnalysisResult(ctx, normalizeAnalysisDays(analysis.periodDays ?? DEFAULT_ANALYSIS_DAYS));
+        return { ...await createHealthAnalysisResult(ctx, normalizeAnalysisDays(analysis.periodDays ?? DEFAULT_ANALYSIS_DAYS)), operationStatus: 'ok' };
     }
 
     if (analysis.action === 'recent') {
-        return buildRecentHealthLogsResult(ctx);
+        return { ...await buildRecentHealthLogsResult(ctx), operationStatus: 'ok' };
     }
 
     if (pending || analysis.action === 'log') {
@@ -274,6 +274,7 @@ export async function healthAgent(
         ctx.session.pendingHealthLog = undefined;
         return {
             responseText: formatSavedHealthLog(record),
+            operationStatus: 'ok',
             keyboard: buildHealthPostSaveKeyboard(record),
         };
     }
@@ -901,6 +902,7 @@ async function updateDiscomfortLevel(
             `Сохранила уровень дискомфорта/зуда: ${level}/10.`,
             `Запись: ${getRecordDisplaySummary(updated)}`,
         ].join('\n'),
+        operationStatus: 'ok',
         keyboard: buildHealthPostSaveKeyboard(updated),
     };
 }

@@ -14,6 +14,8 @@ import { getReflectionMemoryNoiseReasons } from '../utils/reflectionMemoryFilter
 import { esc, heading, table, list, blockquote, paragraph, RichBlock } from '../utils/richMessage';
 import { sendStructuredBlocks } from '../utils';
 import { getBotGenderedText } from '../persona';
+import { continueConfirmedRuntime, cancelRuntimeContinuation } from '../orchestration/runtime/kernel';
+import { sendResultToUser } from './shared';
 
 function isAdmin(ctx: BotContext): boolean {
     return ctx.from?.id === config.adminUserId;
@@ -492,10 +494,13 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
         const [, memoryId, domain] = match;
         await deleteMemoryById(ctx, memoryId, domain);
         await ctx.editMessageText('Готово, этот факт удалён из памяти.');
+        const continuation = await continueConfirmedRuntime(ctx, ['memory.forget'], 'Владелец подтвердил удаление; выбранный факт удалён.');
+        if (continuation) await sendResultToUser(ctx, continuation);
     });
 
     bot.callbackQuery('mem_del_cancel', async (ctx) => {
         await ctx.answerCallbackQuery();
+        await cancelRuntimeContinuation(ctx, ['memory.forget']);
         await ctx.editMessageText('Удаление отменено.');
     });
 

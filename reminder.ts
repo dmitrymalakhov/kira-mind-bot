@@ -557,6 +557,8 @@ export async function postponeReminderUntil(
  */
 export async function cancelReminder(reminderId: string): Promise<boolean> {
     try {
+        // Persist before clearing live timers; a database failure must not report cancellation.
+        await ReminderRepository.delete(reminderId);
         // Отменяем таймер напоминания, если он существует
         const timer = remindersTimers.get(reminderId);
         if (timer) {
@@ -570,8 +572,6 @@ export async function cancelReminder(reminderId: string): Promise<boolean> {
             clearTimeout(expiryTimer);
             expiryTimers.delete(reminderId);
         }
-
-        await ReminderRepository.delete(reminderId).catch(e => console.error('[reminder] DB delete failed on cancel:', e));
 
         console.info(`[reminder] event=cancelled id=${reminderId}`);
         devLog(`Reminder ${reminderId} cancelled`);

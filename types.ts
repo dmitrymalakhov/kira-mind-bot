@@ -42,6 +42,9 @@ export interface ChatPromptWatchWizardState {
 }
 
 export interface SessionData {
+    /** Durable, channel-scoped execution journal; never contains credentials or image bytes. */
+    agentRuntime?: import('./orchestration/runtime/types').RuntimeSessionState;
+    agentRuntimePending?: import('./orchestration/runtime/types').RuntimeSessionState[];
     /** Last mobile interaction; invalidates buttons from earlier API turns. */
     apiActionVersion?: string;
     reminders: Reminder[];
@@ -358,6 +361,8 @@ export interface ForwardedMessageGroup {
 }
 
 export type BotContext = Context & SessionFlavor<SessionData> & {
+    /** Internal orchestration collects intermediate progress into one final response. */
+    suppressAgentProgress?: boolean;
     /** Server-assigned channel key; never accepted from an external request. */
     sessionStorageKey?: string;
 };

@@ -41,6 +41,8 @@ import { sendRecurringTasksMenu } from "../services/recurringTaskService";
 import { getBotGenderedText } from "../persona";
 import { registerBudgetCommands } from "./budgetCommands";
 import { isMaximumSavingsEnabled } from "../services/budgetModeService";
+import { config } from '../config';
+import { orchestrationMode } from '../orchestration/runtime/kernel';
 
 
 function parseCommandArgument(text: string | undefined, command: string): string {
@@ -53,6 +55,18 @@ function formatToggleState(enabled: boolean): string {
 }
 
 export function registerCommandHandlers(bot: Bot<BotContext>) {
+    bot.command('runtime', async ctx => {
+        if (config.allowedUserId <= 0 || ctx.from?.id !== config.allowedUserId || ctx.chat.type !== 'private') return;
+        const run = ctx.session.agentRuntime;
+        await sendStructuredBlocks(ctx, ctx.chat.id, [
+            heading('Выполнение задач', 2),
+            paragraph(`Режим: ${esc(orchestrationMode())}`),
+            paragraph(run ? `Последний запрос: ${esc(run.status)}. Инструментов: ${run.toolNames.length}.` : 'В этом канале ещё нет журнала инструментов.'),
+            ...(run?.toolNames.length ? [paragraph(`Инструменты: ${esc(run.toolNames.join(', '))}`)] : []),
+            ...(run?.skills.length ? [paragraph(`Скиллы: ${esc(run.skills.join(', '))}`)] : []),
+            ...(run?.agents.length ? [list(run.agents.map(agent => `${esc(agent.kind)}: ${esc(agent.status)}`))] : []),
+        ]);
+    });
     registerBudgetCommands(bot);
     registerMemoryCommands(bot);
     registerChatPromptWatchCommands(bot);

@@ -53,6 +53,8 @@ import {
 import { handleRecurringTaskCallback } from "../services/recurringTaskService";
 import { getBotGenderedText } from "../persona";
 import { saveRemindersFromResult as saveSharedRemindersFromResult } from '../handlers/shared';
+import { sendResultToUser } from '../handlers/shared';
+import { continueConfirmedRuntime, cancelRuntimeContinuation } from '../orchestration/runtime/kernel';
 import {
     buildReminderAssistanceRequest,
     getReminderAssistanceKnowledgeSourceText,
@@ -199,6 +201,11 @@ async function saveRemindersFromResult(ctx: BotContext, bot: Bot<BotContext>, re
 }
 
 async function sendProcessingResult(ctx: BotContext, result: ProcessingResult) {
+    if (result.artifacts?.length) {
+        await addToHistory(ctx, 'bot', result.responseText);
+        await sendResultToUser(ctx, result);
+        return;
+    }
     if (result.negotiationSummarySent) {
         await addToHistory(ctx, "bot", "[Переговоры запущены — см. сообщение выше]");
         return;
@@ -395,6 +402,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
                         .catch(() => {});
                 }
                 ctx.session.pendingBrowserTask = undefined;
+                await cancelRuntimeContinuation(ctx, ['agents.start', 'agents.resume']);
                 await ctx.answerCallbackQuery({ text: "Браузерная задача отменена" });
                 if (ctx.callbackQuery.message?.message_id && ctx.callbackQuery.message?.chat?.id) {
                     await runNonCriticalTelegramEdit("browser cancellation keyboard update", () =>
@@ -1261,7 +1269,12 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     if (sendResult.success) {
                         const sentLabel = sendResult.deliveryMode === "voice" ? "Голосовое отправлено!" : "Сообщение отправлено!";
                         await ctx.answerCallbackQuery({ text: sentLabel });
-                        await ctx.reply(sendResult.deliveryMode === "voice" ? "✅ Голосовое сообщение успешно отправлено!" : "✅ Сообщение успешно отправлено!");
+                        const sentText = sendResult.deliveryMode === "voice" ? "✅ Голосовое сообщение успешно отправлено!" : "✅ Сообщение успешно отправлено!";
+                        const continuation = await continueConfirmedRuntime(ctx, ['messages.prepareDraft', 'messages.updateDraft'], sentText);
+                        if (continuation) {
+                            continuation.responseText = `${sentText}\n\n${continuation.responseText}`;
+                            await sendResultToUser(ctx, continuation, false);
+                        } else await ctx.reply(sentText);
                     } else {
                         await ctx.answerCallbackQuery({ text: "Ошибка отправки" });
                         await ctx.reply(`❌ Не удалось отправить сообщение.${sendResult.errorMessage ? `\n\n${sendResult.errorMessage}` : "\n\nПожалуйста, попробуйте ещё раз."}`);
@@ -1405,6 +1418,8 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 if (ctx.chat) {
                     deleteMessageDraft(ctx.chat.id, ctx.sessionStorageKey);
                 }
+
+                await cancelRuntimeContinuation(ctx, ['messages.prepareDraft', 'messages.updateDraft']);
 
                 await ctx.answerCallbackQuery({ text: "Отправка отменена" });
                 await ctx.reply("❌ Отправка сообщения отменена.");

@@ -4,6 +4,9 @@ import { devLog } from '../utils';
 import { buildTodayImportanceContext } from './todayImportance';
 
 export interface AgentMemoryContext {
+    /** The new kernel handles mutations through tools, so synthesis is read-only. */
+    allowSideEffects?: boolean;
+    allowSelfEvolution?: boolean;
     domain: string;
     context: string;
     recalledMemories?: RecalledMemoryRef[];

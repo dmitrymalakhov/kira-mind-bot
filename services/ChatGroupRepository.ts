@@ -84,6 +84,11 @@ export const ChatGroupRepository = {
         return next;
     },
 
+    async setTracking(id: number, ownerChatId: number, enabled: boolean): Promise<boolean> {
+        const result = await repo().update({ id, ownerChatId: ownerChatId as any, profile: getActiveBotProfile() }, { isTracking: enabled });
+        return (result.affected ?? 0) > 0;
+    },
+
     async findAllTracking(): Promise<ChatGroupEntity[]> {
         return repo().find({ where: { isTracking: true, profile: getActiveBotProfile() } });
     },

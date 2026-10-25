@@ -137,12 +137,7 @@ export const RecurringTaskRepository = {
         const nextRunAt = status === "active" && task.nextRunAt.getTime() <= Date.now()
             ? computeNextRecurringRun(task.schedule, new Date(), task.timezone)
             : task.nextRunAt;
-        await repo().createQueryBuilder()
-            .update(RecurringTaskEntity)
-            .set({ status, nextRunAt })
-            .where("id = :id AND profile = :profile", { id, profile: getActiveBotProfile() })
-            .execute();
-        return this.findById(id);
+        return this.update(id, { status, nextRunAt }, chatId);
     },
 
     async delete(id: string, chatId?: number): Promise<boolean> {

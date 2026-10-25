@@ -15,6 +15,7 @@ import {
     checkLastFactSaveError,
 } from "./shared";
 import { handleRecurringTaskText } from "../services/recurringTaskService";
+import { orchestrationMode, hasCompoundActionRequest } from '../orchestration/runtime/kernel';
 import { getBotGenderedText } from "../persona";
 import { getForwardedMessageInfo } from "../utils/forwardedMessage";
 
@@ -95,7 +96,7 @@ export function registerVoiceMessageHandler(bot: Bot<BotContext>): void {
                         );
 
                         try {
-                            if (await handleRecurringTaskText(ctx, transcribedText, {
+                            if ((orchestrationMode() === 'legacy' || !hasCompoundActionRequest(transcribedText) || ctx.session.pendingRecurringTaskEdit) && await handleRecurringTaskText(ctx, transcribedText, {
                                 messageId: ctx.message.message_id,
                                 contextHistory: recurringContextHistory,
                             })) {

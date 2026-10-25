@@ -26,7 +26,7 @@ export function tenantEnvironment(env: NodeJS.ProcessEnv, account: Account, cred
     directory: string, secrets: PlatformSecrets): NodeJS.ProcessEnv {
     const child: NodeJS.ProcessEnv = {};
     for (const [key, value] of Object.entries(env)) {
-        if (/^(?:PATH|LANG|TZ|NODE_EXTRA_CA_CERTS|PLAYWRIGHT_[A-Z_]+|CHROMIUM_[A-Z_]+|OPENAI_[A-Z_]+|GEMINI_[A-Z_]+|GOOGLE_API_KEY|GOOGLE_MAPS_API_KEY|ELEVENLABS_[A-Z_]+|OPENROUTER_[A-Z_]+|ZAI_[A-Z_]+|LM_STUDIO_[A-Z_]+|AI_MODEL_PRESET|MEMORY_EMBEDDING_[A-Z_]+|DB_HOST|DB_PORT|QDRANT_URL|QDRANT_API_KEY)$/.test(key)) child[key] = value;
+        if (/^(?:PATH|LANG|TZ|NODE_EXTRA_CA_CERTS|PLAYWRIGHT_[A-Z_]+|CHROMIUM_[A-Z_]+|OPENAI_[A-Z_]+|GEMINI_[A-Z_]+|GOOGLE_API_KEY|GOOGLE_MAPS_API_KEY|ELEVENLABS_[A-Z_]+|OPENROUTER_[A-Z_]+|ZAI_[A-Z_]+|LM_STUDIO_[A-Z_]+|AI_MODEL_PRESET|KIRA_ORCHESTRATION_MODE|KIRA_DECISIONS_ENABLED|MEMORY_EMBEDDING_[A-Z_]+|DB_HOST|DB_PORT|QDRANT_URL|QDRANT_API_KEY)$/.test(key)) child[key] = value;
     }
     const name = tenantName(account.id);
     const existing = credentials.existingStorage;
