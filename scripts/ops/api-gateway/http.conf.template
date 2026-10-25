@@ -1,0 +1,26 @@
+# Include once from nginx's http {} context (for example conf.d/).
+limit_req_zone $binary_remote_addr zone=kira_api_ip:10m rate=2r/s;
+limit_req_zone $server_name zone=kira_api_total:1m rate=10r/s;
+limit_conn_zone $binary_remote_addr zone=kira_api_connections:10m;
+limit_conn_zone $server_name zone=kira_api_total_connections:1m;
+
+# Log no URL, query string, client IP, credentials or request/response body.
+log_format kira_api '$time_iso8601 method=$request_method status=$status '
+                    'bytes=$body_bytes_sent duration=$request_time request=$request_id';
+
+map $http_authorization $kira_api_has_bearer {
+    default 0;
+    "~*^Bearer [^\s]+$" 1;
+}
+
+map "$request_method:$uri" $kira_api_route_allowed {
+    default 0;
+    "~^GET:/api/v1/(status|capabilities|history|reminders|tasks)$" 1;
+    "~^GET:/api/v1/files/[0-9a-f-]{36}$" 1;
+    "~^POST:/api/v1/(messages|actions)$" 1;
+}
+
+map $ssl_client_serial $kira_api_client_revoked {
+    default 0;
+    # Add a lost device's certificate serial here: "HEX_SERIAL" 1;
+}

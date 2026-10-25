@@ -30,12 +30,21 @@ def main():
             return 1
         curl_config = "url = " + json.dumps(base_url + "/status") + "\n"
         curl_config += "header = " + json.dumps("Authorization: Bearer " + token) + "\n"
+        certificate, key = config.get("clientCertificate"), config.get("clientKey")
+        if bool(certificate) != bool(key):
+            raise ValueError("both clientCertificate and clientKey are required")
+        if certificate:
+            for option, filename in (("cert", certificate), ("key", key)):
+                path = args.config.resolve().parent / filename
+                if not path.is_file():
+                    raise ValueError("missing client TLS file")
+                curl_config += option + " = " + json.dumps(str(path)) + "\n"
         result = subprocess.run([
-            curl, "--silent", "--show-error", "--connect-timeout", "10", "--max-time", "20",
+            curl, "--disable", "--silent", "--show-error", "--connect-timeout", "10", "--max-time", "20",
             "--proto", "=https", "--config", "-", "--write-out", "\n%{http_code}",
         ], input=curl_config, capture_output=True, text=True, timeout=25)
         if result.returncode:
-            print("Нет HTTPS-соединения. Проверь Tailscale на обоих устройствах и доступ к серверу.", file=sys.stderr)
+            print("Нет HTTPS-соединения. Проверь адрес, сеть и клиентский TLS-сертификат; для приватного адреса также Tailscale.", file=sys.stderr)
             return 1
         body, code = result.stdout.rsplit("\n", 1)
         if code != "200":
@@ -49,7 +58,7 @@ def main():
         print("Канал фоновых уведомлений: " + str(status.get("notificationsChannel", "telegram")))
         return 0
     except subprocess.TimeoutExpired:
-        print("Время ожидания HTTPS-соединения истекло. Проверь Tailscale.", file=sys.stderr)
+        print("Время ожидания HTTPS-соединения истекло. Проверь сеть и доступ к серверу.", file=sys.stderr)
     except (OSError, ValueError, KeyError, TypeError):
         print("Не удалось прочитать конфигурацию или ответ API. Проверь connection.json.", file=sys.stderr)
     return 1

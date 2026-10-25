@@ -30,6 +30,8 @@ import { isTodayImportanceRequest } from "../utils/todayImportanceIntent";
 import { formatPromptDateTime } from "../utils/time";
 import { buildPersonalityMoodStyles, getPersonalityGenderForms } from "../utils/personalityGender";
 import { isSimpleSocialMessage } from '../utils/simpleDialogue';
+import { buildSafeAiErrorLog } from '../ai/errorDiagnostics';
+import { buildConversationFailureReply, isConversationContextOverflow } from '../utils/conversationFailureReply';
 
 const MEDICAL_CONTEXT_RE = /(?:здоров|медицин|врач|доктор|клиник|больниц|симптом|болит|боль\b|температур|давлен|пульс|лекар|препарат|дозиров|анализ[ыа]?|обследован|диагноз|лечени|операц|процедур|риск|опасн|наркоз|анестез|госпитал|травм|инфекц|аллерг|сыпь|от[её]к|беременн|психиатр|психолог|терапи)/iu;
 
@@ -373,10 +375,13 @@ ${historyContext}
         };
 
     } catch (error) {
-        console.error("Error in conversation agent:", error);
-        // В случае ошибки возвращаем стандартный ответ
+        console.error("Error in conversation agent:", {
+            ...buildSafeAiErrorLog(error),
+            contextOverflow: isConversationContextOverflow(error),
+        });
         return {
-            responseText: `${getPersonalityGenderForms(config.eventDescriptionGender).understood}, давай обсудим.`
+            responseText: buildConversationFailureReply(error),
+            skipOptionalFollowups: true,
         };
     }
 }

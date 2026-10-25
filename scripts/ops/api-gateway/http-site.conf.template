@@ -1,0 +1,12 @@
+# HTTP serves ACME challenges only; API clients must start with HTTPS.
+server {
+    listen 80;
+    server_name @@DOMAIN@@;
+    access_log off;
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/kira-api-acme;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+    location / { return 404; }
+}
