@@ -3,17 +3,18 @@ import * as http from 'node:http';
 import { ApiBackend, ApiError, ApiOperationStore } from './contracts';
 import { ExternalApiOptions } from './options';
 import { parseSettingsPatch } from './settings';
+import { MAX_SCENE_BODY_BYTES, parseSceneTurn } from './scene';
 
 const PREFIX = '/api/v1';
 const MAX_BODY_BYTES = 64 * 1024;
 
 function hash(text: string): string { return createHash('sha256').update(text).digest('hex'); }
 
-export async function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+export async function readBody(req: http.IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<Record<string, unknown>> {
     if (req.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json') {
         throw new ApiError(415, 'unsupported_media_type', 'Ожидается application/json.');
     }
-    if (Number(req.headers['content-length']) > MAX_BODY_BYTES) {
+    if (Number(req.headers['content-length']) > maxBytes) {
         req.resume();
         throw new ApiError(413, 'body_too_large', 'Слишком большой запрос.');
     }
@@ -23,7 +24,7 @@ export async function readBody(req: http.IncomingMessage): Promise<Record<string
         let failed = false;
         req.on('data', (chunk: Buffer) => {
             size += chunk.length;
-            if (size > MAX_BODY_BYTES) {
+            if (size > maxBytes) {
                 if (!failed) reject(new ApiError(413, 'body_too_large', 'Слишком большой запрос.'));
                 failed = true;
             } else if (!failed) chunks.push(Buffer.from(chunk));
@@ -88,6 +89,8 @@ export function createExternalApiServer(
                 if (path === `${PREFIX}/capabilities`) return json(200, await backend.capabilities());
                 if (path === `${PREFIX}/reminders`) return json(200, await backend.reminders());
                 if (path === `${PREFIX}/tasks`) return json(200, await backend.tasks());
+                if (path === `${PREFIX}/model-settings`) return json(200, await backend.modelSettings());
+                if (path === `${PREFIX}/scene`) return json(200, await backend.sceneCapabilities());
                 if (path === `${PREFIX}/history`) {
                     const limit = Number(url.searchParams.get('limit') ?? 20);
                     if (!Number.isInteger(limit) || limit < 1 || limit > 20) {
@@ -104,6 +107,41 @@ export function createExternalApiServer(
                     });
                     return res.end(file.data);
                 }
+            }
+            if (path === `${PREFIX}/model-settings`) {
+                if (req.method !== 'PUT') {
+                    res.setHeader('Allow', 'GET, PUT');
+                    req.resume();
+                    throw new ApiError(405, 'method_not_allowed', 'Ожидается GET или PUT.');
+                }
+                // Applies from the next turn: a running turn has already read its mode.
+                return json(200, await backend.saveModelSettings(await readBody(req)));
+            }
+            if (path === `${PREFIX}/scene/turns` || path === `${PREFIX}/scene/action-results`) {
+                if (req.method !== 'POST') {
+                    res.setHeader('Allow', 'POST');
+                    req.resume();
+                    throw new ApiError(405, 'method_not_allowed', 'Ожидается POST.');
+                }
+                const isTurn = path.endsWith('/turns');
+                const body = await readBody(req, isTurn ? MAX_SCENE_BODY_BYTES : MAX_BODY_BYTES);
+                const turn = isTurn ? parseSceneTurn(body) : undefined;
+                const preset = turn ? await backend.sceneReady(turn) : null; // vision refused before any receipt
+                const sceneKey = req.headers['idempotency-key'];
+                if (isTurn && (typeof sceneKey !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(sceneKey))) {
+                    throw new ApiError(400, 'idempotency_key_required', 'Нужен Idempotency-Key: 8–128 букв, цифр, _ или -.');
+                }
+                if (busy) {
+                    res.setHeader('Retry-After', '2');
+                    throw new ApiError(409, 'conversation_busy', 'Предыдущий запрос ещё выполняется.');
+                }
+                busy = true;
+                try {
+                    if (!turn) return json(200, await backend.sceneActionResult(body));
+                    const fingerprint = hash(`${path}:${JSON.stringify(body)}`);
+                    return json(200, await operations.run(`${options.ownerId}:scene:${hash(sceneKey as string)}`, fingerprint,
+                        () => backend.sceneTurn(turn, preset)));
+                } finally { busy = false; }
             }
             if (path !== `${PREFIX}/messages` && path !== `${PREFIX}/actions`) {
                 throw new ApiError(404, 'not_found', 'Ресурс не найден.');
@@ -125,6 +163,7 @@ export function createExternalApiServer(
             if (typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(idempotencyKey)) {
                 throw new ApiError(400, 'idempotency_key_required', 'Нужен Idempotency-Key: 8–128 букв, цифр, _ или -.');
             }
+            await backend.turnReady(); // before the synchronous busy check and set below, which must stay atomic
             if (busy) {
                 res.setHeader('Retry-After', '2');
                 throw new ApiError(409, 'conversation_busy', 'Предыдущий запрос ещё выполняется.');

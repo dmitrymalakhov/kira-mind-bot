@@ -2,6 +2,7 @@ import * as http from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { ApiError } from '../api/contracts';
 import { readBody } from '../api/server';
+import { MAX_SCENE_BODY_BYTES } from '../api/scene';
 import { checkPassword, digest, newToken, passwordHash, PlatformSecrets } from './crypto';
 import { Account, AccountStore } from './store';
 import { AccountRuntimes, TenantCredentials } from './runtime';
@@ -42,8 +43,9 @@ class RequestLimits {
     }
 }
 
-async function proxy(req: http.IncomingMessage, res: http.ServerResponse, endpoint: { port: number; token: string }) {
-    const body = req.method === 'POST' || req.method === 'PATCH' ? JSON.stringify(await readBody(req)) : undefined;
+async function proxy(req: http.IncomingMessage, res: http.ServerResponse, endpoint: { port: number; token: string }, route: string) {
+    const body = ['POST', 'PATCH', 'PUT'].includes(req.method || '')
+        ? JSON.stringify(await readBody(req, route === '/api/v1/scene/turns' ? MAX_SCENE_BODY_BYTES : undefined)) : undefined;
     req.resume();
     return new Promise<void>((resolve, reject) => {
         const upstream = http.request({ host: '127.0.0.1', port: endpoint.port, path: req.url, method: req.method,
@@ -180,13 +182,14 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
                     return json(202, { status: 'restarting' });
                 } finally { connecting.delete(account.id); }
             }
-            const readable = req.method === 'GET' && (/^\/api\/v1\/(status|capabilities|history|reminders|tasks|settings)$/.test(route)
+            const readable = req.method === 'GET' && (/^\/api\/v1\/(status|capabilities|history|reminders|tasks|settings|model-settings|scene)$/.test(route)
                 || /^\/api\/v1\/files\/[0-9a-f-]{36}$/.test(route));
-            const writable = (req.method === 'POST' && /^\/api\/v1\/(messages|actions)$/.test(route))
-                || (req.method === 'PATCH' && route === '/api/v1/settings');
+            const writable = (req.method === 'POST' && /^\/api\/v1\/(messages|actions|scene\/turns|scene\/action-results)$/.test(route))
+                || (req.method === 'PATCH' && route === '/api/v1/settings')
+                || (req.method === 'PUT' && route === '/api/v1/model-settings');
             if (!readable && !writable) throw new ApiError(404, 'not_found', 'Ресурс не найден.');
             if (!account.owner_id) throw new ApiError(409, 'telegram_pairing_required', 'Сначала подключи своего бота и открой ссылку подтверждения в Telegram.');
-            await proxy(req, res, runtimes.endpoint(account));
+            await proxy(req, res, runtimes.endpoint(account), route);
         } catch (error) {
             req.resume();
             const safe = error instanceof ApiError ? error : new ApiError(500, 'internal_error', 'Не удалось выполнить запрос.');

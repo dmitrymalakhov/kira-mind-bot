@@ -31,6 +31,10 @@ async function fixture(t: TestContext, changes: Partial<ApiBackend> = {}) {
         message: async text => { executions++; return { messages: [{ id: -1, type: 'text', text }] }; },
         action: async text => { executions++; return { messages: [{ id: -2, type: 'notice', text }] }; },
         file: async () => ({ data: Buffer.from('synthetic file'), filename: 'пример.txt' }),
+        modelSettings: async () => ({ scope: 'app' }), saveModelSettings: async body => ({ saved: body }),
+        turnReady: async () => {},
+        sceneCapabilities: async () => ({ version: 1 }), sceneReady: async () => null,
+        sceneTurn: async () => ({ messages: [] }), sceneActionResult: async () => ({ ok: true }),
         ...changes,
     };
     const server = createExternalApiServer(options, backend, new Receipts());

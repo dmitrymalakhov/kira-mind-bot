@@ -179,6 +179,8 @@ test('two API accounts register/login, pair separate bots, and route history, fi
         for (const entry of [first, second]) {
             const id = entry.data.account.id;
             let executions = 0;
+            let sceneExecutions = 0;
+            let modelPreset: unknown = null;
             const internalToken = secrets.derive(id, 'api');
             let settings: ApiSettings = { budgetMode: 'normal', budgetModes: [], telegram: { personalSessionConfigured: false }, features: [] };
             const worker = createExternalApiServer({ token: internalToken, ownerId: Number(store.accounts.get(id)!.owner_id), host: '127.0.0.1', port: 0 }, {
@@ -187,6 +189,13 @@ test('two API accounts register/login, pair separate bots, and route history, fi
                 file: async () => ({ filename: `${id}.txt`, data: Buffer.from(id) }),
                 message: async () => ({ messages: [{ id: 1, type: 'text', text: `${id}:${++executions}` }] }),
                 action: async () => ({ messages: [] }),
+                turnReady: async () => {},
+                modelSettings: async () => ({ accountId: id, preset: modelPreset }),
+                saveModelSettings: async body => { modelPreset = body.preset; return { accountId: id, preset: modelPreset }; },
+                sceneCapabilities: async () => ({ accountId: id, version: 1 }),
+                sceneReady: async () => null,
+                sceneTurn: async () => ({ messages: [{ id: -1, type: 'text', text: `${id}:scene:${++sceneExecutions}` }] }),
+                sceneActionResult: async body => ({ accountId: id, actionId: body.actionId }),
                 settings: async () => settings,
                 updateSettings: async patch => { settings = { ...settings, budgetMode: patch.budgetMode || settings.budgetMode }; return settings; },
             }, new MemoryApiOperations());
@@ -200,7 +209,27 @@ test('two API accounts register/login, pair separate bots, and route history, fi
             assert.deepEqual(await call('/api/v1/messages', 'POST', token, { text: 'Привет' }, 'same-key-for-both'), result);
             const file = await fetch(url + '/api/v1/files/' + randomUUID(), { headers: { authorization: `Bearer ${token}` } });
             assert.equal(await file.text(), id);
+            assert.equal((await call('/api/v1/model-settings', 'GET', token)).data.accountId, id);
+            assert.equal((await call('/api/v1/scene', 'GET', token)).data.accountId, id);
+            const snapshot = { roomId: randomUUID(), roomVersion: 1, coordinateSpaceId: randomUUID(),
+                observedAt: new Date().toISOString(), tracking: 'normal',
+                avatar: { position: [0, 0, 0], yaw: 0, pose: 'standing' }, objects: [], seats: [] };
+            const turn = { text: 'Посмотри на синтетическую комнату', scene: snapshot,
+                frame: { mime: 'image/jpeg', data: Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(200_000)]).toString('base64'),
+                    capturedAt: snapshot.observedAt, width: 640, height: 480 } };
+            const sceneResult = await call('/api/v1/scene/turns', 'POST', token, turn, 'same-scene-key-for-both');
+            assert.equal(sceneResult.status, 200, 'AR frames larger than 64 KiB must reach the selected worker');
+            assert.equal(sceneResult.data.messages[0].text, `${id}:scene:1`);
+            assert.deepEqual(await call('/api/v1/scene/turns', 'POST', token, turn, 'same-scene-key-for-both'), sceneResult);
+            assert.equal((await call('/api/v1/scene/action-results', 'POST', token, { actionId: snapshot.roomId, status: 'completed' })).data.accountId, id);
         }
+        assert.equal((await call('/api/v1/scene')).status, 401);
+        assert.equal((await call('/api/v1/scene/unknown', 'POST', a, {})).status, 404);
+        assert.equal((await call('/api/v1/model-settings', 'PUT', a, { preset: 'gpt-balanced', expectedRevision: 'none' })).data.preset, 'gpt-balanced');
+        assert.equal((await call('/api/v1/model-settings', 'GET', b)).data.preset, null, 'model selection stays within its account');
+        assert.equal((await call('/api/v1/model-settings', 'PUT', a, { preset: 'x'.repeat(70_000) })).status, 413, 'only scene turns get the larger body limit');
+        assert.equal((await call('/api/v1/messages', 'POST', a, { text: 'x'.repeat(70_000) }, 'oversized-message')).status, 413);
+        assert.equal((await call('/api/v1/scene/turns', 'POST', a, { text: 'x'.repeat(3 * 1024 * 1024) }, 'oversized-scene')).status, 413);
         assert.equal((await call('/api/v1/settings', 'PATCH', a, { budgetMode: 'maximum' })).data.budgetMode, 'maximum');
         assert.equal((await call('/api/v1/settings', 'GET', b)).data.budgetMode, 'normal');
         assert.equal((await call('/api/v1/settings', 'PATCH', a, { budgetMode: 'normal', accountId: second.data.account.id })).status, 400);

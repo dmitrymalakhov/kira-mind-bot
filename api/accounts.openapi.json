@@ -396,6 +396,18 @@
     },
     "/settings": {
       "$ref": "./openapi.json#/paths/~1settings"
+    },
+    "/model-settings": {
+      "$ref": "./openapi.json#/paths/~1model-settings"
+    },
+    "/scene": {
+      "$ref": "./openapi.json#/paths/~1scene"
+    },
+    "/scene/turns": {
+      "$ref": "./openapi.json#/paths/~1scene~1turns"
+    },
+    "/scene/action-results": {
+      "$ref": "./openapi.json#/paths/~1scene~1action-results"
     }
   },
   "components": {

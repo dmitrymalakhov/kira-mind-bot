@@ -38,6 +38,16 @@ export interface ApiBackend {
     message(text: string): Promise<ApiReply>;
     action(token: string): Promise<ApiReply>;
     file(id: string): Promise<{ data: Buffer; filename: string }>;
+    /** The app's text mode (API_AI_MODEL_PRESET): catalog, its selection and the server's global mode. */
+    modelSettings(): Promise<unknown>;
+    /** Throws before any receipt exists when the app's stored mode cannot run, so the turn is surely not executed. */
+    turnReady(): Promise<void>;
+    /** AR scene (api/scene.ts): capabilities with the vision route, a scene turn and the phone's action results. */
+    sceneCapabilities(): Promise<unknown>;
+    sceneReady(turn: import('./scene').SceneTurn): Promise<import('../ai/modelPresets').AiPresetName | null>;
+    sceneTurn(turn: import('./scene').SceneTurn, preset: import('../ai/modelPresets').AiPresetName | null): Promise<ApiReply>;
+    sceneActionResult(body: Record<string, unknown>): Promise<unknown>;
+    saveModelSettings(body: Record<string, unknown>): Promise<unknown>;
 }
 
 export interface ApiOperationStore {
