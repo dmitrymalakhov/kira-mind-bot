@@ -29,16 +29,23 @@ function parsePreferences(value) {
   return { quality: value.quality, ...(value.provider && value.provider !== 'auto' ? { provider: value.provider } : {}) };
 }
 
+function getCustomPresetName(provider, quality) {
+  const level = QUALITY_LEVELS.find(level => level.id === quality);
+  if (!level || !Object.hasOwn(providers, provider)) throw new Error('Выберите провайдера и качество Custom.');
+  return { openai: level.preset, gemini: 'gemini-full', zai: 'glm-full',
+    openrouter: 'hybrid-openrouter-gpt', lmstudio: 'lmstudio-local' }[provider];
+}
+
 function parseStrategyRequest(value) {
   if (value?.mode !== 'custom') return parsePreferences(value);
-  if (Object.keys(value).some(key => !['mode', 'quality', 'presetName', 'routes'].includes(key))
-    || !registry.presetNames.includes(value.presetName) || !value.routes || Array.isArray(value.routes)
+  if (Object.keys(value).some(key => !['mode', 'quality', 'provider', 'routes'].includes(key))
+    || !Object.hasOwn(providers, value.provider) || !value.routes || Array.isArray(value.routes)
     || Object.keys(value.routes).length !== TEXT_TASKS.length) throw new Error('Выберите корректную Custom-стратегию.');
   parsePreferences({ quality: value.quality });
   for (const task of TEXT_TASKS) {
     const ref = value.routes[task];
-    if (!ref || Object.keys(ref).some(key => !['provider', 'model', 'maxTokens', 'reasoningEffort'].includes(key))
-      || !Object.hasOwn(providers, ref.provider) || typeof ref.model !== 'string' || !ref.model.trim()
+    if (!ref || Object.keys(ref).some(key => !['model', 'maxTokens', 'reasoningEffort'].includes(key))
+      || typeof ref.model !== 'string' || !ref.model.trim()
       || ref.model.length > 400 || /[\r\n\0]/.test(ref.model)
       || !Number.isInteger(ref.maxTokens) || ref.maxTokens < 32 || ref.maxTokens > 16384
       || !['none', 'low', 'medium', 'high'].includes(ref.reasoningEffort)) throw new Error('Выберите модель, лимит и рассуждения для каждой задачи Custom.');
@@ -67,22 +74,23 @@ function hasPlanResources(models, vars, memoryProfileName) {
 function buildCustomPlan(raw, context) {
   const request = parseStrategyRequest(raw);
   if (request.mode !== 'custom') throw new Error('Выберите Custom-стратегию.');
-  const base = registry.presets[request.presetName];
+  const presetName = getCustomPresetName(request.provider, request.quality);
+  const base = registry.presets[presetName];
   const models = structuredClone(base.models);
   const catalog = getStrategyCatalog(context);
   const outputTokenLimits = { ...base.outputTokenLimits };
   for (const task of TEXT_TASKS) {
     const route = request.routes[task];
-    if (!catalog.some(ref => ref.provider === route.provider && ref.model === route.model)) throw new Error('Недоступен маршрут Custom: выберите модель из подключённого каталога.');
-    models[task] = { provider: route.provider, model: route.model, allowFallback: false,
+    if (!catalog.some(ref => ref.provider === request.provider && ref.model === route.model)) throw new Error('Недоступен маршрут Custom: выберите модель из подключённого каталога.');
+    models[task] = { provider: request.provider, model: route.model, allowFallback: false,
       generation: { maxTokens: route.maxTokens, reasoningEffort: route.reasoningEffort } };
     outputTokenLimits[task] = route.maxTokens;
   }
   if (!hasPlanResources(models, context.vars, context.memoryProfileName)) throw new Error('Недоступен API для сервисных задач или действующего профиля памяти.');
   const validity = getPresetAvailabilityForMemoryProfile({ models }, context.vars, context.memoryProfileName);
   if (!validity.enabled) throw new Error(validity.unavailableReason);
-  return parseModelPolicy({ version: 3, preferences: { quality: request.quality }, presetName: request.presetName,
-    models, outputTokenLimits, source: 'custom', summary: 'Custom: модели, лимиты и рассуждения выбраны вручную. Автоматическая замена текстовых маршрутов отключена.' });
+  return parseModelPolicy({ version: 3, preferences: { quality: request.quality }, presetName, customProvider: request.provider,
+    models, outputTokenLimits, source: 'custom', summary: `Custom · ${providers[request.provider].label}: модели, лимиты и рассуждения выбраны вручную. Автоматическая замена текстовых маршрутов отключена.` });
 }
 
 function readStoredPreferences(value, version) {
@@ -150,10 +158,12 @@ function parseModelPolicy(raw) {
     if (value.version === 1 && value.preferences.censorship === 'off' && TEXT_TASKS.includes(task) && ref.allowFallback !== false) throw new Error('Свободный диалог не допускает подмену модели');
     if (value.version === 3 && (value.source === 'custom' || preferences.provider) && TEXT_TASKS.includes(task)
       && (ref.allowFallback !== false || ref.localRole || ref.modelEnvKey)) throw new Error('Некорректный закреплённый маршрут модели');
+    if (value.customProvider !== undefined && (value.source !== 'custom' || !Object.hasOwn(providers, value.customProvider)
+      || TEXT_TASKS.includes(task) && ref.provider !== value.customProvider)) throw new Error('Некорректный провайдер Custom');
     if (ref.generation && (!['none', 'low', 'medium', 'high'].includes(ref.generation.reasoningEffort)
       || ref.generation.maxTokens !== undefined && (!Number.isInteger(ref.generation.maxTokens) || ref.generation.maxTokens < 32 || ref.generation.maxTokens > 16384))) throw new Error('Некорректные параметры модели');
   }
   return { ...value, preferences };
 }
 
-module.exports = { API_PROVIDERS, getStrategyCatalog, parseStrategyRequest, buildCustomPlan, SETTING_KEY, DEFAULT_PREFERENCES, QUALITY_LEVELS, TEXT_TASKS, parsePreferences, buildModelPlan, parseModelPolicy };
+module.exports = { getCustomPresetName, API_PROVIDERS, getStrategyCatalog, parseStrategyRequest, buildCustomPlan, SETTING_KEY, DEFAULT_PREFERENCES, QUALITY_LEVELS, TEXT_TASKS, parsePreferences, buildModelPlan, parseModelPolicy };

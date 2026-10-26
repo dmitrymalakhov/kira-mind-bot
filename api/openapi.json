@@ -1469,12 +1469,15 @@
                     "required": [
                       "mode",
                       "quality",
-                      "presetName",
+                      "provider",
                       "routes"
                     ],
                     "properties": {
                       "mode": {
-                        "const": "custom"
+                        "type": "string",
+                        "enum": [
+                          "custom"
+                        ]
                       },
                       "quality": {
                         "type": "string",
@@ -1482,20 +1485,6 @@
                           "standard",
                           "high",
                           "maximum"
-                        ]
-                      },
-                      "presetName": {
-                        "enum": [
-                          "gpt-max",
-                          "gpt-balanced",
-                          "gpt-lean",
-                          "hybrid-openrouter-gpt",
-                          "hybrid-gemini-gpt",
-                          "gemini-full",
-                          "glm-full",
-                          "glm-balanced",
-                          "lmstudio-local",
-                          "hybrid-lmstudio-gpt"
                         ]
                       },
                       "routes": {
@@ -1553,6 +1542,16 @@
                             "$ref": "#/components/schemas/CustomModelRoute"
                           }
                         }
+                      },
+                      "provider": {
+                        "type": "string",
+                        "enum": [
+                          "openai",
+                          "gemini",
+                          "zai",
+                          "openrouter",
+                          "lmstudio"
+                        ]
                       }
                     }
                   }
@@ -2288,21 +2287,11 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "provider",
           "model",
           "maxTokens",
           "reasoningEffort"
         ],
         "properties": {
-          "provider": {
-            "enum": [
-              "openai",
-              "openrouter",
-              "gemini",
-              "zai",
-              "lmstudio"
-            ]
-          },
           "model": {
             "type": "string",
             "minLength": 1,

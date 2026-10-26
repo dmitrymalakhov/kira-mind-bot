@@ -2,9 +2,10 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Accordion, AccordionSummary, AccordionDetails, Alert, Box, Button, Card, CardContent,
   Chip, CircularProgress, Stack, ButtonBase, Typography, TextField, MenuItem, Dialog, DialogTitle,
   DialogContent, DialogActions, FormControlLabel, Switch } from '@mui/material';
-import { QUALITY_LEVELS, TEXT_TASKS, type CustomStrategy, type StrategyRequest, type CustomRoute } from '../../../ai/modelPreferences';
+import { QUALITY_LEVELS, TEXT_TASKS, getCustomPresetName, type CustomStrategy, type StrategyRequest, type CustomRoute } from '../../../ai/modelPreferences';
 import rawRegistry from '../ai-model-presets.json';
-import type { AiModelRef, AiPresetConfig } from '../../../ai/modelPresets';
+import type { AiModelRef, AiPresetConfig, AiProvider, AiTaskKey } from '../../../ai/modelPresets';
+import { customDraftFromModels, customDraftForProvider } from '../modelStrategyEditor';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { fetchModelPreferences, saveModelPreferences } from '../api';
 import { getAiProviderDescriptor } from '../../../ai/providerMetadata';
@@ -28,32 +29,15 @@ export function ModelPreferencesSettings({ onToast, localConnection }: {
   const [mode, setMode] = useState<'automatic'|'custom'>('automatic');
   const [draft, setDraft] = useState<CustomStrategy | null>(null);
   const [dialog, setDialog] = useState(false);
-  const [localEnabled, setLocalEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  function fromModels(presetName: AiPresetName, models: Record<string, AiModelRef>, quality: ModelPreferences['quality']): CustomStrategy {
-    return { mode: 'custom', quality, presetName, routes: Object.fromEntries(TEXT_TASKS.map(task => {
-      const ref = models[task];
-      const route = ref.localRole && data?.localRoutes[ref.localRole];
-      return [task, { provider: ref.provider, model: ref.allowFallback === false ? ref.model : route ? route.model : ref.model,
-        maxTokens: ref.generation?.maxTokens || (route && route.maxTokens) || registry.presets[presetName].outputTokenLimits?.[task] || 2048,
-        reasoningEffort: ref.generation?.reasoningEffort || (route && route.reasoningEffort) || 'none' }];
-    })) };
-  }
   async function load() {
     try {
       const next = await fetchModelPreferences(); setData(next); setPreferences(next.preferences); setError('');
       const models = next.activePlan?.models || registry.presets[next.manualPreset].models;
       setMode(next.mode === 'automatic' && !local(models) ? 'automatic' : 'custom');
-      setLocalEnabled(local(models));
-      // Resolve legacy local roles only for the editable draft; the saved runtime is untouched.
-      setDraft({ mode: 'custom', quality: next.preferences.quality, presetName: next.activePlan?.presetName || next.manualPreset,
-        routes: Object.fromEntries(TEXT_TASKS.map(task => {
-          const ref = models[task]; const route = ref.localRole && next.localRoutes[ref.localRole];
-          return [task, { provider: ref.provider, model: ref.allowFallback === false ? ref.model : route ? route.model : ref.model,
-            maxTokens: ref.generation?.maxTokens || (route && route.maxTokens) || registry.presets[next.manualPreset].outputTokenLimits?.[task] || 2048,
-            reasoningEffort: ref.generation?.reasoningEffort || (route && route.reasoningEffort) || 'none' }];
-        })) });
+      setDraft(customDraftFromModels(models, next.preferences.quality, next.localRoutes,
+        next.activePlan?.outputTokenLimits || registry.presets[next.manualPreset].outputTokenLimits));
     } catch { setError('Не удалось загрузить настройки моделей.'); }
   }
   useEffect(() => { void load(); }, []);
@@ -69,40 +53,53 @@ export function ModelPreferencesSettings({ onToast, localConnection }: {
     } catch (failure) { onToast(failure instanceof Error ? failure.message : 'Не удалось сохранить стратегию', 'error'); }
     finally { setBusy(false); }
   }
-  function openCustom(withLocal = mode === 'custom' && local(data?.activePlan?.models || registry.presets[data?.manualPreset || 'gpt-balanced'].models)) {
-    if (mode === 'custom' && data) {
-      const models = data.activePlan?.models || registry.presets[data.manualPreset].models;
-      setDraft(fromModels(data.activePlan?.presetName || data.manualPreset, models, preferences.quality));
-    }
-    if (mode === 'automatic' && preview?.models && preview.presetName) setDraft(fromModels(preview.presetName, preview.models, preferences.quality));
-    if (withLocal && !local(data?.activePlan?.models || registry.presets[data?.manualPreset || 'gpt-balanced'].models)) {
-      const base = registry.presets['lmstudio-local'];
-      setDraft(fromModels('lmstudio-local', base.models, preferences.quality));
-    }
-    if (!withLocal && data) {
+  function openCustom(withLocal?: boolean) {
+    if (!data) return;
+    const plan = mode === 'automatic' && preview?.models ? preview : data.activePlan;
+    const models = plan?.models || registry.presets[data.manualPreset].models;
+    let next = customDraftFromModels(models, preferences.quality, data.localRoutes,
+      plan?.outputTokenLimits || registry.presets[data.manualPreset].outputTokenLimits);
+    if (withLocal === true) next = next?.provider === 'lmstudio' ? next
+      : customDraftForProvider('lmstudio', preferences.quality, data.catalog, data.localRoutes);
+    if (withLocal === false) {
       const cloud = data.plans.find(plan => plan.preferences.quality === preferences.quality && plan.available);
-      const savedModels = data.activePlan?.models || registry.presets[data.manualPreset].models;
-      if (local(savedModels) && cloud?.models && cloud.presetName) {
-        const current = fromModels(data.activePlan?.presetName || data.manualPreset, savedModels, preferences.quality);
-        const replacement = fromModels(cloud.presetName, cloud.models, preferences.quality);
-        setDraft({ ...current, presetName: cloud.presetName, routes: Object.fromEntries(Object.entries(current.routes)
-          .map(([task, route]) => [task, route.provider === 'lmstudio' ? replacement.routes[task] : route])) });
-      }
+      next = cloud?.models ? customDraftFromModels(cloud.models, preferences.quality, data.localRoutes, cloud.outputTokenLimits) : null;
     }
-    setLocalEnabled(withLocal); setDialog(true);
+    setDraft(next); setDialog(true);
   }
-  function toggleLocal(enabled: boolean) {
-    setLocalEnabled(enabled);
-    if (!enabled && draft) {
-      const cloud = data?.plans.find(plan => plan.preferences.quality === draft.quality && plan.available);
-      if (cloud?.models && cloud.presetName) setDraft(current => current && ({ ...current, presetName: cloud.presetName!,
-        routes: Object.fromEntries(Object.entries(current.routes).map(([task, route]) => [task, route.provider === 'lmstudio'
-          ? fromModels(cloud.presetName!, cloud.models!, draft.quality).routes[task] : route])) }));
-    }
+  function selectProvider(provider: AiProvider) {
+    if (!data || provider === draft?.provider) return;
+    setDraft(customDraftForProvider(provider, preferences.quality, data.catalog, data.localRoutes));
   }
-  const draftHasLocal = Object.values(draft?.routes || {}).some(route => route.provider === 'lmstudio');
-  const draftInvalid = !draft || !localEnabled && draftHasLocal || Object.values(draft.routes).some(route => !data?.catalog.some(ref => ref.provider === route.provider && ref.model === route.model)
-    || !Number.isInteger(route.maxTokens) || route.maxTokens < 32 || route.maxTokens > 16384);
+  const localEnabled = draft?.provider === 'lmstudio';
+  const choices = (data?.catalog || []).filter(ref => ref.provider === draft?.provider);
+  const draftInvalid = !draft || TEXT_TASKS.some(task => {
+    const route = draft.routes[task];
+    return !choices.some(ref => ref.model === route.model) || !Number.isInteger(route.maxTokens) || route.maxTokens < 32 || route.maxTokens > 16384;
+  });
+  const customProviders = (['openai', 'gemini', 'zai', 'openrouter', 'lmstudio'] as const);
+  const serviceModels = draft ? registry.presets[getCustomPresetName(draft.provider, draft.quality)].models : null;
+  function taskFields(task: AiTaskKey) {
+    if (!draft) return null;
+    const route = draft.routes[task];
+    const unavailable = !choices.some(ref => ref.model === route.model);
+    const update = (patch: Partial<CustomRoute>) => setDraft(current => current && ({ ...current,
+      routes: { ...current.routes, [task]: { ...current.routes[task], ...patch } } }));
+    return <Stack key={task} spacing={1.5} sx={{ p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 2, minWidth: 0 }}>
+      <Typography fontWeight={600}>{labels[task]}</Typography>
+      <TextField select size="small" label={`Модель: ${labels[task]}`} value={route.model} disabled={busy}
+        error={unavailable} helperText={unavailable ? 'Выберите доступную модель этого провайдера.' : undefined}
+        onChange={event => update({ model: event.target.value })}>
+        {unavailable && <MenuItem value={route.model} disabled>{route.model || 'Выберите модель'} · недоступна</MenuItem>}
+        {choices.map(ref => <MenuItem key={ref.model} value={ref.model}>{ref.model}</MenuItem>)}
+      </TextField>
+      <Stack direction="row" spacing={1}><TextField select size="small" fullWidth label={`Рассуждения: ${labels[task]}`}
+        value={route.reasoningEffort} disabled={busy} onChange={event => update({ reasoningEffort: event.target.value as CustomRoute['reasoningEffort'] })}>
+        <MenuItem value="none">Выключены</MenuItem><MenuItem value="low">Низкие</MenuItem><MenuItem value="medium">Средние</MenuItem><MenuItem value="high">Высокие</MenuItem>
+      </TextField><TextField size="small" type="number" fullWidth label={`Лимит: ${labels[task]}`} value={route.maxTokens}
+        disabled={busy} inputProps={{ min: 32, max: 16384 }} onChange={event => update({ maxTokens: Number(event.target.value) })} /></Stack>
+    </Stack>;
+  }
   return <Card id="model-presets" sx={{ mb: 2 }}><CardContent><Stack spacing={2.5}>
     <Box><Typography variant="h6" component="h2">Как Кира выбирает модели</Typography>
       <Typography variant="body2" color="text.secondary">Доверьте распределение задач Кире или настройте свою стратегию.</Typography></Box>
@@ -166,15 +163,22 @@ export function ModelPreferencesSettings({ onToast, localConnection }: {
         <Chip size="small" label={data.localConnected ? 'Локальный сервер доступен' : 'Локальный сервер не подключён'} /></Stack>
     </>}
   </Stack></CardContent>
-    <Dialog open={dialog} keepMounted fullWidth maxWidth="lg" onClose={() => { if (!busy) { setDialog(false); setLocalEnabled(local(data?.activePlan?.models || registry.presets[data?.manualPreset || 'gpt-balanced'].models)); } }}>
+    <Dialog open={dialog} keepMounted fullWidth maxWidth="lg" onClose={() => { if (!busy) setDialog(false); }}>
       <DialogTitle>Custom · своя стратегия</DialogTitle>
       <DialogContent dividers><Stack spacing={2.5}>
-        <Typography color="text.secondary">Выберите основу, затем задайте модели, лимиты и рассуждения для задач. Текстовые маршруты закрепляются без автоматической замены.</Typography>
-        <TextField select label="Основа стратегии" value={draft?.presetName || 'gpt-balanced'} disabled={busy} onChange={event => {
-          const name = event.target.value as AiPresetName; const models = registry.presets[name].models;
-          setDraft(fromModels(name, models, preferences.quality)); setLocalEnabled(local(models));
-        }}>{registry.presetNames.map(name => <MenuItem key={name} value={name}>{registry.presets[name as AiPresetName].title}</MenuItem>)}</TextField>
-        <FormControlLabel label="Подключить локальные модели" control={<Switch checked={localEnabled} disabled={busy} onChange={(_, enabled) => toggleLocal(enabled)} />} />
+        <Typography color="text.secondary">Сначала выберите провайдера. Затем назначьте его модели для диалога, анализа и выбора инструментов.</Typography>
+        <TextField select label="Провайдер нейросетей" value={draft?.provider || ''} disabled={busy}
+          helperText="Все текстовые задачи используют модели выбранного провайдера."
+          onChange={event => selectProvider(event.target.value as AiProvider)}>
+          {!draft && <MenuItem value="" disabled>Выберите провайдера</MenuItem>}
+          {customProviders.map(provider => <MenuItem key={provider} value={provider}
+            disabled={provider !== 'lmstudio' && !data?.catalog.some(ref => ref.provider === provider)}>
+            {getAiProviderDescriptor(provider).label}{provider !== 'lmstudio' && !data?.catalog.some(ref => ref.provider === provider) ? ' · подключите API' : ''}
+          </MenuItem>)}
+        </TextField>
+        {!draft && <Alert severity="info">В сохранённой стратегии несколько провайдеров. Она продолжает работать. Выберите одного провайдера для нового распределения моделей; изменения применятся после сохранения.</Alert>}
+        <FormControlLabel label="Использовать локальные модели" control={<Switch checked={localEnabled} disabled={busy}
+          onChange={(_, enabled) => enabled ? selectProvider('lmstudio') : openCustom(false)} />} />
         <Box sx={{ display: localEnabled ? 'block' : 'none' }}>{localConnection}
           <Alert severity="info">Для Docker Desktop: host.docker.internal. Изменение URL и ключа требует пересоздания контейнеров. Нажмите «Сохранить» в блоке подключения, затем обновите каталог.</Alert>
           <Button disabled={busy} onClick={async () => {
@@ -184,27 +188,14 @@ export function ModelPreferencesSettings({ onToast, localConnection }: {
         </Box>
         {draftInvalid && <Alert severity="warning">Для сохранения выберите доступные модели во всех задачах и лимиты от 32 до 16384 токенов.</Alert>}
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2 }}>
-          {draft && TEXT_TASKS.map(task => {
-            const route = draft.routes[task];
-            const choices = (data?.catalog || []).filter(ref => localEnabled || ref.provider !== 'lmstudio');
-            if (!choices.some(ref => ref.provider === route.provider && ref.model === route.model)) choices.push({ provider: route.provider, model: route.model });
-            const update = (patch: Partial<CustomRoute>) => setDraft(current => current && ({ ...current, routes: { ...current.routes, [task]: { ...current.routes[task], ...patch } } }));
-            return <Stack key={task} spacing={1.5} sx={{ p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 2, minWidth: 0 }}>
-              <Typography fontWeight={600}>{labels[task]}</Typography>
-              <TextField select size="small" label={`Модель: ${labels[task]}`} value={`${route.provider}:${route.model}`} disabled={busy}
-                onChange={event => { const ref = choices.find(ref => `${ref.provider}:${ref.model}` === event.target.value); if (ref) { update(ref); if (ref.provider === 'lmstudio') setLocalEnabled(true); } }}>
-                {choices.map(ref => <MenuItem key={`${ref.provider}:${ref.model}`} value={`${ref.provider}:${ref.model}`}>{getAiProviderDescriptor(ref.provider).label} · {ref.model}</MenuItem>)}
-              </TextField>
-              <Stack direction="row" spacing={1}><TextField select size="small" fullWidth label={`Рассуждения: ${labels[task]}`} value={route.reasoningEffort} disabled={busy}
-                onChange={event => update({ reasoningEffort: event.target.value as CustomRoute['reasoningEffort'] })}>
-                <MenuItem value="none">Выключены</MenuItem><MenuItem value="low">Низкие</MenuItem><MenuItem value="medium">Средние</MenuItem><MenuItem value="high">Высокие</MenuItem>
-              </TextField><TextField size="small" type="number" fullWidth label={`Лимит: ${labels[task]}`} value={route.maxTokens} disabled={busy}
-                inputProps={{ min: 32, max: 16384 }} onChange={event => update({ maxTokens: Number(event.target.value) })} /></Stack>
-            </Stack>;
-          })}
+          {(['fastDialogue', 'conversation', 'runtimePlanning', 'complexReasoning'] as const).map(taskFields)}
         </Box>
-        <Alert severity="info">Поиск, зрение и голос используют подключения основы стратегии. Векторы памяти остаются в действующем профиле. Параметры рассуждений применяются, если модель их поддерживает.</Alert>
-        {draftHasLocal && <Typography variant="body2" color="warning.main">При недоступности локальной модели задача завершится ошибкой; облачная замена отключена.</Typography>}
+        {draft && <Accordion disableGutters><AccordionSummary expandIcon={<ExpandMoreIcon />}>Модели для памяти и служебных задач</AccordionSummary>
+          <AccordionDetails><Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2 }}>
+            {TEXT_TASKS.filter(task => !['fastDialogue', 'conversation', 'runtimePlanning', 'complexReasoning'].includes(task)).map(taskFields)}
+          </Box></AccordionDetails></Accordion>}
+        {serviceModels && <Alert severity="info">Поиск: {getAiProviderDescriptor(serviceModels.webSearchReasoning.provider).label} · зрение: {getAiProviderDescriptor(serviceModels.browserVision.provider).label} · голос: {getAiProviderDescriptor(serviceModels.transcription.provider).label}. Профиль векторов памяти сохраняется. Рассуждения применяются в пределах возможностей модели.</Alert>}
+        {localEnabled && <Typography variant="body2" color="warning.main">При недоступности локальной модели задача завершится ошибкой; облачная замена отключена.</Typography>}
       </Stack></DialogContent>
       <DialogActions><Button disabled={busy} onClick={() => setDialog(false)}>Отмена</Button>
         <Button variant="contained" disabled={busy || draftInvalid} onClick={() => draft && void save(draft)}>{busy ? 'Сохраняем…' : 'Сохранить стратегию Custom'}</Button></DialogActions>

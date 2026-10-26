@@ -179,27 +179,28 @@ test('explicit providers balance light and deep models at all levels without a s
     assert.throws(() => parsePreferences({ quality: 'high', provider: 'lmstudio' }));
 });
 
-function customRequest() {
+function customRequest(provider: 'openai'|'lmstudio' = 'openai') {
     const plan = buildModelPlan(preferences, resources());
-    return { mode: 'custom' as const, quality: 'high' as const, presetName: plan.presetName,
-        routes: Object.fromEntries(TEXT_TASKS.map(task => [task, { provider: plan.models[task].provider,
-            model: plan.models[task].model, maxTokens: 1024, reasoningEffort: 'none' as const }])) };
+    return { mode: 'custom' as const, quality: 'high' as const, provider,
+        routes: Object.fromEntries(TEXT_TASKS.map(task => [task, { model: provider === 'lmstudio' ? 'synthetic/local-standard' : plan.models[task].model, maxTokens: 1024, reasoningEffort: 'none' as const }])) };
 }
 
 test('Custom pins catalog routes and generation, preserves specialized services and rejects untrusted settings', () => {
     const { buildCustomPlan, parseStrategyRequest } = require('../ai/modelPreferences');
     const context = resources(); context.localModels = [{ id: 'synthetic/local-standard', uncensored: false }];
-    const request = customRequest();
-    request.routes.conversation = { provider: 'lmstudio', model: 'synthetic/local-standard', maxTokens: 768, reasoningEffort: 'none' };
+    const request = customRequest('lmstudio');
+    request.routes.conversation = { model: 'synthetic/local-standard', maxTokens: 768, reasoningEffort: 'none' };
     const plan = buildCustomPlan(request, context);
     assert.equal(plan.source, 'custom'); assert.equal(plan.version, 3);
+    assert.equal(plan.customProvider, 'lmstudio');
+    assert.ok(TEXT_TASKS.every(task => plan.models[task].provider === 'lmstudio'));
     assert.equal(plan.models.conversation.localRole, undefined);
     assert.equal(plan.models.conversation.modelEnvKey, undefined);
     assert.equal(plan.models.conversation.allowFallback, false);
     assert.equal(plan.models.conversation.generation.maxTokens, 768);
     assert.equal(plan.models.embedding.provider, 'openai');
     assert.deepEqual(parseModelPolicy(JSON.stringify(plan)), plan);
-    for (const patch of [{ userId: 9 }, { apiKey: 'secret' }, { provider: 'openai' }]) assert.throws(() => parseStrategyRequest({ ...request, ...patch }));
+    for (const patch of [{ userId: 9 }, { apiKey: 'secret' }, { provider: 'unknown' }, { presetName: 'gpt-balanced' }]) assert.throws(() => parseStrategyRequest({ ...request, ...patch }));
     assert.throws(() => parseStrategyRequest({ ...request, routes: { ...request.routes, embedding: request.routes.conversation } }));
     const injected = structuredClone(request); (injected.routes.conversation as any).modelEnvKey = 'SECRET';
     assert.throws(() => parseStrategyRequest(injected));
@@ -233,8 +234,8 @@ test('Custom persistence is atomic; invalid or unavailable drafts never overwrit
 test('a Custom local request sends its exact saved model and parameters to the SDK', async t => {
     const { buildCustomPlan } = require('../ai/modelPreferences');
     const context = resources(); context.localModels = [{ id: 'synthetic/local-standard', uncensored: false }];
-    const request = customRequest();
-    request.routes.conversation = { provider: 'lmstudio', model: 'synthetic/local-standard', maxTokens: 640, reasoningEffort: 'none' };
+    const request = customRequest('lmstudio');
+    request.routes.conversation = { model: 'synthetic/local-standard', maxTokens: 640, reasoningEffort: 'none' };
     const plan = buildCustomPlan(request, context);
     const calls: any[] = [];
     t.mock.method(usage, 'logAiUsage', async () => {});
@@ -246,4 +247,28 @@ test('a Custom local request sends its exact saved model and parameters to the S
     assert.equal(calls[0].max_tokens, 640); assert.equal(calls[0].reasoning_effort, 'none');
     const tampered = structuredClone(plan); tampered.models.conversation.localRole = 'fast';
     assert.throws(() => parseModelPolicy(tampered), /закреплённый/);
+});
+
+
+test('Custom uses exactly one declared provider and rejects models from other providers', () => {
+    const { buildCustomPlan, parseStrategyRequest } = require('../ai/modelPreferences');
+    const context = resources(); Object.assign(context.vars, { GEMINI_API_KEY: 'synthetic' });
+    const request = customRequest();
+    const mixed = structuredClone(request); mixed.routes.conversation.model = 'gemini-3.6-flash';
+    assert.throws(() => buildCustomPlan(mixed, context), /Недоступен/);
+    const injected = structuredClone(request); (injected.routes.conversation as any).provider = 'gemini';
+    assert.throws(() => parseStrategyRequest(injected));
+    for (const provider of ['auto', 'unknown', '__proto__']) assert.throws(() => parseStrategyRequest({ ...request, provider }));
+    assert.throws(() => parseStrategyRequest({ ...request, provider: undefined }));
+    const gemini = { ...request, provider: 'gemini', routes: Object.fromEntries(TEXT_TASKS.map(task => [task, {
+        ...request.routes[task], model: 'gemini-3.6-flash' }])) };
+    const plan = buildCustomPlan(gemini, context);
+    assert.equal(plan.presetName, 'gemini-full'); assert.equal(plan.customProvider, 'gemini');
+    assert.ok(TEXT_TASKS.every(task => plan.models[task].provider === 'gemini'));
+    const altered = structuredClone(plan); altered.models.conversation.provider = 'openai';
+    assert.throws(() => parseModelPolicy(altered), /провайдер Custom/);
+    const legacy = { ...buildModelPlan(preferences, context), source: 'custom', version: 3 };
+    for (const task of TEXT_TASKS) legacy.models[task].allowFallback = false;
+    legacy.models.conversation = { provider: 'gemini', model: 'gemini-3.6-flash', allowFallback: false };
+    assert.deepEqual(parseModelPolicy(legacy), legacy);
 });
