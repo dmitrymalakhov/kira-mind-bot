@@ -92,33 +92,33 @@ const BASE_CONFIG_SCHEMA: SectionDef[] = [
       },
       {
         key: 'ELEVENLABS_VOICE_ID',
-        label: 'ElevenLabs Voice ID',
+        label: 'ID голоса',
         type: 'text',
-        hint: 'ID голоса Nastya. Если оставить пустым, бот попробует найти голос по имени ниже.',
+        hint: 'ID выбранного голоса в ElevenLabs.',
       },
       {
         key: 'ELEVENLABS_VOICE_NAME',
-        label: 'ElevenLabs Voice Name',
+        label: 'Имя голоса',
         type: 'text',
         placeholder: 'Nastya',
-        hint: 'Используется только если Voice ID не задан',
+        hint: 'Используется, если ID голоса не указан.',
       },
       {
         key: 'ELEVENLABS_MODEL_ID',
-        label: 'ElevenLabs Model',
+        label: 'Модель речи',
         type: 'text',
         placeholder: 'eleven_v3',
       },
       {
         key: 'ELEVENLABS_OUTPUT_FORMAT',
-        label: 'ElevenLabs Output Format',
+        label: 'Формат аудио',
         type: 'text',
         placeholder: 'mp3_44100_128',
-        hint: 'Формат из quickstart и со скрина. Перед отправкой в Telegram бот перекодирует в OGG/Opus voice.',
+        hint: 'Формат аудио, который возвращает сервис озвучивания.',
       },
       {
         key: 'ELEVENLABS_VOICE_STABILITY',
-        label: 'Voice Stability',
+        label: 'Стабильность голоса',
         type: 'text',
         placeholder: '0.5',
       },
@@ -417,7 +417,7 @@ export const VOICE_MODEL_SECTION: SectionDef = {
   id: 'voice-model', title: 'Модель и голос озвучивания', icon: '🎙️', fields: allFields.filter(field => field.key.startsWith('ELEVENLABS_') && field.key !== 'ELEVENLABS_API_KEY'),
 };
 export const IMAGE_CONNECTION_SECTION: SectionDef = {
-  id: 'image-connection', title: 'Отдельный прокси изображений', icon: '🌐', fields: take(['OPENAI_IMAGE_BASE_URL']).map(field => ({ ...field, type: 'proxy', label: 'Использовать отдельный прокси для изображений', hint: 'При выключении используется общее подключение OpenAI из раздела «Ключи и подключения».' })),
+  id: 'image-connection', title: 'Отдельный прокси изображений', icon: '🌐', fields: take(['OPENAI_IMAGE_BASE_URL']).map(field => ({ ...field, type: 'proxy', label: 'Использовать отдельный прокси для изображений', hint: 'При выключении используется общее подключение OpenAI из раздела «Подключения».' })),
 };
 const movedKeys = new Set([...KEY_SECTIONS, LOCAL_MODEL_CONNECTION_SECTION, VOICE_MODEL_SECTION, IMAGE_CONNECTION_SECTION].flatMap(section => section.fields.map(field => field.key)));
 export const CONFIG_SCHEMA: SectionDef[] = BASE_CONFIG_SCHEMA.filter(section => !['api', 'elevenlabs', 'bots', 'telegram'].includes(section.id)).map(section => ({

@@ -18,9 +18,9 @@ import MenuIcon from '@mui/icons-material/Menu';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import EventRepeatIcon from '@mui/icons-material/EventRepeat';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
-import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
+import { BrandMark } from './BrandMark';
 import { StatusBar } from './StatusBar';
-import { CONFIG_SCHEMA, KEY_SECTIONS, VOICE_MODEL_SECTION, IMAGE_CONNECTION_SECTION } from '../schema';
+import { CONFIG_SCHEMA, KEY_SECTIONS } from '../schema';
 import { ConfigSection, type ConfigSectionHandle } from './ConfigSection';
 import { ModelSettingsSection } from './ModelSettingsSection';
 import { BudgetSettingsSection } from './BudgetSettingsSection';
@@ -46,10 +46,10 @@ const NAVIGATION = [
 type Page = typeof NAVIGATION[number]['id'];
 
 const SETTINGS_TABS = [
-  { id: 'model', label: 'Модели' },
-  { id: 'background', label: 'Фон и экономия' },
-  { id: 'connections', label: 'Ключи и подключения' },
-  { id: 'system', label: 'Система' },
+  { id: 'model', label: 'Модели', caption: 'Настройте, как Кира думает, отвечает и создаёт.' },
+  { id: 'background', label: 'Самостоятельность', caption: 'Фоновые функции и контроль расхода AI.' },
+  { id: 'connections', label: 'Подключения', caption: 'Ваши ключи и доступ к внешним сервисам.' },
+  { id: 'system', label: 'Система', caption: 'Окружение и технические параметры установки.' },
 ] as const;
 type SettingsTab = typeof SETTINGS_TABS[number]['id'];
 const SECTION_DESCRIPTIONS: Record<string, string> = {
@@ -85,6 +85,7 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
   const sectionRefs = useRef<Record<string, ConfigSectionHandle | null>>({});
   const pendingCount = Object.values(dirtySections).filter(Boolean).length;
   const currentPage = NAVIGATION.find(item => item.id === page)!;
+  const currentSettings = SETTINGS_TABS.find(item => item.id === settingsTab)!;
   const showToast = useCallback((message: string, severity: Toast['severity']) => setToast({ message, severity }), []);
   const markDirty = useCallback((id: string, dirty: boolean) => {
     setDirtySections(previous => previous[id] === dirty ? previous : { ...previous, [id]: dirty });
@@ -141,20 +142,17 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
 
   const navigation = (
     <Stack sx={{ height: '100%', bgcolor: 'sidebar.surface' }}>
-      <Stack direction="row" alignItems="center" spacing={1.25} sx={{ px: 2.5, py: 2.5 }}>
-        <Box sx={{ display: 'grid', placeItems: 'center', width: 34, height: 34, borderRadius: 2, color: 'primary.light', bgcolor: 'rgba(79,141,245,0.12)' }}>
-          <AutoAwesomeOutlinedIcon fontSize="small" />
-        </Box>
-        <Box>
-          <Typography fontWeight={700}>Kira Mind</Typography>
-          <Typography variant="caption" color="text.secondary">Панель управления</Typography>
-        </Box>
+      <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 3, pt: 4, pb: 4.5 }}>
+        <BrandMark size={40} />
+        <Box><Typography sx={{ color: '#F1F5EE', fontSize: 19, fontWeight: 600, letterSpacing: '.12em' }}>KIRA <Box component="span" sx={{ fontWeight: 400, color: '#ADC0AF' }}>MIND</Box></Typography>
+          <Typography sx={{ color: '#91A294', fontSize: 9, letterSpacing: '.035em', mt: .25 }}>ПАНЕЛЬ УПРАВЛЕНИЯ</Typography></Box>
       </Stack>
-      <Box component="nav" aria-label="Основная навигация" sx={{ px: 1.5, flex: 1, overflowY: 'auto' }}>
+      <Box component="nav" aria-label="Основная навигация" sx={{ px: 2, flex: 1, overflowY: 'auto' }}>
         {NAVIGATION.map(item => (
-          <Box key={item.id} sx={item.id === 'monitoring' ? { mt: 3, pt: 2, borderTop: '1px solid', borderColor: 'divider' } : undefined}>
+          <Box key={item.id}>
+            {['settings', 'personality', 'monitoring'].includes(item.id) && <Typography variant="overline" sx={{ display: 'block', px: 1.5, mt: item.id === 'settings' ? 0 : 3, mb: 1, color: '#839889' }}>{item.id === 'settings' ? 'Управление' : item.id === 'monitoring' ? 'Система' : 'Пространство'}</Typography>}
             <ListItemButton selected={page === item.id} onClick={() => selectPage(item.id)} aria-current={page === item.id ? 'page' : undefined}
-              sx={{ minHeight: 44, px: 1.5, mb: 0.5, gap: 1.5, color: page === item.id ? 'primary.light' : 'text.secondary' }}>
+              sx={{ minHeight: 45, px: 1.5, mb: .75, gap: 1.5, color: '#AFBDB2', '&:hover': { bgcolor: 'sidebar.hover', color: '#F1F5EE' }, '&.Mui-selected': { bgcolor: '#D8E9CD', color: '#284331', '&:hover': { bgcolor: '#DFEED5' } } }}>
               <ListItemIcon sx={{ minWidth: 0, color: 'inherit', '& svg': { fontSize: 21 } }}>{item.icon}</ListItemIcon>
               <Typography variant="body2" fontWeight={page === item.id ? 600 : 400}>{item.label}</Typography>
               {item.id === 'settings' && pendingCount > 0 && <Box component="span" aria-label="Есть несохранённые изменения" sx={{ ml: 'auto', width: 6, height: 6, borderRadius: '50%', bgcolor: 'warning.main' }} />}
@@ -162,10 +160,10 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
           </Box>
         ))}
       </Box>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mx: 2.5, py: 2, borderTop: '1px solid', borderColor: 'divider' }}>
-        <Typography variant="caption" color="text.secondary">Управление сервисом</Typography>
+      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mx: 2.5, py: 2, borderTop: '1px solid', borderColor: 'sidebar.border' }}>
+        <Typography variant="caption" sx={{ color: '#A5B4AA' }}>Управление сервисом</Typography>
         <Tooltip title="Действия сервиса">
-          <IconButton aria-label="Действия сервиса" aria-haspopup="menu" aria-controls={serviceMenu ? 'service-menu' : undefined} aria-expanded={Boolean(serviceMenu)} onClick={event => setServiceMenu(event.currentTarget)}>
+          <IconButton sx={{ color: '#A5B4AA' }} aria-label="Действия сервиса" aria-haspopup="menu" aria-controls={serviceMenu ? 'service-menu' : undefined} aria-expanded={Boolean(serviceMenu)} onClick={event => setServiceMenu(event.currentTarget)}>
             {restarting ? <CircularProgress size={20} /> : <MoreHorizIcon />}
           </IconButton>
         </Tooltip>
@@ -179,26 +177,27 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
         <Box sx={{ position: 'fixed', inset: '0 auto 0 0', width: SIDEBAR_WIDTH, borderRight: '1px solid', borderColor: 'divider' }}>{navigation}</Box>
       </Box>
       <Drawer open={mobileOpen} onClose={() => setMobileOpen(false)} sx={{ display: { md: 'none' }, '& .MuiDrawer-paper': { width: 272, maxWidth: '85vw' } }}>{navigation}</Drawer>
-      <Box component="main" id="main-content" sx={{ flex: 1, minWidth: 0, px: { xs: 2, sm: 3, lg: 4 }, py: 3 }}>
-        <Stack component="header" direction={{ xs: 'column', sm: 'row' }} alignItems="flex-start" justifyContent="space-between" spacing={2} sx={{ mb: 3 }}>
-          <Stack direction="row" spacing={1} alignItems="flex-start">
-            <IconButton aria-label="Открыть меню" onClick={() => setMobileOpen(true)} sx={{ display: { md: 'none' }, mt: -0.5, ml: -1 }}><MenuIcon /></IconButton>
-            <Box>
-              <Typography variant="h5" component="h1" fontWeight={650}>{currentPage.label}</Typography>
-              {page !== 'settings' && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>{currentPage.caption}</Typography>}
-            </Box>
+      <Box component="main" id="main-content" sx={{ flex: 1, minWidth: 0, px: { xs: 2, sm: 4, lg: 5 }, py: 3, maxWidth: 1440, mx: 'auto' }}>
+        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 3, gap: 2 }}>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <IconButton aria-label="Открыть меню" onClick={() => setMobileOpen(true)} sx={{ display: { md: 'none' } }}><MenuIcon /></IconButton>
+            <Typography variant="caption" color="text.secondary">Kira Mind <Box component="span" sx={{ mx: 1.5, color: '#BCC6B9' }}>/</Box> {currentPage.label}</Typography>
           </Stack>
-          <Box sx={{ pt: { sm: 0.5 }, pl: { xs: 5.5, sm: 0 }, maxWidth: { sm: '50%' } }}><StatusBar /></Box>
+          <StatusBar />
+        </Stack>
+        <Stack component="header" direction="row" alignItems="flex-start" justifyContent="space-between" spacing={2} sx={{ mb: 2.5 }}>
+          <Box><Typography variant="h4" component="h1">{page === 'settings' ? currentSettings.label : currentPage.label}</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: .75 }}>{page === 'settings' ? currentSettings.caption : currentPage.caption}</Typography></Box>
         </Stack>
 
         {/* Keep visited settings mounted so navigation preserves pending edits. */}
         <Box hidden={page !== 'settings'}>
-          <Tabs value={settingsTab} onChange={(_, next: SettingsTab) => selectSettings(next)} variant="scrollable" scrollButtons="auto" allowScrollButtonsMobile aria-label="Разделы настроек" sx={{ mb: 3, borderBottom: '1px solid', borderColor: 'divider' }}>
-            {SETTINGS_TABS.map(item => <Tab key={item.id} id={`settings-tab-${item.id}`} value={item.id} label={item.label} aria-controls={`settings-panel-${item.id}`} />)}
+          <Tabs value={settingsTab} onChange={(_, next: SettingsTab) => selectSettings(next)} variant="scrollable" scrollButtons={false} aria-label="Разделы настроек" sx={{ mb: 2.5, bgcolor: '#EAEDE5', p: .5, borderRadius: 1.75, width: 'fit-content', maxWidth: '100%' }}>
+            {SETTINGS_TABS.map(item => <Tab key={item.id} id={`settings-tab-${item.id}`} value={item.id} sx={{ px: { xs: 1.25, sm: 2.25 }, fontSize: { xs: 12, sm: 13 } }} label={item.id === 'background' ? <><Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Самостоятельность</Box><Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>Фон</Box></> : item.label} aria-controls={`settings-panel-${item.id}`} />)}
           </Tabs>
           {pendingCount > 0 && (
             <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ sm: 'center' }} justifyContent="space-between" spacing={1} sx={{ mb: 2, p: 1.5, borderRadius: 2, bgcolor: 'action.hover' }}>
-              <Typography variant="body2">Есть несохранённые изменения в настройках подключений и системы.</Typography>
+              <Typography variant="body2">Есть несохранённые изменения.</Typography>
               <Button variant="contained" size="small" disabled={savingAll} onClick={() => void handleSaveAll()} startIcon={savingAll ? <CircularProgress size={16} color="inherit" /> : <SaveIcon />} sx={{ flexShrink: 0 }}>Сохранить изменения</Button>
             </Stack>
           )}
@@ -207,12 +206,11 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
               {visitedTabs.has(item.id) && <>
                 {item.id === 'model' && <>
                   <ModelSettingsSection ref={element => { sectionRefs.current['local-models'] = element; }} config={config} onUpdate={onConfigUpdate} onToast={showToast} onDirtyChange={markDirty} />
-                  {[VOICE_MODEL_SECTION, IMAGE_CONNECTION_SECTION].map(section => <ConfigSection key={section.id} inline
-                    ref={element => { sectionRefs.current[section.id] = element; }} section={section} config={config} onUpdate={onConfigUpdate} onToast={showToast} onDirtyChange={markDirty} />)}
+
                 </>}
                 {item.id === 'background' && <BudgetSettingsSection onToast={showToast} />}
                 {item.id === 'connections' && <Stack spacing={2}>
-                  <Typography variant="body2" color="text.secondary">Ключи и доступ к сервисам. Выбор моделей, голоса и параметров генерации — на странице «Модели». Изменения ключей и адресов применяются после пересоздания контейнеров.</Typography>
+                  <Typography variant="body2" color="text.secondary">Ключи хранятся на сервере. Изменения подключений применяются после пересоздания контейнеров.</Typography>
                   {KEY_SECTIONS.map(section => <ConfigSection key={section.id} inline
                     ref={element => { sectionRefs.current[section.id] = element; }} section={section} config={config} onUpdate={onConfigUpdate} onToast={showToast} onDirtyChange={markDirty} />)}
                 </Stack>}

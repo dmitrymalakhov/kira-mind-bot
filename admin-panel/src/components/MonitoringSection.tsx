@@ -27,7 +27,7 @@ function CheckCell({ check }: { check: MonitoringCheck }) {
   const appearance = getStatusAppearance(check.status);
   const meta = Object.entries(check.meta ?? {}).filter(([, value]) => value !== null && value !== undefined && value !== '');
   return (
-    <Paper variant="outlined" sx={{ overflow: 'hidden', borderRadius: '12px', borderColor: open ? appearance.border : 'rgba(148,163,184,.16)', bgcolor: 'rgba(15,23,42,.48)' }}>
+    <Paper variant="outlined" sx={{ overflow: 'hidden', borderRadius: '12px', borderColor: open ? appearance.border : 'rgba(148,163,184,.16)', bgcolor: 'background.paper' }}>
       <Box component="button" type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%', border: 0, color: 'inherit', font: 'inherit', textAlign: 'left', bgcolor: 'transparent', p: 1.1, cursor: 'pointer', '&:hover': { bgcolor: 'rgba(148,163,184,.05)' }, '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.light', outlineOffset: -2 } }}>
         <FiberManualRecordIcon sx={{ fontSize: 10, color: appearance.dot, flexShrink: 0 }} />
         <Typography variant="body2" fontWeight={700} sx={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{check.label}</Typography>
@@ -76,7 +76,7 @@ export const MonitoringSection = memo(function MonitoringSection() {
   return (
     <Box>
       <Box id="monitor-overview" sx={{ scrollMarginTop: 20 }}>
-        <Paper variant="outlined" sx={{ p: 1.5, mb: 2, borderRadius: '14px', borderColor: overall.border, bgcolor: 'rgba(15,23,42,.58)' }}>
+        <Paper variant="outlined" sx={{ p: 1.5, mb: 2, borderRadius: '14px', borderColor: overall.border, bgcolor: 'background.paper' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
             <Chip label={overall.label} sx={{ bgcolor: overall.bg, color: overall.text, border: '1px solid', borderColor: overall.border, fontWeight: 800 }} />
             <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>Снимок: {formatDateTime(data?.generatedAt)}</Typography>

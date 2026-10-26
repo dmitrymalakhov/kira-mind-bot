@@ -732,7 +732,7 @@ function MemoryRow({
                       m: 0,
                       mt: 1,
                       p: 1,
-                      bgcolor: '#0d0d1a',
+                      bgcolor: 'action.hover',
                       border: '1px solid',
                       borderColor: 'divider',
                       borderRadius: 1,

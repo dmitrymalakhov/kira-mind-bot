@@ -815,8 +815,8 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
   return (
     <FocusTrap open={fullscreen}>
     <Box ref={atlasRootRef} tabIndex={-1} role={fullscreen ? 'dialog' : undefined} aria-modal={fullscreen || undefined} aria-label="Атлас знаний"
-      sx={{ ...(fullscreen ? { position: 'fixed', inset: 0, zIndex: 1400, p: { xs: 1, md: 2 }, height: '100dvh', display: 'flex', flexDirection: 'column', overflow: 'auto', bgcolor: '#050B17' } : {}), outline: 'none' }}>
-      <Paper variant="outlined" sx={{ p: 1.5, mb: 1.5, borderRadius: 2, borderColor: 'rgba(34,211,238,0.3)', background: 'linear-gradient(125deg, #101F35, #0C1428)', boxShadow: '0 0 30px #0891b211', flexShrink: 0 }}>
+      sx={{ ...(fullscreen ? { position: 'fixed', inset: 0, zIndex: 1400, p: { xs: 1, md: 2 }, height: '100dvh', display: 'flex', flexDirection: 'column', overflow: 'auto', bgcolor: 'background.default' } : {}), outline: 'none' }}>
+      <Paper variant="outlined" sx={{ p: 1.5, mb: 1.5, borderRadius: 2, borderColor: 'divider', bgcolor: 'background.paper', flexShrink: 0 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
           <HubOutlinedIcon color="primary" fontSize="small" />
           <Typography variant="subtitle2" fontWeight={700}>Memory Atlas · Карта знаний</Typography>
@@ -894,7 +894,7 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
                 sx={{
                   fontSize: '11px',
                   bgcolor: visibleEdgeKinds.has(kind) ? EDGE_COLORS[kind] : undefined,
-                  color: visibleEdgeKinds.has(kind) ? '#fff' : undefined,
+                  color: 'text.primary',
                   '&:hover': { bgcolor: visibleEdgeKinds.has(kind) ? EDGE_COLORS[kind] : undefined },
                 }}
               />
@@ -909,7 +909,7 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
           {visibleDomains.map(([domain, count]) => <Chip key={domain} size="small" clickable
             label={`${DOMAIN_LABELS[domain] || domain} · ${count}`} aria-pressed={domains.has(domain)} variant={domains.has(domain) ? 'filled' : 'outlined'}
             onClick={() => setDomains(current => { const next = new Set(current); if (next.has(domain)) next.delete(domain); else next.add(domain); return next; })}
-            sx={{ borderColor: DOMAIN_COLORS[domain], color: domains.has(domain) ? '#fff' : DOMAIN_COLORS[domain], bgcolor: domains.has(domain) ? `${DOMAIN_COLORS[domain]}55` : undefined }} />)}
+            sx={{ borderColor: DOMAIN_COLORS[domain], color: 'text.primary', bgcolor: domains.has(domain) ? `${DOMAIN_COLORS[domain]}20` : undefined }} />)}
         </Stack>
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} sx={{ mt: 2 }}>
           <Autocomplete size="small" slotProps={{ popper: { sx: { zIndex: 1600 } } }} sx={{ flex: 1, minWidth: 160 }} options={people} value={people.find(node => node.id === personId) || null}
@@ -956,9 +956,9 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
       >
         <Box sx={{ position: 'relative', height: fullscreen ? '100%' : { xs: 420, md: 'clamp(520px, 72vh, 800px)' }, minHeight: 360, overflow: 'hidden', backgroundImage: 'radial-gradient(ellipse at 50% 40%, #142F4E55, transparent 65%), linear-gradient(#22D3EE08 1px, transparent 1px), linear-gradient(90deg, #22D3EE08 1px, transparent 1px)', backgroundSize: '100% 100%, 32px 32px, 32px 32px' }}>
           <Stack direction="row" spacing={1} sx={{ position: 'absolute', top: 12, left: 12, zIndex: 2 }}>
-            <Button aria-label="Приблизить граф" variant="outlined" size="small" onClick={() => rendererRef.current?.getCamera().animatedZoom({ duration: 200 })}><AddIcon /></Button>
-            <Button aria-label="Отдалить граф" variant="outlined" size="small" onClick={() => rendererRef.current?.getCamera().animatedUnzoom({ duration: 200 })}><RemoveIcon /></Button>
-            {selectedNodeId && <Button size="small" onClick={clearSelection}>Снять выбор</Button>}
+            <Button aria-label="Приблизить граф" sx={{ bgcolor: 'background.paper', '&:hover': { bgcolor: '#E8F0E2' } }} variant="outlined" size="small" onClick={() => rendererRef.current?.getCamera().animatedZoom({ duration: 200 })}><AddIcon /></Button>
+            <Button aria-label="Отдалить граф" sx={{ bgcolor: 'background.paper', '&:hover': { bgcolor: '#E8F0E2' } }} variant="outlined" size="small" onClick={() => rendererRef.current?.getCamera().animatedUnzoom({ duration: 200 })}><RemoveIcon /></Button>
+            {selectedNodeId && <Button size="small" sx={{ bgcolor: 'background.paper' }} onClick={clearSelection}>Снять выбор</Button>}
           </Stack>
           <Box ref={containerRef} sx={{ position: 'absolute', inset: 0 }} aria-label="WebGL-граф памяти" />
           <Box component="canvas" ref={flowCanvasRef} aria-hidden="true" sx={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }} />
@@ -980,7 +980,7 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
           {!loading && data && data.nodes.length > 0 && (
             <Typography
               variant="caption"
-              color="text.disabled"
+              color="#A5B6CB"
               sx={{ position: 'absolute', left: 12, bottom: 8, pointerEvents: 'none' }}
             >
               {selectedNodeId ? 'Подсвечены связи выбранного узла' : 'Выберите узел на графе или найдите его в списке справа'} {layoutRunning ? '· размещаем узлы…' : ''}

@@ -28,6 +28,7 @@ interface Props {
   onToast: (message: string, severity: 'success' | 'error') => void;
   onDirtyChange?: (id: string, dirty: boolean) => void;
   inline?: boolean;
+  saveLabel?: string;
   open?: boolean;
   onClose?: () => void;
 }
@@ -44,7 +45,7 @@ function getEntryValue(entry?: ConfigResponse[string]): string {
 }
 
 export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
-  function ConfigSection({ section, config, onUpdate, onToast, onDirtyChange, open = false, onClose, inline = false }, ref) {
+  function ConfigSection({ section, config, onUpdate, onToast, onDirtyChange, open = false, onClose, inline = false, saveLabel = 'Сохранить' }, ref) {
     const [localValues, setLocalValues] = useState<Record<string, string>>(() =>
       Object.fromEntries(section.fields.map((field) => [field.key, getEntryValue(config[field.key])]))
     );
@@ -181,7 +182,7 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
         <DialogActions sx={{ px: 0, pt: 2, gap: 1, flexWrap: 'wrap', justifyContent: 'space-between' }}>
           <Stack direction="row" spacing={1} sx={{ ml: 'auto !important' }}>
 
-            <Button variant="contained" disabled={saving || !dirty || invalid} onClick={() => void handleSave()} startIcon={saving ? <CircularProgress size={14} color="inherit" /> : <SaveIcon />}>Сохранить</Button>
+            <Button variant="contained" disabled={saving || !dirty || invalid} onClick={() => void handleSave()} startIcon={saving ? <CircularProgress size={14} color="inherit" /> : <SaveIcon />}>{saveLabel}</Button>
           </Stack>
         </DialogActions>
     </>;

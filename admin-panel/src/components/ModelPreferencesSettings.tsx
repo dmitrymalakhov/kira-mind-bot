@@ -1,11 +1,16 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Accordion, AccordionSummary, AccordionDetails, Alert, Box, Button, Card, CardContent,
   Chip, CircularProgress, Stack, ButtonBase, Typography, TextField, MenuItem, Dialog, DialogTitle,
-  DialogContent, DialogActions, FormControlLabel, Switch } from '@mui/material';
+  DialogContent, DialogActions, FormControlLabel, Switch, ToggleButton, ToggleButtonGroup } from '@mui/material';
 import { QUALITY_LEVELS, TEXT_TASKS, getCustomPresetName, type CustomStrategy, type StrategyRequest, type CustomRoute } from '../../../ai/modelPreferences';
 import rawRegistry from '../ai-model-presets.json';
 import type { AiModelRef, AiPresetConfig, AiProvider, AiTaskKey } from '../../../ai/modelPresets';
 import { customDraftFromModels, customDraftForProvider, inferCustomProvider } from '../modelStrategyEditor';
+import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
+import NorthEastIcon from '@mui/icons-material/NorthEast';
+import ComputerOutlinedIcon from '@mui/icons-material/ComputerOutlined';
+import CloudOutlinedIcon from '@mui/icons-material/CloudOutlined';
+import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { fetchModelPreferences, saveModelPreferences } from '../api';
 import { getAiProviderDescriptor } from '../../../ai/providerMetadata';
@@ -98,84 +103,102 @@ export function ModelPreferencesSettings({ onToast, localConnection }: {
         {unavailable && <MenuItem value={route.model} disabled>{route.model || 'Выберите модель'} · недоступна</MenuItem>}
         {choices.map(ref => <MenuItem key={ref.model} value={ref.model}>{ref.model}</MenuItem>)}
       </TextField>
-      <Stack direction="row" spacing={1}><TextField select size="small" fullWidth label={`Рассуждения: ${labels[task]}`}
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}><TextField select size="small" fullWidth label={`Рассуждения: ${labels[task]}`}
         value={route.reasoningEffort} disabled={busy} onChange={event => update({ reasoningEffort: event.target.value as CustomRoute['reasoningEffort'] })}>
         <MenuItem value="none">Выключены</MenuItem><MenuItem value="low">Низкие</MenuItem><MenuItem value="medium">Средние</MenuItem><MenuItem value="high">Высокие</MenuItem>
       </TextField><TextField size="small" type="number" fullWidth label={`Лимит: ${labels[task]}`} value={route.maxTokens}
         disabled={busy} inputProps={{ min: 32, max: 16384 }} onChange={event => update({ maxTokens: Number(event.target.value) })} /></Stack>
     </Stack>;
   }
-  return <Card id="model-presets" sx={{ mb: 2 }}><CardContent><Stack spacing={2.5}>
-    <Box><Typography variant="h6" component="h2">Как Кира выбирает модели</Typography>
-      <Typography variant="body2" color="text.secondary">Доверьте распределение задач Кире или настройте свою стратегию.</Typography></Box>
-    {error && <Alert severity="error" action={<Button onClick={() => void load()}>Повторить</Button>}>{error}</Alert>}
-    {!data && !error && <CircularProgress size={22} aria-label="Загрузка настроек моделей" />}
-    {data && <>
-      <Box role="status" aria-label="Действующая стратегия" sx={{ p: 2, bgcolor: 'action.hover', borderRadius: 2 }}>
-        <Typography variant="body2" fontWeight={700}>Сейчас работает: {activeMode === 'automatic' ? 'Автоматически · API' : 'Custom'} · {activeProvider ? getAiProviderDescriptor(activeProvider).label : 'несколько провайдеров'}</Typography>
-        <Typography variant="body2" color="text.secondary">{activeLocal
-          ? activeProvider === 'lmstudio' ? 'Текстовые задачи выполняются на вашем компьютере. Поиск, голос и другие сервисы используют отдельные API.' : 'Часть текстовых задач выполняется локально, часть — через API.'
-          : 'Текстовые задачи выполняются через API. Локальные модели не используются.'}</Typography>
-      </Box>
-      <TextField select label="Стратегия" value={selectedMode} disabled={busy} onChange={event => {
-        if (event.target.value === 'custom') openCustom(); else setMode('automatic');
-      }}>
-        <MenuItem value="automatic">Автоматически · API</MenuItem>
-        <MenuItem value="custom">Custom · моя стратегия</MenuItem>
-      </TextField>
-      {selectedMode === 'custom' ? <Stack spacing={2}>
-        <Typography variant="body2" color="text.secondary">Вы задаёте провайдера и модели вручную. Локальные модели включаются в редакторе Custom и применяются после сохранения.</Typography>
-        <Button variant="outlined" onClick={() => openCustom()}>Редактировать стратегию Custom</Button>
-      </Stack> : <>
-        <Alert severity="info">В автоматической стратегии модели подбираются через API по уровню качества. Локальные модели в этом режиме не используются.
-          {activeLocal && <Typography variant="body2" sx={{ mt: 1 }}>Сейчас ещё работает сохранённая локальная стратегия. Нажмите «Применить», чтобы перейти на API.</Typography>}
-        </Alert>
-        <TextField select label="Провайдер API" value={preferences.provider || 'auto'} disabled={busy}
-          onChange={event => setPreferences(current => ({ ...current, provider: event.target.value as ModelPreferences['provider'] }))}
-          helperText={data.providers.find(item => item.id === (preferences.provider || 'auto'))?.description}>
-          {data.providers.map(provider => {
-            const available = provider.id === 'auto' || data.providerPlans.some(plan => plan.preferences.provider === provider.id && plan.available);
-            return <MenuItem key={provider.id} value={provider.id} disabled={!available}>{provider.title}{available ? '' : ' · подключите API'}</MenuItem>;
-          })}
-        </TextField>
-        <Box role="radiogroup" aria-label="Качество ответов" sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' }, gap: 1.5 }}>
-          {QUALITY_LEVELS.map(level => <ButtonBase key={level.id} role="radio" aria-checked={preferences.quality === level.id}
-            aria-label={level.title} disabled={busy} tabIndex={preferences.quality === level.id ? 0 : -1}
-            onKeyDown={event => {
-              if (!['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-              event.preventDefault(); const index = QUALITY_LEVELS.findIndex(item => item.id === level.id);
-              const next = event.key === 'Home' ? 0 : event.key === 'End' ? 2 : (index + (['ArrowLeft', 'ArrowUp'].includes(event.key) ? 2 : 1)) % 3;
-              setPreferences(current => ({ ...current, quality: QUALITY_LEVELS[next].id }));
-              event.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="radio"]')[next]?.focus();
-            }} onClick={() => setPreferences(current => ({ ...current, quality: level.id }))}
-            sx={{ display: 'block', textAlign: 'left', p: 2, height: '100%', borderRadius: 2, border: '1px solid',
-              borderColor: preferences.quality === level.id ? 'primary.main' : 'divider', bgcolor: preferences.quality === level.id ? 'action.selected' : 'transparent',
-              '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.light', outlineOffset: 2 } }}>
-            <Typography fontWeight={700} sx={{ mb: 1 }}>{level.title}</Typography>
-            <Typography variant="body2" color="text.secondary">{level.description}</Typography>
-            <Typography variant="body2" color={level.id === 'standard' ? 'success.light' : 'warning.light'} sx={{ mt: 1.5 }}>{level.costNote}</Typography>
-          </ButtonBase>)}
+  return <Card id="model-presets"><CardContent sx={{ p: { xs: 0, md: 0 }, '&:last-child': { pb: 0 } }}>
+    <Box sx={{ px: { xs: 2.5, md: 3.5 }, pt: 3, pb: 2.5 }}>
+      <Typography variant="h6" component="h2">Диалог и мышление</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: .5 }}>Качество ответов и выбор моделей для разных задач.</Typography>
+    </Box>
+    {error && <Alert severity="error" sx={{ mx: 3, mb: 2 }} action={<Button onClick={() => void load()}>Повторить</Button>}>{error}</Alert>}
+    {!data && !error && <Box sx={{ p: 3 }}><CircularProgress size={22} aria-label="Загрузка настроек моделей" /></Box>}
+    {data && <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 1fr) 274px' }, borderTop: '1px solid', borderColor: 'divider' }}>
+      <Stack spacing={2} sx={{ p: { xs: 2.5, md: 3.5 }, minWidth: 0 }}>
+        <ToggleButtonGroup exclusive value={selectedMode} aria-label="Стратегия" fullWidth disabled={busy}
+          onChange={(_, value) => { if (value === 'custom') openCustom(); else if (value === 'automatic') setMode('automatic'); }}>
+          <ToggleButton value="automatic" aria-label="Автоматически · API"><CloudOutlinedIcon sx={{ mr: 1, fontSize: 18 }} /><Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Автоматически · API</Box><Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>Авто · API</Box></ToggleButton>
+          <ToggleButton value="custom" aria-label="Custom · свои модели"><TuneRoundedIcon sx={{ mr: 1, fontSize: 18 }} />Custom</ToggleButton>
+        </ToggleButtonGroup>
+        {selectedMode === 'custom' ? <Stack spacing={2} sx={{ py: 1 }}>
+          <Typography fontWeight={600}>Модели под вашим управлением</Typography>
+          <Typography variant="body2" color="text.secondary">Выберите провайдера, затем назначьте его модели для диалога и сложных задач. Локальные модели подключаются здесь же.</Typography>
+          <Button variant="contained" endIcon={<NorthEastIcon />} sx={{ alignSelf: 'flex-start' }} onClick={() => openCustom()}>Редактировать стратегию Custom</Button>
+        </Stack> : <>
+          <Box sx={{ maxWidth: 360 }}><TextField select fullWidth label="Провайдер API" value={preferences.provider || 'auto'} disabled={busy}
+            onChange={event => setPreferences(current => ({ ...current, provider: event.target.value as ModelPreferences['provider'] }))}>
+            {data.providers.map(provider => {
+              const available = provider.id === 'auto' || data.providerPlans.some(plan => plan.preferences.provider === provider.id && plan.available);
+              return <MenuItem key={provider.id} value={provider.id} disabled={!available}>{provider.id === 'auto' ? 'По подключённым API' : provider.title}{available ? '' : ' · подключите API'}</MenuItem>;
+            })}
+          </TextField></Box>
+          <Box>
+            <Typography variant="body2" fontWeight={600} sx={{ mb: 1.25 }}>Качество ответов</Typography>
+            <Box role="radiogroup" aria-label="Качество ответов" sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, minmax(0, 1fr))' }, gap: 1 }}>
+              {QUALITY_LEVELS.map((level, index) => <ButtonBase key={level.id} role="radio" aria-checked={preferences.quality === level.id}
+                aria-label={level.title} disabled={busy} tabIndex={preferences.quality === level.id ? 0 : -1}
+                onKeyDown={event => {
+                  if (!['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+                  event.preventDefault(); const next = event.key === 'Home' ? 0 : event.key === 'End' ? 2 : (index + (['ArrowLeft', 'ArrowUp'].includes(event.key) ? 2 : 1)) % 3;
+                  setPreferences(current => ({ ...current, quality: QUALITY_LEVELS[next].id }));
+                  event.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="radio"]')[next]?.focus();
+                }} onClick={() => setPreferences(current => ({ ...current, quality: level.id }))}
+                sx={{ display: 'block', textAlign: 'left', p: 1.75, borderRadius: 2.5, border: '1px solid',
+                  borderColor: preferences.quality === level.id ? '#709277' : 'divider', bgcolor: preferences.quality === level.id ? '#F0F5E9' : '#FFFFFF',
+                  '&:hover': { borderColor: '#709277' }, '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 2 } }}>
+                <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: .75 }}>
+                  <Typography variant="body2" fontWeight={650}>{level.title}</Typography>
+                  <CheckRoundedIcon sx={{ fontSize: 16, color: preferences.quality === level.id ? 'primary.main' : 'transparent' }} />
+                </Stack>
+                <Typography variant="caption" color="text.secondary" display="block">{['Для повседневных задач', 'Для сложных вопросов', 'Больше глубины и деталей'][index]}</Typography>
+                <Typography variant="caption" sx={{ mt: 1.5, display: 'block', color: index === 0 ? 'primary.main' : 'warning.dark' }}>{['Ниже расход API', 'Выше обычного', 'Самый высокий расход'][index]}</Typography>
+              </ButtonBase>)}
+            </Box>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>{QUALITY_LEVELS.find(level => level.id === preferences.quality)?.description}</Typography>
+          </Box>
+          {!preview?.available && <Alert severity="warning">{preview?.unavailableReason || 'Не удалось подобрать модели.'}</Alert>}
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'center' }}>
+            <Button variant="contained" disabled={!changed || busy || !preview?.available} onClick={() => void save(preferences)}>{busy ? 'Сохраняем…' : 'Применить'}</Button>
+            <Typography variant="caption" color={changed ? 'text.secondary' : 'primary.main'}>{changed ? activeLocal ? 'После применения текстовые задачи перейдут на API.' : 'Изменения ещё не применены' : 'Настройки сохранены'}</Typography>
+          </Stack>
+          <Box sx={{ borderTop: '1px solid', borderColor: 'divider', pt: 1.5 }}>
+            <Button size="small" startIcon={<ComputerOutlinedIcon />} endIcon={<NorthEastIcon sx={{ fontSize: '14px !important' }} />} onClick={() => openCustom(true)} disabled={busy} sx={{ px: 0 }}>Локальные модели в Custom</Button>
+            <Typography variant="caption" color="text.secondary" display="block">Автоматическая стратегия использует API. Расход зависит от объёма диалога; фон настраивается отдельно.</Typography>
+          </Box>
+          {preview?.models && <Accordion disableGutters sx={{ mb: '0 !important' }}>
+            <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography variant="body2">Модели выбранного уровня</Typography></AccordionSummary>
+            <AccordionDetails><Stack spacing={1}>{['fastDialogue', 'conversation', 'runtimePlanning', 'complexReasoning'].map(task => {
+              const ref = preview.models![task as keyof typeof preview.models];
+              return <Typography variant="body2" key={task} sx={{ overflowWrap: 'anywhere' }}><b>{labels[task]}:</b> {getAiProviderDescriptor(ref.provider).label} · {ref.model}</Typography>;
+            })}</Stack></AccordionDetails>
+          </Accordion>}
+        </>}
+      </Stack>
+      <Stack role="status" aria-label="Действующая стратегия" spacing={2.5} sx={{ p: 3, bgcolor: '#F7F8F3', borderLeft: { lg: '1px solid #E4E7DF' }, borderTop: { xs: '1px solid #E4E7DF', lg: 0 }, minWidth: 0 }}>
+        <Box><Typography variant="overline" color="text.secondary">Сейчас работает</Typography>
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}><Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: 'primary.main' }} />
+            <Typography variant="body2" fontWeight={650}>{activeMode === 'automatic' ? 'Автоматически · API' : 'Custom'}</Typography></Stack>
+          <Typography variant="h6" component="p" sx={{ mt: 1 }}>{activeProvider ? getAiProviderDescriptor(activeProvider).label : 'Несколько провайдеров'}</Typography>
+          <Typography variant="caption" color="text.secondary">{activeLocal ? activeProvider === 'lmstudio' ? 'Текст — на вашем компьютере' : 'Локальные модели и API' : 'Текст — через API'}</Typography>
         </Box>
-        <Typography variant="caption" color="text.secondary">Стоимость сравнивается между уровнями одного провайдера. Это относительная оценка: точный счёт зависит от тарифов API, контекста и инструментов. Фоновые функции настраиваются отдельно.</Typography>
-        {!preview?.available && <Alert severity="warning">{preview?.unavailableReason || 'Не удалось подобрать модели.'}</Alert>}
-        <Stack direction="row" spacing={2} alignItems="center">
-          <Button variant="contained" disabled={!changed || busy || !preview?.available} onClick={() => void save(preferences)}>{busy ? 'Сохраняем…' : 'Применить'}</Button>
-          <Typography variant="body2" color="text.secondary">{changed ? 'Изменения ещё не применены' : 'Настройки применены'}</Typography>
-        </Stack>
-        {preview?.models && <Accordion disableGutters><AccordionSummary expandIcon={<ExpandMoreIcon />}>Какие модели будут работать</AccordionSummary>
-          <AccordionDetails><Stack spacing={1}>{['fastDialogue', 'conversation', 'runtimePlanning', 'complexReasoning'].map(task => {
-            const ref = preview.models![task as keyof typeof preview.models];
-            return <Typography variant="body2" key={task}><b>{labels[task]}:</b> {getAiProviderDescriptor(ref.provider).label} · {ref.model}</Typography>;
-          })}</Stack></AccordionDetails></Accordion>}
-      </>}
-      {selectedMode === 'automatic' && <Box>
-        <Button variant="outlined" disabled={busy} onClick={() => openCustom(true)}>Настроить локальные модели в Custom</Button>
-        <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>Откроется редактор Custom. Текущая стратегия изменится только после сохранения.</Typography>
-      </Box>}
-      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap><Chip size="small" label={data.serviceConnected ? 'API подключён' : 'Подключите API'} />
-        <Chip size="small" label={data.localConnected ? 'Сервер LM Studio доступен' : 'Сервер LM Studio не подключён'} /></Stack>
-    </>}
-  </Stack></CardContent>
+        {(['fastDialogue', 'complexReasoning'] as const).map(task => {
+          const ref = activeModels![task]; const route = ref.localRole && data.localRoutes[ref.localRole];
+          const model = ref.allowFallback === false ? ref.model : route ? route.model : ref.model;
+          return <Box key={task}><Typography variant="caption" color="text.secondary">{labels[task]}</Typography>
+            <Typography variant="body2" sx={{ mt: .4, overflowWrap: 'anywhere', fontSize: 12.5 }}>{model}</Typography></Box>;
+        })}
+        <Box sx={{ pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+          <Typography variant="caption" color="text.secondary">{activeLocal ? 'Поиск, голос и другие сервисы используют отдельные API.' : 'Локальные модели не используются.'}</Typography>
+        </Box>
+        <Stack spacing={.75}><Chip size="small" variant="outlined" sx={{ alignSelf: 'flex-start' }} label={data.serviceConnected ? 'API настроен' : 'API не настроен'} />
+          <Typography variant="caption" color="text.secondary">LM Studio: {data.localConnected ? 'сервер доступен' : 'не подключён'}</Typography></Stack>
+      </Stack>
+    </Box>}
+  </CardContent>
     <Dialog open={dialog} keepMounted fullWidth maxWidth="lg" onClose={() => { if (!busy) setDialog(false); }}>
       <DialogTitle>Custom · своя стратегия</DialogTitle>
       <DialogContent dividers><Stack spacing={2.5}>
