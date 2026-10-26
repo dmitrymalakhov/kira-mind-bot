@@ -1438,23 +1438,15 @@
                 "type": "object",
                 "additionalProperties": false,
                 "required": [
-                  "cost",
                   "quality"
                 ],
                 "properties": {
-                  "cost": {
-                    "type": "string",
-                    "enum": [
-                      "low",
-                      "medium",
-                      "high"
-                    ]
-                  },
                   "quality": {
                     "type": "string",
                     "enum": [
                       "standard",
-                      "high"
+                      "high",
+                      "maximum"
                     ]
                   }
                 }

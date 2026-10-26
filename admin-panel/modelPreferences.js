@@ -1,5 +1,5 @@
 'use strict';
-const { SETTING_KEY, DEFAULT_PREFERENCES, buildModelPlan, parseModelPolicy, parsePreferences } = require('../ai/modelPreferences');
+const { SETTING_KEY, QUALITY_LEVELS, buildModelPlan, parseModelPolicy, parsePreferences } = require('../ai/modelPreferences');
 const { readLocalRoutes, listLocalModels } = require('./localModels');
 
 async function resources(pool, vars, memoryProfileName) {
@@ -16,12 +16,10 @@ async function readModelPreferences(pool, vars, memoryProfileName) {
   const policy = parseModelPolicy(rows.find(row => row.key === SETTING_KEY)?.value);
   const context = await resources(pool, vars, memoryProfileName);
   const manualPreset = rows.find(row => row.key === 'AI_MODEL_PRESET')?.value || vars.AI_MODEL_PRESET || 'gpt-balanced';
-  const inferred = { ...DEFAULT_PREFERENCES,
-    cost: ['gpt-lean','lmstudio-local'].includes(manualPreset) ? 'low' : manualPreset === 'gpt-max' ? 'high' : 'medium',
-    quality: ['gpt-lean','lmstudio-local'].includes(manualPreset) ? 'standard' : 'high' };
+  const inferred = { quality: ['gpt-lean','lmstudio-local'].includes(manualPreset) ? 'standard' : manualPreset === 'gpt-max' ? 'maximum' : 'high' };
   const plans = [];
-  for (const cost of ['low','medium','high']) for (const quality of ['standard','high']) {
-    const preferences = { cost, quality };
+  for (const { id: quality } of QUALITY_LEVELS) {
+    const preferences = { quality };
     try { plans.push({ ...buildModelPlan(preferences, context), available: true }); }
     catch (error) { plans.push({ preferences, available: false, unavailableReason: error.message }); }
   }

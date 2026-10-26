@@ -88,7 +88,7 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
           <Alert severity="info">Из Docker Desktop используйте host.docker.internal вместо localhost. После изменения подключения пересоздайте контейнеры бота и админки; обычного рестарта недостаточно.</Alert>
           <LocalModelSettings onToast={onToast} onSaved={localSaved} />
           <Typography fontWeight={600}>3. Включите локальные модели</Typography>
-          <Typography variant="body2" color="text.secondary">Локальный режим выполняет текстовые задачи в LM Studio. Гибрид оставляет сложный анализ облачной модели. Поиск, голос, изображения и векторы памяти используют отдельные подключения. Включение режима заменит автоматический выбор по стоимости и качеству.</Typography>
+          <Typography variant="body2" color="text.secondary">Локальный режим выполняет текстовые задачи в LM Studio. Гибрид оставляет сложный анализ облачной модели. Поиск, голос, изображения и векторы памяти используют отдельные подключения. Включение режима заменит автоматический выбор по уровню качества.</Typography>
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
             {(['lmstudio-local', 'hybrid-lmstudio-gpt'] as const).map(name => {
               const preset = data?.availablePresets.find(item => item.name === name);

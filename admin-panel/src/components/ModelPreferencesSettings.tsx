@@ -1,16 +1,17 @@
 import { useEffect, useState } from 'react';
 import { Accordion, AccordionSummary, AccordionDetails, Alert, Box, Button, Card, CardContent,
-  Chip, CircularProgress, Stack, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
+  Chip, CircularProgress, Stack, ButtonBase, Typography } from '@mui/material';
+import { QUALITY_LEVELS } from '../../../ai/modelPreferences';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { fetchModelPreferences, saveModelPreferences } from '../api';
 import type { ModelPreferences, ModelPreferencesResponse } from '../types';
 
-const equal = (a: ModelPreferences, b: ModelPreferences) => a.cost === b.cost && a.quality === b.quality;
+const equal = (a: ModelPreferences, b: ModelPreferences) => a.quality === b.quality;
 export function ModelPreferencesSettings({ onToast, onSaved, refreshToken }: {
   onToast: (message: string, severity: 'success'|'error') => void; onSaved: () => void; refreshToken: number;
 }) {
   const [data, setData] = useState<ModelPreferencesResponse | null>(null);
-  const [preferences, setPreferences] = useState<ModelPreferences>({ cost: 'medium', quality: 'high' });
+  const [preferences, setPreferences] = useState<ModelPreferences>({ quality: 'high' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   async function load() {
@@ -30,33 +31,39 @@ export function ModelPreferencesSettings({ onToast, onSaved, refreshToken }: {
   }
   return <Card id="model-presets" sx={{ mb: 2 }}><CardContent><Stack spacing={2.5}>
     <Box><Typography variant="h6" component="h2">Как Кира выбирает модели</Typography>
-      <Typography variant="body2" color="text.secondary">Задайте предпочтения — Кира сама распределит общение и сложные задачи между доступными моделями.</Typography></Box>
+      <Typography variant="body2" color="text.secondary">Выберите качество ответов — Кира сама распределит общение и сложные задачи между доступными моделями.</Typography></Box>
     {error && <Alert severity="error" action={<Button onClick={() => void load()}>Повторить</Button>}>{error}</Alert>}
     {!data && !error && <CircularProgress size={22} aria-label="Загрузка настроек моделей" />}
     {data && <>
-      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-        <Box sx={{ flex: 1 }}><Typography fontWeight={600} sx={{ mb: 1 }}>Стоимость</Typography>
-          <ToggleButtonGroup exclusive fullWidth size="small" value={preferences.cost} disabled={busy} aria-label="Стоимость"
-            onChange={(_, cost) => cost && setPreferences({ ...preferences, cost })}>
-            <ToggleButton value="low">Низкая</ToggleButton><ToggleButton value="medium">Средняя</ToggleButton><ToggleButton value="high">Высокая</ToggleButton>
-          </ToggleButtonGroup>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>Определяет класс моделей и предел одного ответа. Платный фон настраивается отдельно.</Typography>
-        </Box>
-        <Box sx={{ flex: 1 }}><Typography fontWeight={600} sx={{ mb: 1 }}>Качество</Typography>
-          <ToggleButtonGroup exclusive fullWidth size="small" value={preferences.quality} disabled={busy} aria-label="Качество"
-            onChange={(_, quality) => quality && setPreferences({ ...preferences, quality })}>
-            <ToggleButton value="standard">Обычное</ToggleButton><ToggleButton value="high">Высокое</ToggleButton>
-          </ToggleButtonGroup>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>Больше внимания сложным вопросам в пределах выбранной стоимости. Короткие реплики остаются короткими.</Typography>
-        </Box>
-      </Stack>
+      <Box role="radiogroup" aria-label="Качество ответов" sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' }, gap: 1.5 }}>
+        {QUALITY_LEVELS.map(level => <ButtonBase key={level.id} role="radio" aria-checked={preferences.quality === level.id}
+          aria-label={level.title} disabled={busy} tabIndex={preferences.quality === level.id ? 0 : -1}
+          onKeyDown={event => {
+            const key = event.key; if (!['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp', 'Home', 'End'].includes(key)) return;
+            event.preventDefault();
+            const index = QUALITY_LEVELS.findIndex(item => item.id === level.id);
+            const next = key === 'Home' ? 0 : key === 'End' ? 2 : (index + (['ArrowLeft', 'ArrowUp'].includes(key) ? 2 : 1)) % 3;
+            setPreferences({ quality: QUALITY_LEVELS[next].id });
+            event.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="radio"]')[next]?.focus();
+          }} onClick={() => setPreferences({ quality: level.id })}
+          sx={{ display: 'block', textAlign: 'left', p: 2, height: '100%', borderRadius: 2, border: '1px solid',
+            borderColor: preferences.quality === level.id ? 'primary.main' : 'divider', bgcolor: preferences.quality === level.id ? 'action.selected' : 'transparent',
+            '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.light', outlineOffset: 2 } }}>
+          <Typography fontWeight={700} sx={{ mb: 1 }}>{level.title}</Typography>
+          <Typography variant="body2" color="text.secondary">{level.description}</Typography>
+          <Typography variant="body2" color={level.id === 'standard' ? 'success.light' : 'warning.light'} sx={{ mt: 1.5 }}>{level.costNote}</Typography>
+        </ButtonBase>)}
+      </Box>
+      <Typography variant="caption" color="text.secondary">Уровень меняет модели, глубину рассуждения и лимиты ответа. Итоговый расход зависит от длины диалога и инструментов; фоновые функции настраиваются отдельно.</Typography>
+      {data.activePlan?.version === 1 && <Alert severity="info">Сохранён прежний план моделей. Он продолжает работать без изменений; новый уровень включится после нажатия «Применить».</Alert>}
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
         <Chip size="small" label={data.serviceConnected ? 'API сервиса подключён' : 'API сервиса не настроен'} />
         <Chip size="small" label={data.localConnected ? 'Локальные модели доступны' : 'Локальная модель не подключена'} />
       </Stack>
       {data.mode === 'manual' && <Alert severity="info">Сейчас действует ручной профиль. Нажмите «Применить», чтобы включить автоматический выбор по этим настройкам.</Alert>}
-      {preview?.available ? <Alert severity={changed ? 'info' : 'success'}>{preview.summary}</Alert>
-        : <Alert severity="warning">{preview?.unavailableReason || 'Не удалось подобрать модели.'}</Alert>}
+      {preview?.available && preview.presetName !== QUALITY_LEVELS.find(level => level.id === preferences.quality)?.preset &&
+        <Alert severity="info">Используется доступный провайдер. Его модели могут совпадать на разных уровнях; уровень меняет лимиты ответа в пределах доступного каталога.</Alert>}
+      {!preview?.available && <Alert severity="warning">{preview?.unavailableReason || 'Не удалось подобрать модели.'}</Alert>}
       <Stack direction="row" spacing={2} alignItems="center">
         <Button variant="contained" disabled={!changed || busy || !preview?.available} onClick={() => void save()}>
           {busy ? 'Сохраняем…' : 'Применить'}</Button>

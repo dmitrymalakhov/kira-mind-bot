@@ -84,9 +84,9 @@ test('settings require authentication, validate the entire patch and accept idem
     assert.equal(disallowed.headers.get('allow'), 'GET, PATCH');
 });
 
-test('model preferences use authenticated GET/PUT and only accept the three server-managed axes', async t => {
+test('model preferences use authenticated GET/PUT and only accept one quality axis with three levels', async t => {
     const { parsePreferences } = await import('../ai/modelPreferences');
-    let saved = { cost: 'medium', quality: 'high' };
+    let saved = { quality: 'high' };
     let writes = 0;
     const f = await fixture(t, {
         modelPreferences: async () => ({ preferences: saved, scope: 'account' }),
@@ -102,8 +102,8 @@ test('model preferences use authenticated GET/PUT and only accept the three serv
     }
     assert.equal(writes, 0);
     assert.equal((await f.request('/model-preferences', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cost: 'low', quality: 'high' }) })).status, 200);
-    assert.equal(saved.cost, 'low'); assert.equal(writes, 1);
+        body: JSON.stringify({ quality: 'standard' }) })).status, 200);
+    assert.equal(saved.quality, 'standard'); assert.equal(writes, 1);
     assert.equal((await f.request('/model-preferences', { method: 'POST' })).status, 405);
 });
 

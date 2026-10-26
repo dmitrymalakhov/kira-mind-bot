@@ -14,25 +14,27 @@ import { getModelPolicy } from '../services/modelPreferenceService';
 
 const resources = () => ({ vars: { OPENAI_API_KEY: 'synthetic-api-key' }, memoryProfileName: 'stable-1536',
     localRoutes: defaultLocalRoutes('synthetic/local-standard'), localModels: [] as Array<{ id: string; uncensored: boolean }> });
-const preferences: ModelPreferences = { cost: 'medium', quality: 'high' };
+const preferences: ModelPreferences = { quality: 'high' };
 const messages = [{ role: 'user' as const, content: 'Synthetic request' }];
 
-test('cost limits the model class while quality changes reasoning without adding a routing call', () => {
-    for (const cost of ['low', 'medium', 'high'] as const) {
-        const normal = buildModelPlan({ ...preferences, cost, quality: 'standard' }, resources());
-        const high = buildModelPlan({ ...preferences, cost }, resources());
-        assert.equal(high.models.complexReasoning.model, cost === 'low' ? 'gpt-6-luna' : 'gpt-6.1-sol');
-        assert.equal(high.models.fastDialogue.model, 'gpt-6-luna');
-        assert.equal(high.models.fastDialogue.generation?.reasoningEffort, 'none');
-        assert.notEqual(high.models.complexReasoning.generation?.reasoningEffort, normal.models.complexReasoning.generation?.reasoningEffort);
-        assert.ok(Object.values(high.models).every(ref => !ref.model.includes('astra')));
-        assert.deepEqual(parseModelPolicy(JSON.stringify(high)), high);
+test('three quality levels increase model capacity and ceilings while keeping the fast path light', () => {
+    const plans = ['standard', 'high', 'maximum'].map(quality => buildModelPlan({ quality }, resources()));
+    for (const [index, plan] of plans.entries()) {
+        assert.equal(plan.version, 2);
+        assert.equal(plan.models.complexReasoning.model, index === 0 ? 'gpt-6-luna' : 'gpt-6.1-sol');
+        assert.equal(plan.models.complexReasoning.generation?.reasoningEffort, ['low', 'medium', 'high'][index]);
+        assert.equal(plan.models.fastDialogue.model, 'gpt-6-luna');
+        assert.equal(plan.models.fastDialogue.generation?.reasoningEffort, 'none');
+        assert.equal(plan.models.complexReasoning.generation?.maxTokens, [4096, 8192, 16384][index]);
+        assert.ok(Object.values(plan.models).every(ref => !ref.model.includes('astra')));
+        assert.deepEqual(parseModelPolicy(JSON.stringify(plan)), plan);
     }
+    assert.match(plans[2].summary, /Самая высокая стоимость/);
 });
 
 function legacyPlan(local = true) {
     const plan = buildModelPlan(preferences, resources());
-    const raw = { ...plan, preferences: { ...preferences, censorship: 'off' }, source: local ? 'local' : 'service-free' };
+    const raw = { ...plan, version: 1, preferences: { cost: 'medium', quality: 'high', censorship: 'off' }, source: local ? 'local' : 'service-free' };
     for (const task of TEXT_TASKS) raw.models[task] = local
         ? { provider: 'lmstudio', model: 'synthetic/local-pinned', localRole: 'fast', allowFallback: false }
         : { provider: 'openai', model: 'synthetic/service-pinned', allowFallback: false };
@@ -48,7 +50,7 @@ test('local catalog and obsolete free-model flags never silently change automati
     assert.throws(() => parsePreferences({ ...preferences, censorship: 'off' }));
 });
 
-test('saved version-1 policies retain pinned local and API routes while exposing only cost and quality', () => {
+test('saved version-1 policies retain pinned local and API routes while exposing a single quality level', () => {
     for (const local of [true, false]) {
         const legacy = legacyPlan(local);
         const parsed = parseModelPolicy(JSON.stringify(legacy))!;
@@ -59,8 +61,17 @@ test('saved version-1 policies retain pinned local and API routes while exposing
         assert.throws(() => parseModelPolicy(altered), /подмену/);
         assert.throws(() => parseModelPolicy({ ...legacy, preferences: { ...legacy.preferences, accountId: 'other' } }));
     }
-    const on = buildModelPlan(preferences, resources());
-    assert.deepEqual(parseModelPolicy({ ...on, preferences: { ...preferences, censorship: 'on' } }), on);
+    const on = { ...buildModelPlan(preferences, resources()), version: 1 as const };
+    assert.deepEqual(parseModelPolicy({ ...on, preferences: { cost: 'medium', quality: 'high', censorship: 'on' } }), on);
+    for (const [cost, quality] of [['low', 'standard'], ['medium', 'high'], ['high', 'maximum']]) {
+        for (const oldQuality of ['standard', 'high']) {
+            const raw = { ...on, preferences: { cost, quality: oldQuality } };
+            const parsed = parseModelPolicy(raw)!;
+            assert.deepEqual(parsed.preferences, { quality }); assert.deepEqual(parsed.models, raw.models);
+            assert.deepEqual(parsed.outputTokenLimits, raw.outputTokenLimits);
+        }
+    }
+    assert.throws(() => parseModelPolicy({ ...on, version: 2, preferences: { cost: 'medium', quality: 'high' } }));
 });
 
 test('preferences reject credentials, identity, arbitrary model IDs and unknown values', () => {
@@ -74,7 +85,7 @@ test('an unavailable provider is not selected from ambient process credentials',
 });
 
 test('explicit app presets bypass the general account policy while ordinary turns use it', async t => {
-    const plan = buildModelPlan({ ...preferences, cost: 'low' }, resources());
+    const plan = buildModelPlan({ quality: 'standard' }, resources());
     const descriptor = Object.getOwnPropertyDescriptor(AppDataSource, 'isInitialized')!;
     Object.defineProperty(AppDataSource, 'isInitialized', { configurable: true, value: true });
     t.after(() => Object.defineProperty(AppDataSource, 'isInitialized', descriptor));
@@ -88,11 +99,11 @@ test('the actual SDK request receives the compiled reasoning and ceiling; API pr
     t.mock.method(usage, 'logAiUsage', async () => {});
     const calls: any[] = [];
     t.mock.method(openaiProviderAdapter.client.chat.completions, 'create', async (body: any) => { calls.push(body); return { choices: [{ message: { content: '{}' } }] } as any; });
-    const plan = buildModelPlan({ ...preferences, cost: 'low' }, resources());
+    const plan = buildModelPlan({ quality: 'standard' }, resources());
     await runWithChannelPreset('gpt-max', () => runWithModelPolicy(plan, () => createChatCompletionForTask('complexReasoning', { messages, max_tokens: 20000, temperature: 0.5 })));
     assert.equal(calls.length, 1);
     assert.equal(calls[0].model, 'gpt-6-luna');
-    assert.equal(calls[0].reasoning_effort, 'medium');
+    assert.equal(calls[0].reasoning_effort, 'low');
     assert.equal(calls[0].max_completion_tokens, 4096);
     assert.equal(calls[0].temperature, undefined);
 });
@@ -133,7 +144,7 @@ test('the shared settings controller writes the plan and preset atomically and v
     assert.equal(writes.length, 1);
 });
 
-test('preferences list six choices and canonicalize old stored settings without rewriting them', async () => {
+test('preferences list three quality choices and canonicalize old stored settings without rewriting them', async () => {
     const { readModelPreferences } = require('../admin-panel/modelPreferences');
     const legacy = legacyPlan(false);
     const queries: string[] = [];
@@ -142,7 +153,7 @@ test('preferences list six choices and canonicalize old stored settings without 
         return { rows: sql.includes('key IN') ? [{ key: 'AI_MODEL_POLICY', value: JSON.stringify(legacy) }] : [] };
     } };
     const result = await readModelPreferences(pool, resources().vars, 'stable-1536');
-    assert.equal(result.plans.length, 6);
+    assert.equal(result.plans.length, 3);
     assert.deepEqual(result.preferences, preferences);
     assert.deepEqual(result.activePlan.models, legacy.models);
     assert.ok(queries.every(sql => sql.startsWith('SELECT')));
