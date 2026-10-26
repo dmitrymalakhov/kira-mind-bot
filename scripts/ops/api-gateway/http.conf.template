@@ -15,10 +15,11 @@ map $http_authorization $kira_api_has_bearer {
 
 map "$request_method:$uri" $kira_api_route_allowed {
     default 0;
-    "~^GET:/api/v1/(status|capabilities|history|reminders|tasks|dialogue-jobs|settings)$" 1;
+    "~^GET:/api/v1/(status|capabilities|history|reminders|tasks|dialogue-jobs|settings|model-preferences)$" 1;
     "~^GET:/api/v1/files/[0-9a-f-]{36}$" 1;
     "~^POST:/api/v1/(messages|actions)$" 1;
     "PATCH:/api/v1/settings" 1;
+    "PUT:/api/v1/model-preferences" 1;
     "~^DELETE:/api/v1/dialogue-jobs/[0-9a-f-]{36}$" 1;
 }
 

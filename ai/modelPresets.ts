@@ -46,6 +46,8 @@ export interface AiModelRef {
     model: string;
     modelEnvKey?: string;
     localRole?: import('./localModelRouting').LocalModelRole;
+    /** A selected free/local dialogue route must never silently fall back to a different content policy. */
+    allowFallback?: boolean;
     generation?: { maxTokens?: number; reasoningEffort: 'none' | 'low' | 'medium' | 'high'; temperature?: number };
 }
 

@@ -1415,6 +1415,73 @@
           }
         }
       }
+    },
+    "/model-preferences": {
+      "get": {
+        "summary": "Предпочтения моделей и доступные варианты распределения",
+        "responses": {
+          "200": {
+            "description": "Общие настройки аккаунта, действующий план, подключения и доступность сочетаний"
+          },
+          "401": {
+            "description": "Требуется токен"
+          }
+        }
+      },
+      "put": {
+        "summary": "Сохранить цензуру, стоимость и качество; план моделей вычисляет сервер",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "censorship",
+                  "cost",
+                  "quality"
+                ],
+                "properties": {
+                  "censorship": {
+                    "type": "string",
+                    "enum": [
+                      "on",
+                      "off"
+                    ]
+                  },
+                  "cost": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ]
+                  },
+                  "quality": {
+                    "type": "string",
+                    "enum": [
+                      "standard",
+                      "high"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Предпочтения и план атомарно сохранены"
+          },
+          "400": {
+            "description": "Некорректные настройки или отсутствует подходящая модель"
+          },
+          "401": {
+            "description": "Требуется токен"
+          }
+        }
+      }
     }
   },
   "components": {

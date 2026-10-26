@@ -7,6 +7,8 @@ import type {
   HealthLogsResponse,
   AiPresetName,
   AiPresetResponse,
+  ModelPreferences,
+  ModelPreferencesResponse,
   MemoryFormPayload,
   MemoryGraphQuery,
   MemoryGraphResponse,
@@ -88,6 +90,16 @@ export async function fetchAiPreset(): Promise<AiPresetResponse> {
     throw new Error(body.error || 'Failed to load AI preset');
   }
   return r.json();
+}
+
+export async function fetchModelPreferences(): Promise<ModelPreferencesResponse> {
+  const r = await apiFetch('/api/model-preferences');
+  if (!r.ok) throw new Error('Не удалось загрузить настройки моделей');
+  return r.json();
+}
+export async function saveModelPreferences(preferences: ModelPreferences) {
+  const r = await apiFetch('/api/model-preferences', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(preferences) });
+  return r.json() as Promise<{ success: boolean; error?: string }>;
 }
 
 export async function fetchBudgetMode(): Promise<{ mode: BudgetMode }> {

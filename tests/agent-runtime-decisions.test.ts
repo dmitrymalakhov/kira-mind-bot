@@ -30,6 +30,13 @@ describe('optional Decisions routing adapter', () => {
         });
     });
 
+    test('does not replace a pinned free-dialogue classifier with Luna Decisions', async t => {
+        t.mock.method(resolver, 'resolveModelForTaskAsync', async () => ({ presetName: 'gpt-balanced',
+            modelRef: { provider: 'openai', model: 'synthetic/service-free', allowFallback: false } }) as any);
+        const call = t.mock.method(decisionAdapter, 'createDecision', async () => { throw new Error('No alternate classifier'); });
+        await enabled(async () => { assert.equal(await classifyWithDecisions('Синтетический запрос'), null); assert.equal(call.mock.callCount(), 0); });
+    });
+
     test('returns routing, independent actions and context signals in one request', async t => {
         t.mock.method(resolver, 'resolveModelForTaskAsync', async () => ({ presetName: 'gpt-balanced', modelRef: { provider: 'openai', model: 'synthetic-classifier' } }) as any);
         let body: any;

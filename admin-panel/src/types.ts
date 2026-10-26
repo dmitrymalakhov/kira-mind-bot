@@ -131,6 +131,19 @@ export interface AiPresetResponse {
   source: ConfigSourceInfo;
 }
 
+export type { ModelPreferences } from '../../ai/modelPreferences';
+export interface ModelPreferencesResponse {
+  mode: 'automatic' | 'manual';
+  preferences: import('../../ai/modelPreferences').ModelPreferences;
+  activePlan: import('../../ai/modelPreferences').ModelPolicy | null;
+  manualPreset: AiPresetName;
+  localConnected: boolean; serviceConnected: boolean; localError?: string;
+  plans: Array<Partial<import('../../ai/modelPreferences').ModelPolicy> & {
+    preferences: import('../../ai/modelPreferences').ModelPreferences;
+    available: boolean; unavailableReason?: string;
+  }>;
+}
+
 export type MonitoringCheckStatus = 'ok' | 'warn' | 'down' | 'disabled';
 export type MonitoringCheckCategory = 'runtime' | 'storage' | 'telegram' | 'ai';
 

@@ -67,7 +67,7 @@ async function createResponseWithModel(
 
     try {
         const result = await providerAdapter.createResponse(modelRef.model,
-            limitResponseGeneration(preset, taskKey, modelRef.provider, params), modelRef.generation);
+            limitResponseGeneration(preset, taskKey, modelRef.provider, params, modelRef.generation?.maxTokens), modelRef.generation);
         const usage = getUsageTokens(result);
 
         recordAiUsage({
@@ -140,7 +140,9 @@ export async function createResponseForTask(
         const currentRoute = await resolveModelForTaskFreshAsync(taskKey);
         if (currentRoute.presetName === route.presetName
             && currentRoute.modelRef.provider === route.modelRef.provider
-            && currentRoute.modelRef.model === route.modelRef.model) {
+            && currentRoute.modelRef.model === route.modelRef.model
+            && currentRoute.modelRef.allowFallback === route.modelRef.allowFallback
+            && JSON.stringify(currentRoute.modelRef.generation) === JSON.stringify(route.modelRef.generation)) {
             return false;
         }
         if (presetRefreshCount >= MAX_PRESET_REFRESHES_PER_REQUEST) {
@@ -172,7 +174,7 @@ export async function createResponseForTask(
 
             // Non-retryable: либо проброс (true-full), либо cross-provider fallback.
             if (!diagnostics.retryable) {
-                if (!allowsCrossProviderFallback(route.presetName)) throw error;
+                if (!allowsCrossProviderFallback(route.presetName, route.modelRef)) throw error;
                 const fallbackModel = getTaskFallbackModel(taskKey);
                 console.warn('[AI responses fallback]', {
                     taskKey,
@@ -196,7 +198,7 @@ export async function createResponseForTask(
             if (await switchToCurrentRoute()) continue;
 
             const providerAdapter = getAiProviderAdapter(route.modelRef.provider);
-            const policy = allowsCrossProviderFallback(route.presetName)
+            const policy = allowsCrossProviderFallback(route.presetName, route.modelRef)
                 ? resolveRetryPolicy(undefined)
                 : resolveRetryPolicy(providerAdapter.getRetryPolicy, providerAdapter);
 
@@ -215,7 +217,7 @@ export async function createResponseForTask(
 
             // Попытки primary исчерпаны → same-provider degradation chain (true-full)
             // либо cross-provider fallback на GPT (остальные пресеты).
-            if (!allowsCrossProviderFallback(route.presetName)) {
+            if (!allowsCrossProviderFallback(route.presetName, route.modelRef)) {
                 const { result } = await runSameProviderDegradationChain<ResponseResult>(
                     route.presetName,
                     route.modelRef,

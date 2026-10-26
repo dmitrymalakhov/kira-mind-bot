@@ -37,6 +37,8 @@ export interface ApiBackend {
     dialogueJobs?(): Promise<unknown>;
     cancelDialogueJob?(id: string): Promise<unknown>;
     settings?(): Promise<ApiSettings>;
+    modelPreferences?(): Promise<unknown>;
+    updateModelPreferences?(body: unknown): Promise<unknown>;
     updateSettings?(patch: ApiSettingsPatch): Promise<ApiSettings>;
     message(text: string, options?: { deferredDialogue?: boolean }): Promise<ApiReply>;
     action(token: string): Promise<ApiReply>;

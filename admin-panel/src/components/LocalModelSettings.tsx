@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, Box, Button, CircularProgress, MenuItem, Stack, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, Checkbox, CircularProgress, FormControlLabel, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import type { LocalModelRole, LocalModelRoutes } from '../../../ai/localModelRouting';
 import roles from '../../../ai/local-model-roles.json';
 
@@ -30,6 +30,7 @@ export function LocalModelSettings({ onToast, onSaved }: Props) {
       const response = await fetch('/api/local-models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings }) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error);
+      setSettings(result.settings);
       setSaved(JSON.stringify(result.settings));
       onToast('Модели по задачам сохранены. Применятся в течение 5 секунд.', 'success');
       onSaved();
@@ -52,10 +53,12 @@ export function LocalModelSettings({ onToast, onSaved }: Props) {
         <Stack spacing={1.5}>
           <Typography variant="body2" fontWeight={600}>{roles[role].label}</Typography>
           <Typography variant="caption" color="text.secondary">{roles[role].description}</Typography>
-          <TextField select fullWidth label={`Модель: ${roles[role].label}`} value={route.model} disabled={loading || saving} onChange={e => update({ model: e.target.value })}>
+          <TextField select fullWidth label={`Модель: ${roles[role].label}`} value={route.model} disabled={loading || saving} onChange={e => update({ model: e.target.value, freeDialogue: false })}>
             {!route.model && <MenuItem value="">Выберите модель</MenuItem>}
             {choices.map(m => <MenuItem key={m.id} value={m.id}>{m.label}{m.uncensored ? ' · Uncensored' : ''}{m.loaded ? ' · загружена' : ''}</MenuItem>)}
           </TextField>
+          <FormControlLabel control={<Checkbox checked={route.freeDialogue === true} disabled={loading || saving}
+            onChange={(_, freeDialogue) => update({ freeDialogue })} />} label="Использовать эту модель для свободного диалога" />
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
             <TextField select fullWidth label={`Рассуждения: ${roles[role].label}`} value={route.reasoningEffort} onChange={e => update({ reasoningEffort: e.target.value as typeof route.reasoningEffort })} disabled={loading || saving}>
               <MenuItem value="none">Выключены — быстрый ответ</MenuItem><MenuItem value="low">Низкий уровень</MenuItem><MenuItem value="medium">Средний уровень</MenuItem><MenuItem value="high">Высокий уровень</MenuItem>

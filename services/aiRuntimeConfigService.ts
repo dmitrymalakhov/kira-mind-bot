@@ -26,6 +26,8 @@ function getChannelPresetName(): AiPresetName | null {
     return scope?.active ? scope.preset : null;
 }
 
+export function hasChannelPresetOverride(): boolean { return getChannelPresetName() !== null; }
+
 let cachedPresetName: AiPresetName | null = null;
 let lastRefreshAt = 0;
 let cachedFromDb = false;

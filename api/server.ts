@@ -74,6 +74,13 @@ export function createExternalApiServer(
             }
             const url = new URL(req.url ?? '/', 'http://localhost');
             const path = url.pathname;
+            if (path === `${PREFIX}/model-preferences`) {
+                if (req.method === 'GET' && backend.modelPreferences) return json(200, await backend.modelPreferences());
+                if (req.method === 'PUT' && backend.updateModelPreferences) return json(200, await backend.updateModelPreferences(await readBody(req)));
+                res.setHeader('Allow', 'GET, PUT');
+                req.resume();
+                throw new ApiError(405, 'method_not_allowed', 'Ожидается GET или PUT.');
+            }
             if (path === `${PREFIX}/settings`) {
                 if (req.method === 'GET' && backend.settings) return json(200, await backend.settings());
                 if (req.method === 'PATCH' && backend.updateSettings) {

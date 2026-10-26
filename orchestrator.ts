@@ -15,7 +15,7 @@ import { extractExplicitRememberFact } from "./utils/enhancedFactExtraction";
 import { buildProactiveSourceExplanation, resolveProactiveSourceQuestion } from './utils/proactiveSourceQuestion';
 import { detectRelationshipInMessage, resolveRelationshipFromMemory } from "./utils/resolveRelationshipFromMemory";
 import { createPlan } from "./orchestration/planner";
-import { isSimpleSocialMessage } from './utils/simpleDialogue';
+import { isSimpleSocialMessage, simplePresenceReply, simpleSocialFallback } from './utils/simpleDialogue';
 import { INTENT_CLASSIFIER_INSTRUCTIONS } from './orchestration/intentPrompt';
 import { executePlan } from "./orchestration/executor";
 import { Plan } from "./orchestration/types";
@@ -825,6 +825,8 @@ export async function processMessage(
         const fastTurn = options.turn ?? { userText: originalMessage };
         const fastEligible = options.fastDialogue === true && !options.recurringTaskRun && !options.voiceReplyRequested &&
             !isForwarded && !isBrowserTaskLike && !explicitRemember && canUseFastDialogue(ctx, fastTurn);
+        const presenceReply = fastEligible && simplePresenceReply(originalMessage, config.characterName);
+        if (presenceReply) return { responseText: presenceReply, operationStatus: 'ok', skipOptionalFollowups: true, fastResponse: true };
         const socialClassification: MessageClassification | null = simpleSocial && !fastEligible ? {
             intent: 'РАЗГОВОР', confidenceLevel: 'ВЫСОКИЙ',
             details: { responseComplexity: 'routine', memoryNeed: 'none', relationshipRole: null },
@@ -837,6 +839,13 @@ export async function processMessage(
             ?? await classifyMessage(originalMessage, isForwarded, forwardFrom,
                 fastEligible ? messageHistory.slice(-4).map(item => ({ ...item, content: item.content.slice(0, 700) })) : messageHistory,
                 knownChatGroups, fastEligible ? { topic: fastTurn.currentTopic } : undefined);
+        if (simpleSocial && fastEligible) {
+            const draft = classification.fastReply;
+            classification = { intent: 'РАЗГОВОР', confidenceLevel: 'ВЫСОКИЙ',
+                details: { memoryNeed: 'none', responseComplexity: 'routine', relationshipRole: null },
+                fastReply: { mode: 'answer', answer: draft?.mode === 'answer' && draft.answer?.trim() && draft.answer.length <= 240
+                    ? draft.answer.trim() : simpleSocialFallback(originalMessage, config.characterName) } };
+        }
         let deterministicOverrideApplied = Boolean(
             deterministicReminderClassification ||
             deterministicSelfPhotoClassification ||

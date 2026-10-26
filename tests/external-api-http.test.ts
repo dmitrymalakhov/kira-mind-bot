@@ -84,6 +84,29 @@ test('settings require authentication, validate the entire patch and accept idem
     assert.equal(disallowed.headers.get('allow'), 'GET, PATCH');
 });
 
+test('model preferences use authenticated GET/PUT and only accept the three server-managed axes', async t => {
+    const { parsePreferences } = await import('../ai/modelPreferences');
+    let saved = { censorship: 'on', cost: 'medium', quality: 'high' };
+    let writes = 0;
+    const f = await fixture(t, {
+        modelPreferences: async () => ({ preferences: saved, scope: 'account' }),
+        updateModelPreferences: async body => {
+            try { saved = parsePreferences(body); } catch { throw new ApiError(400, 'invalid_preferences', 'Invalid'); }
+            writes++; return { success: true, preferences: saved };
+        },
+    });
+    assert.equal((await fetch(f.url + '/model-preferences')).status, 401);
+    assert.equal((await f.request('/model-preferences')).status, 200);
+    for (const body of [{ ...saved, userId: 123 }, { ...saved, model: 'gpt-6-astra' }, { ...saved, cost: 'unlimited' }]) {
+        assert.equal((await f.request('/model-preferences', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).status, 400);
+    }
+    assert.equal(writes, 0);
+    assert.equal((await f.request('/model-preferences', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ censorship: 'on', cost: 'low', quality: 'high' }) })).status, 200);
+    assert.equal(saved.cost, 'low'); assert.equal(writes, 1);
+    assert.equal((await f.request('/model-preferences', { method: 'POST' })).status, 405);
+});
+
 test('every route including files requires a bearer token; errors carry no private details', async t => {
     const f = await fixture(t);
     for (const path of ['/status', '/history', '/files/12345678-1234-4123-8123-123456789012']) {

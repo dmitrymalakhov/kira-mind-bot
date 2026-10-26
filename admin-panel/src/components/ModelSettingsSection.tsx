@@ -12,6 +12,7 @@ import { BudgetSettingsSection } from './BudgetSettingsSection';
 import { getAiProviderDescriptor } from '../../../ai/providerMetadata';
 import { LocalModelSettings } from './LocalModelSettings';
 import { ImageGenerationSettings } from './ImageGenerationSettings';
+import { ModelPreferencesSettings } from './ModelPreferencesSettings';
 
 interface Props {
   config: ConfigResponse;
@@ -42,6 +43,8 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [showLocalModels, setShowLocalModels] = useState(false);
+    const [preferenceRefresh, setPreferenceRefresh] = useState(0);
+    const localSaved = () => { void load(); setPreferenceRefresh(value => value + 1); };
     useImperativeHandle(ref, () => ({ getUpdates: () => ({}) }));
 
     async function load() {
@@ -66,6 +69,7 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
         const result = await saveAiPreset(selected);
         if (!result.success) throw new Error(result.error || 'Не удалось сохранить модель');
         await load();
+        setPreferenceRefresh(value => value + 1);
         onToast('Модель сохранена. Кира подхватит выбор в течение 5 секунд.', 'success');
       } catch (error) {
         onToast(error instanceof Error ? error.message : 'Ошибка соединения', 'error');
@@ -74,7 +78,12 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
 
     return (
       <>
-        <Card id="model-presets" sx={{ mb: 2 }}>
+        <ModelPreferencesSettings onToast={onToast} onSaved={() => void load()} refreshToken={preferenceRefresh} />
+        <Accordion sx={{ mb: 2 }} slotProps={{ transition: { unmountOnExit: true } }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography fontWeight={600}>Дополнительно: подключения и ручной выбор</Typography></AccordionSummary>
+          <AccordionDetails>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Ручной выбор профиля отключает автоматическое распределение. Настройки локальных моделей и подключений сохраняются отдельно.</Typography>
+        <Card id="model-presets-manual" sx={{ mb: 2 }}>
           <CardContent>
             <Stack spacing={2}>
               <Typography variant="subtitle1" component="h2" fontWeight={600}>Модель общения Киры</Typography>
@@ -102,9 +111,9 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
                   ))}
                 </TextField>
                 <Button variant="contained" onClick={() => void save()}
-                  disabled={loading || saving || !changed || !preview?.enabled}
+                  disabled={loading || saving || !preview?.enabled}
                   startIcon={saving ? <CircularProgress size={14} color="inherit" /> : <SaveIcon />}
-                >Применить</Button>
+                >Включить ручной профиль</Button>
               </Stack>
               {preview && (
                 <>
@@ -144,14 +153,16 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
               )}
               {loading && <CircularProgress size={20} aria-label="Загрузка модели" />}
               {(selected === 'lmstudio-local' || selected === 'hybrid-lmstudio-gpt')
-                ? <LocalModelSettings onToast={onToast} onSaved={() => void load()} />
+                ? <LocalModelSettings onToast={onToast} onSaved={localSaved} />
                 : <Accordion expanded={showLocalModels} onChange={(_, expanded) => setShowLocalModels(expanded)}>
                     <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography variant="body2">Настроить локальные модели LM Studio</Typography></AccordionSummary>
-                    <AccordionDetails>{showLocalModels && <LocalModelSettings onToast={onToast} onSaved={() => void load()} />}</AccordionDetails>
+                    <AccordionDetails>{showLocalModels && <LocalModelSettings onToast={onToast} onSaved={localSaved} />}</AccordionDetails>
                   </Accordion>}
             </Stack>
           </CardContent>
         </Card>
+          </AccordionDetails>
+        </Accordion>
         <ImageGenerationSettings onToast={onToast} />
         <BudgetSettingsSection onToast={onToast} />
       </>

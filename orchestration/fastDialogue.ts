@@ -7,6 +7,7 @@ import { looksLikeKiraRelocationRequest } from '../utils/kiraResidence';
 import { needsRuntimeTools } from './runtime/authorization';
 import { DialogueJobRepository } from '../services/DialogueJobRepository';
 import { getActiveAiPresetName } from '../services/aiRuntimeConfigService';
+import { getModelPolicy } from '../services/modelPreferenceService';
 import { isBackgroundFeatureEnabled, getBackgroundFeaturePreference } from '../services/backgroundFeatureService';
 
 export function fastDialogueEnabled(): boolean {
@@ -27,6 +28,7 @@ export function fastDialogueInstructions(): string {
     return [
         'В этом же вызове добавь fastReply: {mode:"answer"|"review"|"defer"|"route",answer?:string}.',
         'answer: короткий законченный ответ на самостоятельный простой вопрос или приветствие, без поиска, действий и личных воспоминаний. memoryNeed=none, responseComplexity=routine.',
+        'Приветствия, благодарность и проверка связи — обычный живой разговор: answer, 1–2 коротких предложения. Не превращай их в рассказ о своём настроении, событиях дня, биографии или состоянии памяти. Вопрос «как ты?» сам по себе не требует поиска по памяти или фонового review.',
         'review: такой же полезный и достоверный ответ уже возможен, но есть конкретная причина проверить, принесёт ли глубокий разбор существенное дополнение. Не выбирай review автоматически для каждого сообщения.',
         'defer: разговорный/исследовательский вопрос требует личной памяти, актуальных источников или сложного анализа. answer оставь пустым: система сама подтвердит начало работы. Не угадывай личные факты.',
         'route: любые действия, подтверждения, неясное намерение, вопросы о жизни персонажа и составные поручения. answer оставь пустым.',
@@ -36,10 +38,10 @@ export function fastDialogueInstructions(): string {
 }
 
 export function deepWorkNotice(classification: MessageClassification, optional = false): string {
-    if (optional) return 'Проверю, можно ли существенно дополнить ответ с учётом памяти и источников. Напишу, если найду что-то полезное. Новая реплика или /cancel_deep остановит разбор.';
-    if (classification.details.knowledgeSource === 'external_current' || classification.intent === 'ВЕБ_ПОИСК') return 'Проверю источники и вернусь с ответом. Можно продолжать разговор; новая реплика остановит этот разбор. Отменить: /cancel_deep.';
-    if (classification.details.memoryNeed && classification.details.memoryNeed !== 'none') return 'Посмотрю, что есть в памяти по этому вопросу, и вернусь с ответом. Новая реплика остановит этот разбор. Отменить: /cancel_deep.';
-    return 'Разберу вопрос подробнее и вернусь с ответом. Новая реплика остановит этот разбор. Отменить: /cancel_deep.';
+    if (optional) return 'Проверю ещё пару деталей. Дополню ответ, если найду что-то полезное.';
+    if (classification.details.knowledgeSource === 'external_current' || classification.intent === 'ВЕБ_ПОИСК') return 'Проверю свежие источники и вернусь с ответом.';
+    if (classification.details.memoryNeed && classification.details.memoryNeed !== 'none') return 'Посмотрю, что мы обсуждали раньше, и вернусь с ответом.';
+    return 'Мне нужно чуть больше времени на этот вопрос. Вернусь с ответом.';
 }
 
 export async function tryFastDialogueResult(ctx: BotContext, turn: ConversationTurn, classification: MessageClassification,
@@ -72,7 +74,7 @@ export async function tryFastDialogueResult(ctx: BotContext, turn: ConversationT
                     userId: ctx.from!.id, chatId: ctx.chat!.id, messageId: ctx.message?.message_id,
                     input: { message: turn.userText, initialAnswer: required ? '' : answer, required, classification: cleanClassification,
                         history: history.slice(-8).map(({ role, content }) => ({ role, content: content.slice(0, 1800) })),
-                        topic: turn.currentTopic?.slice(0, 400), preset: await getActiveAiPresetName() } });
+                        topic: turn.currentTopic?.slice(0, 400), preset: await getActiveAiPresetName(), modelPolicy: await getModelPolicy() } });
                 if (!job || !['staged', 'queued', 'running'].includes(job.status)) { if (required) return; }
                 else jobId = job.id;
             } catch { if (required) return; }

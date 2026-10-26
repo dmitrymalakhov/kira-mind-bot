@@ -14,6 +14,7 @@ export function decisionsEnabled(): boolean { return process.env.KIRA_DECISIONS_
 export async function classifyWithDecisions(prompt: string): Promise<MessageClassification | null> {
     if (!decisionsEnabled()) return null;
     const route = await resolveModelForTaskAsync('intentClassification');
+    if (route.modelRef.allowFallback === false) return null;
     const adapter = getAiProviderAdapter(route.modelRef.provider);
     // Respect provider-pure presets and the channel's scoped route. Never introduce an OpenAI call into Gemini/local modes.
     if (!adapter.createDecision) return null;

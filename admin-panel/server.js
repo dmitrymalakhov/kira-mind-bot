@@ -9,6 +9,7 @@ const path = require('path');
 const http = require('http');
 const { Pool } = require('pg');
 const { AI_PRESETS, AI_PRESET_NAMES, parseAiPresetName } = require('./aiPresetRegistry');
+const { registerModelPreferenceRoutes } = require('./modelPreferences');
 const { registerBudgetModeRoutes } = require('./budgetMode');
 const { registerBackgroundFeatureRoutes } = require('./backgroundFeatures');
 const { registerLocalModelRoutes, readLocalRoutes, resolveLocalPreset } = require('./localModels');
@@ -403,6 +404,9 @@ async function readMemoryEmbeddingProfileState(pool, vars) {
   };
 }
 
+registerModelPreferenceRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile,
+  memoryProfile: async (pool, vars) => (await readMemoryEmbeddingProfileState(pool, vars)).profile.name });
+
 registerBudgetModeRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable });
 registerBackgroundFeatureRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
 registerLocalModelRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
@@ -465,7 +469,7 @@ app.post('/api/ai-preset', requireAuth, async (req, res) => {
       return res.status(400).json({ error: availability.unavailableReason || 'AI preset недоступен без обязательных API ключей' });
     }
     await pool.query(
-      'INSERT INTO bot_settings (key, value, "updatedAt") VALUES ($1, $2, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = now()',
+      'WITH removed AS (DELETE FROM bot_settings WHERE key = \'AI_MODEL_POLICY\') INSERT INTO bot_settings (key, value, "updatedAt") VALUES ($1, $2, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = now()',
       ['AI_MODEL_PRESET', preset]
     );
     res.json({ success: true, configuredPresetName: preset, message: 'AI preset сохранён. Бот подхватит его без перезапуска.' });

@@ -183,11 +183,11 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
                     return json(202, { status: 'restarting' });
                 } finally { connecting.delete(account.id); }
             }
-            const readable = req.method === 'GET' && (/^\/api\/v1\/(status|capabilities|history|reminders|tasks|dialogue-jobs|settings|model-settings|scene)$/.test(route)
+            const readable = req.method === 'GET' && (/^\/api\/v1\/(status|capabilities|history|reminders|tasks|dialogue-jobs|settings|model-settings|model-preferences|scene)$/.test(route)
                 || /^\/api\/v1\/files\/[0-9a-f-]{36}$/.test(route));
             const writable = (req.method === 'POST' && /^\/api\/v1\/(messages|actions|scene\/turns|scene\/action-results)$/.test(route))
                 || (req.method === 'PATCH' && route === '/api/v1/settings')
-                || (req.method === 'PUT' && route === '/api/v1/model-settings')
+                || (req.method === 'PUT' && ['/api/v1/model-settings', '/api/v1/model-preferences'].includes(route))
                 || (req.method === 'DELETE' && /^\/api\/v1\/dialogue-jobs\/[0-9a-f-]{36}$/.test(route));
             if (!readable && !writable) throw new ApiError(404, 'not_found', 'Ресурс не найден.');
             if (!account.owner_id) throw new ApiError(409, 'telegram_pairing_required', 'Сначала подключи своего бота и открой ссылку подтверждения в Telegram.');

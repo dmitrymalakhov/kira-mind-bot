@@ -66,6 +66,26 @@ test('greeting also uses exactly one compact fast call', async t => {
     assert.equal(result.responseText, 'Привет!'); assert.equal(calls.ai.mock.callCount(), 1); assert.equal(calls.answer.mock.callCount(), 0);
 });
 
+test('presence checks never ask a classifier, memory or a background worker, even after a complex topic', async t => {
+    const calls = foreground(t);
+    const stage = t.mock.method(DialogueJobRepository, 'stage', async () => { throw new Error('No background work for a presence check'); });
+    const result = await processMessage(ctx(), 'Ты тут?', false, '', [], undefined,
+        { fastDialogue: true, turn: { userText: 'Ты тут?', currentTopic: 'Сложный синтетический анализ памяти' } });
+    assert.equal(result.responseText, 'Да, я тут. Что у тебя?');
+    assert.equal(result.fastResponse, true); assert.equal(result.dialogueJobId, undefined);
+    assert.equal(calls.ai.mock.callCount(), 0); assert.equal(calls.recall.mock.callCount(), 0);
+    assert.equal(calls.answer.mock.callCount(), 0); assert.equal(stage.mock.callCount(), 0);
+});
+
+test('an erroneous defer or memory signal cannot turn an exact greeting into background research', async t => {
+    const value = classification(); value.details.memoryNeed = 'full'; value.details.knowledgeSource = 'personal'; value.fastReply = { mode: 'defer' };
+    const calls = foreground(t, value);
+    const stage = t.mock.method(DialogueJobRepository, 'stage', async () => { throw new Error('No deep review for a greeting'); });
+    const result = await processMessage(ctx(), 'Привет!', false, '', [], undefined, { fastDialogue: true });
+    assert.equal(result.responseText, 'Привет! Как ты?'); assert.equal(result.dialogueJobId, undefined);
+    assert.equal(calls.ai.mock.callCount(), 1); assert.equal(calls.recall.mock.callCount(), 0); assert.equal(stage.mock.callCount(), 0);
+});
+
 test('personal evidence overrides a confident draft; a durable job exists before acknowledging work', async t => {
     const calls = foreground(t);
     t.mock.method(features, 'getBackgroundFeaturePreference', async () => true);
@@ -280,7 +300,7 @@ test('real API text handler delivers the fast response, flushes history and only
     let staged: DialogueJob | undefined; let saved = false;
     t.mock.method(session.TypeORMSessionStorage.prototype, 'read', async () => undefined);
     t.mock.method(session.TypeORMSessionStorage.prototype, 'write', async (_key: string, data: any) => {
-        if (data.messageHistory.some((item: any) => item.role === 'bot' && item.content.includes('/cancel_deep'))) saved = true;
+        if (data.messageHistory.some((item: any) => item.role === 'bot' && /вернусь/iu.test(item.content))) saved = true;
     });
     t.mock.method(DialogueJobRepository, 'stage', async (values: any) => {
         assert.equal(values.channel, `api:${OWNER}`); assert.equal(values.input.preset, 'gpt-balanced');
@@ -295,6 +315,6 @@ test('real API text handler delivers the fast response, flushes history and only
     const backend = new BotApiBackend(bot, { ownerId: OWNER, token: 'synthetic-test-token-at-least-thirty-two-characters', host: '127.0.0.1', port: 3200 });
     const response = await backend.message('Объясни рекурсию подробно', { deferredDialogue: true });
     assert.equal(response.backgroundJob!.status, 'queued'); assert.equal(response.backgroundJob!.required, true);
-    assert.ok(response.messages.some(item => item.text?.includes('/cancel_deep')));
+    assert.ok(response.messages.some(item => /вернусь/iu.test(item.text || '')));
     assert.equal(calls.ai.mock.callCount(), 1); assert.equal(calls.recall.mock.callCount(), 0); assert.equal(calls.answer.mock.callCount(), 0);
 });

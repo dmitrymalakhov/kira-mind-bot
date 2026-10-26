@@ -15,8 +15,9 @@ function bounded(limit: number, ...values: unknown[]): number {
 
 /** Applied on every attempt, including retries, provider degradation and JSON fallback. */
 export function limitChatGeneration(preset: string, task: AiTaskKey, provider: AiProvider,
-    params: ChatCompletionParamsWithoutModel): ChatCompletionParamsWithoutModel {
-    const limit = outputLimit(preset, task, provider);
+    params: ChatCompletionParamsWithoutModel, modelLimit?: number): ChatCompletionParamsWithoutModel {
+    const presetLimit = outputLimit(preset, task, provider);
+    const limit = provider === 'lmstudio' ? undefined : modelLimit === undefined ? presetLimit : Math.min(modelLimit, presetLimit ?? modelLimit);
     if (limit === undefined) return params;
     const result = { ...params, max_completion_tokens: bounded(limit, params.max_completion_tokens, params.max_tokens) };
     // Adapters normalize the canonical key to the wire format supported by their model.
@@ -25,7 +26,8 @@ export function limitChatGeneration(preset: string, task: AiTaskKey, provider: A
 }
 
 export function limitResponseGeneration(preset: string, task: AiTaskKey, provider: AiProvider,
-    params: ResponseCreateParams): ResponseCreateParams {
-    const limit = outputLimit(preset, task, provider);
+    params: ResponseCreateParams, modelLimit?: number): ResponseCreateParams {
+    const presetLimit = outputLimit(preset, task, provider);
+    const limit = provider === 'lmstudio' ? undefined : modelLimit === undefined ? presetLimit : Math.min(modelLimit, presetLimit ?? modelLimit);
     return limit === undefined ? params : { ...params, max_output_tokens: bounded(limit, params.max_output_tokens) };
 }

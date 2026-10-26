@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isSimpleSocialMessage } from '../utils/simpleDialogue';
+import { isSimpleSocialMessage, simplePresenceReply } from '../utils/simpleDialogue';
 import { defaultLocalRoutes, parseLocalRoutes } from '../ai/localModelRouting';
 import { resolveConfiguredModelRef } from '../ai/modelResolver';
 import { resolveModelForTaskAsync } from '../ai/modelResolver';
@@ -21,6 +21,11 @@ const { listLocalModels, registerLocalModelRoutes } = require('../admin-panel/lo
 test('social fast path never consumes an action or context-dependent answer', () => {
   for (const text of ['Привет!', 'Привет, как дела?', 'Спасибо большое', 'Добрый вечер, Лира', 'Лира, как настроение?']) assert.equal(isSimpleSocialMessage(text, 'Лира'), true, text);
   for (const text of ['Привет, напомни через час', 'Спасибо, отправь это маме', 'Да', 'Нет', 'А что с ней?', 'Привет, какие сегодня новости?', 'Ок, бронируй']) assert.equal(isSimpleSocialMessage(text, 'Лира'), false, text);
+});
+
+test('presence recognition is exact and cannot swallow a longer request, quotation or third-person question', () => {
+  for (const text of ['Ты тут?', 'Лира, ты на связи?', 'Привет, ты здесь?', 'Ау!']) assert.ok(simplePresenceReply(text, 'Лира'), text);
+  for (const text of ['Ты тут? Напомни через час', 'Напиши ему «ты тут?»', 'Он тут?', 'Ты тут была вчера?', 'Ты на связи с моей коллегой?']) assert.equal(simplePresenceReply(text, 'Лира'), undefined, text);
 });
 
 test('self-contained turns keep mood and a recent event without loading the personality archive into the prompt', () => {
@@ -117,7 +122,7 @@ test('saved local roles propagate into live task routing after cache expiry', as
   t.mock.method(Date, 'now', () => now);
   t.mock.method(AppDataSource, 'getRepository', () => ({ async findOneBy({ key }: { key: string }) {
     if (fail) throw new Error('synthetic unavailable database');
-    return { value: key === 'AI_MODEL_PRESET' ? 'lmstudio-local' : JSON.stringify(routes) };
+    return key === 'AI_MODEL_PRESET' ? { value: 'lmstudio-local' } : key === 'LM_STUDIO_ROUTES' ? { value: JSON.stringify(routes) } : null;
   } }) as any);
   await getLocalModelRoutes(true);
   assert.equal((await resolveModelForTaskAsync('intentClassification')).modelRef.generation?.temperature, 0);

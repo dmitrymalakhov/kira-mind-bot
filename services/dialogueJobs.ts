@@ -7,6 +7,7 @@ import { DialogueJobRepository } from './DialogueJobRepository';
 import { fastDialogueEnabled, deepWorkNotice } from '../orchestration/fastDialogue';
 import { isBackgroundFeatureEnabled } from './backgroundFeatureService';
 import { runWithChannelPreset } from './aiRuntimeConfigService';
+import { runWithModelPolicy } from './modelPreferenceService';
 import { createJsonChatCompletionForTask } from '../ai/chatCompletion';
 import { fetchAgentMemoryContext, buildMemoryContextBlock } from '../utils/agentMemoryContext';
 import { buildKnowledgeSourcePrompt, decideKnowledgeSource } from '../utils/knowledgeSource';
@@ -150,7 +151,7 @@ export async function executeDialogueJob(bot: Bot<BotContext>, job: DialogueJob,
             await repository.update(job, { status: 'completed' });
             return;
         }
-        await runWithChannelPreset(job.input.preset, async () => {
+        await runWithChannelPreset(job.input.preset, () => runWithModelPolicy(job.input.modelPolicy ?? null, async () => {
             if (job.phase === 'review') {
                 const decision = await (deps.review ?? review)(job);
                 if (!await valid()) return;
@@ -174,7 +175,7 @@ export async function executeDialogueJob(bot: Bot<BotContext>, job: DialogueJob,
             if (!await valid()) return;
             if (!result.material || !result.answer.trim()) { await repository.update(job, { status: 'completed', resultText: null }); return; }
             await repository.update(job, { status: 'ready', phase: 'deep', resultText: result.answer });
-        });
+        }));
     } catch {
         // Do not log prompts, memory or provider errors. A delivery with no acknowledgement remains unknown.
         const status = job.status === 'delivering' ? 'unknown' : job.input.required ? 'ready' : 'failed';

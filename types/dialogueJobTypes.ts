@@ -14,6 +14,7 @@ export interface DialogueJobInput {
     history: Array<{ role: string; content: string }>;
     topic?: string;
     preset: AiPresetName;
+    modelPolicy?: import('../ai/modelPreferences').ModelPolicy | null;
 }
 export interface DialogueJob {
     id: string;

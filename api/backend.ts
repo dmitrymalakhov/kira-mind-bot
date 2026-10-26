@@ -1,5 +1,6 @@
 import { Bot, Context } from 'grammy';
 import { randomUUID } from 'node:crypto';
+import { readModelPreferences, saveModelPreferences } from '../services/modelPreferenceService';
 import type { Update, UserFromGetMe } from 'grammy/types';
 import { config } from '../config';
 import { BOT_CAPABILITIES } from '../capabilities';
@@ -55,10 +56,12 @@ export class BotApiBackend implements ApiBackend {
 
     async capabilities() {
         return { input: ['text', 'actions'], output: ['text', 'photo', 'document', 'voice'],
-            settings: ['modelMode'], scene: { version: 1 }, deferredDialogue: { preference: 'respond-async', results: '/api/v1/dialogue-jobs', cancellation: true }, capabilities: BOT_CAPABILITIES };
+            settings: ['modelMode', 'modelPreferences'], scene: { version: 1 }, deferredDialogue: { preference: 'respond-async', results: '/api/v1/dialogue-jobs', cancellation: true }, capabilities: BOT_CAPABILITIES };
     }
 
     settings() { return readUserSettings(); }
+    modelPreferences() { return readModelPreferences(); }
+    updateModelPreferences(body: unknown) { return saveModelPreferences(body); }
     updateSettings(patch: ApiSettingsPatch) { return updateUserSettings(patch); }
     private sceneService?: SceneService;
     private get scene() { return this.sceneService ??= new SceneService(this.options.ownerId, this.models); }
