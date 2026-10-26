@@ -1438,18 +1438,10 @@
                 "type": "object",
                 "additionalProperties": false,
                 "required": [
-                  "censorship",
                   "cost",
                   "quality"
                 ],
                 "properties": {
-                  "censorship": {
-                    "type": "string",
-                    "enum": [
-                      "on",
-                      "off"
-                    ]
-                  },
                   "cost": {
                     "type": "string",
                     "enum": [

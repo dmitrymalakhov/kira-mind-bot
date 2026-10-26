@@ -1,16 +1,16 @@
 import { useEffect, useState } from 'react';
 import { Accordion, AccordionSummary, AccordionDetails, Alert, Box, Button, Card, CardContent,
-  Chip, CircularProgress, FormControlLabel, Stack, Switch, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
+  Chip, CircularProgress, Stack, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { fetchModelPreferences, saveModelPreferences } from '../api';
 import type { ModelPreferences, ModelPreferencesResponse } from '../types';
 
-const equal = (a: ModelPreferences, b: ModelPreferences) => a.censorship === b.censorship && a.cost === b.cost && a.quality === b.quality;
+const equal = (a: ModelPreferences, b: ModelPreferences) => a.cost === b.cost && a.quality === b.quality;
 export function ModelPreferencesSettings({ onToast, onSaved, refreshToken }: {
   onToast: (message: string, severity: 'success'|'error') => void; onSaved: () => void; refreshToken: number;
 }) {
   const [data, setData] = useState<ModelPreferencesResponse | null>(null);
-  const [preferences, setPreferences] = useState<ModelPreferences>({ censorship: 'on', cost: 'medium', quality: 'high' });
+  const [preferences, setPreferences] = useState<ModelPreferences>({ cost: 'medium', quality: 'high' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   async function load() {
@@ -35,12 +35,6 @@ export function ModelPreferencesSettings({ onToast, onSaved, refreshToken }: {
     {!data && !error && <CircularProgress size={22} aria-label="Загрузка настроек моделей" />}
     {data && <>
       <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-        <Box sx={{ flex: 1 }}><Typography fontWeight={600}>Цензура диалога</Typography>
-          <FormControlLabel control={<Switch checked={preferences.censorship === 'on'} disabled={busy}
-            onChange={(_, checked) => setPreferences({ ...preferences, censorship: checked ? 'on' : 'off' })} />}
-            label={preferences.censorship === 'on' ? 'Включена' : 'Выключена'} />
-          <Typography variant="body2" color="text.secondary">При выключении используется подходящая модель свободного диалога. Ограничения самого провайдера не меняются.</Typography>
-        </Box>
         <Box sx={{ flex: 1 }}><Typography fontWeight={600} sx={{ mb: 1 }}>Стоимость</Typography>
           <ToggleButtonGroup exclusive fullWidth size="small" value={preferences.cost} disabled={busy} aria-label="Стоимость"
             onChange={(_, cost) => cost && setPreferences({ ...preferences, cost })}>
@@ -77,7 +71,7 @@ export function ModelPreferencesSettings({ onToast, onSaved, refreshToken }: {
           return <Typography variant="body2" key={String(label)}><b>{String(label)}:</b> {model.provider === 'lmstudio' ? 'На вашем компьютере' : 'API'} · {model.model}</Typography>;
         })}</Stack></AccordionDetails>
       </Accordion>}
-      <Typography variant="caption" color="text.secondary">Собственные подключения не обязательны: при доступном API сервиса Кира работает через него. Для свободного диалога нужна соответствующая модель. Подключения и ручной выбор — ниже.</Typography>
+      <Typography variant="caption" color="text.secondary">Собственные подключения не обязательны: при доступном API сервиса Кира работает через него. Свою локальную модель можно подключить в блоке ниже.</Typography>
     </>}
   </Stack></CardContent></Card>;
 }

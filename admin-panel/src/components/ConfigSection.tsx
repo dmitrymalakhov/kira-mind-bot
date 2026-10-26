@@ -19,6 +19,7 @@ import type { SectionDef, ConfigResponse } from '../types';
 
 interface Props {
   section: SectionDef;
+  requiresRecreate?: boolean;
   config: ConfigResponse;
   onUpdate: (cfg: ConfigResponse) => void;
   onToast: (message: string, severity: 'success' | 'error') => void;
@@ -35,7 +36,7 @@ function getEntryValue(entry?: ConfigResponse[string]): string {
 }
 
 export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
-  function ConfigSection({ section, config, onUpdate, onToast }, ref) {
+  function ConfigSection({ section, config, onUpdate, onToast, requiresRecreate = false }, ref) {
     const [localValues, setLocalValues] = useState<Record<string, string>>(() =>
       Object.fromEntries(section.fields.map((field) => [field.key, getEntryValue(config[field.key])]))
     );
@@ -83,7 +84,7 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
             await restartService('kira-mind-bot');
             onToast('✅ Сохранено и бот перезапущен', 'success');
           } else {
-            onToast(result.message || '✅ Сохранено', 'success');
+            onToast(requiresRecreate ? 'Подключение сохранено. Для применения пересоздайте контейнеры бота и админки.' : result.message || '✅ Сохранено', 'success');
           }
           const newCfg = await fetchConfig();
           onUpdate(newCfg);
@@ -110,7 +111,7 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
           titleTypographyProps={{ variant: 'subtitle1', fontWeight: 600, color: 'secondary.main' }}
           action={
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Tooltip title="Автоматически перезапустить бота после сохранения">
+              {!requiresRecreate && <Tooltip title="Автоматически перезапустить бота после сохранения">
                 <FormControlLabel
                   control={
                     <Checkbox
@@ -123,7 +124,7 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
                   label={<span style={{ fontSize: 11, color: '#64748b' }}>рестарт</span>}
                   sx={{ mr: 0 }}
                 />
-              </Tooltip>
+              </Tooltip>}
               <Button
                 variant="outlined"
                 size="small"

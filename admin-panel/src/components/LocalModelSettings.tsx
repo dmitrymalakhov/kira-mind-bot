@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Alert, Box, Button, Checkbox, CircularProgress, FormControlLabel, MenuItem, Stack, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import type { LocalModelRole, LocalModelRoutes } from '../../../ai/localModelRouting';
 import roles from '../../../ai/local-model-roles.json';
 
-interface Model { id: string; label: string; loaded: boolean; uncensored: boolean; loadedIds: string[]; }
+interface Model { id: string; label: string; loaded: boolean; loadedIds: string[]; }
 interface Props { onToast: (message: string, severity: 'success' | 'error') => void; onSaved: () => void; }
 export function LocalModelSettings({ onToast, onSaved }: Props) {
   const [settings, setSettings] = useState<LocalModelRoutes>(() => Object.fromEntries(Object.entries(roles).map(([key, role]) => [key, { model: '', maxTokens: role.maxTokens, reasoningEffort: role.reasoningEffort }])) as LocalModelRoutes);
@@ -38,27 +38,25 @@ export function LocalModelSettings({ onToast, onSaved }: Props) {
     finally { setSaving(false); }
   }
   return <Stack spacing={2} data-testid="local-model-settings">
-    <Typography fontWeight={600}>Локальные модели по задачам</Typography>
+    <Typography fontWeight={600}>2. Выберите модели по задачам</Typography>
     <Typography variant="body2" color="text.secondary">
-      Эти настройки действуют в профилях LM Studio и гибриде. В гибриде глубокий анализ выполняет GPT через lmrouter.
+      Сначала запустите сервер LM Studio и проверьте подключение кнопкой «Обновить список». Эти модели используются после включения локального или гибридного режима ниже.
       Для скорости можно выбрать одну модель для нескольких ролей и оставить рассуждения выключенными в быстрых ролях.
     </Typography>
     {error && <Alert severity="warning">{error}</Alert>}
     {(Object.keys(roles) as LocalModelRole[]).map(role => {
       const route = settings[role];
       const choices = [...models];
-      if (route.model && !choices.some(m => m.id === route.model)) choices.push({ id: route.model, label: route.model, loaded: models.some(m => m.loadedIds.includes(route.model)), loadedIds: [], uncensored: false });
+      if (route.model && !choices.some(m => m.id === route.model)) choices.push({ id: route.model, label: route.model, loaded: models.some(m => m.loadedIds.includes(route.model)), loadedIds: [] });
       const update = (patch: Partial<typeof route>) => setSettings(current => ({ ...current, [role]: { ...current[role], ...patch } }));
       return <Box key={role} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
         <Stack spacing={1.5}>
           <Typography variant="body2" fontWeight={600}>{roles[role].label}</Typography>
           <Typography variant="caption" color="text.secondary">{roles[role].description}</Typography>
-          <TextField select fullWidth label={`Модель: ${roles[role].label}`} value={route.model} disabled={loading || saving} onChange={e => update({ model: e.target.value, freeDialogue: false })}>
+          <TextField select fullWidth label={`Модель: ${roles[role].label}`} value={route.model} disabled={loading || saving} onChange={e => update({ model: e.target.value })}>
             {!route.model && <MenuItem value="">Выберите модель</MenuItem>}
-            {choices.map(m => <MenuItem key={m.id} value={m.id}>{m.label}{m.uncensored ? ' · Uncensored' : ''}{m.loaded ? ' · загружена' : ''}</MenuItem>)}
+            {choices.map(m => <MenuItem key={m.id} value={m.id}>{m.label}{m.loaded ? ' · загружена' : ''}</MenuItem>)}
           </TextField>
-          <FormControlLabel control={<Checkbox checked={route.freeDialogue === true} disabled={loading || saving}
-            onChange={(_, freeDialogue) => update({ freeDialogue })} />} label="Использовать эту модель для свободного диалога" />
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
             <TextField select fullWidth label={`Рассуждения: ${roles[role].label}`} value={route.reasoningEffort} onChange={e => update({ reasoningEffort: e.target.value as typeof route.reasoningEffort })} disabled={loading || saving}>
               <MenuItem value="none">Выключены — быстрый ответ</MenuItem><MenuItem value="low">Низкий уровень</MenuItem><MenuItem value="medium">Средний уровень</MenuItem><MenuItem value="high">Высокий уровень</MenuItem>

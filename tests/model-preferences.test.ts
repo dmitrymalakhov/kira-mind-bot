@@ -14,7 +14,7 @@ import { getModelPolicy } from '../services/modelPreferenceService';
 
 const resources = () => ({ vars: { OPENAI_API_KEY: 'synthetic-api-key' }, memoryProfileName: 'stable-1536',
     localRoutes: defaultLocalRoutes('synthetic/local-standard'), localModels: [] as Array<{ id: string; uncensored: boolean }> });
-const preferences: ModelPreferences = { censorship: 'on', cost: 'medium', quality: 'high' };
+const preferences: ModelPreferences = { cost: 'medium', quality: 'high' };
 const messages = [{ role: 'user' as const, content: 'Synthetic request' }];
 
 test('cost limits the model class while quality changes reasoning without adding a routing call', () => {
@@ -30,46 +30,37 @@ test('cost limits the model class while quality changes reasoning without adding
     }
 });
 
-test('free dialogue is unavailable without a suitable resource and never pretends a normal cloud model is unrestricted', () => {
-    assert.throws(() => buildModelPlan({ ...preferences, censorship: 'off' }, resources()), /Для свободного диалога/);
-    const context = resources(); context.localModels = [{ id: 'synthetic/local-standard', uncensored: false }];
-    assert.throws(() => buildModelPlan({ ...preferences, censorship: 'off' }, context), /Для свободного диалога/);
-});
+function legacyPlan(local = true) {
+    const plan = buildModelPlan(preferences, resources());
+    const raw = { ...plan, preferences: { ...preferences, censorship: 'off' }, source: local ? 'local' : 'service-free' };
+    for (const task of TEXT_TASKS) raw.models[task] = local
+        ? { provider: 'lmstudio', model: 'synthetic/local-pinned', localRole: 'fast', allowFallback: false }
+        : { provider: 'openai', model: 'synthetic/service-pinned', allowFallback: false };
+    return raw;
+}
 
-test('a connected model can be explicitly selected for free dialogue without inferring behaviour from its filename', () => {
-    const context = resources(); context.localModels = [{ id: 'synthetic/local-standard', uncensored: false }];
-    context.localRoutes.fast.freeDialogue = true;
-    const plan = buildModelPlan({ ...preferences, censorship: 'off' }, context);
-    assert.equal(plan.source, 'local'); assert.equal(plan.models.fastDialogue.model, 'synthetic/local-standard');
-    assert.equal(plan.models.fastDialogue.allowFallback, false);
-});
-
-test('free local dialogue pins all text routes including classification; local role controls survive', () => {
+test('local catalog and obsolete free-model flags never silently change automatic API routing', () => {
     const context = resources();
     context.localModels = [{ id: 'synthetic/local-free', uncensored: true }];
-    context.localRoutes.fast.maxTokens = 768;
-    const plan = buildModelPlan({ ...preferences, censorship: 'off' }, context);
-    assert.equal(plan.source, 'local');
-    for (const task of TEXT_TASKS) {
-        assert.equal(plan.models[task].provider, 'lmstudio');
-        assert.equal(plan.models[task].model, 'synthetic/local-free');
-        assert.equal(plan.models[task].allowFallback, false);
-        assert.ok(plan.models[task].localRole); // Role parameters stay live while the free model remains pinned.
-    }
-    assert.equal(plan.models.fastDialogue.generation?.maxTokens, 768);
-    assert.equal(plan.models.webSearchReasoning.provider, 'openai');
-    assert.equal(plan.models.embedding.model, 'text-embedding-3-small');
-    const altered = structuredClone(plan); altered.models.fastDialogue.allowFallback = true;
-    assert.throws(() => parseModelPolicy(altered), /подмену/);
+    (context.vars as NodeJS.ProcessEnv).LM_STUDIO_FREE_MODEL = 'synthetic/local-free';
+    (context.vars as NodeJS.ProcessEnv).KIRA_FREE_DIALOGUE_MODEL = 'synthetic/service-free';
+    assert.deepEqual(buildModelPlan(preferences, context), buildModelPlan(preferences, resources()));
+    assert.throws(() => parsePreferences({ ...preferences, censorship: 'off' }));
 });
 
-test('a declared service free model works without a local connection and with no standard-model fallback', () => {
-    const context = resources(); (context.vars as NodeJS.ProcessEnv).KIRA_FREE_DIALOGUE_MODEL = 'synthetic/service-free';
-    const plan = buildModelPlan({ ...preferences, censorship: 'off', cost: 'low' }, context);
-    assert.equal(plan.source, 'service-free');
-    for (const task of TEXT_TASKS) assert.deepEqual(plan.models[task], { provider: 'openai', model: 'synthetic/service-free', allowFallback: false });
-    (context.vars as NodeJS.ProcessEnv).KIRA_FREE_DIALOGUE_MODEL = 'invalid\nmodel';
-    assert.throws(() => buildModelPlan({ ...preferences, censorship: 'off' }, context), /Некорректный маршрут/);
+test('saved version-1 policies retain pinned local and API routes while exposing only cost and quality', () => {
+    for (const local of [true, false]) {
+        const legacy = legacyPlan(local);
+        const parsed = parseModelPolicy(JSON.stringify(legacy))!;
+        assert.deepEqual(parsed.preferences, preferences);
+        assert.deepEqual(parsed.models, legacy.models);
+        assert.deepEqual(parseModelPolicy(parsed), parsed);
+        const altered = structuredClone(legacy); altered.models.fastDialogue.allowFallback = true;
+        assert.throws(() => parseModelPolicy(altered), /подмену/);
+        assert.throws(() => parseModelPolicy({ ...legacy, preferences: { ...legacy.preferences, accountId: 'other' } }));
+    }
+    const on = buildModelPlan(preferences, resources());
+    assert.deepEqual(parseModelPolicy({ ...on, preferences: { ...preferences, censorship: 'on' } }), on);
 });
 
 test('preferences reject credentials, identity, arbitrary model IDs and unknown values', () => {
@@ -106,16 +97,14 @@ test('the actual SDK request receives the compiled reasoning and ceiling; API pr
     assert.equal(calls[0].temperature, undefined);
 });
 
-test('free-model HTTP failure and malformed JSON never dispatch a standard fallback', async t => {
+test('legacy pinned policies still prohibit cross-provider and JSON fallbacks', async t => {
     t.mock.method(usage, 'logAiUsage', async () => {});
     const network = t.mock.method(openaiProviderAdapter.client.chat.completions, 'create', async () => { throw new Error('Unexpected cloud request'); });
-    const context = resources(); context.localModels = [{ id: 'synthetic/local-free', uncensored: true }];
-    const local = buildModelPlan({ ...preferences, censorship: 'off' }, context);
+    const local = parseModelPolicy(legacyPlan())!;
     t.mock.method(lmstudioProviderAdapter.client.chat.completions, 'create', async () => { throw Object.assign(new Error('Synthetic unavailable'), { status: 503 }); });
     await assert.rejects(runWithModelPolicy(local, () => createChatCompletionForTask('conversation', { messages })));
     assert.equal(network.mock.callCount(), 0);
-    (context.vars as NodeJS.ProcessEnv).KIRA_FREE_DIALOGUE_MODEL = 'synthetic/service-free'; context.localModels = [];
-    const cloud = buildModelPlan({ ...preferences, censorship: 'off' }, context);
+    const cloud = parseModelPolicy(legacyPlan(false))!;
     network.mock.restore();
     const malformed = t.mock.method(openaiProviderAdapter.client.chat.completions, 'create', async () => ({ choices: [{ message: { content: 'not JSON' } }] }) as any);
     assert.equal(await runWithModelPolicy(cloud, () => createJsonChatCompletionForTask('intentClassification', { messages })), null);
@@ -142,4 +131,19 @@ test('the shared settings controller writes the plan and preset atomically and v
     await assert.rejects(saveModelPreferences(pool, resources().vars, 'stable-1536', { ...preferences, userId: 1 }));
     await assert.rejects(saveModelPreferences(pool, resources().vars, 'stable-1536', { ...preferences, censorship: 'off' }));
     assert.equal(writes.length, 1);
+});
+
+test('preferences list six choices and canonicalize old stored settings without rewriting them', async () => {
+    const { readModelPreferences } = require('../admin-panel/modelPreferences');
+    const legacy = legacyPlan(false);
+    const queries: string[] = [];
+    const pool = { query: async (sql: string) => {
+        queries.push(sql);
+        return { rows: sql.includes('key IN') ? [{ key: 'AI_MODEL_POLICY', value: JSON.stringify(legacy) }] : [] };
+    } };
+    const result = await readModelPreferences(pool, resources().vars, 'stable-1536');
+    assert.equal(result.plans.length, 6);
+    assert.deepEqual(result.preferences, preferences);
+    assert.deepEqual(result.activePlan.models, legacy.models);
+    assert.ok(queries.every(sql => sql.startsWith('SELECT')));
 });

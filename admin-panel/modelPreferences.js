@@ -16,16 +16,12 @@ async function readModelPreferences(pool, vars, memoryProfileName) {
   const policy = parseModelPolicy(rows.find(row => row.key === SETTING_KEY)?.value);
   const context = await resources(pool, vars, memoryProfileName);
   const manualPreset = rows.find(row => row.key === 'AI_MODEL_PRESET')?.value || vars.AI_MODEL_PRESET || 'gpt-balanced';
-  const localFree = manualPreset === 'lmstudio-local' && context.localModels.some(model =>
-    (model.uncensored || model.id === vars.LM_STUDIO_FREE_MODEL || context.localRoutes.fast.freeDialogue)
-    && (model.id === context.localRoutes.fast.model || model.loadedIds?.includes(context.localRoutes.fast.model)));
   const inferred = { ...DEFAULT_PREFERENCES,
-    censorship: localFree ? 'off' : 'on',
     cost: ['gpt-lean','lmstudio-local'].includes(manualPreset) ? 'low' : manualPreset === 'gpt-max' ? 'high' : 'medium',
     quality: ['gpt-lean','lmstudio-local'].includes(manualPreset) ? 'standard' : 'high' };
   const plans = [];
-  for (const censorship of ['on','off']) for (const cost of ['low','medium','high']) for (const quality of ['standard','high']) {
-    const preferences = { censorship, cost, quality };
+  for (const cost of ['low','medium','high']) for (const quality of ['standard','high']) {
+    const preferences = { cost, quality };
     try { plans.push({ ...buildModelPlan(preferences, context), available: true }); }
     catch (error) { plans.push({ preferences, available: false, unavailableReason: error.message }); }
   }

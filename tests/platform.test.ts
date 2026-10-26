@@ -182,7 +182,7 @@ test('two API accounts register/login, pair separate bots, and route history, fi
             let executions = 0;
             let sceneExecutions = 0;
             let modelPreset: unknown = null;
-            let modelPreferences = { censorship: 'on', cost: 'medium', quality: 'high' };
+            let modelPreferences = { cost: 'medium', quality: 'high' };
             const internalToken = secrets.derive(id, 'api');
             let settings: ApiSettings = { budgetMode: 'normal', budgetModes: [], telegram: { personalSessionConfigured: false }, features: [] };
             const worker = createExternalApiServer({ token: internalToken, ownerId: Number(store.accounts.get(id)!.owner_id), host: '127.0.0.1', port: 0 }, {
@@ -210,10 +210,10 @@ test('two API accounts register/login, pair separate bots, and route history, fi
             endpoints.set(id, { port: (worker.address() as AddressInfo).port, token: internalToken });
         }
         assert.equal((await call('/api/v1/model-preferences')).status, 401);
-        assert.equal((await call('/api/v1/model-preferences', 'PUT', a, { censorship: 'on', cost: 'low', quality: 'high' })).data.accountId, first.data.account.id);
+        assert.equal((await call('/api/v1/model-preferences', 'PUT', a, { cost: 'low', quality: 'high' })).data.accountId, first.data.account.id);
         assert.equal((await call('/api/v1/model-preferences', 'GET', a)).data.preferences.cost, 'low');
         assert.equal((await call('/api/v1/model-preferences', 'GET', b)).data.preferences.cost, 'medium');
-        assert.equal((await call('/api/v1/model-preferences', 'PUT', a, { censorship: 'on', cost: 'high', quality: 'high', accountId: second.data.account.id })).status, 400);
+        assert.equal((await call('/api/v1/model-preferences', 'PUT', a, { cost: 'high', quality: 'high', accountId: second.data.account.id })).status, 400);
         for (const [token, id] of [[a, first.data.account.id], [b, second.data.account.id]]) {
             assert.equal((await call('/api/v1/history', 'GET', token)).data.messages[0].text, id);
             const result = await call('/api/v1/messages', 'POST', token, { text: 'Привет' }, 'same-key-for-both');

@@ -15,8 +15,7 @@ async function listLocalModels(vars, fetchImpl = globalThis.fetch) {
     loaded: Boolean(m.loaded_instances?.length),
     loadedIds: (m.loaded_instances || []).map(instance => instance.id),
     contextLength: m.loaded_instances?.[0]?.config?.context_length ?? null,
-    uncensored: /uncensored|obliterated|heretic/i.test(`${m.key} ${m.display_name}`),
-  })).sort((a, b) => Number(b.uncensored) - Number(a.uncensored) || a.label.localeCompare(b.label));
+  })).sort((a, b) => a.label.localeCompare(b.label));
 }
 
 async function readLocalRoutes(pool, vars) {

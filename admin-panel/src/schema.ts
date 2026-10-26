@@ -401,7 +401,11 @@ const BASE_CONFIG_SCHEMA: SectionDef[] = [
 ];
 
 const backgroundEnvKeys = new Set<string>(Object.values(backgroundFeatures).map(feature => feature.envKey));
+export const LOCAL_MODEL_CONNECTION_SECTION: SectionDef = {
+  id: 'local-model-connection', title: '1. Подключите LM Studio', icon: '💻',
+  fields: BASE_CONFIG_SCHEMA.flatMap(section => section.fields).filter(field => field.key.startsWith('LM_STUDIO_')),
+};
 export const CONFIG_SCHEMA: SectionDef[] = BASE_CONFIG_SCHEMA.map(section => ({
   ...section,
-  fields: section.fields.filter(field => !backgroundEnvKeys.has(field.key)),
+  fields: section.fields.filter(field => !backgroundEnvKeys.has(field.key) && !field.key.startsWith('LM_STUDIO_')),
 }));

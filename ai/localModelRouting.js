@@ -10,9 +10,7 @@ function parseLocalRoutes(raw) {
     if (!route || typeof route.model !== 'string' || !route.model.trim() || route.model.length > 400 || /[\r\n\0]/.test(route.model)) throw new Error(`Укажите модель для роли ${roles[key].label}`);
     if (!Number.isInteger(route.maxTokens) || route.maxTokens < 32 || route.maxTokens > 8192) throw new Error('Лимит ответа должен быть от 32 до 8192 токенов');
     if (!['none', 'low', 'medium', 'high'].includes(route.reasoningEffort)) throw new Error('Неизвестный режим рассуждения');
-    if (route.freeDialogue !== undefined && typeof route.freeDialogue !== 'boolean') throw new Error('Неизвестная настройка свободного диалога');
-    result[key] = { model: route.model.trim(), maxTokens: route.maxTokens, reasoningEffort: route.reasoningEffort,
-      ...(route.freeDialogue ? { freeDialogue: true } : {}) };
+    result[key] = { model: route.model.trim(), maxTokens: route.maxTokens, reasoningEffort: route.reasoningEffort };
   }
   return result;
 }

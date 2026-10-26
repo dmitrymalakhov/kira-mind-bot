@@ -1,6 +1,6 @@
 import type { AiModelRef, AiPresetName, AiTaskKey } from './modelPresets';
 import type { LocalModelRoutes } from './localModelRouting';
-export interface ModelPreferences { censorship: 'on' | 'off'; cost: 'low' | 'medium' | 'high'; quality: 'standard' | 'high' }
+export interface ModelPreferences { cost: 'low' | 'medium' | 'high'; quality: 'standard' | 'high' }
 export interface ModelPolicy { version: 1; preferences: ModelPreferences; presetName: AiPresetName;
   models: Record<AiTaskKey, AiModelRef>; outputTokenLimits: Partial<Record<AiTaskKey, number>>; source: string; summary: string }
 export interface ModelResources { vars: NodeJS.ProcessEnv; localRoutes: LocalModelRoutes;

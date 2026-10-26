@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import {
   Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Card,
   CardContent, Chip, CircularProgress, MenuItem, Stack, TextField, Typography,
@@ -7,7 +7,8 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import SaveIcon from '@mui/icons-material/Save';
 import { fetchAiPreset, saveAiPreset } from '../api';
 import type { AiModelRef, AiPresetName, AiPresetResponse, ConfigResponse } from '../types';
-import type { ConfigSectionHandle } from './ConfigSection';
+import { ConfigSection, type ConfigSectionHandle } from './ConfigSection';
+import { LOCAL_MODEL_CONNECTION_SECTION } from '../schema';
 import { BudgetSettingsSection } from './BudgetSettingsSection';
 import { getAiProviderDescriptor } from '../../../ai/providerMetadata';
 import { LocalModelSettings } from './LocalModelSettings';
@@ -37,15 +38,15 @@ function modelLabel(ref?: AiModelRef) {
 }
 
 export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
-  function ModelSettingsSection({ onToast }, ref) {
+  function ModelSettingsSection({ config, onUpdate, onToast }, ref) {
     const [data, setData] = useState<AiPresetResponse | null>(null);
     const [selected, setSelected] = useState<AiPresetName>('gpt-balanced');
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-    const [showLocalModels, setShowLocalModels] = useState(false);
+    const connectionRef = useRef<ConfigSectionHandle>(null);
     const [preferenceRefresh, setPreferenceRefresh] = useState(0);
     const localSaved = () => { void load(); setPreferenceRefresh(value => value + 1); };
-    useImperativeHandle(ref, () => ({ getUpdates: () => ({}) }));
+    useImperativeHandle(ref, () => ({ getUpdates: () => connectionRef.current?.getUpdates() ?? ({}) }));
 
     async function load() {
       setLoading(true);
@@ -63,10 +64,10 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
     const preview = data?.availablePresets.find(preset => preset.name === selected);
     const changed = selected !== data?.configuredPresetName;
 
-    async function save() {
+    async function save(preset: AiPresetName = selected) {
       setSaving(true);
       try {
-        const result = await saveAiPreset(selected);
+        const result = await saveAiPreset(preset);
         if (!result.success) throw new Error(result.error || 'Не удалось сохранить модель');
         await load();
         setPreferenceRefresh(value => value + 1);
@@ -79,8 +80,26 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
     return (
       <>
         <ModelPreferencesSettings onToast={onToast} onSaved={() => void load()} refreshToken={preferenceRefresh} />
+        <Card id="local-models" sx={{ mb: 2 }}><CardContent><Stack spacing={2}>
+          <Typography variant="h6" component="h2">Свои локальные модели</Typography>
+          <Typography variant="body2" color="text.secondary">Запустите LM Studio на своём компьютере и включите Local Server. Укажите адрес сервера, затем выберите модели и включите нужный режим.</Typography>
+          <ConfigSection ref={connectionRef} requiresRecreate config={config} onUpdate={onUpdate} onToast={onToast}
+            section={LOCAL_MODEL_CONNECTION_SECTION} />
+          <Alert severity="info">Из Docker Desktop используйте host.docker.internal вместо localhost. После изменения подключения пересоздайте контейнеры бота и админки; обычного рестарта недостаточно.</Alert>
+          <LocalModelSettings onToast={onToast} onSaved={localSaved} />
+          <Typography fontWeight={600}>3. Включите локальные модели</Typography>
+          <Typography variant="body2" color="text.secondary">Локальный режим выполняет текстовые задачи в LM Studio. Гибрид оставляет сложный анализ облачной модели. Поиск, голос, изображения и векторы памяти используют отдельные подключения. Включение режима заменит автоматический выбор по стоимости и качеству.</Typography>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+            {(['lmstudio-local', 'hybrid-lmstudio-gpt'] as const).map(name => {
+              const preset = data?.availablePresets.find(item => item.name === name);
+              return <Button key={name} variant="outlined" disabled={loading || saving || !preset?.enabled}
+                onClick={() => void save(name)}>{name === 'lmstudio-local' ? 'Включить локальный режим' : 'Включить гибрид'}</Button>;
+            })}
+          </Stack>
+          {active && <Typography variant="body2" color="text.secondary">Сохранённый профиль: {active.title}. Автоматический выбор можно включить кнопкой «Применить» выше.</Typography>}
+        </Stack></CardContent></Card>
         <Accordion sx={{ mb: 2 }} slotProps={{ transition: { unmountOnExit: true } }}>
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography fontWeight={600}>Дополнительно: подключения и ручной выбор</Typography></AccordionSummary>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography fontWeight={600}>Дополнительно: ручной выбор профиля</Typography></AccordionSummary>
           <AccordionDetails>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Ручной выбор профиля отключает автоматическое распределение. Настройки локальных моделей и подключений сохраняются отдельно.</Typography>
         <Card id="model-presets-manual" sx={{ mb: 2 }}>
@@ -152,12 +171,7 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
                 </>
               )}
               {loading && <CircularProgress size={20} aria-label="Загрузка модели" />}
-              {(selected === 'lmstudio-local' || selected === 'hybrid-lmstudio-gpt')
-                ? <LocalModelSettings onToast={onToast} onSaved={localSaved} />
-                : <Accordion expanded={showLocalModels} onChange={(_, expanded) => setShowLocalModels(expanded)}>
-                    <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography variant="body2">Настроить локальные модели LM Studio</Typography></AccordionSummary>
-                    <AccordionDetails>{showLocalModels && <LocalModelSettings onToast={onToast} onSaved={localSaved} />}</AccordionDetails>
-                  </Accordion>}
+
             </Stack>
           </CardContent>
         </Card>
