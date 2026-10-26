@@ -5,7 +5,7 @@ import { Accordion, AccordionSummary, AccordionDetails, Alert, Box, Button, Card
 import { QUALITY_LEVELS, TEXT_TASKS, getCustomPresetName, type CustomStrategy, type StrategyRequest, type CustomRoute } from '../../../ai/modelPreferences';
 import rawRegistry from '../ai-model-presets.json';
 import type { AiModelRef, AiPresetConfig, AiProvider, AiTaskKey } from '../../../ai/modelPresets';
-import { customDraftFromModels, customDraftForProvider } from '../modelStrategyEditor';
+import { customDraftFromModels, customDraftForProvider, inferCustomProvider } from '../modelStrategyEditor';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { fetchModelPreferences, saveModelPreferences } from '../api';
 import { getAiProviderDescriptor } from '../../../ai/providerMetadata';
@@ -77,6 +77,11 @@ export function ModelPreferencesSettings({ onToast, localConnection }: {
     const route = draft.routes[task];
     return !choices.some(ref => ref.model === route.model) || !Number.isInteger(route.maxTokens) || route.maxTokens < 32 || route.maxTokens > 16384;
   });
+  const activeModels = data ? data.activePlan?.models || registry.presets[data.manualPreset].models : null;
+  const activeLocal = activeModels ? local(activeModels) : false;
+  const activeMode = data?.mode === 'automatic' && !activeLocal ? 'automatic' : 'custom';
+  const activeProvider = activeModels ? inferCustomProvider(activeModels) : null;
+  const selectedMode = dialog ? 'custom' : mode;
   const customProviders = (['openai', 'gemini', 'zai', 'openrouter', 'lmstudio'] as const);
   const serviceModels = draft ? registry.presets[getCustomPresetName(draft.provider, draft.quality)].models : null;
   function taskFields(task: AiTaskKey) {
@@ -106,16 +111,25 @@ export function ModelPreferencesSettings({ onToast, localConnection }: {
     {error && <Alert severity="error" action={<Button onClick={() => void load()}>Повторить</Button>}>{error}</Alert>}
     {!data && !error && <CircularProgress size={22} aria-label="Загрузка настроек моделей" />}
     {data && <>
-      <TextField select label="Стратегия" value={mode} disabled={busy} onChange={event => {
+      <Box role="status" aria-label="Действующая стратегия" sx={{ p: 2, bgcolor: 'action.hover', borderRadius: 2 }}>
+        <Typography variant="body2" fontWeight={700}>Сейчас работает: {activeMode === 'automatic' ? 'Автоматически · API' : 'Custom'} · {activeProvider ? getAiProviderDescriptor(activeProvider).label : 'несколько провайдеров'}</Typography>
+        <Typography variant="body2" color="text.secondary">{activeLocal
+          ? activeProvider === 'lmstudio' ? 'Текстовые задачи выполняются на вашем компьютере. Поиск, голос и другие сервисы используют отдельные API.' : 'Часть текстовых задач выполняется локально, часть — через API.'
+          : 'Текстовые задачи выполняются через API. Локальные модели не используются.'}</Typography>
+      </Box>
+      <TextField select label="Стратегия" value={selectedMode} disabled={busy} onChange={event => {
         if (event.target.value === 'custom') openCustom(); else setMode('automatic');
       }}>
-        <MenuItem value="automatic">Автоматически</MenuItem>
+        <MenuItem value="automatic">Автоматически · API</MenuItem>
         <MenuItem value="custom">Custom · моя стратегия</MenuItem>
       </TextField>
-      {mode === 'custom' ? <Stack spacing={2}>
-        <Alert severity="info">Действует своя стратегия: {data.activePlan?.source === 'custom' ? 'модели и параметры заданы вручную' : registry.presets[data.manualPreset].title}. Автоматический режим включится только после «Применить».</Alert>
+      {selectedMode === 'custom' ? <Stack spacing={2}>
+        <Typography variant="body2" color="text.secondary">Вы задаёте провайдера и модели вручную. Локальные модели включаются в редакторе Custom и применяются после сохранения.</Typography>
         <Button variant="outlined" onClick={() => openCustom()}>Редактировать стратегию Custom</Button>
       </Stack> : <>
+        <Alert severity="info">В автоматической стратегии модели подбираются через API по уровню качества. Локальные модели в этом режиме не используются.
+          {activeLocal && <Typography variant="body2" sx={{ mt: 1 }}>Сейчас ещё работает сохранённая локальная стратегия. Нажмите «Применить», чтобы перейти на API.</Typography>}
+        </Alert>
         <TextField select label="Провайдер API" value={preferences.provider || 'auto'} disabled={busy}
           onChange={event => setPreferences(current => ({ ...current, provider: event.target.value as ModelPreferences['provider'] }))}
           helperText={data.providers.find(item => item.id === (preferences.provider || 'auto'))?.description}>
@@ -154,18 +168,18 @@ export function ModelPreferencesSettings({ onToast, localConnection }: {
             return <Typography variant="body2" key={task}><b>{labels[task]}:</b> {getAiProviderDescriptor(ref.provider).label} · {ref.model}</Typography>;
           })}</Stack></AccordionDetails></Accordion>}
       </>}
-      <Box sx={{ borderTop: '1px solid', borderColor: 'divider', pt: 1 }}>
-        <FormControlLabel label="Использовать локальные модели · Custom" control={<Switch checked={local(data.activePlan?.models || registry.presets[data.manualPreset].models)}
-          disabled={busy} onChange={(_, enabled) => enabled ? openCustom(true) : openCustom(false)} />} />
-        <Typography variant="body2" color="text.secondary">Тумблер открывает настройку Custom. Включение или отключение применяется после сохранения стратегии. По умолчанию используются API, выбранные системой.</Typography>
-      </Box>
+      {selectedMode === 'automatic' && <Box>
+        <Button variant="outlined" disabled={busy} onClick={() => openCustom(true)}>Настроить локальные модели в Custom</Button>
+        <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>Откроется редактор Custom. Текущая стратегия изменится только после сохранения.</Typography>
+      </Box>}
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap><Chip size="small" label={data.serviceConnected ? 'API подключён' : 'Подключите API'} />
-        <Chip size="small" label={data.localConnected ? 'Локальный сервер доступен' : 'Локальный сервер не подключён'} /></Stack>
+        <Chip size="small" label={data.localConnected ? 'Сервер LM Studio доступен' : 'Сервер LM Studio не подключён'} /></Stack>
     </>}
   </Stack></CardContent>
     <Dialog open={dialog} keepMounted fullWidth maxWidth="lg" onClose={() => { if (!busy) setDialog(false); }}>
       <DialogTitle>Custom · своя стратегия</DialogTitle>
       <DialogContent dividers><Stack spacing={2.5}>
+        <Alert severity="info">Редактируется стратегия Custom. Она начнёт работать после «Сохранить стратегию Custom»; «Отмена» оставит действующие настройки.</Alert>
         <Typography color="text.secondary">Сначала выберите провайдера. Затем назначьте его модели для диалога, анализа и выбора инструментов.</Typography>
         <TextField select label="Провайдер нейросетей" value={draft?.provider || ''} disabled={busy}
           helperText="Все текстовые задачи используют модели выбранного провайдера."
