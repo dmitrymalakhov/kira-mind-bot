@@ -158,3 +158,92 @@ test('preferences list three quality choices and canonicalize old stored setting
     assert.deepEqual(result.activePlan.models, legacy.models);
     assert.ok(queries.every(sql => sql.startsWith('SELECT')));
 });
+
+test('explicit providers balance light and deep models at all levels without a silent provider switch', () => {
+    const context = resources(); Object.assign(context.vars, { GEMINI_API_KEY: 'synthetic', ZAI_API_KEY: 'synthetic', OPENROUTER_API_KEY: 'synthetic' });
+    for (const provider of ['openai', 'gemini', 'zai', 'openrouter']) {
+        const plans = ['standard', 'high', 'maximum'].map(quality => buildModelPlan({ quality, provider }, context));
+        for (const plan of plans) {
+            assert.equal(plan.version, 3); assert.equal(plan.preferences.provider, provider);
+            assert.ok(TEXT_TASKS.every(task => plan.models[task].allowFallback === false));
+            assert.deepEqual(parseModelPolicy(plan), plan);
+        }
+        if (['gemini','zai'].includes(provider)) {
+            assert.equal(plans[0].models.complexReasoning.model, plans[0].models.fastDialogue.model);
+            assert.notEqual(plans[1].models.complexReasoning.model, plans[1].models.fastDialogue.model);
+            assert.equal(plans[2].models.conversation.model, plans[2].models.complexReasoning.model);
+        }
+    }
+    assert.throws(() => buildModelPlan({ quality: 'high', provider: 'gemini' }, resources()), /Нет доступного/);
+    assert.deepEqual(parsePreferences({ quality: 'high', provider: 'auto' }), preferences);
+    assert.throws(() => parsePreferences({ quality: 'high', provider: 'lmstudio' }));
+});
+
+function customRequest() {
+    const plan = buildModelPlan(preferences, resources());
+    return { mode: 'custom' as const, quality: 'high' as const, presetName: plan.presetName,
+        routes: Object.fromEntries(TEXT_TASKS.map(task => [task, { provider: plan.models[task].provider,
+            model: plan.models[task].model, maxTokens: 1024, reasoningEffort: 'none' as const }])) };
+}
+
+test('Custom pins catalog routes and generation, preserves specialized services and rejects untrusted settings', () => {
+    const { buildCustomPlan, parseStrategyRequest } = require('../ai/modelPreferences');
+    const context = resources(); context.localModels = [{ id: 'synthetic/local-standard', uncensored: false }];
+    const request = customRequest();
+    request.routes.conversation = { provider: 'lmstudio', model: 'synthetic/local-standard', maxTokens: 768, reasoningEffort: 'none' };
+    const plan = buildCustomPlan(request, context);
+    assert.equal(plan.source, 'custom'); assert.equal(plan.version, 3);
+    assert.equal(plan.models.conversation.localRole, undefined);
+    assert.equal(plan.models.conversation.modelEnvKey, undefined);
+    assert.equal(plan.models.conversation.allowFallback, false);
+    assert.equal(plan.models.conversation.generation.maxTokens, 768);
+    assert.equal(plan.models.embedding.provider, 'openai');
+    assert.deepEqual(parseModelPolicy(JSON.stringify(plan)), plan);
+    for (const patch of [{ userId: 9 }, { apiKey: 'secret' }, { provider: 'openai' }]) assert.throws(() => parseStrategyRequest({ ...request, ...patch }));
+    assert.throws(() => parseStrategyRequest({ ...request, routes: { ...request.routes, embedding: request.routes.conversation } }));
+    const injected = structuredClone(request); (injected.routes.conversation as any).modelEnvKey = 'SECRET';
+    assert.throws(() => parseStrategyRequest(injected));
+    for (const model of ['unknown-model', 'https://example.com/model', 'bad\nmodel']) {
+        const invalid = structuredClone(request); invalid.routes.conversation.model = model;
+        assert.throws(() => buildCustomPlan(invalid, context));
+    }
+    const disconnected = resources();
+    assert.throws(() => buildCustomPlan(request, disconnected), /Недоступен/);
+});
+
+test('Custom persistence is atomic; invalid or unavailable drafts never overwrite the active policy', async () => {
+    const { saveModelPreferences, readModelPreferences } = require('../admin-panel/modelPreferences');
+    const writes: any[] = [];
+    const pool = { query: async (sql: string, params: unknown[]) => { if (sql.startsWith('INSERT')) writes.push(params); return { rows: [] }; } };
+    const request = customRequest();
+    const saved = await saveModelPreferences(pool, resources().vars, 'stable-1536', request);
+    assert.equal(saved.activePlan.source, 'custom'); assert.equal(writes.length, 1);
+    const invalid = structuredClone(request); invalid.routes.conversation.maxTokens = 20000;
+    await assert.rejects(saveModelPreferences(pool, resources().vars, 'stable-1536', invalid));
+    assert.equal(writes.length, 1);
+    const reads: string[] = [];
+    const result = await readModelPreferences({ query: async (sql: string) => {
+        reads.push(sql); return { rows: sql.includes('key IN') ? [{ key: 'AI_MODEL_POLICY', value: JSON.stringify(saved.activePlan) }] : [] };
+    } }, resources().vars, 'stable-1536');
+    assert.equal(result.mode, 'custom'); assert.deepEqual(result.activePlan, saved.activePlan);
+    assert.equal(result.providerPlans.length, 12);
+    assert.ok(reads.every(sql => sql.startsWith('SELECT')));
+});
+
+test('a Custom local request sends its exact saved model and parameters to the SDK', async t => {
+    const { buildCustomPlan } = require('../ai/modelPreferences');
+    const context = resources(); context.localModels = [{ id: 'synthetic/local-standard', uncensored: false }];
+    const request = customRequest();
+    request.routes.conversation = { provider: 'lmstudio', model: 'synthetic/local-standard', maxTokens: 640, reasoningEffort: 'none' };
+    const plan = buildCustomPlan(request, context);
+    const calls: any[] = [];
+    t.mock.method(usage, 'logAiUsage', async () => {});
+    t.mock.method(lmstudioProviderAdapter.client.chat.completions, 'create', async (body: any) => {
+        calls.push(body); return { choices: [{ message: { content: 'Synthetic reply' } }] } as any;
+    });
+    await runWithModelPolicy(plan, () => createChatCompletionForTask('conversation', { messages, max_tokens: 4000 }));
+    assert.equal(calls.length, 1); assert.equal(calls[0].model, 'synthetic/local-standard');
+    assert.equal(calls[0].max_tokens, 640); assert.equal(calls[0].reasoning_effort, 'none');
+    const tampered = structuredClone(plan); tampered.models.conversation.localRole = 'fast';
+    assert.throws(() => parseModelPolicy(tampered), /закреплённый/);
+});

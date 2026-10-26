@@ -1429,27 +1429,134 @@
         }
       },
       "put": {
-        "summary": "Сохранить цензуру, стоимость и качество; план моделей вычисляет сервер",
+        "summary": "Сохранить автоматическую стратегию по качеству и API либо Custom",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "quality"
-                ],
-                "properties": {
-                  "quality": {
-                    "type": "string",
-                    "enum": [
-                      "standard",
-                      "high",
-                      "maximum"
-                    ]
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "quality"
+                    ],
+                    "properties": {
+                      "quality": {
+                        "type": "string",
+                        "enum": [
+                          "standard",
+                          "high",
+                          "maximum"
+                        ]
+                      },
+                      "provider": {
+                        "type": "string",
+                        "enum": [
+                          "auto",
+                          "openai",
+                          "gemini",
+                          "zai",
+                          "openrouter"
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "mode",
+                      "quality",
+                      "presetName",
+                      "routes"
+                    ],
+                    "properties": {
+                      "mode": {
+                        "const": "custom"
+                      },
+                      "quality": {
+                        "type": "string",
+                        "enum": [
+                          "standard",
+                          "high",
+                          "maximum"
+                        ]
+                      },
+                      "presetName": {
+                        "enum": [
+                          "gpt-max",
+                          "gpt-balanced",
+                          "gpt-lean",
+                          "hybrid-openrouter-gpt",
+                          "hybrid-gemini-gpt",
+                          "gemini-full",
+                          "glm-full",
+                          "glm-balanced",
+                          "lmstudio-local",
+                          "hybrid-lmstudio-gpt"
+                        ]
+                      },
+                      "routes": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "defaultText",
+                          "lightweightText",
+                          "fastDialogue",
+                          "complexReasoning",
+                          "runtimePlanning",
+                          "intentClassification",
+                          "intentDedup",
+                          "conversation",
+                          "memoryExtraction",
+                          "memoryConsolidation",
+                          "messageAnalysis",
+                          "browserPlanning"
+                        ],
+                        "properties": {
+                          "defaultText": {
+                            "$ref": "#/components/schemas/CustomModelRoute"
+                          },
+                          "lightweightText": {
+                            "$ref": "#/components/schemas/CustomModelRoute"
+                          },
+                          "fastDialogue": {
+                            "$ref": "#/components/schemas/CustomModelRoute"
+                          },
+                          "complexReasoning": {
+                            "$ref": "#/components/schemas/CustomModelRoute"
+                          },
+                          "runtimePlanning": {
+                            "$ref": "#/components/schemas/CustomModelRoute"
+                          },
+                          "intentClassification": {
+                            "$ref": "#/components/schemas/CustomModelRoute"
+                          },
+                          "intentDedup": {
+                            "$ref": "#/components/schemas/CustomModelRoute"
+                          },
+                          "conversation": {
+                            "$ref": "#/components/schemas/CustomModelRoute"
+                          },
+                          "memoryExtraction": {
+                            "$ref": "#/components/schemas/CustomModelRoute"
+                          },
+                          "memoryConsolidation": {
+                            "$ref": "#/components/schemas/CustomModelRoute"
+                          },
+                          "messageAnalysis": {
+                            "$ref": "#/components/schemas/CustomModelRoute"
+                          },
+                          "browserPlanning": {
+                            "$ref": "#/components/schemas/CustomModelRoute"
+                          }
+                        }
+                      }
+                    }
                   }
-                }
+                ]
               }
             }
           }
@@ -2174,6 +2281,45 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "CustomModelRoute": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider",
+          "model",
+          "maxTokens",
+          "reasoningEffort"
+        ],
+        "properties": {
+          "provider": {
+            "enum": [
+              "openai",
+              "openrouter",
+              "gemini",
+              "zai",
+              "lmstudio"
+            ]
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "maxTokens": {
+            "type": "integer",
+            "minimum": 32,
+            "maximum": 16384
+          },
+          "reasoningEffort": {
+            "enum": [
+              "none",
+              "low",
+              "medium",
+              "high"
+            ]
           }
         }
       }

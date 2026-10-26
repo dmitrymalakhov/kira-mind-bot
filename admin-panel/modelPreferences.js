@@ -1,5 +1,5 @@
 'use strict';
-const { SETTING_KEY, QUALITY_LEVELS, buildModelPlan, parseModelPolicy, parsePreferences } = require('../ai/modelPreferences');
+const { SETTING_KEY, QUALITY_LEVELS, buildModelPlan, parseModelPolicy, parseStrategyRequest, buildCustomPlan, getStrategyCatalog, API_PROVIDERS } = require('../ai/modelPreferences');
 const { readLocalRoutes, listLocalModels } = require('./localModels');
 
 async function resources(pool, vars, memoryProfileName) {
@@ -23,15 +23,23 @@ async function readModelPreferences(pool, vars, memoryProfileName) {
     try { plans.push({ ...buildModelPlan(preferences, context), available: true }); }
     catch (error) { plans.push({ preferences, available: false, unavailableReason: error.message }); }
   }
-  return { scope: 'account', scopeNote: 'Общие настройки Киры. Явный режим отдельного приложения имеет приоритет только в его диалоге.',
-    mode: policy ? 'automatic' : 'manual', preferences: policy?.preferences || inferred,
+  const providerPlans = API_PROVIDERS.filter(item => item.id !== 'auto').flatMap(provider => QUALITY_LEVELS.map(({ id: quality }) => {
+    const preferences = { quality, provider: provider.id };
+    try { return { ...buildModelPlan(preferences, context), available: true }; }
+    catch (error) { return { preferences, available: false, unavailableReason: error.message }; }
+  }));
+  return { providers: API_PROVIDERS, providerPlans, catalog: getStrategyCatalog(context), localRoutes: context.localRoutes,
+    scope: 'account', scopeNote: 'Общие настройки Киры. Явный режим отдельного приложения имеет приоритет только в его диалоге.',
+    mode: policy?.source === 'custom' ? 'custom' : policy ? 'automatic' : 'manual', preferences: policy?.preferences || inferred,
     activePlan: policy, manualPreset,
     plans, localConnected: context.localModels.length > 0, localError: context.localError,
-    serviceConnected: Boolean(vars.OPENAI_API_KEY || vars.GEMINI_API_KEY || vars.ZAI_API_KEY) };
+    serviceConnected: Boolean(vars.OPENAI_API_KEY || vars.GEMINI_API_KEY || vars.ZAI_API_KEY || vars.OPENROUTER_API_KEY) };
 }
 async function saveModelPreferences(pool, vars, memoryProfileName, body) {
-  const preferences = parsePreferences(body);
-  const plan = buildModelPlan(preferences, await resources(pool, vars, memoryProfileName));
+  const request = parseStrategyRequest(body);
+  const context = await resources(pool, vars, memoryProfileName);
+  const plan = request.mode === 'custom' ? buildCustomPlan(request, context) : buildModelPlan(request, context);
+  const preferences = plan.preferences;
   // A single statement makes the selected preset and its task policy atomic, including on imported DB roles.
   await pool.query('INSERT INTO bot_settings (key,value,"updatedAt") VALUES ($1,$2,now()),($3,$4,now()) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,"updatedAt"=now()',
     ['AI_MODEL_PRESET', plan.presetName, SETTING_KEY, JSON.stringify(plan)]);
@@ -46,7 +54,7 @@ function registerModelPreferenceRoutes(app, { requireAuth, createDbPool, ensureB
     finally { await pool.end(); }
   });
   app.put('/api/model-preferences', requireAuth, async (req,res) => {
-    try { parsePreferences(req.body); } catch (error) { return res.status(400).json({ error: error.message }); }
+    try { parseStrategyRequest(req.body); } catch (error) { return res.status(400).json({ error: error.message }); }
     const pool = createDbPool();
     try { await ensureBotSettingsTable(pool); const vars = { ...process.env, ...readEnvFile() };
       res.json(await saveModelPreferences(pool, vars, await memoryProfile(pool, vars), req.body)); }

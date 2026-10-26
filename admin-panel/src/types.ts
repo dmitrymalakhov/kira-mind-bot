@@ -133,7 +133,11 @@ export interface AiPresetResponse {
 
 export type { ModelPreferences } from '../../ai/modelPreferences';
 export interface ModelPreferencesResponse {
-  mode: 'automatic' | 'manual';
+  mode: 'automatic' | 'manual' | 'custom';
+  providers: typeof import('../../ai/modelPreferences').API_PROVIDERS;
+  providerPlans: ModelPreferencesResponse['plans'];
+  catalog: Array<Pick<AiModelRef, 'provider'|'model'>>;
+  localRoutes: import('../../ai/localModelRouting').LocalModelRoutes;
   preferences: import('../../ai/modelPreferences').ModelPreferences;
   activePlan: import('../../ai/modelPreferences').ModelPolicy | null;
   manualPreset: AiPresetName;

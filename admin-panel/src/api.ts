@@ -7,7 +7,6 @@ import type {
   HealthLogsResponse,
   AiPresetName,
   AiPresetResponse,
-  ModelPreferences,
   ModelPreferencesResponse,
   MemoryFormPayload,
   MemoryGraphQuery,
@@ -98,7 +97,7 @@ export async function fetchModelPreferences(): Promise<ModelPreferencesResponse>
   if (!r.ok) throw new Error('Не удалось загрузить настройки моделей');
   return r.json();
 }
-export async function saveModelPreferences(preferences: ModelPreferences) {
+export async function saveModelPreferences(preferences: import('../../ai/modelPreferences').StrategyRequest) {
   const r = await apiFetch('/api/model-preferences', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(preferences) });
   return r.json() as Promise<{ success: boolean; error?: string }>;
 }
