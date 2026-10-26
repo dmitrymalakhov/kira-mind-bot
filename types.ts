@@ -365,6 +365,9 @@ export type BotContext = Context & SessionFlavor<SessionData> & {
     suppressAgentProgress?: boolean;
     /** Server-assigned channel key; never accepted from an external request. */
     sessionStorageKey?: string;
+    /** Dedicated durable ledger for a background task; does not change its delivery channel. */
+    agentRuntimeStorageKey?: string;
+    agentRuntimeRequestKey?: string;
 };
 
 // Интерфейс для хранения истории сообщений

@@ -5,7 +5,7 @@ import { GoogleMapsService } from '../../services/googleMaps';
 import { ContactsStore } from '../../stores/ContactsStore';
 import { getContactPortrait } from '../../services/PsychologicalPortraitService';
 import { getMultiQueryMemoryContextDetailed } from '../../utils/multiQueryMemory';
-import { saveContactMemoryFactOrAsk } from '../../utils/contactMemory';
+import { saveContactMemoryFactOrAsk, ambiguousMemoryDeletionGuard, resolveContactIdentity, contactOptionLabel } from '../../utils/contactMemory';
 import { getRecentMemories, findMemoryByContent } from '../../utils/enhancedDomainMemory';
 import { resolveRelationshipFromMemory } from '../../utils/resolveRelationshipFromMemory';
 import { readMessagesAgent } from '../../agents/readMessagesAgent';
@@ -23,6 +23,8 @@ import { parseSettingsPatch } from '../../api/settings';
 import { BACKGROUND_FEATURE_KEYS } from '../../ai/backgroundFeatures';
 import { getCapabilitiesKnowledgeBase } from '../../capabilities';
 import { objectSchema, textSchema } from './registry';
+import { memoryConfirmationKey, contactMemoryConfirmationKey } from './confirmation';
+import { listSchema, listPage } from './listing';
 import type { ProcessingResult } from '../../orchestrator';
 import type { ToolContext, ToolDefinition, ToolOutput } from './types';
 
@@ -31,7 +33,7 @@ export function processingOutput(result: ProcessingResult, context?: ToolContext
         context?.ctx.session.pendingHealthLog || context?.ctx.session.pendingHealthDiscomfort || context?.ctx.session.pendingContactMemory);
     const status = result.operationStatus ?? (result.imageGenerated === false ? 'failed' : waiting ? 'needs_input' : 'ok');
     result.operationStatus = status;
-    return { status, summary: result.responseText || 'Операция завершена.', result };
+    return { status, summary: result.responseText || 'Операция завершена.', result, question: result.clarificationQuestion };
 }
 
 function readTool(name: string, skill: string, description: string, schema: ToolDefinition['inputSchema'], execute: ToolDefinition['execute'], ownerOnly = true): ToolDefinition {
@@ -64,9 +66,9 @@ export function domainTools(): ToolDefinition[] {
             const data = ContactsStore.getInstance().searchContactsByName(String(args.query));
             return { status: 'ok', summary: `Кандидатов: ${data.length}`, data: data.map(c => ({ id: c.id, firstName: c.firstName, lastName: c.lastName, username: c.username })) };
         }),
-        readTool('contacts.list', 'people-and-memory', 'Получить список контактов без телефонов и приватных заметок.', objectSchema({}), async () => {
+        readTool('contacts.list', 'people-and-memory', 'Получить список контактов без телефонов и приватных заметок.', listSchema, async args => {
             const data = ContactsStore.getInstance().getAllContacts().map(c => ({ id: c.id, firstName: c.firstName, lastName: c.lastName, username: c.username }));
-            return { status: 'ok', summary: `Контактов: ${data.length}`, data };
+            return { status: 'ok', summary: `Контактов: ${data.length}`, data: listPage(data, args) };
         }),
         readTool('people.resolve', 'people-and-memory', 'Узнать имя по явно указанной роли из памяти. Не связывает неоднозначных людей.', objectSchema({ relationship: textSchema('Роль: мама, коллега и т.д.') }), async (args, context) => {
             const name = await resolveRelationshipFromMemory(context.ctx, String(args.relationship), context.message);
@@ -94,13 +96,15 @@ export function domainTools(): ToolDefinition[] {
             description: 'Сохранить явно сообщённый пользователем факт о человеке через существующий identity/evidence flow. Не сохранять выводы модели.',
             inputSchema: objectSchema({ contactName: textSchema('Имя из слов пользователя'), fact: textSchema('Атомарный факт из текущей реплики') }),
             async execute(args, context) {
+                if (context.ctx.session.pendingContactMemory) return { status: 'failed', summary: 'Сначала заверши уточнение личности из предыдущего запроса.' };
                 if (!context.message.toLocaleLowerCase().includes(String(args.fact).toLocaleLowerCase())) return { status: 'failed', summary: 'Факт должен дословно присутствовать в текущих словах пользователя.' };
                 let clarification: ProcessingResult | undefined;
                 const capture = Object.create(context.ctx);
                 Object.defineProperty(capture, 'reply', { value: async (text: string, options?: { reply_markup?: InlineKeyboard }) => { clarification = { responseText: text, keyboard: options?.reply_markup }; return { message_id: 0 }; } });
                 const saved = await saveContactMemoryFactOrAsk(capture, { contactName: String(args.contactName), content: String(args.fact), domain: 'personal', importance: 0.9 });
-                const summary = saved.status === 'saved' ? 'Факт сохранён.' : 'Требуется уточнение личности.';
-                return { status: saved.status === 'saved' ? 'ok' : 'needs_input', summary, result: clarification ?? { responseText: summary } };
+                const summary = saved.status === 'saved' ? 'Факт сохранён.' : saved.status === 'pending' ? 'Требуется уточнение личности.' : 'Сохранение факта не подтверждено.';
+                return { status: saved.status === 'saved' ? 'ok' : saved.status === 'pending' ? 'needs_input' : 'failed', summary, result: clarification ?? { responseText: summary },
+                    ...(saved.status === 'pending' ? { confirmationKey: contactMemoryConfirmationKey(context.ctx) } : {}) };
             },
         },
         {
@@ -109,20 +113,41 @@ export function domainTools(): ToolDefinition[] {
             inputSchema: objectSchema({ query: textSchema('Какой факт пользователь явно просит забыть') }),
             async execute(args, context) {
                 if (!/(?:забудь|удали\s+(?:этот\s+)?факт|не\s+храни)/iu.test(context.message)) return { status: 'failed', summary: 'Нет явной просьбы забыть факт.' };
+                const guard = ambiguousMemoryDeletionGuard(String(args.query));
+                if (guard) return { status: 'needs_input', summary: guard, question: guard, result: { responseText: guard } };
                 const found = await findMemoryByContent(context.ctx, String(args.query));
                 if (!found) return { status: 'failed', summary: 'Подходящий факт не найден.' };
+                const confirmationKey = memoryConfirmationKey(found.id, found.domain);
                 const result: ProcessingResult = { responseText: `Нашла в памяти:\n\n«${found.content}»\n\nУдалить этот факт?`,
-                    keyboard: new InlineKeyboard().text('Да, удалить', `mem_del:${found.id}:${found.domain}`).text('Отмена', 'mem_del_cancel') };
-                return { status: 'needs_input', summary: result.responseText, result };
+                    keyboard: new InlineKeyboard().text('Да, удалить', `mem_del:${found.id}:${found.domain}`).text('Отмена', `mem_del_cancel:${confirmationKey}`) };
+                return { status: 'needs_input', summary: result.responseText, result, confirmationKey };
             },
         },
         {
             name: 'telegram.readMessages', skill: 'telegram-reading', effect: 'state', ownerOnly: true,
             description: 'Показать непрочитанные или проанализировать выбранную переписку. Может предложить выбор периода. Не использовать для переговоров.',
-            inputSchema: objectSchema({ request: textSchema('Самодостаточная задача чтения из исходного запроса') }),
+            inputSchema: objectSchema({ request: textSchema('Самодостаточная задача чтения из исходного запроса'), mode: { type: 'string', enum: ['unread', 'conversation'] }, contactQuery: textSchema('Однозначное имя или username'), groupQueries: { type: 'array', maxItems: 10, items: textSchema('Название чата', 200) }, saveFacts: { type: 'boolean' } }, ['request', 'mode']),
             async execute(args, context) {
-                const classification = { ...context.classification, intent: 'ПРОВЕРКА_СООБЩЕНИЙ' as const };
-                return processingOutput(await readMessagesAgent(context.ctx, String(args.request), context.isForwarded, context.forwardFrom, context.messageHistory, classification, context.memoryContext, context.voiceReplyRequested === true), context);
+                const mode = args.mode;
+                let contactQuery = String(args.contactQuery ?? '');
+                const groupQueries = args.groupQueries as string[] | undefined;
+                if (mode === 'conversation' && !contactQuery && !groupQueries?.length) {
+                    if (context.continuationAnswer) contactQuery = context.continuationAnswer;
+                    else return { status: 'needs_input', summary: 'Нужна переписка для анализа.', question: 'С кем или в каком чате проанализировать переписку?', result: { responseText: 'С кем или в каком чате проанализировать переписку?' } };
+                }
+                if (contactQuery) {
+                    let identity = resolveContactIdentity(contactQuery);
+                    if (identity.status === 'ambiguous' && context.continuationAnswer) { contactQuery = context.continuationAnswer; identity = resolveContactIdentity(contactQuery); }
+                    if (identity.status === 'ambiguous') {
+                        const question = `Уточни фамилию или username: ${identity.candidates.slice(0, 6).map(contactOptionLabel).join(', ')}.`;
+                        return { status: 'needs_input', summary: question, question, result: { responseText: question } };
+                    }
+                }
+                const classification = { intent: 'ПРОВЕРКА_СООБЩЕНИЙ' as const, confidenceLevel: 'ВЫСОКИЙ' as const, details: { messagesCheckType: mode === 'unread' ? 'ALL_MESSAGES' as const : 'ANALYZE_CONVERSATION' as const,
+                    contactQuery, groupChatQueries: groupQueries, analysisQuery: String(args.request), saveFactsAboutUser: args.saveFacts === true } };
+                const result = await readMessagesAgent(context.ctx, String(args.request), context.isForwarded, context.forwardFrom, context.messageHistory, classification, context.memoryContext, context.voiceReplyRequested === true);
+                if (result.keyboard && !context.ctx.session.studyChatRequest && !context.ctx.session.chatAnalysisPeriodRequest && !context.ctx.session.pendingContactMemory && result.operationStatus !== 'needs_input') { result.operationStatus ??= 'ok'; result.keyboard = undefined; }
+                return processingOutput(result, context);
             },
         },
         {
@@ -200,8 +225,8 @@ export function domainTools(): ToolDefinition[] {
             async execute(args, context) {
                 if (!looksLikeKiraRelocationRequest(context.message)) return { status: 'failed', summary: 'Нет явной просьбы о переезде.' };
                 const current = await getKiraResidence();
-                const intent = await detectKiraRelocationIntent(context.message, current);
-                if (!intent) return { status: 'needs_input', summary: 'Уточни новый город.', result: { responseText: 'В какой город мне переехать?' } };
+                const intent = await detectKiraRelocationIntent([context.message, context.continuationAnswer].filter(Boolean).join('\n'), current);
+                if (!intent) return { status: 'needs_input', summary: 'Уточни новый город.', question: 'В какой город мне переехать?', result: { responseText: 'В какой город мне переехать?' } };
                 const result = await relocateKira(intent.city, 'conversation');
                 if (result.changed && result.residence.movedAt) await rememberKiraRelocation(result.previous.city, result.residence.city, result.residence.movedAt);
                 const summary = `Текущее место жизни: ${result.residence.city}.`;

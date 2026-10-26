@@ -226,6 +226,7 @@ export async function saveRemindersFromResult(
             if (reminder.targetChat) requestedTargetNotificationCandidates.push(reminder);
         } catch (error) {
             console.error('[reminder] create failed:', error);
+            result.reminderPersistenceUncertain = true;
             failures.push({
                 text: details.text,
                 error: error instanceof Error ? error.message : String(error),

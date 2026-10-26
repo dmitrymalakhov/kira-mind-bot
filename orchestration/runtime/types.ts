@@ -41,6 +41,7 @@ export interface ToolObservation {
     status: ToolStatus;
     summary: string;
     data?: unknown;
+    confirmationKey?: string;
 }
 
 export interface ToolOutput {
@@ -49,6 +50,9 @@ export interface ToolOutput {
     data?: unknown;
     context?: string;
     result?: ProcessingResult;
+    confirmationKey?: string;
+    /** A missing parameter, as opposed to an existing domain-specific confirmation UI. */
+    question?: string;
 }
 
 export interface ToolContext extends KiraRuntimeInput {
@@ -97,6 +101,7 @@ export interface RuntimeReceipt {
     tool: string;
     status: 'running' | ToolStatus;
     summary?: string;
+    waitingForParameter?: boolean;
 }
 
 export interface RuntimeSessionState {
@@ -115,4 +120,9 @@ export interface RuntimeSessionState {
     pendingCalls?: RuntimeToolCall[];
     classification?: MessageClassification;
     question?: string;
+    parameterCall?: RuntimeToolCall;
+    backgroundRun?: boolean;
+    ledgerKey?: string;
+    /** Dependency truth survives evidence/context compaction. */
+    completedCalls?: Record<string, ToolStatus>;
 }

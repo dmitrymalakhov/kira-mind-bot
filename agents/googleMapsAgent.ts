@@ -15,6 +15,7 @@ const mapsService = new GoogleMapsService();
 
 // Интерфейс для результата обработки запроса к картам
 interface MapsQueryResult {
+    analysisFailed?: boolean;
     queryType: 'directions' | 'place_search' | 'address_lookup' | 'unknown';
     origin?: string;
     destination?: string;
@@ -129,7 +130,7 @@ async function analyzeMapsQuery(
         console.error("Error analyzing maps query:", error);
         // Возвращаем стандартный результат в случае ошибки
         return {
-            queryType: "unknown"
+            queryType: "unknown", analysisFailed: true
         };
     }
 }
@@ -153,10 +154,12 @@ export async function mapsAgent(
     try {
         // Анализируем запрос пользователя
         const queryResult = await analyzeMapsQuery(message, messageHistory, memoryContext);
+        if (queryResult.analysisFailed) return { responseText: 'Не удалось разобрать запрос к картам.', operationStatus: 'failed' };
 
         // Если запрос не связан с картами, возвращаем соответствующий результат
         if (queryResult.queryType === "unknown") {
             return {
+                operationStatus: 'needs_input', clarificationQuestion: 'Какое место найти или какой маршрут построить?',
                 responseText: "Кажется, твой запрос не связан с картами или местоположением. Могу я помочь тебе чем-то еще? Если ты хочешь узнать маршрут или найти места поблизости, укажи более точную информацию. 🗺️"
             };
         }
@@ -201,6 +204,7 @@ export async function mapsAgent(
 
             default:
                 return {
+                    operationStatus: 'needs_input', clarificationQuestion: 'Какое место найти или какой маршрут построить?',
                     responseText: "Извини, но я не смогла точно определить, что ты хочешь узнать. Можешь уточнить свой запрос? Например, 'Как добраться от Кремля до Большого театра' или 'Найди кафе рядом с метро Маяковская'. 🗺️"
                 };
         }
@@ -208,6 +212,7 @@ export async function mapsAgent(
         console.error("Error in maps agent:", error);
         // В случае ошибки возвращаем стандартный ответ
         return {
+            operationStatus: 'failed',
             responseText: "Произошла ошибка при обработке запроса, связанного с картами. Пожалуйста, попробуй сформулировать запрос по-другому или проверь подключение к сервисам карт. 🗺️"
         };
     }
@@ -230,6 +235,7 @@ async function processDirectionsQuery(
         if (!queryResult.origin || !queryResult.destination) {
             // Если не хватает параметров, запрашиваем уточнение
             return {
+                operationStatus: 'needs_input', clarificationQuestion: 'Откуда и куда построить маршрут?',
                 responseText: "Для построения маршрута мне нужно знать точку отправления и назначения. Пожалуйста, укажи их более конкретно. Например: 'Как добраться от Кремля до Большого театра'. 🚗"
             };
         }
@@ -246,6 +252,7 @@ async function processDirectionsQuery(
 
         if (!directions) {
             return {
+                operationStatus: 'failed',
                 responseText: `К сожалению, не удалось построить маршрут от "${queryResult.origin}" до "${queryResult.destination}". Пожалуйста, проверь правильность адресов или попробуй другие точки маршрута. 🚫`
             };
         }
@@ -280,6 +287,7 @@ async function processDirectionsQuery(
     } catch (error) {
         console.error("Error processing directions query:", error);
         return {
+            operationStatus: 'failed',
             responseText: "Произошла ошибка при построении маршрута. Пожалуйста, проверь правильность адресов и попробуй еще раз. 🚫"
         };
     }
@@ -301,6 +309,7 @@ async function processPlaceSearchQuery(
         // Проверяем наличие необходимых параметров
         if (!queryResult.location) {
             return {
+                operationStatus: 'needs_input', clarificationQuestion: 'Где искать места?',
                 responseText: "Для поиска мест мне нужно знать локацию. Пожалуйста, укажи, где именно искать. Например: 'Найди кафе рядом с Красной площадью'. 📍"
             };
         }
@@ -318,6 +327,7 @@ async function processPlaceSearchQuery(
 
         if (!places || places.length === 0) {
             return {
+                operationStatus: 'failed',
                 responseText: `К сожалению, не удалось найти ${queryResult.placeType || "места"} рядом с "${queryResult.location}" в радиусе ${radius} метров. Пожалуйста, попробуй изменить параметры поиска. 🚫`
             };
         }
@@ -369,6 +379,7 @@ async function processPlaceSearchQuery(
     } catch (error) {
         console.error("Error processing place search query:", error);
         return {
+            operationStatus: 'failed',
             responseText: "Произошла ошибка при поиске мест. Пожалуйста, проверь правильность локации и попробуй еще раз. 🚫"
         };
     }
@@ -390,6 +401,7 @@ async function processAddressLookupQuery(
         // Проверяем наличие необходимых параметров
         if (!queryResult.address) {
             return {
+                operationStatus: 'needs_input', clarificationQuestion: 'Какой адрес или место найти?',
                 responseText: "Для поиска информации о месте мне нужен адрес или название локации. Пожалуйста, укажи его более конкретно. Например: 'Что находится по адресу Тверская 13' или 'Информация о ГУМе'. 📍"
             };
         }
@@ -399,6 +411,7 @@ async function processAddressLookupQuery(
 
         if (!geocoded) {
             return {
+                operationStatus: 'failed',
                 responseText: `К сожалению, не удалось найти информацию о "${queryResult.address}". Пожалуйста, проверь правильность адреса или попробуй более точное описание. 🚫`
             };
         }
@@ -428,6 +441,7 @@ async function processAddressLookupQuery(
     } catch (error) {
         console.error("Error processing address lookup query:", error);
         return {
+            operationStatus: 'failed',
             responseText: "Произошла ошибка при поиске информации об адресе. Пожалуйста, проверь правильность адреса и попробуй еще раз. 🚫"
         };
     }

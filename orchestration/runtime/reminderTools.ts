@@ -7,14 +7,20 @@ import { syncReminderMemoryMutation } from '../../services/ReminderMemorySync';
 import type { ProcessingResult, ReminderCreationDetails } from '../../orchestrator';
 import type { RecurrenceRule, ReminderTargetChat } from '../../types/reminderTypes';
 import { objectSchema, textSchema } from './registry';
+import { listSchema, listPage } from './listing';
 import type { ToolContext, ToolDefinition, ToolOutput } from './types';
 
 async function commit(result: ProcessingResult, context: ToolContext): Promise<ToolOutput> {
     const { saveRemindersFromResult } = await import('../../handlers/shared');
     await saveRemindersFromResult(context.ctx, result);
     result.remindersPersisted = true;
+    if (result.reminderPersistenceUncertain) {
+        const notice = 'Результат части сохранений неизвестен. Автоматический повтор остановлен; проверь /reminders перед новым созданием.';
+        result.responseText += `\n\n${notice}`;
+        result.structuredResponseBlocks?.push({ type: 'paragraph', text: notice });
+    }
     return {
-        status: result.reminderCreated ? (result.keyboard ? 'needs_input' : 'ok') : 'failed',
+        status: result.reminderPersistenceUncertain ? 'unknown' : result.reminderCreationFailures?.length ? 'failed' : result.reminderCreated ? (result.keyboard ? 'needs_input' : 'ok') : 'failed',
         summary: result.responseText,
         data: { reminders: result.reminderDetailsList ?? [], failures: result.reminderCreationFailures ?? [] },
         result,
@@ -32,10 +38,10 @@ export function reminderTools(): ToolDefinition[] {
         {
             name: 'reminders.list', skill: 'reminders', effect: 'read', ownerOnly: true,
             description: 'Получить активные напоминания текущего чата с их ID. Перед изменением выбери точный ID.',
-            inputSchema: objectSchema({}),
-            async execute(_, context) {
+            inputSchema: listSchema,
+            async execute(args, context) {
                 const reminders = ReminderRegistry.getInstance().getActiveByChatId(context.ctx.chat!.id);
-                return { status: 'ok', summary: `Активных напоминаний: ${reminders.length}`, data: reminders.map(r => ({ id: r.id, text: r.text, dueAt: r.dueDate, recurrence: r.recurrence })) };
+                return { status: 'ok', summary: `Активных напоминаний: ${reminders.length}`, data: listPage(reminders.map(r => ({ id: r.id, text: r.text, dueAt: r.dueDate, recurrence: r.recurrence })), args) };
             },
         },
         {

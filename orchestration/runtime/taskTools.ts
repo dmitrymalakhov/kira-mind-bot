@@ -8,6 +8,7 @@ import { ChatGroupRepository } from '../../services/ChatGroupRepository';
 import { listChatPromptWatchers, addChatPromptWatcher, setChatPromptWatcherEnabled, removeChatPromptWatcher } from '../../services/chatPromptWatchers';
 import { listReadableTelegramChats } from '../../services/telegram';
 import { objectSchema, textSchema } from './registry';
+import { listSchema, listPage } from './listing';
 import type { ToolDefinition } from './types';
 
 const idSchema = objectSchema({ id: textSchema('ID из списка объектов') });
@@ -16,8 +17,8 @@ export function taskTools(): ToolDefinition[] {
     return [
         {
             name: 'tasks.list', skill: 'recurring-tasks', effect: 'read', ownerOnly: true,
-            description: 'Список регулярных AI-задач текущего чата, включая расписание и состояние.', inputSchema: objectSchema({}),
-            async execute(_, context) { return { status: 'ok', summary: 'Регулярные задачи.', data: await RecurringTaskRepository.listByChatId(context.ctx.chat!.id) }; },
+            description: 'Список регулярных AI-задач текущего чата, включая расписание и состояние.', inputSchema: listSchema,
+            async execute(args, context) { return { status: 'ok', summary: 'Регулярные задачи.', data: listPage((await RecurringTaskRepository.listByChatId(context.ctx.chat!.id)).map(task => ({ id: task.id, title: task.title, prompt: task.prompt, schedule: task.schedule, status: task.status, nextRunAt: task.nextRunAt, lockedAt: task.lockedAt })), args) }; },
         },
         {
             name: 'tasks.create', skill: 'recurring-tasks', effect: 'state', ownerOnly: true,
@@ -63,13 +64,13 @@ export function taskTools(): ToolDefinition[] {
         },
         {
             name: 'telegram.listChats', skill: 'telegram-reading', effect: 'read', ownerOnly: true,
-            description: 'Получить доступные чаты личной Telegram-сессии. Нужен для выбора источника наблюдения.', inputSchema: objectSchema({}),
-            async execute() { return { status: 'ok', summary: 'Доступные чаты.', data: await listReadableTelegramChats() }; },
+            description: 'Получить доступные чаты личной Telegram-сессии. Нужен для выбора источника наблюдения.', inputSchema: listSchema,
+            async execute(args) { return { status: 'ok', summary: 'Доступные чаты.', data: listPage(await listReadableTelegramChats(), args) }; },
         },
         {
             name: 'watchers.list', skill: 'chat-monitoring', effect: 'read', ownerOnly: true,
-            description: 'Список наблюдений по пользовательским условиям.', inputSchema: objectSchema({}),
-            async execute() { return { status: 'ok', summary: 'Наблюдения.', data: await listChatPromptWatchers() }; },
+            description: 'Список наблюдений по пользовательским условиям.', inputSchema: listSchema,
+            async execute(args) { return { status: 'ok', summary: 'Наблюдения.', data: listPage((await listChatPromptWatchers()).map(watcher => ({ id: watcher.id, sourceChatId: watcher.sourceChatId, sourceChatTitle: watcher.sourceChatTitle, prompt: watcher.prompt, enabled: watcher.enabled })), args) }; },
         },
         {
             name: 'watchers.create', skill: 'chat-monitoring', effect: 'state', ownerOnly: true,
@@ -93,8 +94,8 @@ export function taskTools(): ToolDefinition[] {
         })),
         {
             name: 'chatGroups.list', skill: 'chat-monitoring', effect: 'read', ownerOnly: true,
-            description: 'Получить именованные наборы чатов и состояние отслеживания.', inputSchema: objectSchema({}),
-            async execute(_, context) { return { status: 'ok', summary: 'Группы чатов.', data: await ChatGroupRepository.findAll(context.ctx.chat!.id) }; },
+            description: 'Получить именованные наборы чатов и состояние отслеживания.', inputSchema: listSchema,
+            async execute(args, context) { return { status: 'ok', summary: 'Группы чатов.', data: listPage(await ChatGroupRepository.findAll(context.ctx.chat!.id), args) }; },
         },
         {
             name: 'chatGroups.save', skill: 'chat-monitoring', effect: 'state', ownerOnly: true,

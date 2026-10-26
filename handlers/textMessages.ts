@@ -238,7 +238,7 @@ export function registerTextMessageHandler(bot: Bot<BotContext>, options: { imme
             }
 
             // These messages are handled by dedicated bot.hears handlers in memoryCommands
-            if (MEMORY_HEARS_RE.test(message) || MEMORY_DELETE_RE.test(message)) {
+            if (MEMORY_HEARS_RE.test(message) || MEMORY_DELETE_RE.test(message) && (orchestrationMode() === 'legacy' || !hasCompoundActionRequest(message))) {
                 return;
             }
 

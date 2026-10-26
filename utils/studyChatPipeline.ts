@@ -58,7 +58,7 @@ export async function studyChatAndSaveFacts(
     contactName: string,
     contactId: number,
     period: StudyChatPeriod
-): Promise<{ responseText: string; savedCount: number }> {
+): Promise<{ responseText: string; savedCount: number; operationStatus: 'ok' | 'failed' | 'needs_input' }> {
     const contact = ContactsStore.getInstance().getContact(contactId);
     const displayName = contact ? `${contact.firstName} ${contact.lastName || ''}`.trim() : contactName;
 
@@ -78,10 +78,11 @@ export async function studyChatAndSaveFacts(
         return {
             responseText: `Не удалось загрузить переписку с ${displayName}: ${reason}. Проверь подключение Telegram и попробуй ещё раз.`,
             savedCount: 0,
+            operationStatus: 'failed',
         };
     }
     if ('error' in fetchResult) {
-        return { responseText: fetchResult.error, savedCount: 0 };
+        return { responseText: fetchResult.error, savedCount: 0, operationStatus: 'failed' };
     }
     await notifyUser(ctx, getBotGenderedText(
         `📨 Этап 1/5: загрузила ${fetchResult.messageCount} сообщений.`,
@@ -135,6 +136,7 @@ export async function studyChatAndSaveFacts(
         return {
             responseText: `Не удалось проанализировать переписку с ${displayName}: ${reason}`,
             savedCount: 0,
+            operationStatus: 'failed',
         };
     }
 
@@ -250,5 +252,5 @@ export async function studyChatAndSaveFacts(
         ) + portraitNote;
     }
 
-    return { responseText, savedCount };
+    return { responseText, savedCount, operationStatus: updateResult.errors.length ? 'failed' : updateResult.pendingFacts.length ? 'needs_input' : 'ok' };
 }

@@ -55,6 +55,7 @@ import { getBotGenderedText } from "../persona";
 import { saveRemindersFromResult as saveSharedRemindersFromResult } from '../handlers/shared';
 import { sendResultToUser } from '../handlers/shared';
 import { continueConfirmedRuntime, cancelRuntimeContinuation } from '../orchestration/runtime/kernel';
+import { contactMemoryConfirmationKey } from '../orchestration/runtime/confirmation';
 import {
     buildReminderAssistanceRequest,
     getReminderAssistanceKnowledgeSourceText,
@@ -292,7 +293,13 @@ export function registerCallback(bot: Bot<BotContext>): void {
                 return;
             }
 
-            if (await handleContactMemoryCallback(ctx, callbackData)) {
+            const contactMemoryKey = contactMemoryConfirmationKey(ctx);
+            let contactMemorySaved: string | undefined;
+            if (await handleContactMemoryCallback(ctx, callbackData, summary => { contactMemorySaved = summary; })) {
+                if (contactMemorySaved && contactMemoryKey) {
+                    const remaining = await continueConfirmedRuntime(ctx, ['memory.rememberContact'], contactMemorySaved, {}, contactMemoryKey);
+                    if (remaining) await sendResultToUser(ctx, remaining);
+                } else if (contactMemoryKey && ['cmem:cancel', 'cmem:later'].includes(callbackData)) await cancelRuntimeContinuation(ctx, ['memory.rememberContact'], contactMemoryKey);
                 return;
             }
             if (await handleContactMemoryLookupCallback(ctx, callbackData)) {
@@ -961,7 +968,16 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     ).catch((error) => console.error("[telegram-edit] study chat progress update failed:", error));
                 }
 
-                const { responseText } = await handleStudyChatPeriodCallback(ctx, period, requestId);
+                const studyResult = await handleStudyChatPeriodCallback(ctx, period, requestId);
+                const { responseText } = studyResult;
+                if (studyResult.operationStatus === 'ok') {
+                    const remaining = await continueConfirmedRuntime(ctx, ['telegram.readMessages'], responseText);
+                    if (remaining) {
+                        remaining.responseText = `${responseText}\n\n${remaining.responseText}`;
+                        await sendResultToUser(ctx, remaining);
+                        return;
+                    }
+                }
                 if (callbackChatId && callbackMessageId && responseText.length <= MAX_MESSAGE_LENGTH) {
                     await editMessageTextIfChanged(ctx.api,
                         callbackChatId,

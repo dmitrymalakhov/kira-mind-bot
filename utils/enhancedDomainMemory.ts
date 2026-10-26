@@ -1719,7 +1719,7 @@ export async function deleteMemoryById(
     domain: string
 ): Promise<void> {
     const svc = vectorService();
-    if (!svc) return;
+    if (!svc) throw new Error('Сервис памяти недоступен; удаление не подтверждено');
     await svc.deleteMemory(memoryId, domain);
     devLog('🗑️ Факт удалён по ID:', memoryId);
 }

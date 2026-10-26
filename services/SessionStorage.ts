@@ -516,16 +516,20 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
 }
 
 export async function persistSessionNow(ctx: BotContext): Promise<void> {
-    const key = ctx.sessionStorageKey ?? (ctx.chat?.id != null ? String(ctx.chat.id) : undefined);
+    const key = ctx.agentRuntimeStorageKey ?? ctx.sessionStorageKey ?? (ctx.chat?.id != null ? String(ctx.chat.id) : undefined);
     if (!key || !ctx.session) return;
-    await new TypeORMSessionStorage(Boolean(ctx.sessionStorageKey)).write(key, ctx.session);
+    const value = ctx.agentRuntimeStorageKey ? { ...ctx.session } : ctx.session;
+    if (ctx.agentRuntimeStorageKey) delete (value as SessionWithSnapshot)[SESSION_SNAPSHOT];
+    await new TypeORMSessionStorage(Boolean(ctx.agentRuntimeStorageKey || ctx.sessionStorageKey)).write(key, value);
 }
 
 /** Write-ahead persistence must fail closed before a tool can mutate external state. */
 export async function persistAgentRuntime(ctx: BotContext): Promise<void> {
-    const key = ctx.sessionStorageKey ?? (ctx.chat?.id != null ? String(ctx.chat.id) : undefined);
+    const key = ctx.agentRuntimeStorageKey ?? ctx.sessionStorageKey ?? (ctx.chat?.id != null ? String(ctx.chat.id) : undefined);
     if (!key || !ctx.session) throw new Error('Нет контекста для журнала выполнения');
-    await new TypeORMSessionStorage(true).write(key, ctx.session);
+    const value = ctx.agentRuntimeStorageKey ? { ...ctx.session } : ctx.session;
+    if (ctx.agentRuntimeStorageKey) delete (value as SessionWithSnapshot)[SESSION_SNAPSHOT];
+    await new TypeORMSessionStorage(true).write(key, value);
 }
 
 /**
@@ -720,12 +724,17 @@ export async function mergePersistedBackgroundContinuation(
     const serializablePatch = Object.fromEntries(
         Object.entries(patch).filter(([, value]) => value !== undefined),
     );
-    if (Object.keys(serializablePatch).length === 0) return;
+    const waitingRuntime = data.agentRuntime?.status === 'waiting' && data.agentRuntime.startedAt >= startedAt - 1000 ? data.agentRuntime : undefined;
+    if (Object.keys(serializablePatch).length === 0 && !waitingRuntime) return;
 
     const repo = AppDataSource.getRepository(SessionEntity);
     const key = scopedBotKey(chatId);
     const mergePatch = (persisted: Partial<PersistedSession>): Partial<PersistedSession> => {
         const next = { ...persisted } as Record<string, unknown>;
+        if (waitingRuntime) {
+            if (persisted.agentRuntime && ['waiting', 'running'].includes(persisted.agentRuntime.status)) next.agentRuntimePending = [...(persisted.agentRuntimePending ?? []).filter(run => run.runId !== waitingRuntime.runId), waitingRuntime].slice(-4);
+            else next.agentRuntime = waitingRuntime;
+        }
         const now = Date.now();
         for (const [field, value] of Object.entries(serializablePatch)) {
             if (field === "pendingQuickChoices") {

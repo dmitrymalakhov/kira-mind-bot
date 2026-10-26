@@ -21,6 +21,7 @@ import { executePlan } from "./orchestration/executor";
 import { Plan } from "./orchestration/types";
 import { runKiraRuntime, orchestrationMode, hasCompoundActionRequest, continueConfirmedRuntime, mergeRuntimeResults, continueQuestionRuntime, cancelRuntimeContinuation } from './orchestration/runtime/kernel';
 import { classifyWithDecisions, decisionsEnabled } from './ai/decisionRouting';
+import { contactMemoryConfirmationKey } from './orchestration/runtime/confirmation';
 import { ChatGroupRepository } from "./services/ChatGroupRepository";
 import { handlePendingContactMemoryText } from "./utils/contactMemory";
 import { handlePendingContactLookupText, maybeStartContactMemoryLookup } from "./utils/contactMemoryLookup";
@@ -147,9 +148,11 @@ export interface ReminderCreationFailure {
 
 export interface ProcessingResult {
     responseText: string;
+    clarificationQuestion?: string;
     operationStatus?: import('./orchestration/runtime/types').ToolStatus;
     /** The tool has already committed reminders; transports must only deliver their confirmation. */
     remindersPersisted?: boolean;
+    reminderPersistenceUncertain?: boolean;
     artifacts?: Array<{ kind: 'image' | 'document'; path?: string; url?: string; filename?: string; caption?: string }>;
     /** No optional memory-gap/reminder/hint analysis on a self-contained reply. */
     skipOptionalFollowups?: boolean;
@@ -623,7 +626,7 @@ export async function processMessage(
         const internalBrowserContinuation = BROWSER_CONTINUATION_RE.test(message);
         const routingMessage = internalBrowserContinuation ? message : originalMessage;
         if (orchestrationMode() === 'skills' && !isForwarded && !options.turn?.forwardContext && !internalBrowserContinuation) {
-            const continuation = await continueQuestionRuntime(ctx, originalMessage);
+            const continuation = await continueQuestionRuntime(ctx, originalMessage, {}, replyContext?.text);
             if (continuation) return continuation;
         }
         const knowledgeDecision = decideKnowledgeSource(
@@ -690,9 +693,12 @@ export async function processMessage(
 
         const explicitRemember = extractExplicitRememberFact(message);
         if (!explicitRemember && !isBrowserTaskLike && !knowledgeDecision.requiresWeb) {
-            const contactMemoryResolution = await handlePendingContactMemoryText(ctx, message);
+            const contactMemoryKey = contactMemoryConfirmationKey(ctx);
+            let contactMemorySaved: string | undefined;
+            const contactMemoryResolution = await handlePendingContactMemoryText(ctx, message, summary => { contactMemorySaved = summary; });
             if (contactMemoryResolution) {
-                return { responseText: contactMemoryResolution };
+                const remaining = contactMemorySaved && contactMemoryKey ? await continueConfirmedRuntime(ctx, ['memory.rememberContact'], contactMemorySaved, {}, contactMemoryKey) : undefined;
+                return remaining ? mergeRuntimeResults([{ responseText: contactMemoryResolution }, remaining]) : { responseText: contactMemoryResolution };
             }
             const pendingContactLookup = await handlePendingContactLookupText(ctx, message);
             if (pendingContactLookup) {

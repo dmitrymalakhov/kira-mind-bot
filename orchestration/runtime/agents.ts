@@ -81,6 +81,7 @@ export function agentTools(): ToolDefinition[] {
             live.set(scopedKey(context, id), { controller, context: child });
             try {
                 const output = await run(record.kind, String(args.task), args, child);
+                if (controller.signal.aborted) { output.status = 'failed'; output.summary = 'Делегированная задача отменена; зависимые шаги не выполняются.'; output.result = { responseText: output.summary, operationStatus: 'failed' }; }
                 record.status = controller.signal.aborted ? 'cancelled' : output.status === 'needs_input' ? 'waiting' : output.status === 'ok' ? 'completed' : 'failed';
                 record.summary = output.summary.slice(0, 1500);
                 record.updatedAt = Date.now();

@@ -72,6 +72,17 @@ export function contactOptionLabel(contact: Contact): string {
     return contact.username ? `${display} (@${contact.username})` : display;
 }
 
+export function ambiguousMemoryDeletionGuard(query: string): string | null {
+    const trimmed = query.trim();
+    const bare = /^@[a-zA-Z0-9_]{3,32}$/.test(trimmed) || /^[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+){0,2}$/u.test(trimmed);
+    const target = bare ? trimmed : query.match(/^(@[a-zA-Z0-9_]{3,32}|[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+){0,2})(?=\s|$|[:,.-])/u)?.[1]?.trim();
+    if (!target) return null;
+    const resolution = resolveContactIdentity(target);
+    if (resolution.status !== 'ambiguous') return null;
+    const variants = resolution.candidates.slice(0, 6).map(contactOptionLabel).join(', ');
+    return `Имя «${target}» неоднозначно (${variants}). Уточни фамилию или username, чтобы я ` + getBotGenderedText('не выбрала', 'не выбрал') + ' не тот факт.';
+}
+
 export function contactIdentityTags(contactName: string, contact?: Contact): string[] {
     const alias = contactName.trim().replace(/\s+/g, ' ');
     const display = contact ? contactDisplayName(contact) : alias;
@@ -692,7 +703,7 @@ export async function saveContactMemoryFactOrAsk(
     return { status: 'pending' };
 }
 
-export async function handleContactMemoryCallback(ctx: BotContext, callbackData: string): Promise<boolean> {
+export async function handleContactMemoryCallback(ctx: BotContext, callbackData: string, onSaved?: (summary: string) => void): Promise<boolean> {
     if (!callbackData.startsWith('cmem:')) return false;
 
     const pending = ctx.session.pendingContactMemory;
@@ -738,6 +749,7 @@ export async function handleContactMemoryCallback(ctx: BotContext, callbackData:
         await ctx.answerCallbackQuery({ text: retryContact ? 'Сохранено в память' : 'Сохранено как новый человек' });
         await ctx.editMessageText(getBotGenderedText("Сохранила факты:", "Сохранил факты:") +
             `\n${result.savedContents.join('\n')}`);
+        onSaved?.(`Подтверждено сохранение фактов: ${result.savedContents.join('; ')}`);
         return true;
     }
 
@@ -770,10 +782,11 @@ export async function handleContactMemoryCallback(ctx: BotContext, callbackData:
         `Сохранил как факты о ${contactDisplayName(contact)}:`,
     ) + `\n\n${result.savedContents.join('\n')}`);
     devLog('Contact memory disambiguated via callback:', result.savedContents);
+    if (result.savedContents.length) onSaved?.(`Подтверждено сохранение фактов: ${result.savedContents.join('; ')}`);
     return true;
 }
 
-export async function handlePendingContactMemoryText(ctx: BotContext, message: string): Promise<string | null> {
+export async function handlePendingContactMemoryText(ctx: BotContext, message: string, onSaved?: (summary: string) => void): Promise<string | null> {
     const pending = ctx.session.pendingContactMemory;
     if (!pending || Date.now() - pending.createdAt > PENDING_CONTACT_MEMORY_TTL_MS) {
         if (pending) ctx.session.pendingContactMemory = undefined;
@@ -798,6 +811,7 @@ export async function handlePendingContactMemoryText(ctx: BotContext, message: s
             return `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}. Попробуй ещё раз позже.`;
         }
         ctx.session.pendingContactMemory = undefined;
+        if (result.savedContents.length) onSaved?.(`Подтверждено сохранение фактов: ${result.savedContents.join('; ')}`);
         return getBotGenderedText("Сохранила оставшиеся факты:", "Сохранил оставшиеся факты:") +
             `\n${result.savedContents.join('\n')}`;
     }
@@ -815,6 +829,7 @@ export async function handlePendingContactMemoryText(ctx: BotContext, message: s
             return `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}. Напиши «повтори».`;
         }
         ctx.session.pendingContactMemory = undefined;
+        if (result.savedContents.length) onSaved?.(`Подтверждено сохранение фактов: ${result.savedContents.join('; ')}`);
         return getBotGenderedText(
             `Сохранила как факты о ${contactDisplayName(narrowed[0])}:`,
             `Сохранил как факты о ${contactDisplayName(narrowed[0])}:`,
@@ -832,6 +847,7 @@ export async function handlePendingContactMemoryText(ctx: BotContext, message: s
             return `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}. Напиши «повтори».`;
         }
         ctx.session.pendingContactMemory = undefined;
+        if (result.savedContents.length) onSaved?.(`Подтверждено сохранение фактов: ${result.savedContents.join('; ')}`);
         return getBotGenderedText(
             `Сохранила как факты о ${resolution.displayName}:`,
             `Сохранил как факты о ${resolution.displayName}:`,

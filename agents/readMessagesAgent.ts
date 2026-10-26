@@ -1445,6 +1445,7 @@ export async function readMessagesAgent(
 
             if (!classification.details.contactQuery) {
                 return {
+                    operationStatus: 'needs_input', clarificationQuestion: 'Укажи имя контакта для анализа переписки.',
                     responseText: "Пожалуйста, укажи имя контакта для анализа переписки."
                 };
             }
@@ -1470,6 +1471,7 @@ export async function readMessagesAgent(
 
             if (isRelationshipQuery && !nameToSearch) {
                 return {
+                    operationStatus: 'failed',
                     responseText: `Сначала нужно сохранить в память, кто твоя ${contactQuery}. Скажи, например: «Запомни, моя ${contactQuery} — [имя]». После этого я смогу найти переписку с этим человеком.`,
                 };
             }
@@ -1481,6 +1483,7 @@ export async function readMessagesAgent(
                     ? " Проверь, что в памяти сохранён факт (например: «Запомни, моя жена — Юля») и что это имя есть в контактах."
                     : " Можно сохранить в память, кто это (например: «Запомни, моя жена — Юля»), или указать имя из контактов.";
                 return {
+                    operationStatus: 'failed',
                     responseText: getBotGenderedText(
                         `Не нашла контакт «${nameToSearch}» в списке контактов.`,
                         `Не нашёл контакт «${nameToSearch}» в списке контактов.`,
@@ -1513,6 +1516,7 @@ export async function readMessagesAgent(
 
             if (!classification.details.analysisQuery) {
                 return {
+                    operationStatus: 'needs_input', clarificationQuestion: 'Что узнать из переписки?',
                     responseText: "Пожалуйста, укажи запрос для анализа переписки."
                 };
             }
@@ -1529,17 +1533,20 @@ export async function readMessagesAgent(
                 return { responseText: answer, voiceReplyRequested };
             }
             return {
+                operationStatus: 'failed',
                 responseText: "Не удалось найти информацию по твоему запросу."
             };
         }
 
         return {
+            operationStatus: 'needs_input', clarificationQuestion: 'Показать новые сообщения или проанализировать конкретную переписку?',
             responseText: "Пожалуйста, уточни, что именно ты хочешь сделать с сообщениями Telegram. Например, «показать новые сообщения» или «изучи переписку с женой и узнай больше про меня»."
         };
 
     } catch (error) {
         console.error("Ошибка в агенте для Telegram-аккаунта:", error);
         return {
+            operationStatus: 'failed',
             responseText: "Произошла ошибка при обработке запроса к Telegram. Проверь статус подключения командой «статус телеграм»."
         };
     }
@@ -1553,7 +1560,7 @@ export async function handleStudyChatPeriodCallback(
     ctx: BotContext,
     period: StudyChatPeriod,
     requestId?: string
-): Promise<{ responseText: string }> {
+): Promise<ProcessingResult> {
     const req = ctx.session?.studyChatRequest;
     if (!req && requestId && processingStudyChatRequests.has(requestId)) {
         return { responseText: "Анализ этой переписки уже запущен. Дождись результата." };
@@ -1582,8 +1589,7 @@ export async function handleStudyChatPeriodCallback(
     }
 
     try {
-        const { responseText } = await studyChatAndSaveFacts(ctx, req.contactName, req.contactId, period);
-        return { responseText };
+        return await studyChatAndSaveFacts(ctx, req.contactName, req.contactId, period);
     } finally {
         processingStudyChatRequests.delete(processingKey);
     }
