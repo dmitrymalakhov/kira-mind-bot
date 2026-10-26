@@ -10,6 +10,7 @@ import { classifyAiErrorForProvider, buildSafeAiErrorLogForProvider, createAiExe
 import { allowsCrossProviderFallback, errorToMessage, getTaskFallbackModel } from './runtimeSupport';
 import { resolveRetryPolicy } from './providers/policyDefaults';
 import { runSameProviderDegradationChain } from './executionPolicy';
+import { limitResponseGeneration } from './generationLimits';
 
 const MAX_PRESET_REFRESHES_PER_REQUEST = 3;
 
@@ -65,7 +66,8 @@ async function createResponseWithModel(
     const fallbackUsed = stage === 'fallback';
 
     try {
-        const result = await providerAdapter.createResponse(modelRef.model, params);
+        const result = await providerAdapter.createResponse(modelRef.model,
+            limitResponseGeneration(preset, taskKey, modelRef.provider, params));
         const usage = getUsageTokens(result);
 
         recordAiUsage({

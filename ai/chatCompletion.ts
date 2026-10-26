@@ -12,6 +12,7 @@ import { parseLLMJson } from '../utils';
 import { allowsCrossProviderFallback, errorToMessage, getTaskFallbackModel } from './runtimeSupport';
 import { resolveRetryPolicy } from './providers/policyDefaults';
 import { runSameProviderDegradationChain } from './executionPolicy';
+import { limitChatGeneration } from './generationLimits';
 
 const MAX_PRESET_REFRESHES_PER_REQUEST = 3;
 
@@ -127,7 +128,8 @@ async function createChatCompletionWithModel(
     const fallbackUsed = stage === 'fallback';
 
     try {
-        const result = await providerAdapter.createChatCompletion(modelRef.model, params, modelRef.generation);
+        const result = await providerAdapter.createChatCompletion(modelRef.model,
+            limitChatGeneration(preset, taskKey, modelRef.provider, params), modelRef.generation);
 
         recordAiUsage({
             taskKey,
@@ -417,7 +419,7 @@ export async function createJsonChatCompletionForTask<T>(
             taskKey,
             params,
             invalidJsonError,
-            'json-parse-fallback',
+            execution.route.presetName,
             trace.traceId,
             execution.attempt + 1,
         );

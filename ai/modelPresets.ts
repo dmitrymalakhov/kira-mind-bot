@@ -22,6 +22,7 @@ export type AiTaskKey =
     | 'lightweightText'
     | 'fastDialogue'
     | 'complexReasoning'
+    | 'runtimePlanning'
     | 'intentClassification'
     | 'intentDedup'
     | 'conversation'
@@ -76,6 +77,8 @@ export interface AiPresetConfig {
     name: AiPresetName;
     title: string;
     description: string;
+    /** Per-request output ceilings; lower caller limits and configured local roles still apply. */
+    outputTokenLimits?: Partial<Record<AiTaskKey, number>>;
     characteristics?: {
         quality: string;
         cost: string;

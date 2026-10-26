@@ -6,6 +6,7 @@ export const GENERATIVE_TASK_KEYS: readonly AiTaskKey[] = [
     'lightweightText',
     'fastDialogue',
     'complexReasoning',
+    'runtimePlanning',
     'intentClassification',
     'intentDedup',
     'conversation',

@@ -14,6 +14,7 @@ const TASK_KEYS: AiTaskKey[] = [
     "lightweightText",
     "fastDialogue",
     "complexReasoning",
+    "runtimePlanning",
     "intentClassification",
     "intentDedup",
     "conversation",
@@ -102,8 +103,8 @@ describe("AI model fallback and environment selection", () => {
         }
     });
 
-    test("preserves a strong fallback for complex reasoning", () => {
-        assert.deepEqual(getFallbackModel("complexReasoning"), { provider: "openai", model: "gpt-5.4" });
+    test("uses mini fallback without escalating the economy preset", () => {
+        assert.deepEqual(getFallbackModel("complexReasoning"), { provider: "openai", model: "gpt-5.4-mini" });
     });
 
     test("uses task-specific fallbacks for embeddings and transcription", () => {

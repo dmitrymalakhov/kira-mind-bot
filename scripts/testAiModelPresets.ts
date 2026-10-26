@@ -207,13 +207,13 @@ assert.strictEqual(aiPresets['glm-balanced'].title, buildPresetTitle(aiPresets['
 
 assert.deepStrictEqual(
     getGenerativeProviderCounts(aiPresets['hybrid-gemini-gpt'].models).map(({ label, count }) => `${label}:${count}`),
-    ['GPT:7', 'Gemini:6'],
+    ['Gemini:7', 'GPT:7'],
 );
 assert.deepStrictEqual(
     getGenerativeProviderCounts(aiPresets['hybrid-openrouter-gpt'].models).map(({ label, count }) => `${label}:${count}`),
-    ['GPT:9', 'OpenRouter Auto:4'],
+    ['GPT:10', 'OpenRouter Auto:4'],
 );
-assert.strictEqual(formatGenerativeUsageSummary(aiPresets['hybrid-gemini-gpt'].models), 'GPT 7 · Gemini 6');
+assert.strictEqual(formatGenerativeUsageSummary(aiPresets['hybrid-gemini-gpt'].models), 'Gemini 7 · GPT 7');
 assert.strictEqual(formatServiceSummary(aiPresets['hybrid-gemini-gpt'].models), 'OpenAI Embeddings · OpenAI Transcription');
 assert.strictEqual(formatServiceSummary(aiPresets['gemini-full'].models), 'Gemini Embeddings · Gemini Transcription');
 assert.strictEqual(formatServiceSummary(aiPresets['glm-full'].models), 'OpenAI Embeddings · Z.ai Transcription');

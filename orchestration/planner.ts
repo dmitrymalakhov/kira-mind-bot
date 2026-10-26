@@ -215,7 +215,7 @@ ${AVAILABLE_STEPS}
 - Минимум один шаг. params можно опустить или передать пустой объект.`;
 
     try {
-        const resp = await createChatCompletionForTask('complexReasoning', {
+        const resp = await createChatCompletionForTask('runtimePlanning', {
             messages: [
                 {
                     role: 'system',

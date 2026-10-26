@@ -93,7 +93,7 @@ async function decide(input: { context: ToolContext; tools: ToolDefinition[]; sk
         remaining -= JSON.stringify(compact).length;
         return compact;
     }).reverse();
-    const decision = await createJsonChatCompletionForTask<RuntimeDecision>('complexReasoning', {
+    const decision = await createJsonChatCompletionForTask<RuntimeDecision>('runtimePlanning', {
         messages: [{ role: 'system', content: [
             'Ты ведущее ядро Киры. Разложи весь запрос на действия, выполняй их доступными инструментами и оценивай результаты. Не выводи внутренние рассуждения.',
             ...(context.readOnly ? ['Это фоновый разбор вопроса: только чтение памяти, источников и research-агенты. Никаких изменений, переговоров, браузерных действий, сохранения фактов или обещаний таких действий.'] : []),

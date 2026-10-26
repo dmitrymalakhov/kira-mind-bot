@@ -40,7 +40,7 @@ describe('new engine through the real message entry point', () => {
             if (task === 'intentClassification') { classifications++; return {
                 intent: 'ВЕБ_ПОИСК', confidenceLevel: 'ВЫСОКИЙ', details: { memoryNeed: 'none', relationshipRole: null, responseComplexity: 'routine' }, subIntents: [{ intent: 'НАПОМИНАНИЕ' }],
             } as any; }
-            assert.equal(task, 'complexReasoning');
+            assert.equal(task, 'runtimePlanning');
             return [
                 { calls: [{ id: 'search', tool: 'web.search', args: { query: 'Синтетические события в субботу' } }] },
                 { calls: [{ id: 'remind', tool: 'reminders.create', args: { text: 'Выбрать синтетическое событие', dueAt: '2099-01-01T10:00:00+03:00' } }] },

@@ -20,7 +20,7 @@ interface Props {
 }
 
 const TASK_LABELS: Record<string, string> = {
-  fastDialogue: 'Быстрый первый ответ', conversation: 'Разговор с контекстом', complexReasoning: 'Сложные ответы',
+  fastDialogue: 'Быстрый первый ответ', conversation: 'Разговор с контекстом', complexReasoning: 'Сложные ответы', runtimePlanning: 'Выбор инструментов',
   defaultText: 'Повседневный текст', lightweightText: 'Короткие проверки',
   intentClassification: 'Понимание запроса', intentDedup: 'Проверка повторов',
   memoryExtraction: 'Извлечение фактов', memoryConsolidation: 'Упорядочивание памяти',
@@ -109,10 +109,13 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
                     <Chip size="small" color={changed ? 'warning' : 'success'} label={changed ? 'Предпросмотр — нажмите «Применить»' : 'Этот профиль сохранён'} />
                   </Stack>
                   <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
-                    {(['fastDialogue', 'conversation', 'complexReasoning'] as const).map(task => (
+                    {(['fastDialogue', 'conversation', 'runtimePlanning', 'complexReasoning'] as const).map(task => (
                       <Box key={task} sx={{ flex: 1, p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
                         <Typography variant="caption" color="text.secondary">{TASK_LABELS[task]}</Typography>
                         <Typography variant="body2" fontWeight={600}>{modelLabel(preview.models[task])}</Typography>
+                        {preview.outputTokenLimits?.[task] && preview.models[task]?.provider !== 'lmstudio' && (
+                          <Typography variant="caption" color="text.secondary">До {preview.outputTokenLimits[task]} выходных токенов за вызов</Typography>
+                        )}
                       </Box>
                     ))}
                   </Stack>

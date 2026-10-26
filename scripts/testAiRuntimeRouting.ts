@@ -212,7 +212,7 @@ async function main() {
             ['gpt-balanced', 'memoryExtraction', 'openai', 'gpt-5.4-mini'],
             ['gpt-balanced', selectConversationTask({ details: { responseComplexity: 'routine' } }), 'openai', 'gpt-5.4-mini'],
             ['gpt-balanced', selectConversationTask({ details: { responseComplexity: 'complex' } }), 'openai', 'gpt-5.4'],
-            ['gpt-lean', selectConversationTask(undefined, true), 'openai', 'gpt-5.4'],
+            ['gpt-lean', selectConversationTask(undefined, true), 'openai', 'gpt-5.4-mini'],
             ['gpt-balanced', selectConversationTask({ subIntents: [{ intent: 'ВЕБ_ПОИСК' }] }), 'openai', 'gpt-5.4'],
             ['gpt-balanced', selectConversationTask(), 'openai', 'gpt-5.4-mini'],
             ['gemini-full', 'lightweightText', 'gemini', 'gemini-3.5-flash-lite'],

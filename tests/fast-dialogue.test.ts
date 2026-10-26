@@ -167,6 +167,26 @@ function worker(t: TestContext, value: DialogueJob) {
     };
 }
 
+test('deep answer reuses prepared memory without paying for an unnecessary tool-planning loop', async t => {
+    const value = job(true); const deps = worker(t, value);
+    value.input.classification.details.responseComplexity = 'complex';
+    value.input.classification.details.memoryNeed = 'full';
+    const recall = t.mock.method(memory, 'fetchAgentMemoryContext', async () => ({ domain: 'personal', context: 'Синтетическое свидетельство из памяти', recalledMemories: [] }));
+    const planner = t.mock.method(completion, 'createJsonChatCompletionForTask', async () => { throw new Error('Unnecessary planning inference'); });
+    const answer = t.mock.method(conversation, 'conversationAgent', async (...args: any[]) => {
+        assert.match(args[6].context, /Синтетическое свидетельство/);
+        assert.equal(args[6].allowSideEffects, false);
+        assert.equal(args[6].allowSelfEvolution, false);
+        return { responseText: 'Синтетический полный ответ.' };
+    });
+    await executeDialogueJob({} as any, value, { ...deps, deepen: undefined });
+    assert.equal(deps.stored().status, 'ready');
+    assert.equal(deps.stored().resultText, 'Синтетический полный ответ.');
+    assert.equal(recall.mock.callCount(), 1);
+    assert.equal(answer.mock.callCount(), 1);
+    assert.equal(planner.mock.callCount(), 0);
+});
+
 test('review is silent when deeper work would add no value', async t => {
     const value = job(); const deps = worker(t, value);
     deps.review = async () => ({ needed: false, memoryNeed: 'full', web: false });

@@ -100,7 +100,7 @@ async function deepen(job: DialogueJob, signal: AbortSignal): Promise<string> {
     ].filter(Boolean).join('\n\n');
     const result = await runKiraRuntime({ ctx, message: job.input.message, classification, isForwarded: false, forwardFrom: '',
         messageHistory: job.input.history.map(item => ({ ...item, timestamp: job.createdAt })), enrichedContextFromMemory: context,
-        readOnly: true, suppressProgress: true }, { signal, forceLoop: true, limits: { rounds: 5, calls: 8 } });
+        readOnly: true, suppressProgress: true }, { signal, limits: { rounds: 5, calls: 8 } });
     if (signal.aborted || result.operationStatus === 'failed' || result.operationStatus === 'unknown') throw new Error('deep_work_failed');
     return result.responseText.slice(0, 12_000);
 }

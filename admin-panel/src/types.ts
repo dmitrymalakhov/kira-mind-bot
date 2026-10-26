@@ -74,6 +74,7 @@ export interface AiPresetConfig {
   name: AiPresetName;
   title: string;
   description: string;
+  outputTokenLimits?: Record<string, number>;
   characteristics?: {
     quality: string;
     cost: string;
