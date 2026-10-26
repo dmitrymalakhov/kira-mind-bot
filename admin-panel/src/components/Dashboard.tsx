@@ -18,6 +18,9 @@ import MenuIcon from '@mui/icons-material/Menu';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import EventRepeatIcon from '@mui/icons-material/EventRepeat';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import CloseIcon from '@mui/icons-material/Close';
 import { BrandMark } from './BrandMark';
 import { StatusBar } from './StatusBar';
 import { CONFIG_SCHEMA, KEY_SECTIONS } from '../schema';
@@ -33,7 +36,9 @@ import { RecurringTasksSection } from './RecurringTasksSection';
 import { saveConfig, fetchConfig, logout, restartService } from '../api';
 import type { ConfigResponse, Toast } from '../types';
 
-const SIDEBAR_WIDTH = 232;
+const SIDEBAR_WIDTH = 304;
+const SIDEBAR_COMPACT_WIDTH = 88;
+const SIDEBAR_STORAGE_KEY = 'kira.admin.sidebar.collapsed.v1';
 const NAVIGATION = [
   { id: 'settings', label: 'Настройки', icon: <TuneIcon />, caption: 'Модель, самостоятельность и подключения Киры.' },
   { id: 'personality', label: 'Личность', icon: <PersonOutlineIcon />, caption: 'Характер, история и внешность Киры.' },
@@ -76,6 +81,10 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
   const [configDialog, setConfigDialog] = useState<string | null>(null);
   const [visitedDialogs, setVisitedDialogs] = useState<Set<string>>(() => new Set());
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true'; }
+    catch { return false; }
+  });
   const [serviceMenu, setServiceMenu] = useState<HTMLElement | null>(null);
   const [restartOpen, setRestartOpen] = useState(false);
   const [restarting, setRestarting] = useState(false);
@@ -87,9 +96,15 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
   const currentPage = NAVIGATION.find(item => item.id === page)!;
   const currentSettings = SETTINGS_TABS.find(item => item.id === settingsTab)!;
   const showToast = useCallback((message: string, severity: Toast['severity']) => setToast({ message, severity }), []);
+  const sidebarWidth = sidebarCollapsed ? SIDEBAR_COMPACT_WIDTH : SIDEBAR_WIDTH;
   const markDirty = useCallback((id: string, dirty: boolean) => {
     setDirtySections(previous => previous[id] === dirty ? previous : { ...previous, [id]: dirty });
   }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem(SIDEBAR_STORAGE_KEY, String(sidebarCollapsed)); }
+    catch { /* Navigation still works when browser storage is unavailable. */ }
+  }, [sidebarCollapsed]);
 
   useEffect(() => {
     if (!pendingCount) return;
@@ -140,43 +155,57 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
     finally { setRestarting(false); }
   }
 
-  const navigation = (
+  const renderNavigation = (compact: boolean, mobile = false) => (
     <Stack sx={{ height: '100%', bgcolor: 'sidebar.surface' }}>
-      <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 2.5, pt: 4, pb: 4.5 }}>
-        <BrandMark size={52} />
-        <Box><Typography sx={{ color: '#F1F5EE', fontSize: 21, fontWeight: 500, letterSpacing: '-.025em', whiteSpace: 'nowrap' }}>Kira <Box component="span" sx={{ fontWeight: 400, color: '#ADC0AF' }}>Mind</Box></Typography>
-          <Typography sx={{ color: '#91A294', fontSize: 9, letterSpacing: '.035em', mt: .25 }}>ПАНЕЛЬ УПРАВЛЕНИЯ</Typography></Box>
+      <Stack direction="row" alignItems="center" justifyContent={compact ? 'center' : 'flex-start'} spacing={compact ? 0 : 1.5}
+        sx={{ px: compact ? 1.5 : 2.5, minHeight: 128, flexShrink: 0, position: 'relative' }}>
+        <BrandMark size={compact ? 56 : 88} />
+        {!compact && <Box><Typography sx={{ color: '#F1F5EE', fontSize: 27, fontWeight: 500, letterSpacing: '-.035em', whiteSpace: 'nowrap' }}>Kira <Box component="span" sx={{ fontWeight: 400, color: '#ADC0AF' }}>Mind</Box></Typography>
+          <Typography sx={{ color: '#A5B4AA', fontSize: 10, letterSpacing: '.04em', mt: .5 }}>ПАНЕЛЬ УПРАВЛЕНИЯ</Typography></Box>}
+        {mobile && <IconButton aria-label="Закрыть меню" onClick={() => setMobileOpen(false)} size="small" sx={{ position: 'absolute', top: 10, right: 10, color: '#AFBDB2' }}><CloseIcon fontSize="small" /></IconButton>}
       </Stack>
-      <Box component="nav" aria-label="Основная навигация" sx={{ px: 2, flex: 1, overflowY: 'auto' }}>
+      <Box component="nav" id={mobile ? 'mobile-navigation' : 'desktop-navigation'} aria-label="Основная навигация" sx={{ px: compact ? 2 : 2.5, flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {NAVIGATION.map(item => (
           <Box key={item.id}>
-            {['settings', 'personality', 'monitoring'].includes(item.id) && <Typography variant="overline" sx={{ display: 'block', px: 1.5, mt: item.id === 'settings' ? 0 : 3, mb: 1, color: '#839889' }}>{item.id === 'settings' ? 'Управление' : item.id === 'monitoring' ? 'Система' : 'Пространство'}</Typography>}
-            <ListItemButton selected={page === item.id} onClick={() => selectPage(item.id)} aria-current={page === item.id ? 'page' : undefined}
-              sx={{ minHeight: 45, px: 1.5, mb: .75, gap: 1.5, color: '#AFBDB2', '&:hover': { bgcolor: 'sidebar.hover', color: '#F1F5EE' }, '&.Mui-selected': { bgcolor: '#D8E9CD', color: '#284331', '&:hover': { bgcolor: '#DFEED5' } } }}>
-              <ListItemIcon sx={{ minWidth: 0, color: 'inherit', '& svg': { fontSize: 21 } }}>{item.icon}</ListItemIcon>
-              <Typography variant="body2" fontWeight={page === item.id ? 600 : 400}>{item.label}</Typography>
-              {item.id === 'settings' && pendingCount > 0 && <Box component="span" aria-label="Есть несохранённые изменения" sx={{ ml: 'auto', width: 6, height: 6, borderRadius: '50%', bgcolor: 'warning.main' }} />}
-            </ListItemButton>
+            {['settings', 'personality', 'monitoring'].includes(item.id) && <Box sx={{ height: 24, display: 'flex', alignItems: 'center', justifyContent: compact ? 'center' : 'flex-start', px: compact ? 0 : 1.75, mt: item.id === 'settings' ? 0 : 1 }}>
+              {compact ? <Box aria-hidden="true" sx={{ width: 22, borderTop: '1px solid', borderColor: 'sidebar.border' }} /> : <Typography variant="overline" sx={{ color: '#A5B4AA' }}>{item.id === 'settings' ? 'Управление' : item.id === 'monitoring' ? 'Система' : 'Пространство'}</Typography>}
+            </Box>}
+            <Tooltip title={compact ? item.label + (item.id === 'settings' && pendingCount > 0 ? ' · Есть несохранённые изменения' : '') : ''} placement="right" arrow>
+              <ListItemButton selected={page === item.id} onClick={() => selectPage(item.id)} aria-label={item.label} aria-current={page === item.id ? 'page' : undefined}
+                sx={{ minHeight: 52, px: compact ? 0 : 1.75, mb: .5, gap: 1.75, position: 'relative', justifyContent: compact ? 'center' : 'flex-start', color: '#BBC8BE', '&:hover': { bgcolor: 'sidebar.hover', color: '#F1F5EE' }, '&.Mui-selected': { bgcolor: '#D8E9CD', color: '#284331', '&:hover': { bgcolor: '#DFEED5' } } }}>
+                <ListItemIcon sx={{ minWidth: 0, color: 'inherit', '& svg': { fontSize: 24 } }}>{item.icon}</ListItemIcon>
+                {!compact && <Typography fontSize={15} fontWeight={page === item.id ? 600 : 400}>{item.label}</Typography>}
+                {item.id === 'settings' && pendingCount > 0 && <Box component="span" aria-label="Есть несохранённые изменения" sx={{ position: 'absolute', right: compact ? 8 : 16, top: compact ? 10 : 23, width: 6, height: 6, borderRadius: '50%', bgcolor: 'warning.main' }} />}
+              </ListItemButton>
+            </Tooltip>
           </Box>
         ))}
       </Box>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mx: 2.5, py: 2, borderTop: '1px solid', borderColor: 'sidebar.border' }}>
-        <Typography variant="caption" sx={{ color: '#A5B4AA' }}>Управление сервисом</Typography>
-        <Tooltip title="Действия сервиса">
-          <IconButton sx={{ color: '#A5B4AA' }} aria-label="Действия сервиса" aria-haspopup="menu" aria-controls={serviceMenu ? 'service-menu' : undefined} aria-expanded={Boolean(serviceMenu)} onClick={event => setServiceMenu(event.currentTarget)}>
-            {restarting ? <CircularProgress size={20} /> : <MoreHorizIcon />}
-          </IconButton>
-        </Tooltip>
+      <Stack sx={{ mx: compact ? 2 : 2.5, py: 1, borderTop: '1px solid', borderColor: 'sidebar.border', flexShrink: 0 }}>
+        <Stack direction="row" justifyContent={compact ? 'center' : 'space-between'} alignItems="center">
+          {!compact && <Typography variant="caption" sx={{ color: '#A5B4AA' }}>Управление сервисом</Typography>}
+          <Tooltip title="Действия сервиса" placement="right">
+            <IconButton sx={{ color: '#BBC8BE', minHeight: 44, minWidth: 44 }} aria-label="Действия сервиса" aria-haspopup="menu" aria-controls={serviceMenu ? 'service-menu' : undefined} aria-expanded={Boolean(serviceMenu)} onClick={event => setServiceMenu(event.currentTarget)}>
+              {restarting ? <CircularProgress size={20} /> : <MoreHorizIcon />}
+            </IconButton>
+          </Tooltip>
+        </Stack>
+        {!mobile && <Tooltip title={compact ? 'Развернуть меню' : ''} placement="right" arrow>
+          <Button onClick={() => setSidebarCollapsed(value => !value)} aria-label={compact ? 'Развернуть меню' : 'Свернуть меню'} aria-expanded={!compact} aria-controls="desktop-navigation"
+            sx={{ mt: .5, minWidth: 0, minHeight: 44, px: compact ? 0 : 1.5, gap: 1.5, justifyContent: compact ? 'center' : 'flex-start', color: '#BBC8BE', fontWeight: 400, '&:hover': { bgcolor: 'sidebar.hover', color: '#F1F5EE' } }}>
+            {compact ? <ChevronRightIcon /> : <ChevronLeftIcon />}{!compact && 'Свернуть меню'}
+          </Button>
+        </Tooltip>}
       </Stack>
     </Stack>
   );
 
   return (
     <Box sx={{ minHeight: '100vh', display: 'flex', bgcolor: 'background.default' }}>
-      <Box component="aside" sx={{ display: { xs: 'none', md: 'block' }, width: SIDEBAR_WIDTH, flexShrink: 0 }}>
-        <Box sx={{ position: 'fixed', inset: '0 auto 0 0', width: SIDEBAR_WIDTH, borderRight: '1px solid', borderColor: 'divider' }}>{navigation}</Box>
+      <Box component="aside" sx={{ display: { xs: 'none', md: 'block' }, width: sidebarWidth, flexShrink: 0, transition: 'width 180ms ease' }}>
+        <Box sx={{ position: 'fixed', inset: '0 auto 0 0', width: sidebarWidth, transition: 'width 180ms ease', borderRight: '1px solid', borderColor: 'divider' }}>{renderNavigation(sidebarCollapsed)}</Box>
       </Box>
-      <Drawer open={mobileOpen} onClose={() => setMobileOpen(false)} sx={{ display: { md: 'none' }, '& .MuiDrawer-paper': { width: 272, maxWidth: '85vw' } }}>{navigation}</Drawer>
+      <Drawer open={mobileOpen} onClose={() => setMobileOpen(false)} sx={{ display: { md: 'none' }, '& .MuiDrawer-paper': { width: SIDEBAR_WIDTH, maxWidth: '88vw' } }}>{renderNavigation(false, true)}</Drawer>
       <Box component="main" id="main-content" sx={{ flex: 1, minWidth: 0, px: { xs: 2, sm: 4, lg: 5 }, py: 3, maxWidth: 1440, mx: 'auto' }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 3, gap: 2 }}>
           <Stack direction="row" spacing={1} alignItems="center">
