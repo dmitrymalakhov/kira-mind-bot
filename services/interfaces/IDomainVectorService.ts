@@ -1,6 +1,12 @@
 import { IVectorService, MemoryEntry, SearchOptions, SearchResult, MemoryStats } from './IVectorService';
 import { DomainConfig, SearchStrategy, DomainStats, DomainTrend } from '../../types';
 
+export interface MemoryCandidateOptions {
+    /** Conversational recall filters before top-k; storage/dedup callers keep their ranking. */
+    acceptCandidate?: (candidate: SearchResult) => boolean;
+    relevanceOnly?: boolean;
+}
+
 export abstract class IDomainVectorService extends IVectorService {
     abstract createDomain(config: DomainConfig): Promise<void>;
     abstract getDomainConfig(domain: string): Promise<DomainConfig | null>;
@@ -11,13 +17,13 @@ export abstract class IDomainVectorService extends IVectorService {
 
     abstract searchInDomain(query: string, domain: string, userId: string, options?: SearchOptions): Promise<SearchResult[]>;
     abstract searchCrossDomain(query: string, userId: string, strategy: SearchStrategy): Promise<SearchResult[]>;
-    abstract searchAllDomains(query: string, userId: string, limit?: number): Promise<SearchResult[]>;
+    abstract searchAllDomains(query: string, userId: string, limit?: number, options?: MemoryCandidateOptions): Promise<SearchResult[]>;
     /**
      * Опциональный lexical candidate source для гибридного retrieval.
      * `score` здесь служит только локальной сортировке; dense cosine возвращает
      * `searchAllDomains` и сохраняется отдельно при fusion.
      */
-    abstract searchLexicalAllDomains?(query: string, userId: string, limit?: number): Promise<SearchResult[]>;
+    abstract searchLexicalAllDomains?(query: string, userId: string, limit?: number, options?: MemoryCandidateOptions): Promise<SearchResult[]>;
     /** Якорные факты (явные «Запомни») для подмешивания в контекст */
     abstract getAnchorMemories(userId: string, limit?: number): Promise<SearchResult[]>;
     /** Обновить существующую точку (при дедупликации) */

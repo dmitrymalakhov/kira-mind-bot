@@ -20,6 +20,7 @@ export interface AgentMemoryContextOptions {
     memoryNeed?: 'none' | 'light' | 'full';
     /** Детерминированная дневная сводка строит snapshot отдельно и не должна читать его дважды. */
     includeTodayImportance?: boolean;
+    trackAccess?: boolean;
 }
 
 /**
@@ -58,7 +59,7 @@ export async function fetchAgentMemoryContext(
     const [memory, todayImportanceContext] = await Promise.all([
         focused && relationship?.complete
             ? Promise.resolve({ context: '', recalledMemories: [] })
-            : getMultiQueryMemoryContextDetailed(ctx, trimmed, memoryNeed),
+            : getMultiQueryMemoryContextDetailed(ctx, trimmed, memoryNeed, { trackAccess: options.trackAccess }),
         options.includeTodayImportance === false
             ? Promise.resolve('')
             : buildTodayImportanceContext(ctx, trimmed),

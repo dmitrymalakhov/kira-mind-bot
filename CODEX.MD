@@ -123,6 +123,9 @@
   - retrieval, proactive hints и memory-gap должны использовать одни и те же helper-ы contact-memory.
   - `contact_username` считается сильным identity key наравне с `contact_id`, но не заменяет backward-compatible теги `contact_name/contact_alias/contact_key`.
 - Conversational memory retrieval является гибридным:
+  - candidate scope применяется до top-k; conversational dense отбирается по релевантности без раннего штрафа за возраст, а full-text использует отдельные bounded AND/OR пулы. Raw cosine и ranking старых storage/dedup callers не меняются;
+  - owner-атрибутированный заголовок главы/модели не является contact prefix; смешанные/source-chat и contact записи не получают это исключение;
+  - LLM-reranker принимает только номера показанных кандидатов или NONE; malformed/error означает ограниченный fallback. Кеш зависит от owner, всего вопроса, содержания кандидатов и лимита. Token packing сохраняет порядок реранкера и ограничивает также первый длинный факт. Background deepen отключает access/importance reinforcement через trackAccess:false. Карта и ограничения: docs/memory-retrieval-pipeline.md;
   - dense cosine, нормализованные lexical overlap и entity match объединяются только в multi-query recall; raw cosine из vector service остаётся неизменным для dedup, contradiction и storage-порогов;
   - entity match влияет только на порядок уже разрешённых contact scope кандидатов и не является механизмом идентификации или авторизации смешения людей;
   - Qdrant full-text payload index на `content` добавляется без изменения vector schema; его недоступность должна деградировать поиск до dense-only, а не блокировать запуск;

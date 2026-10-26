@@ -13,6 +13,7 @@ const RETRIEVAL_STOPWORDS = new Set([
     'мы', 'на', 'над', 'не', 'него', 'нее', 'неё', 'но', 'о', 'об', 'он', 'она',
     'они', 'от', 'по', 'под', 'про', 'с', 'со', 'так', 'там', 'тебе', 'ты', 'у',
     'что', 'это', 'этот', 'эта', 'эти', 'я',
+    'помнишь', 'вспомни', 'напомни', 'пожалуйста', 'расскажи', 'скажи', 'знаешь',
     'a', 'about', 'and', 'are', 'for', 'from', 'how', 'in', 'is', 'of', 'on',
     'or', 'the', 'to', 'was', 'what', 'when', 'where', 'who', 'with',
 ]);
@@ -211,6 +212,7 @@ export function fuseMemoryRetrievalCandidates<T extends MemoryRetrievalCandidate
     lexicalCandidates: T[],
     limit: number
 ): Array<HybridMemoryRetrievalResult<T>> {
+    const queryTokens = tokenizeMemoryRetrievalText(query);
     const merged = new Map<string, { candidate: T; semanticScore: number; sources: Set<'semantic' | 'lexical'> }>();
 
     for (const candidate of semanticCandidates) {
@@ -243,7 +245,11 @@ export function fuseMemoryRetrievalCandidates<T extends MemoryRetrievalCandidate
             const blended = semanticScore * 0.62 + lexical.score * 0.25 + entity.score * 0.13 + agreementBonus;
             const lexicalRescue = lexical.score >= 0.82 && lexical.matchedTokens.length >= 2
                 ? lexical.score * 0.92
-                : 0;
+                // Short deterministic cues (e.g. «работает») must survive without
+                // dense agreement. This is candidate recall, not proof of a fact.
+                : queryTokens.length === 1 && lexical.score >= 0.9 && lexical.matchedTokens[0]?.length >= 4
+                    ? lexical.score * 0.78
+                    : 0;
             const entityRescue = entity.score >= 0.80 ? entity.score * 0.86 : 0;
             const hybridScore = clamp01(Math.max(semanticScore, blended, lexicalRescue, entityRescue));
             const scoreDetails: MemoryRetrievalScoreDetails = {

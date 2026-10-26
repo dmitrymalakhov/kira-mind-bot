@@ -1,6 +1,6 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { v4 as uuidv4 } from 'uuid';
-import { IDomainVectorService } from './interfaces/IDomainVectorService';
+import { IDomainVectorService, MemoryCandidateOptions } from './interfaces/IDomainVectorService';
 import { MemoryEntry, SearchOptions, SearchResult, MemoryStats, DomainConfig, SearchStrategy, DomainStats, DomainTrend, MemoryRelation, MemoryRelationType } from '../types';
 import { PREDEFINED_DOMAINS, DOMAIN_SEARCH_THRESHOLDS } from '../constants/domains';
 import { config } from '../config';
@@ -723,9 +723,11 @@ export class QdrantVectorService implements IDomainVectorService {
         return results.map(r => r.content).join('\n');
     }
 
-    async searchAllDomains(query: string, userId: string, limit = 5): Promise<SearchResult[]> {
+    async searchAllDomains(query: string, userId: string, limit = 5, options: MemoryCandidateOptions = {}): Promise<SearchResult[]> {
         const vector = await this.embed(query);
-        const perDomainLimit = Math.min(10, Math.max(3, limit));
+        const perDomainLimit = options.acceptCandidate
+            ? Math.min(60, Math.max(15, limit * 3))
+            : Math.min(10, Math.max(3, limit));
 
         // Параллельный поиск по всем доменам — эмбеддинг уже готов
         const domainSearches = Object.values(PREDEFINED_DOMAINS).map(async (domain) => {
@@ -757,7 +759,10 @@ export class QdrantVectorService implements IDomainVectorService {
             else devLog('searchAllDomains domain error:', r.reason);
         }
 
-        return this.applyImportanceRecencyRanking(allResults).slice(0, limit);
+        const eligible = options.acceptCandidate ? allResults.filter(options.acceptCandidate) : allResults;
+        return (options.relevanceOnly
+            ? eligible.sort((a, b) => b.score - a.score)
+            : this.applyImportanceRecencyRanking(eligible)).slice(0, limit);
     }
 
     /**
@@ -765,37 +770,48 @@ export class QdrantVectorService implements IDomainVectorService {
      * Финальный score рассчитывается общим fusion-слоем; здесь score нужен лишь
      * для ограничения числа кандидатов до объединения с dense-выдачей.
      */
-    async searchLexicalAllDomains(query: string, userId: string, limit = 20): Promise<SearchResult[]> {
+    async searchLexicalAllDomains(query: string, userId: string, limit = 20, options: MemoryCandidateOptions = {}): Promise<SearchResult[]> {
         const queryTokens = tokenizeMemoryRetrievalText(query).slice(0, 12);
         if (queryTokens.length === 0) return [];
 
-        const perDomainLimit = Math.min(25, Math.max(5, limit));
+        const perDomainLimit = Math.min(60, Math.max(10, limit * 2));
         const domainSearches = Object.values(PREDEFINED_DOMAINS).map(async (domain) => {
             const collection = this.collectionFor(domain);
             await this.ensureCollectionCompatibility(collection);
             if (!await this.ensureMemoryTextIndex(collection)) return [] as SearchResult[];
 
-            const scroll = await this.client.scroll(collection, {
-                filter: {
-                    must: [
-                        { key: 'botId', match: { value: this.botId } },
-                        { key: 'userId', match: { value: userId } },
-                    ],
+            const scopeFilter = {
+                must: [
+                    { key: 'botId', match: { value: this.botId } },
+                    { key: 'userId', match: { value: userId } },
+                ],
+                must_not: this.activeMustNotFilter(),
+            };
+            const conditions = queryTokens.map(token => ({ key: 'content', match: { text: token } }));
+            // OR scroll is ordered by point ID, not relevance. A separate AND pool
+            // prevents early common-word hits from hiding precise multi-word facts.
+            const filters = [
+                ...(conditions.length > 1 ? [{ ...scopeFilter, must: [...scopeFilter.must, ...conditions] }] : []),
+                { ...scopeFilter,
                     min_should: {
-                        conditions: queryTokens.map(token => ({
-                            key: 'content',
-                            match: { text: token },
-                        })),
+                        conditions,
                         min_count: 1,
                     },
-                    must_not: this.activeMustNotFilter(),
                 },
+            ];
+            const branches = await Promise.allSettled(filters.map(filter => this.client.scroll(collection, {
+                filter,
                 limit: perDomainLimit,
                 with_payload: true,
                 with_vector: false,
-            });
+            })));
+            const points = new Map<string, Awaited<ReturnType<QdrantClient['scroll']>>['points'][number]>();
+            for (const branch of branches) {
+                if (branch.status === 'fulfilled') for (const point of branch.value.points ?? []) points.set(String(point.id), point);
+                else devLog('Lexical candidate branch unavailable:', branch.reason);
+            }
 
-            return (scroll.points ?? [])
+            return [...points.values()]
                 .filter(point => Boolean(point.payload?.content && point.payload?.timestamp))
                 .map(point => {
                     const content = String(point.payload!.content);
@@ -807,7 +823,7 @@ export class QdrantVectorService implements IDomainVectorService {
                     const candidateScore = Math.max(lexical, entity * 0.9);
                     return this.mapSearchPoint(point, candidateScore);
                 })
-                .filter(result => result.score >= 0.18);
+                .filter(result => result.score >= 0.18 && (!options.acceptCandidate || options.acceptCandidate(result)));
         });
 
         const settled = await Promise.allSettled(domainSearches);

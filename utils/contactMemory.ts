@@ -10,6 +10,7 @@ import { devLog } from '../utils';
 import { resolveOrCreatePersonIdentity } from '../services/PersonIdentityService';
 import { getBotGenderedText } from '../persona';
 import { PENDING_CONTACT_MEMORY_TTL_MS } from './contactMemoryConstants';
+import { isEligibleForUserSynthesis } from './userSynthesisFilter';
 
 const RECENT_FACT_TTL_MS = 10 * 60 * 1000;
 
@@ -197,9 +198,15 @@ export function isContactMemoryEntry(memory: { content: string; tags?: string[] 
 }
 
 export function isMemoryEntryAllowedForContactScope(
-    memory: { content: string; tags?: string[] | undefined },
+    memory: { content: string; tags?: string[] | undefined; subject?: string },
     scope: ContactIdentityScope | null
 ): boolean {
+    // Product document headings are not people's names. Only explicitly owner-
+    // attributed syntheses may bypass that legacy prefix rule; mixed-chat and
+    // contact sources retain the existing isolation checks.
+    const ownerDocument = /^\[(?:(?:ЭПИЗОД|ГЛАВА|МОДЕЛЬ) ПАМЯТИ:|ИНДЕКС (?:СОМНЕНИЙ|ОТКРЫТЫХ ЛИНИЙ) ПАМЯТИ\])/u.test(memory.content);
+    if (ownerDocument && !hasContactMemoryTags(memory.tags) &&
+        (memory.subject === 'user' || memory.tags?.includes('subject:user')) && isEligibleForUserSynthesis(memory)) return true;
     if (!isContactMemoryEntry(memory)) return true;
     if (!scope) return false;
     if (scope.status === 'ambiguous') return false;

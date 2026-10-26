@@ -91,7 +91,7 @@ async function review(job: DialogueJob) {
 async function deepen(job: DialogueJob, signal: AbortSignal): Promise<string> {
     const ctx = backgroundContext(job);
     const classification = job.input.classification;
-    const prepared = await fetchAgentMemoryContext(ctx, job.input.message, { memoryNeed: classification.details.memoryNeed ?? 'full' });
+    const prepared = await fetchAgentMemoryContext(ctx, job.input.message, { memoryNeed: classification.details.memoryNeed ?? 'full', trackAccess: false });
     if (signal.aborted) throw new Error('cancelled');
     const knowledge = decideKnowledgeSource(job.input.message);
     const context = [buildMemoryContextBlock(prepared), buildKnowledgeSourcePrompt(knowledge),
