@@ -112,7 +112,7 @@ export function ModelPreferencesSettings({ onToast, localConnection }: {
       <TextField select label="Стратегия" value={mode} disabled={busy} onChange={event => {
         if (event.target.value === 'custom') openCustom(); else setMode('automatic');
       }}>
-        <MenuItem value="automatic">Автоматически · выбор Киры</MenuItem>
+        <MenuItem value="automatic">Автоматически</MenuItem>
         <MenuItem value="custom">Custom · моя стратегия</MenuItem>
       </TextField>
       {mode === 'custom' ? <Stack spacing={2}>
