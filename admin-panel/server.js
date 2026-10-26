@@ -342,14 +342,7 @@ app.post('/api/logout', (req, res) => {
 
 app.get('/api/config', requireAuth, async (req, res) => {
   const vars = require('./configValues').mergeEditableDefaults(readEnvFile(), process.env, EDITABLE_KEYS);
-  const result = {};
-  for (const [key, value] of Object.entries(vars)) {
-    if (SENSITIVE_KEYS.has(key) && value && value.length > 6) {
-      result[key] = { value: value.slice(0, 4) + '••••', masked: true };
-    } else {
-      result[key] = { value, masked: false };
-    }
-  }
+  const result = require('./configValues').maskConfigValues(vars, SENSITIVE_KEYS);
   for (const [key, value] of Object.entries(SYSTEM_DEFAULT_CONFIG)) {
     if (!(key in result)) {
       result[key] = { value, masked: false, source: 'system_default' };

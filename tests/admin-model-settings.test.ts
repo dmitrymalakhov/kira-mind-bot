@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { KEY_SECTIONS, CONFIG_SCHEMA, LOCAL_MODEL_CONNECTION_SECTION, VOICE_MODEL_SECTION, IMAGE_CONNECTION_SECTION } from '../admin-panel/src/schema';
-const { mergeEditableDefaults, isValidProxyUrl } = require('../admin-panel/configValues');
+const { mergeEditableDefaults, maskConfigValues, isValidProxyUrl } = require('../admin-panel/configValues');
 const { registerMemoryDetailRoute } = require('../admin-panel/memoryDetail');
 
 test('credentials, model choices and system parameters each have a single editor', () => {
@@ -43,4 +43,25 @@ test('full memory detail is read-only, authenticated, scoped and never returns a
     status = 200;
     await handler({ params: { domain: 'general', id: 'synthetic-record' }, query: { userId: 'synthetic-owner' } }, response);
     assert.equal(status, 200); assert.equal(result.record.content, payload.content); assert.equal(cache, 'private, no-store');
+});
+
+
+test('admin config masks legacy service credentials and short secrets without changing source values or numeric limits', () => {
+    const original = { SERGEY_BOT_TOKEN: 'synthetic-legacy-bot-token', KIRA_API_TOKEN: 'synthetic-owner-api-token',
+        DB_PASSWORD: 'tiny', FUTURE_PROVIDER_API_KEY: 'synthetic-provider-key', TELEGRAM_SESSION_STRING: 'synthetic-session',
+        MAX_OUTPUT_TOKENS: '2048', TOKEN_BUDGET: '1000', TELEGRAM_API_ID: 'synthetic-api-id', OPENAI_BASE_URL: 'http://synthetic-proxy:8080/v1',
+        EMPTY_API_KEY: '', CUSTOM_CREDENTIAL: 'synthetic-explicit-secret' };
+    const snapshot = { ...original };
+    const result = maskConfigValues(original, new Set(['CUSTOM_CREDENTIAL']));
+    for (const key of ['SERGEY_BOT_TOKEN', 'KIRA_API_TOKEN', 'DB_PASSWORD', 'FUTURE_PROVIDER_API_KEY', 'TELEGRAM_SESSION_STRING', 'CUSTOM_CREDENTIAL']) {
+        assert.equal(result[key].masked, true);
+        assert.ok(result[key].value.includes('••••'));
+        assert.ok(!JSON.stringify(result).includes(original[key as keyof typeof original]));
+        assert.deepEqual(Object.keys(result[key]).sort(), ['masked', 'value']);
+    }
+    assert.equal(result.DB_PASSWORD.value, '••••');
+    for (const key of ['MAX_OUTPUT_TOKENS','TOKEN_BUDGET','TELEGRAM_API_ID','OPENAI_BASE_URL','EMPTY_API_KEY']) {
+        assert.deepEqual(result[key], { value: original[key as keyof typeof original], masked: false });
+    }
+    assert.deepEqual(original, snapshot);
 });
