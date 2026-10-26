@@ -16,6 +16,7 @@ import { ContactsStore } from "../stores/ContactsStore";
 import { ReminderRegistry } from "../stores/ReminderRegistry";
 import { reconsolidateAfterResponse } from "../services/MemoryReconsolidationService";
 import { looksLikeBrowserTaskCancellation } from "../utils/browserTaskCancellation";
+import { browserConfirmationKey } from '../orchestration/runtime/confirmation';
 import { applyReminderEditInput, extractReminderPostponeDate } from "../utils/reminderEditor";
 import { stripVoiceReplyDirective, wantsVoiceReply } from "../utils/voiceReply";
 import { editMessageTextIfChanged } from "../utils/telegramMessageEdit";
@@ -533,20 +534,22 @@ export function registerTextMessageHandler(bot: Bot<BotContext>, options: { imme
                                         .catch(() => {});
                                 }
                                 ctx.session.pendingBrowserTask = undefined;
-                                await cancelRuntimeContinuation(ctx, ['agents.start', 'agents.resume']);
+                                if (pendingBrowserTask.sessionId) await cancelRuntimeContinuation(ctx, ['agents.start', 'agents.resume'], browserConfirmationKey(pendingBrowserTask.sessionId));
                                 await replyAndStore(ctx, 'Браузерная задача отменена.');
                                 return;
                             }
 
-                            pendingBrowserTask.userAnswer = message;
-                            messageForProcessing = [
-                                'Продолжи задачу в браузере через Playwright.',
-                                `browserSessionId: ${pendingBrowserTask.sessionId ?? 'none'}`,
-                                `Исходная задача пользователя: ${pendingBrowserTask.originalTask}`,
-                                `Вопрос агента пользователю: ${pendingBrowserTask.question}`,
-                                `Ответ пользователя: ${message}`,
-                                'Используй ответ как недостающий параметр, подтяни долговременную память как обычно и продолжи выполнение.',
-                            ].join('\n');
+                            if (orchestrationMode() === 'legacy') {
+                                pendingBrowserTask.userAnswer = message;
+                                messageForProcessing = [
+                                    'Продолжи задачу в браузере через Playwright.',
+                                    `browserSessionId: ${pendingBrowserTask.sessionId ?? 'none'}`,
+                                    `Исходная задача пользователя: ${pendingBrowserTask.originalTask}`,
+                                    `Вопрос агента пользователю: ${pendingBrowserTask.question}`,
+                                    `Ответ пользователя: ${message}`,
+                                    'Используй ответ как недостающий параметр, подтяни долговременную память как обычно и продолжи выполнение.',
+                                ].join('\n');
+                            }
                         }
                     }
 

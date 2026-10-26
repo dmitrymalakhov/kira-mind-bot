@@ -55,7 +55,7 @@ import { getBotGenderedText } from "../persona";
 import { saveRemindersFromResult as saveSharedRemindersFromResult } from '../handlers/shared';
 import { sendResultToUser } from '../handlers/shared';
 import { continueConfirmedRuntime, cancelRuntimeContinuation, replaceRuntimeConfirmation, mergeRuntimeResults } from '../orchestration/runtime/kernel';
-import { contactMemoryConfirmationKey, telegramPeriodConfirmationKey, hasPendingRuntimeConfirmation, CONTACT_MEMORY_PARENT_TOOLS } from '../orchestration/runtime/confirmation';
+import { contactMemoryConfirmationKey, browserConfirmationKey, telegramPeriodConfirmationKey, hasPendingRuntimeConfirmation, findPendingRuntimeConfirmation, CONTACT_MEMORY_PARENT_TOOLS } from '../orchestration/runtime/confirmation';
 import {
     buildReminderAssistanceRequest,
     getReminderAssistanceKnowledgeSourceText,
@@ -328,10 +328,15 @@ export function registerCallback(bot: Bot<BotContext>): void {
 
                 await sendChoiceReceipt(ctx, selection.choice.label);
                 if (selection.choice.action === "cancel_browser_task") {
+                    const sessionId = ctx.session.pendingBrowserTask?.sessionId ?? ctx.session.activeBrowserTask?.sessionId;
+                    const parent = sessionId ? findPendingRuntimeConfirmation(ctx, browserConfirmationKey(sessionId)) : undefined;
+                    const browserCtx: BotContext = parent?.ledgerKey ? Object.create(ctx) : ctx;
+                    if (parent?.ledgerKey) browserCtx.agentRuntimeStorageKey = parent.ledgerKey;
                     await addToHistory(ctx, "user", selection.choice.message);
                     const cancelled = await import("../agents/browserAgent")
-                        .then((m) => m.cancelBrowserRunForContext(ctx))
+                        .then((m) => m.cancelBrowserRunForContext(browserCtx))
                         .catch(() => false);
+                    if (sessionId) await cancelRuntimeContinuation(ctx, ['agents.start', 'agents.resume'], browserConfirmationKey(sessionId));
                     const responseText = cancelled
                         ? "Ок, запись через браузер остановила."
                         : "Ок, не буду запускать запись.";
@@ -404,13 +409,17 @@ export function registerCallback(bot: Bot<BotContext>): void {
 
             if (callbackData.startsWith("browser_cancel:")) {
                 const sessionId = callbackData.replace("browser_cancel:", "").trim();
+                if (!sessionId || ctx.session.pendingBrowserTask?.sessionId !== sessionId) {
+                    await ctx.answerCallbackQuery({ text: 'Эта браузерная задача уже недоступна.' });
+                    return;
+                }
                 if (sessionId) {
                     await import("../agents/browserAgent")
                         .then((m) => m.cancelPausedBrowserSession(sessionId))
                         .catch(() => {});
                 }
                 ctx.session.pendingBrowserTask = undefined;
-                await cancelRuntimeContinuation(ctx, ['agents.start', 'agents.resume']);
+                await cancelRuntimeContinuation(ctx, ['agents.start', 'agents.resume'], browserConfirmationKey(sessionId));
                 await ctx.answerCallbackQuery({ text: "Браузерная задача отменена" });
                 if (ctx.callbackQuery.message?.message_id && ctx.callbackQuery.message?.chat?.id) {
                     await runNonCriticalTelegramEdit("browser cancellation keyboard update", () =>

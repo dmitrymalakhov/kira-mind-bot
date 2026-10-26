@@ -6,6 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { InlineKeyboard, InputFile } from 'grammy';
 import type { BotContext, MessageHistory } from '../types';
+import { browserContextScopeKey, browserRuntimeOwnerKey, browserRunBelongsToContext } from '../utils/browserRuntimeScope';
 import type { ProcessingResult, MessageClassification } from '../orchestrator';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { devLog, parseLLMJson } from '../utils';
@@ -438,6 +439,7 @@ interface BrowserRunState {
     id: string;
     userId: number;
     chatId?: number;
+    sessionScopeKey?: string;
     browser: Browser;
     browserCtx: BrowserContext;
     persistentProfile: boolean;
@@ -5595,6 +5597,8 @@ function parseBrowserContinuationMessage(message: string): ParsedBrowserContinua
 }
 
 function getPausedBrowserSession(ctx: BotContext, message: string): BrowserRunState | undefined {
+    const requestedId = browserTaskSessionFromMessage(message);
+    if (requestedId && requestedId !== 'none' && ctx.session.pendingBrowserTask?.sessionId && requestedId !== ctx.session.pendingBrowserTask.sessionId) return undefined;
     const sessionId =
         ctx.session.pendingBrowserTask?.sessionId ||
         browserTaskSessionFromMessage(message);
@@ -5606,12 +5610,12 @@ function getPausedBrowserSession(ctx: BotContext, message: string): BrowserRunSt
         closeBrowserRunState(state, 'expired').catch(() => {});
         return undefined;
     }
-    if (state.userId !== (ctx.from?.id ?? 0) || state.chatId !== ctx.chat?.id) return undefined;
+    if (!browserRunBelongsToContext(state, ctx)) return undefined;
     return state;
 }
 
-function browserRunOwnerKey(userId: number, chatId?: number): string {
-    return `${chatId ?? 0}:${userId}`;
+function browserRunOwnerKey(userId: number, chatId?: number, scopeKey?: string): string {
+    return browserRuntimeOwnerKey(userId, chatId, scopeKey);
 }
 
 function browserRunOwnerKeyForContext(ctx: BotContext): string {
@@ -5663,7 +5667,7 @@ async function enqueueBrowserAgentLane<T>(
 }
 
 function registerActiveBrowserRun(ctx: BotContext, state: BrowserRunState): void {
-    activeBrowserSessions.set(browserRunOwnerKey(state.userId, state.chatId), state);
+    activeBrowserSessions.set(browserRunOwnerKey(state.userId, state.chatId, state.sessionScopeKey), state);
     ctx.session.activeBrowserTask = {
         originalTask: state.originalTask,
         sessionId: state.id,
@@ -5675,10 +5679,11 @@ function registerActiveBrowserRun(ctx: BotContext, state: BrowserRunState): void
 function getActiveBrowserSession(ctx: BotContext): BrowserRunState | undefined {
     const userId = ctx.from?.id ?? 0;
     const chatId = ctx.chat?.id;
-    const state = activeBrowserSessions.get(browserRunOwnerKey(userId, chatId));
+    const ownerKey = browserRunOwnerKey(userId, chatId, browserContextScopeKey(ctx));
+    const state = activeBrowserSessions.get(ownerKey);
     if (!state) return undefined;
-    if (Date.now() > state.expiresAt || state.userId !== userId || state.chatId !== chatId) {
-        activeBrowserSessions.delete(browserRunOwnerKey(userId, chatId));
+    if (Date.now() > state.expiresAt || !browserRunBelongsToContext(state, ctx)) {
+        activeBrowserSessions.delete(ownerKey);
         return undefined;
     }
     return state;
@@ -5719,7 +5724,7 @@ function pauseBrowserRun(
         closeBrowserRunState(state, 'expired').catch(() => {});
     }, PENDING_BROWSER_TTL_MS);
     pausedBrowserSessions.set(state.id, state);
-    activeBrowserSessions.delete(browserRunOwnerKey(state.userId, state.chatId));
+    activeBrowserSessions.delete(browserRunOwnerKey(state.userId, state.chatId, state.sessionScopeKey));
     ctx.session.activeBrowserTask = undefined;
     ctx.session.pendingBrowserTask = {
         originalTask: state.originalTask,
@@ -5777,7 +5782,7 @@ function ensureBrowserRunStateShape(state: BrowserRunState): void {
 async function closeBrowserRunState(state: BrowserRunState, reason: 'done' | 'failed' | 'expired' | 'cancelled'): Promise<void> {
     if (state.timeout) clearTimeout(state.timeout);
     pausedBrowserSessions.delete(state.id);
-    activeBrowserSessions.delete(browserRunOwnerKey(state.userId, state.chatId));
+    activeBrowserSessions.delete(browserRunOwnerKey(state.userId, state.chatId, state.sessionScopeKey));
     recordBrowserTrajectoryEvent(state, 'lifecycle.close', {
         reason,
         historyLength: state.history.length,
@@ -5841,8 +5846,6 @@ export async function cancelPausedBrowserSession(sessionId?: string): Promise<vo
 }
 
 export async function cancelBrowserRunForContext(ctx: BotContext): Promise<boolean> {
-    const userId = ctx.from?.id ?? 0;
-    const chatId = ctx.chat?.id;
     const sessionIds = new Set<string>();
     if (ctx.session.pendingBrowserTask?.sessionId) sessionIds.add(ctx.session.pendingBrowserTask.sessionId);
     if (ctx.session.activeBrowserTask?.sessionId) sessionIds.add(ctx.session.activeBrowserTask.sessionId);
@@ -5851,13 +5854,13 @@ export async function cancelBrowserRunForContext(ctx: BotContext): Promise<boole
 
     for (const sessionId of sessionIds) {
         const paused = pausedBrowserSessions.get(sessionId);
-        if (paused && paused.userId === userId && paused.chatId === chatId) {
+        if (paused && browserRunBelongsToContext(paused, ctx)) {
             await closeBrowserRunState(paused, 'cancelled').catch(() => {});
             cancelled = true;
         }
 
         const active = [...activeBrowserSessions.values()].find(
-            (item) => item.id === sessionId && item.userId === userId && item.chatId === chatId
+            (item) => item.id === sessionId && browserRunBelongsToContext(item, ctx)
         );
         if (active) {
             active.cancelRequested = true;
@@ -10040,6 +10043,7 @@ async function createBrowserRun(
         id: randomUUID(),
         userId,
         chatId: ctx.chat?.id,
+        sessionScopeKey: browserContextScopeKey(ctx),
         browser,
         browserCtx,
         persistentProfile,
@@ -12720,6 +12724,8 @@ async function runBrowserAgent(
 ): Promise<ProcessingResult> {
     const userId = ctx.from?.id ?? 0;
     const recentUserContext = buildRecentUserContext(messageHistory);
+    const foreignRun = [...activeBrowserSessions.values(), ...pausedBrowserSessions.values()].some(run => run.userId === userId && run.chatId === ctx.chat?.id && !browserRunBelongsToContext(run, ctx) && run.expiresAt > Date.now());
+    if (foreignRun) return { operationStatus: 'failed', responseText: 'Браузер уже занят задачей в другом канале. Заверши или отмени её в исходном диалоге.' };
     let state: BrowserRunState | undefined;
     let shouldClose = true;
     let taskForLlm = message;

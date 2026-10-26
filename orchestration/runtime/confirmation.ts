@@ -15,8 +15,14 @@ export function telegramPeriodConfirmationKey(kind: 'chat-analysis' | 'study-cha
     return `${kind}:${requestId}`;
 }
 
+export function browserConfirmationKey(sessionId: string): string { return `browser:${sessionId}`; }
+
 export const CONTACT_MEMORY_PARENT_TOOLS = ['memory.rememberContact', 'telegram.readMessages', 'agents.start'];
 
 export function hasPendingRuntimeConfirmation(ctx: BotContext, key: string): boolean {
-    return [ctx.session.agentRuntime, ...(ctx.session.agentRuntimePending ?? [])].some(run => run?.status === 'waiting' && run.observations?.some(item => item.status === 'needs_input' && item.confirmationKey === key));
+    return Boolean(findPendingRuntimeConfirmation(ctx, key));
+}
+
+export function findPendingRuntimeConfirmation(ctx: BotContext, key: string) {
+    return [ctx.session.agentRuntime, ...(ctx.session.agentRuntimePending ?? [])].find(run => run?.status === 'waiting' && run.observations?.some(item => item.status === 'needs_input' && item.confirmationKey === key));
 }

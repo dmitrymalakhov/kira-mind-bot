@@ -19,6 +19,15 @@ import { agentTools } from '../orchestration/runtime/agents';
 import { contactMemoryConfirmationKey, CONTACT_MEMORY_PARENT_TOOLS } from '../orchestration/runtime/confirmation';
 import { ToolRegistry, objectSchema } from '../orchestration/runtime/registry';
 import { registerCallback } from '../callbacks';
+import * as browser from '../agents/browserAgent';
+import { browserConfirmationKey } from '../orchestration/runtime/confirmation';
+import { browserContextScopeKey, browserRuntimeOwnerKey, browserRunBelongsToContext } from '../utils/browserRuntimeScope';
+import { isBrowserContinuationAnswer } from '../utils/continuationInput';
+import { BotApiBackend } from '../api/backend';
+import { config } from '../config';
+import * as orchestrator from '../orchestrator';
+import * as history from '../utils/history';
+import * as reconsolidation from '../services/MemoryReconsolidationService';
 
 const originalMode = process.env.KIRA_ORCHESTRATION_MODE;
 process.env.KIRA_ORCHESTRATION_MODE = 'skills';
@@ -129,4 +138,63 @@ test('an uncertain callback outcome closes the child and retains an unknown rece
     t.mock.method(persistence, 'persistAgentRuntime', async () => {});
     await kernel.cancelRuntimeContinuation(value, ['agents.start'], 'synthetic-key', 'Неизвестный исход записи', 'unknown');
     assert.equal(parent.agents[0].status, 'failed'); assert.equal(parent.receipts[0].status, 'unknown'); assert.deepEqual(parent.pendingCalls, []);
+});
+
+test('browser ownership separates Telegram, API and task ledgers while preserving the delivery identity', () => {
+    const telegram = ctx(); const api = { ...telegram, sessionStorageKey: 'api:101' } as BotContext;
+    const task = { ...telegram, agentRuntimeStorageKey: 'task:101:synthetic-task' } as BotContext;
+    const keys = [telegram, api, task].map(value => browserRuntimeOwnerKey(101, 101, browserContextScopeKey(value)));
+    assert.equal(new Set(keys).size, 3);
+    const run = { userId: 101, chatId: 101, sessionScopeKey: browserContextScopeKey(api) };
+    assert.equal(browserRunBelongsToContext(run, api), true);
+    assert.equal(browserRunBelongsToContext(run, telegram), false); assert.equal(browserRunBelongsToContext(run, task), false);
+    assert.equal(browserRunBelongsToContext({ userId: 101, chatId: 101 }, telegram), true);
+    assert.equal(browserRunBelongsToContext({ userId: 202, chatId: 101 }, telegram), false);
+});
+
+test('browser answer intake preserves new commands and validates an explicit session', () => {
+    for (const message of ['Напомни завтра проверить', 'Найди свежую афишу', 'Привет', 'Открой другой сайт', 'Отмени напоминание']) assert.equal(isBrowserContinuationAnswer(message, 'browser-a'), false, message);
+    for (const message of ['Да', 'Контакт Сигма', 'https://example.test', '+00000000000']) assert.equal(isBrowserContinuationAnswer(message, 'browser-a'), true, message);
+    assert.equal(isBrowserContinuationAnswer('Продолжи задачу в браузере через Playwright.\nbrowserSessionId: browser-b', 'browser-a'), false);
+    assert.equal(isBrowserContinuationAnswer('Продолжи задачу в браузере через Playwright.\nbrowserSessionId: browser-a', 'browser-a'), true);
+});
+
+test('an old browser cancel cannot cancel the current session or another delegated task', async t => {
+    const value = ctx(); value.session.pendingBrowserTask = { sessionId: 'browser-b', expiresAt: Date.now() + 60_000 } as any;
+    value.session.agentRuntime = { ...state('cmem:other-task'), observations: [{ id: 'other', tool: 'agents.start', status: 'needs_input', confirmationKey: 'cmem:other-task', summary: 'Другой агент' }] };
+    const browserGoal = { ...state(browserConfirmationKey('browser-b')), runId: 'browser-goal', observations: [{ id: 'browser', tool: 'agents.start', status: 'needs_input' as const, confirmationKey: browserConfirmationKey('browser-b'), summary: 'Браузер' }] };
+    value.session.agentRuntimePending = [browserGoal];
+    const cancelled = t.mock.method(browser, 'cancelPausedBrowserSession', async () => {}); t.mock.method(persistence, 'persistAgentRuntime', async () => {});
+    const update = callbackBot(value); await update('browser_cancel:browser-a');
+    assert.equal(cancelled.mock.callCount(), 0); assert.equal(value.session.pendingBrowserTask?.sessionId, 'browser-b'); assert.equal(browserGoal.status, 'waiting');
+    await update('browser_cancel:browser-b', 102);
+    assert.equal(cancelled.mock.callCount(), 1); assert.equal(value.session.pendingBrowserTask, undefined); assert.equal(browserGoal.status, 'failed'); assert.equal(value.session.agentRuntime.status, 'waiting');
+});
+
+test('browser delegation binds its wait and prevents an old agent id from resuming or cancelling a new session', async t => {
+    const value = ctx(); value.session.agentRuntime = { ...state('unused'), status: 'running', observations: [] };
+    t.mock.method(persistence, 'persistAgentRuntime', async () => {});
+    const invoked = t.mock.method(browser, 'browserAgent', async (current: BotContext) => { current.session.pendingBrowserTask = { sessionId: 'browser-a', expiresAt: Date.now() + 60_000 } as any; return { responseText: 'Выбери вариант' }; });
+    const tools = agentTools(); const result = await tools[0].execute({ kind: 'browser', task: 'Открой синтетическую страницу' }, context(value));
+    assert.equal(result.confirmationKey, browserConfirmationKey('browser-a'));
+    const record = value.session.agentRuntime.agents[0]; assert.equal(record.confirmationKey, result.confirmationKey);
+    value.session.pendingBrowserTask = { sessionId: 'browser-b', expiresAt: Date.now() + 60_000 } as any;
+    assert.equal((await tools.find(tool => tool.name === 'agents.resume')!.execute({ id: record.id, answer: 'Да' }, context(value))).status, 'failed');
+    assert.equal((await tools.find(tool => tool.name === 'agents.cancel')!.execute({ id: record.id }, context(value))).status, 'failed');
+    assert.equal(invoked.mock.callCount(), 1); assert.equal(value.session.pendingBrowserTask?.sessionId, 'browser-b');
+});
+
+test('the real API handler passes a new command past a paused browser without wrapping it as an answer', async t => {
+    const owner = config.allowedUserId; config.allowedUserId = 101;
+    const value = session(); value.pendingBrowserTask = { sessionId: 'browser-a', originalTask: 'Старая задача', question: 'Какой вариант?', expiresAt: Date.now() + 60_000 } as any;
+    t.mock.method(persistence.TypeORMSessionStorage.prototype, 'read', async () => value); t.mock.method(persistence.TypeORMSessionStorage.prototype, 'write', async () => {});
+    t.mock.method(history, 'addToHistory', async () => {}); t.mock.method(reconsolidation, 'reconsolidateAfterResponse', async () => {});
+    let expected = 'Напомни завтра проверить синтетический отчёт';
+    const processed = t.mock.method(orchestrator, 'processMessage', async (_current: BotContext, message: string) => { assert.equal(message, expected); return { responseText: 'Новая задача принята', skipOptionalFollowups: true }; });
+    const bot = new Bot<BotContext>('1234567890:abcdefghijklmnopqrstuvwxyzABCDE', { botInfo: { id: 1234567890, is_bot: true, first_name: 'Synthetic', username: 'synthetic_bot' } as any });
+    try {
+        const backend = new BotApiBackend(bot, { token: 'synthetic-browser-api-token-12345678901234567890', ownerId: 101, host: '127.0.0.1', port: 3200 });
+        for (expected of ['Напомни завтра проверить синтетический отчёт', 'Можешь завтра напомнить проверить синтетический отчёт?']) await backend.message(expected);
+        assert.equal(processed.mock.callCount(), 2); assert.equal(value.pendingBrowserTask?.sessionId, 'browser-a');
+    } finally { config.allowedUserId = owner; }
 });

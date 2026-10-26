@@ -9,7 +9,8 @@ import { createJsonChatCompletionForTask } from '../../ai/chatCompletion';
 import { persistAgentRuntime } from '../../services/SessionStorage';
 import { objectSchema, textSchema } from './registry';
 import { processingOutput } from './domainTools';
-import { contactMemoryConfirmationKey } from './confirmation';
+import { contactMemoryConfirmationKey, browserConfirmationKey } from './confirmation';
+import { isBrowserContinuationAnswer } from '../../utils/continuationInput';
 import type { AgentRunRecord, ToolContext, ToolDefinition, ToolOutput } from './types';
 
 const live = new Map<string, { controller: AbortController; context: ToolContext }>();
@@ -45,8 +46,13 @@ async function research(task: string, context: ToolContext): Promise<ToolOutput>
 async function run(kind: AgentRunRecord['kind'], task: string, args: Record<string, unknown>, context: ToolContext): Promise<ToolOutput> {
     if (kind === 'research') return research(task, context);
     if (kind === 'browser') {
+        const pending = context.ctx.session.pendingBrowserTask;
+        if (pending && !isBrowserContinuationAnswer(task, pending.sessionId)) return { status: 'failed', summary: 'Сначала заверши или отмени текущую браузерную задачу.' };
         const result = await browserAgent(context.ctx, task, context.isForwarded, context.forwardFrom, context.messageHistory, { ...context.classification, intent: 'БРАУЗЕР_ЗАДАЧА' }, context.memoryContext);
-        return processingOutput(result, Boolean(context.ctx.session.pendingBrowserTask));
+        const output = processingOutput(result, Boolean(context.ctx.session.pendingBrowserTask));
+        const sessionId = context.ctx.session.pendingBrowserTask?.sessionId;
+        if (output.status === 'needs_input' && sessionId) output.confirmationKey = browserConfirmationKey(sessionId);
+        return output;
     }
     if (kind === 'negotiation') {
         if (NegotiationStore.getPendingStart(context.ctx.chat!.id) || NegotiationStore.getActiveSessionByChatId(context.ctx.chat!.id)) return { status: 'failed', summary: 'В этом чате уже подготовлены или идут переговоры. Сначала заверши или отмени их.' };
@@ -73,8 +79,9 @@ export function agentTools(): ToolDefinition[] {
             const state = context.ctx.session.agentRuntime;
             if (!state) return { status: 'failed', summary: 'Нет журнала родительского задания.' };
             if (state.agents.filter(agent => agent.parentRunId === context.runId).length >= 4) return { status: 'failed', summary: 'Достигнут лимит делегирования.' };
-            const resumed = args.kind === 'browser' && /^Продолжи задачу в браузере через Playwright\.|browserSessionId:/i.test(String(args.task))
-                ? [...state.agents].reverse().find(agent => agent.kind === 'browser' && agent.status === 'waiting') : undefined;
+            const pendingBrowserId = context.ctx.session.pendingBrowserTask?.sessionId;
+            const resumed = args.kind === 'browser' && isBrowserContinuationAnswer(String(args.task), pendingBrowserId)
+                ? [...state.agents].reverse().find(agent => agent.kind === 'browser' && agent.status === 'waiting' && agent.confirmationKey === browserConfirmationKey(pendingBrowserId!)) : undefined;
             const id = resumed?.id ?? randomUUID();
             const now = Date.now();
             const record: AgentRunRecord = resumed ?? { id, kind: args.kind as AgentRunRecord['kind'], status: 'running', parentRunId: context.runId, createdAt: now, updatedAt: now };
@@ -91,6 +98,7 @@ export function agentTools(): ToolDefinition[] {
                 if (controller.signal.aborted) { output.status = 'failed'; output.summary = 'Делегированная задача отменена; зависимые шаги не выполняются.'; output.result = { responseText: output.summary, operationStatus: 'failed' }; }
                 record.status = controller.signal.aborted ? 'cancelled' : output.status === 'needs_input' ? 'waiting' : output.status === 'ok' ? 'completed' : 'failed';
                 record.summary = output.summary.slice(0, 1500);
+                record.confirmationKey = output.confirmationKey ?? record.confirmationKey;
                 record.updatedAt = Date.now();
                 await persistAgentRuntime(context.ctx);
                 return { ...output, data: { run: { ...record }, output: output.data } };
@@ -120,6 +128,7 @@ export function agentTools(): ToolDefinition[] {
             const record = context.ctx.session.agentRuntime?.agents.find(agent => agent.id === args.id);
             if (!record) return { status: 'failed', summary: 'Задание этого канала не найдено.' };
             if (!['running', 'waiting'].includes(record.status)) return { status: 'failed', summary: 'Это задание уже завершено или прервано.' };
+            if (record.kind === 'browser' && record.status === 'waiting' && record.confirmationKey !== browserConfirmationKey(context.ctx.session.pendingBrowserTask?.sessionId ?? '')) return { status: 'failed', summary: 'Это задание не связано с текущей браузерной сессией.' };
             live.get(scopedKey(context, record.id))?.controller.abort();
             if (record.kind === 'browser') await cancelBrowserRunForContext(context.ctx);
             if (record.kind === 'negotiation') {
@@ -136,8 +145,9 @@ export function agentTools(): ToolDefinition[] {
         inputSchema: objectSchema({ id: textSchema('ID задания'), answer: textSchema('Новый ответ пользователя') }),
         async execute(args, context) {
             const record = context.ctx.session.agentRuntime?.agents.find(agent => agent.id === args.id);
-            if (!record || record.kind !== 'browser' || record.status !== 'waiting' || !context.ctx.session.pendingBrowserTask) return { status: 'failed', summary: 'Нет ожидающего браузерного сценария для продолжения.' };
-            const output = await run('browser', String(args.answer), args, context);
+            const pending = context.ctx.session.pendingBrowserTask;
+            if (!record || record.kind !== 'browser' || record.status !== 'waiting' || !pending?.sessionId || record.confirmationKey !== browserConfirmationKey(pending.sessionId)) return { status: 'failed', summary: 'Нет ожидающего браузерного сценария для продолжения.' };
+            const output = await run('browser', `Продолжи задачу в браузере через Playwright.\nbrowserSessionId: ${pending.sessionId}\nОтвет пользователя: ${String(args.answer)}`, args, context);
             record.status = output.status === 'needs_input' ? 'waiting' : output.status === 'ok' ? 'completed' : 'failed';
             record.updatedAt = Date.now();
             return output;

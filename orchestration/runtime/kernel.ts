@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'crypto';
+import { looksLikeIndependentRequest } from '../../utils/continuationInput';
 import { createJsonChatCompletionForTask } from '../../ai/chatCompletion';
 import { conversationAgent } from '../../agents/conversationAgent';
 import { selectNewsDigestResponse } from '../../agents/webSearchAgent';
@@ -452,7 +453,7 @@ export async function replaceRuntimeConfirmation(ctx: KiraRuntimeInput['ctx'], t
 
 export function hasRuntimeQuestionAnswer(ctx: KiraRuntimeInput['ctx'], message: string, state = ctx.session.agentRuntime): boolean {
     if (state?.status !== 'waiting' || !state.question || Date.now() - state.updatedAt > 30 * 60_000 || !message.trim() || message.length > 300) return false;
-    return !/^(?:привет|спасибо|пока|что(?=\s|$)|как(?=\s|$)|почему(?=\s|$)|зачем(?=\s|$)|найди|напомни|напиши|отправь|создай|покажи|расскажи|проанализируй|открой|сгенерируй|нарисуй|изучи|запиши|удали|убери|отмени\s+|включи|выключи|отключи|приостанови|возобнови|останови|запусти|обнови|перенеси|поменяй|измени|скачай|выгрузи|экспортируй)/iu.test(message.trim());
+    return !looksLikeIndependentRequest(message);
 }
 
 export async function continueQuestionRuntime(ctx: KiraRuntimeInput['ctx'], answer: string, dependencies: RuntimeDependencies = {}, replyText?: string): Promise<ProcessingResult | undefined> {

@@ -94,6 +94,7 @@ export interface AgentRunRecord {
     createdAt: number;
     updatedAt: number;
     summary?: string;
+    confirmationKey?: string;
 }
 
 export interface RuntimeReceipt {

@@ -11,6 +11,8 @@ import * as planner from '../orchestration/planner';
 import * as executor from '../orchestration/executor';
 import { ChatGroupRepository } from '../services/ChatGroupRepository';
 import { reminderService } from '../services/ReminderService';
+import * as kernel from '../orchestration/runtime/kernel';
+import { browserConfirmationKey } from '../orchestration/runtime/confirmation';
 
 function ctx() {
     return { from: { id: 101 }, chat: { id: 101, type: 'private' }, update: { update_id: 11001 },
@@ -68,5 +70,65 @@ describe('new engine through the real message entry point', () => {
         const ai = t.mock.method(completion, 'createJsonChatCompletionForTask', async () => { throw new Error('Unexpected extra inference'); });
         try { assert.equal((await processMessage(ctx(), 'Привет')).responseText, 'Привет!'); assert.equal(ai.mock.callCount(), 0); }
         finally { if (oldMode === undefined) delete process.env.KIRA_ORCHESTRATION_MODE; else process.env.KIRA_ORCHESTRATION_MODE = oldMode; }
+    });
+
+    test('a new reminder is not classified as an answer to the paused browser', async t => {
+        const mode = process.env.KIRA_ORCHESTRATION_MODE; process.env.KIRA_ORCHESTRATION_MODE = 'skills';
+        t.mock.method(ChatGroupRepository, 'findAll', async () => []);
+        t.mock.method(memory, 'fetchAgentMemoryContext', async () => ({ domain: 'personal', context: '', recalledMemories: [] }));
+        t.mock.method(completion, 'createJsonChatCompletionForTask', async () => ({ intent: 'НАПОМИНАНИЕ', confidenceLevel: 'ВЫСОКИЙ', details: {} }) as any);
+        let message = 'Напомни завтра проверить синтетический отчёт';
+        const run = t.mock.method(kernel, 'runKiraRuntime', async (input: any) => { assert.equal(input.classification.intent, 'НАПОМИНАНИЕ'); assert.equal(input.message, message); return { responseText: 'Напоминание сохранено', operationStatus: 'ok' }; });
+        const value = ctx(); value.session.pendingBrowserTask = { sessionId: 'browser-a', originalTask: 'Старая задача', question: 'Какой вариант?', expiresAt: Date.now() + 60_000 };
+        try { for (message of ['Напомни завтра проверить синтетический отчёт', 'Можешь завтра напомнить проверить синтетический отчёт?']) await processMessage(value, message); assert.equal(run.mock.callCount(), 2); assert.equal(value.session.pendingBrowserTask.sessionId, 'browser-a'); }
+        finally { if (mode === undefined) delete process.env.KIRA_ORCHESTRATION_MODE; else process.env.KIRA_ORCHESTRATION_MODE = mode; }
+    });
+
+    test('a new successful browser task cannot complete an unrelated waiting delegation', async t => {
+        const mode = process.env.KIRA_ORCHESTRATION_MODE; process.env.KIRA_ORCHESTRATION_MODE = 'skills';
+        t.mock.method(ChatGroupRepository, 'findAll', async () => []);
+        t.mock.method(memory, 'fetchAgentMemoryContext', async () => ({ domain: 'personal', context: '', recalledMemories: [] }));
+        t.mock.method(completion, 'createJsonChatCompletionForTask', async () => ({ intent: 'БРАУЗЕР_ЗАДАЧА', confidenceLevel: 'ВЫСОКИЙ', details: {} }) as any);
+        t.mock.method(kernel, 'runKiraRuntime', async () => ({ responseText: 'Сайт прочитан', operationStatus: 'ok' }));
+        const resumed = t.mock.method(kernel, 'continueConfirmedRuntime', async () => undefined);
+        const value = ctx(); value.session.agentRuntime = { status: 'waiting', goal: 'Изучи переписку и напомни проверить', observations: [{ id: 'study', tool: 'agents.start', status: 'needs_input' }], pendingCalls: [{ id: 'next' }] };
+        try { await processMessage(value, 'Открой сайт https://example.test'); assert.equal(resumed.mock.callCount(), 0); }
+        finally { if (mode === undefined) delete process.env.KIRA_ORCHESTRATION_MODE; else process.env.KIRA_ORCHESTRATION_MODE = mode; }
+    });
+
+    test('browser completion finds the matching archived parent without overwriting the current waiting goal', async t => {
+        const mode = process.env.KIRA_ORCHESTRATION_MODE; process.env.KIRA_ORCHESTRATION_MODE = 'skills';
+        t.mock.method(ChatGroupRepository, 'findAll', async () => []);
+        t.mock.method(memory, 'fetchAgentMemoryContext', async () => ({ domain: 'personal', context: '', recalledMemories: [] }));
+        t.mock.method(completion, 'createJsonChatCompletionForTask', async () => ({ intent: 'БРАУЗЕР_ЗАДАЧА', confidenceLevel: 'ВЫСОКИЙ', details: {} }) as any);
+        const value = ctx(); value.session.pendingBrowserTask = { sessionId: 'browser-a', originalTask: 'Старая задача', expiresAt: Date.now() + 60_000 };
+        value.session.agentRuntime = { runId: 'other-goal', status: 'waiting' };
+        value.session.agentRuntimePending = [{ status: 'waiting', backgroundRun: true, ledgerKey: 'task:101:synthetic-browser', observations: [{ id: 'browser', tool: 'agents.start', status: 'needs_input', confirmationKey: browserConfirmationKey('browser-a') }] }];
+        t.mock.method(kernel, 'runKiraRuntime', async (input: any) => { assert.equal(input.ctx.agentRuntimeStorageKey, 'task:101:synthetic-browser'); assert.equal(input.recurringTaskRun, true); value.session.pendingBrowserTask = undefined; return { responseText: 'Сайт прочитан', operationStatus: 'ok' }; });
+        const resumed = t.mock.method(kernel, 'continueConfirmedRuntime', async (...[current, _tools, _summary, _deps, key]: Parameters<typeof kernel.continueConfirmedRuntime>) => { assert.equal(key, browserConfirmationKey('browser-a')); assert.equal(current.session.agentRuntime?.runId, 'other-goal'); return undefined; });
+        try { await processMessage(value, 'Продолжи задачу в браузере через Playwright.\nbrowserSessionId: browser-a\nОтвет пользователя: Да'); assert.equal(resumed.mock.callCount(), 1); }
+        finally { if (mode === undefined) delete process.env.KIRA_ORCHESTRATION_MODE; else process.env.KIRA_ORCHESTRATION_MODE = mode; }
+    });
+
+    test('browser cancellation, failure and uncertainty never resume queued writes', async t => {
+        const mode = process.env.KIRA_ORCHESTRATION_MODE; process.env.KIRA_ORCHESTRATION_MODE = 'skills';
+        t.mock.method(ChatGroupRepository, 'findAll', async () => []);
+        t.mock.method(memory, 'fetchAgentMemoryContext', async () => ({ domain: 'personal', context: '', recalledMemories: [] }));
+        t.mock.method(session, 'persistAgentRuntime', async () => {});
+        t.mock.method(completion, 'createJsonChatCompletionForTask', async () => ({ intent: 'БРАУЗЕР_ЗАДАЧА', confidenceLevel: 'ВЫСОКИЙ', details: {} }) as any);
+        let status: 'ok' | 'failed' | 'unknown' = 'ok';
+        t.mock.method(kernel, 'runKiraRuntime', async (input: any) => { input.ctx.session.pendingBrowserTask = undefined; return { responseText: 'Браузер завершил работу', operationStatus: status }; });
+        const resumed = t.mock.method(kernel, 'continueConfirmedRuntime', async () => undefined);
+        try {
+            for (status of ['ok', 'failed', 'unknown'] as const) {
+                const value = ctx(); value.session.pendingBrowserTask = { sessionId: 'browser-a', originalTask: 'Старая задача', expiresAt: Date.now() + 60_000 };
+                value.session.agentRuntime = { runId: 'browser-goal', status: 'waiting', receipts: [{ key: 'browser-receipt', tool: 'agents.start', status: 'needs_input' }], agents: [], pendingCalls: [{ id: 'write' }], observations: [{ id: 'browser', tool: 'agents.start', status: 'needs_input', confirmationKey: browserConfirmationKey('browser-a') }] };
+                const result = await processMessage(value, status === 'ok' ? 'отмена' : 'Продолжи задачу в браузере через Playwright.\nbrowserSessionId: browser-a\nОтвет пользователя: Да');
+                assert.equal(value.session.agentRuntime.status, 'failed'); assert.deepEqual(value.session.agentRuntime.pendingCalls, []);
+                assert.equal(result.operationStatus, status === 'unknown' ? 'unknown' : 'failed');
+                assert.equal(value.session.agentRuntime.receipts[0].status, status === 'unknown' ? 'unknown' : 'failed');
+            }
+            assert.equal(resumed.mock.callCount(), 0);
+        } finally { if (mode === undefined) delete process.env.KIRA_ORCHESTRATION_MODE; else process.env.KIRA_ORCHESTRATION_MODE = mode; }
     });
 });

@@ -1,5 +1,5 @@
 import * as dotenv from "dotenv";
-import { ConversationReplyContext, ConversationTurn, KnowledgeSource, KnowledgeSourceDecision, MessageHistory } from "./types";
+import { BotContext, ConversationReplyContext, ConversationTurn, KnowledgeSource, KnowledgeSourceDecision, MessageHistory } from "./types";
 import { reminderAgent } from "./agents/reminderAgent";
 import { imageAgent } from "./agents/imageAgent";
 import { imageGenerationAgent } from "./agents/imageGenerationAgent";
@@ -21,7 +21,8 @@ import { executePlan } from "./orchestration/executor";
 import { Plan } from "./orchestration/types";
 import { runKiraRuntime, orchestrationMode, hasCompoundActionRequest, continueConfirmedRuntime, mergeRuntimeResults, continueQuestionRuntime, cancelRuntimeContinuation } from './orchestration/runtime/kernel';
 import { classifyWithDecisions, decisionsEnabled } from './ai/decisionRouting';
-import { contactMemoryConfirmationKey, CONTACT_MEMORY_PARENT_TOOLS } from './orchestration/runtime/confirmation';
+import { contactMemoryConfirmationKey, browserConfirmationKey, findPendingRuntimeConfirmation, CONTACT_MEMORY_PARENT_TOOLS } from './orchestration/runtime/confirmation';
+import { isBrowserContinuationAnswer } from './utils/continuationInput';
 import { ChatGroupRepository } from "./services/ChatGroupRepository";
 import { handlePendingContactMemoryText } from "./utils/contactMemory";
 import { handlePendingContactLookupText, maybeStartContactMemoryLookup } from "./utils/contactMemoryLookup";
@@ -671,8 +672,10 @@ export async function processMessage(
 
         const originalLooksLikeNewBrowserTask =
             !BROWSER_CONTINUATION_RE.test(routingMessage) &&
+            (orchestrationMode() === 'legacy' || !isBrowserContinuationAnswer(routingMessage, ctx.session.pendingBrowserTask?.sessionId)) &&
             looksLikeBrowserTaskText(routingMessage);
         if (originalLooksLikeNewBrowserTask && hasActivePendingBrowserTask(ctx)) {
+            if (orchestrationMode() === 'skills') return { responseText: 'Сначала заверши или отмени текущую браузерную задачу.', operationStatus: 'failed', skipOptionalFollowups: true };
             devLog("New browser task detected while another browser task is paused; clearing pending browser task");
             console.log("[ORCH] clearing pending browser task for new request:", originalMessage.slice(0, 100));
             ctx.session.pendingBrowserTask = undefined;
@@ -877,6 +880,7 @@ export async function processMessage(
         if (
             !deterministicOverrideApplied &&
             hasActivePendingBrowserTask(ctx) &&
+            (orchestrationMode() === 'legacy' || ['РАЗГОВОР', 'БРАУЗЕР_ЗАДАЧА'].includes(classification.intent) && isBrowserContinuationAnswer(message, ctx.session.pendingBrowserTask?.sessionId)) &&
             !explicitRemember
         ) {
             classification = { ...classification, intent: "БРАУЗЕР_ЗАДАЧА", confidenceLevel: "ВЫСОКИЙ" };
@@ -1094,18 +1098,28 @@ export async function processMessage(
         }
 
         if (orchestrationMode() === 'skills') {
-            const suspended = classification.intent === 'БРАУЗЕР_ЗАДАЧА' && ctx.session.agentRuntime?.status === 'waiting' ? ctx.session.agentRuntime : undefined;
+            const pendingBrowserId = ctx.session.pendingBrowserTask?.sessionId;
+            const continuationKey = pendingBrowserId && classification.intent === 'БРАУЗЕР_ЗАДАЧА' && isBrowserContinuationAnswer(executionMessage, pendingBrowserId) ? browserConfirmationKey(pendingBrowserId) : undefined;
+            const suspended = continuationKey ? findPendingRuntimeConfirmation(ctx, continuationKey) : undefined;
+            const runtimeCtx: BotContext = suspended?.ledgerKey ? Object.create(ctx) : ctx;
+            if (suspended?.ledgerKey) runtimeCtx.agentRuntimeStorageKey = suspended.ledgerKey;
             let result = await runKiraRuntime({
-                ctx, message: executionMessage, isForwarded, forwardFrom, messageHistory, classification,
+                ctx: runtimeCtx, message: executionMessage, isForwarded, forwardFrom, messageHistory, classification,
                 lastLocation, enrichedContextFromMemory,
                 voiceReplyRequested: options.voiceReplyRequested === true,
                 suppressProgress: options.suppressProgress === true,
-                recurringTaskRun: options.recurringTaskRun === true,
+                recurringTaskRun: options.recurringTaskRun === true || suspended?.backgroundRun === true,
             });
-            if (suspended && (suspended.pendingCalls?.length || suspended.classification?.subIntents?.length || hasCompoundActionRequest(suspended.goal ?? '')) && result.operationStatus === 'ok' && !ctx.session.pendingBrowserTask) {
-                ctx.session.agentRuntime = suspended;
-                const continuation = await continueConfirmedRuntime(ctx, ['agents.start', 'agents.resume'], result.responseText);
-                if (continuation) result = mergeRuntimeResults([result, continuation]);
+            if (suspended && !ctx.session.pendingBrowserTask) {
+                const cancelled = !internalBrowserContinuation && looksLikeBrowserTaskCancellation(originalMessage);
+                if (cancelled || result.operationStatus === 'failed' || result.operationStatus === 'unknown') {
+                    const status = result.operationStatus === 'unknown' ? 'unknown' : 'failed';
+                    await cancelRuntimeContinuation(ctx, ['agents.start', 'agents.resume'], continuationKey, cancelled ? 'Браузерная задача отменена владельцем.' : result.responseText, status);
+                    result.operationStatus = status;
+                } else if (result.operationStatus === 'ok') {
+                    const continuation = await continueConfirmedRuntime(ctx, ['agents.start', 'agents.resume'], result.responseText, {}, continuationKey);
+                    if (continuation) result = mergeRuntimeResults([result, continuation]);
+                }
             }
             result.recalledMemories = initialMemory.recalledMemories ?? [];
             saveSessionDedupSnapshot(ctx, { message, classification, plan: { steps: [] }, result });
