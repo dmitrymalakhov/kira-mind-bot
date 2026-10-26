@@ -9,7 +9,6 @@ import { fetchAiPreset, saveAiPreset } from '../api';
 import type { AiModelRef, AiPresetName, AiPresetResponse, ConfigResponse } from '../types';
 import { ConfigSection, type ConfigSectionHandle } from './ConfigSection';
 import { LOCAL_MODEL_CONNECTION_SECTION } from '../schema';
-import { BudgetSettingsSection } from './BudgetSettingsSection';
 import { getAiProviderDescriptor } from '../../../ai/providerMetadata';
 import { LocalModelSettings } from './LocalModelSettings';
 import { ImageGenerationSettings } from './ImageGenerationSettings';
@@ -18,6 +17,7 @@ import { ModelPreferencesSettings } from './ModelPreferencesSettings';
 interface Props {
   config: ConfigResponse;
   onUpdate: (cfg: ConfigResponse) => void;
+  onDirtyChange?: (id: string, dirty: boolean) => void;
   onToast: (message: string, severity: 'success' | 'error') => void;
 }
 
@@ -38,7 +38,7 @@ function modelLabel(ref?: AiModelRef) {
 }
 
 export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
-  function ModelSettingsSection({ config, onUpdate, onToast }, ref) {
+  function ModelSettingsSection({ config, onUpdate, onToast, onDirtyChange }, ref) {
     const [data, setData] = useState<AiPresetResponse | null>(null);
     const [selected, setSelected] = useState<AiPresetName>('gpt-balanced');
     const [loading, setLoading] = useState(true);
@@ -46,7 +46,7 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
     const connectionRef = useRef<ConfigSectionHandle>(null);
     const [preferenceRefresh, setPreferenceRefresh] = useState(0);
     const localSaved = () => { void load(); setPreferenceRefresh(value => value + 1); };
-    useImperativeHandle(ref, () => ({ getUpdates: () => connectionRef.current?.getUpdates() ?? ({}) }));
+    useImperativeHandle(ref, () => ({ getUpdates: () => connectionRef.current?.getUpdates() ?? ({}), acceptSaved: (saved, submitted) => connectionRef.current?.acceptSaved(saved, submitted) }));
 
     async function load() {
       setLoading(true);
@@ -83,7 +83,7 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
         <Card id="local-models" sx={{ mb: 2 }}><CardContent><Stack spacing={2}>
           <Typography variant="h6" component="h2">Свои локальные модели</Typography>
           <Typography variant="body2" color="text.secondary">Запустите LM Studio на своём компьютере и включите Local Server. Укажите адрес сервера, затем выберите модели и включите нужный режим.</Typography>
-          <ConfigSection ref={connectionRef} requiresRecreate config={config} onUpdate={onUpdate} onToast={onToast}
+          <ConfigSection inline ref={connectionRef} onDirtyChange={onDirtyChange} config={config} onUpdate={onUpdate} onToast={onToast}
             section={LOCAL_MODEL_CONNECTION_SECTION} />
           <Alert severity="info">Из Docker Desktop используйте host.docker.internal вместо localhost. После изменения подключения пересоздайте контейнеры бота и админки; обычного рестарта недостаточно.</Alert>
           <LocalModelSettings onToast={onToast} onSaved={localSaved} />
@@ -178,7 +178,6 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
           </AccordionDetails>
         </Accordion>
         <ImageGenerationSettings onToast={onToast} />
-        <BudgetSettingsSection onToast={onToast} />
       </>
     );
   }

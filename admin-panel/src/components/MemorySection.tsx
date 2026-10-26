@@ -788,6 +788,7 @@ export function MemorySection({ onToast }: { onToast?: ToastFn }) {
   const [memoryProfileStatus, setMemoryProfileStatus] = useState<AiPresetResponse['memoryEmbeddingProfile'] | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'atlas'>('list');
   const [atlasRefreshToken, setAtlasRefreshToken] = useState(0);
+  const [atlasFiltersOpen, setAtlasFiltersOpen] = useState(false);
 
   const page = Math.floor((query.offset ?? 0) / (query.limit ?? draft.limit));
   const rowsPerPage = query.limit ?? draft.limit;
@@ -960,7 +961,7 @@ export function MemorySection({ onToast }: { onToast?: ToastFn }) {
         </Box>
       </Box>
 
-      {memoryProfileStatus && (
+      {memoryProfileStatus && (viewMode === 'list' || ['mismatch', 'unavailable'].includes(memoryProfileStatus.compatibility.status)) && (
         <Alert
           severity={
             memoryProfileStatus.compatibility.status === 'mismatch'
@@ -989,6 +990,10 @@ export function MemorySection({ onToast }: { onToast?: ToastFn }) {
         </Alert>
       )}
 
+      {viewMode === 'atlas' && <Button size="small" aria-expanded={atlasFiltersOpen} onClick={() => setAtlasFiltersOpen(value => !value)} sx={{ mb: 1 }}>
+        {atlasFiltersOpen ? 'Скрыть фильтры' : 'Фильтры и область памяти'}
+      </Button>}
+      <Collapse in={viewMode === 'list' || atlasFiltersOpen}>
       <Paper variant="outlined" sx={{ p: 2, mb: 2, bgcolor: 'background.paper', borderRadius: 1 }}>
         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr 1fr 1fr' }, gap: 1.5 }}>
           <TextField
@@ -1100,6 +1105,8 @@ export function MemorySection({ onToast }: { onToast?: ToastFn }) {
           label={<Typography variant="caption">Показывать синтетические главы, модели и индексы</Typography>}
         />
       </Paper>
+
+      </Collapse>
 
       {error && (
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>

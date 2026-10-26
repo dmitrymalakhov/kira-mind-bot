@@ -13,14 +13,14 @@ const BASE_CONFIG_SCHEMA: SectionDef[] = [
         label: 'OpenAI API Key',
         type: 'password',
         required: true,
-        hint: 'OpenAI sk-ключ или ключ lmrouter lmr_live_. Для lmrouter также укажите OpenAI Base URL.',
+        hint: 'Ключ OpenAI или вашего прокси. Адрес прокси задаётся отдельно ниже.',
       },
       {
         key: 'OPENAI_BASE_URL',
-        label: 'OpenAI / lmrouter Base URL',
-        type: 'text',
-        placeholder: 'https://api.openai.com/v1',
-        hint: 'Адрес API с /v1. Используется GPT, поиском, embeddings, аудио и мониторингом. Пустое поле — прямой OpenAI. Требуется пересоздание контейнеров.',
+        label: 'Использовать прокси для моделей OpenAI',
+        type: 'proxy',
+        placeholder: 'http://host.docker.internal:8080/v1',
+        hint: 'При выключении запросы идут напрямую в OpenAI. Прокси применяется к тексту, поиску, голосу и векторам памяти; изображения наследуют его, если отдельный адрес не задан.',
       },
       {
         key: 'LM_STUDIO_BASE_URL',
@@ -63,7 +63,7 @@ const BASE_CONFIG_SCHEMA: SectionDef[] = [
         key: 'OPENAI_IMAGE_API_KEY',
         label: 'Отдельный ключ OpenAI Image (необязательно)',
         type: 'password',
-        hint: 'Пустое поле использует OPENAI_API_KEY. Применяется после пересоздания контейнеров. Модель и референс выбираются в разделе «Модели».',
+        hint: 'Пустое поле использует OPENAI_API_KEY. Применяется после пересоздания контейнеров. Модель выбирается на странице «Модели», внешность — в «Личность».',
       },
       {
         key: 'OPENAI_IMAGE_BASE_URL',
@@ -401,11 +401,28 @@ const BASE_CONFIG_SCHEMA: SectionDef[] = [
 ];
 
 const backgroundEnvKeys = new Set<string>(Object.values(backgroundFeatures).map(feature => feature.envKey));
+const allFields = BASE_CONFIG_SCHEMA.flatMap(section => section.fields);
+const take = (keys: string[]) => allFields.filter(field => keys.includes(field.key));
+export const KEY_SECTIONS: SectionDef[] = [
+  { id: 'keys-ai', title: 'Ключи AI', icon: '🔑', fields: take(['OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'OPENAI_IMAGE_API_KEY', 'LM_STUDIO_API_KEY']) },
+  { id: 'keys-voice', title: 'Озвучивание', icon: '🎙️', fields: take(['ELEVENLABS_API_KEY']) },
+  { id: 'keys-telegram', title: 'Telegram', icon: '✉️', fields: take(['KIRA_BOT_TOKEN', 'TELEGRAM_API_ID', 'TELEGRAM_API_HASH', 'TELEGRAM_SESSION_STRING']) },
+  { id: 'keys-services', title: 'Другие сервисы', icon: '🔌', fields: take(['GOOGLE_MAPS_API_KEY', 'QDRANT_API_KEY']) },
+  { id: 'model-proxy', title: 'Прокси для моделей', icon: '🌐', fields: take(['OPENAI_BASE_URL']) },
+];
 export const LOCAL_MODEL_CONNECTION_SECTION: SectionDef = {
-  id: 'local-model-connection', title: '1. Подключите LM Studio', icon: '💻',
-  fields: BASE_CONFIG_SCHEMA.flatMap(section => section.fields).filter(field => field.key.startsWith('LM_STUDIO_')),
+  id: 'local-model-connection', title: 'Подключение LM Studio', icon: '💻', fields: take(['LM_STUDIO_BASE_URL', 'LM_STUDIO_MODEL']),
 };
-export const CONFIG_SCHEMA: SectionDef[] = BASE_CONFIG_SCHEMA.map(section => ({
+export const VOICE_MODEL_SECTION: SectionDef = {
+  id: 'voice-model', title: 'Модель и голос озвучивания', icon: '🎙️', fields: allFields.filter(field => field.key.startsWith('ELEVENLABS_') && field.key !== 'ELEVENLABS_API_KEY'),
+};
+export const IMAGE_CONNECTION_SECTION: SectionDef = {
+  id: 'image-connection', title: 'Отдельный прокси изображений', icon: '🌐', fields: take(['OPENAI_IMAGE_BASE_URL']).map(field => ({ ...field, type: 'proxy', label: 'Использовать отдельный прокси для изображений', hint: 'При выключении используется общее подключение OpenAI из раздела «Ключи и подключения».' })),
+};
+const movedKeys = new Set([...KEY_SECTIONS, LOCAL_MODEL_CONNECTION_SECTION, VOICE_MODEL_SECTION, IMAGE_CONNECTION_SECTION].flatMap(section => section.fields.map(field => field.key)));
+export const CONFIG_SCHEMA: SectionDef[] = BASE_CONFIG_SCHEMA.filter(section => !['api', 'elevenlabs', 'bots', 'telegram'].includes(section.id)).map(section => ({
   ...section,
-  fields: section.fields.filter(field => !backgroundEnvKeys.has(field.key) && !field.key.startsWith('LM_STUDIO_')),
+  fields: [...section.fields, ...(section.id === 'general' ? take(['KIRA_ALLOWED_USER_ID']) : [])].filter(field => !backgroundEnvKeys.has(field.key) && !movedKeys.has(field.key)),
 }));
+
+export const ALL_CONFIG_SECTIONS = [...KEY_SECTIONS, ...CONFIG_SCHEMA, LOCAL_MODEL_CONNECTION_SECTION, VOICE_MODEL_SECTION, IMAGE_CONNECTION_SECTION];

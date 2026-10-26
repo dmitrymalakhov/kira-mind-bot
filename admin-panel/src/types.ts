@@ -12,7 +12,7 @@ export interface ConfigResponse {
   [key: string]: ConfigEntry;
 }
 
-export type FieldType = 'text' | 'password' | 'number' | 'toggle' | 'textarea' | 'duration' | 'select';
+export type FieldType = 'text' | 'proxy' | 'password' | 'number' | 'toggle' | 'textarea' | 'duration' | 'select';
 
 export interface FieldOption {
   value: string;

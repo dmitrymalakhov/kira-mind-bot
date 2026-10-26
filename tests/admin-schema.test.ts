@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { CONFIG_SCHEMA } from "../admin-panel/src/schema";
+import { ALL_CONFIG_SECTIONS as CONFIG_SCHEMA } from "../admin-panel/src/schema";
 
 describe("admin configuration schema", () => {
     const fields = CONFIG_SCHEMA.flatMap((section) => section.fields);
@@ -25,7 +25,7 @@ describe("admin configuration schema", () => {
     });
 
     test("provides labels and supported editor types for every field", () => {
-        const supported = new Set(["text", "password", "number", "toggle", "textarea", "duration", "select"]);
+        const supported = new Set(["text", "password", "number", "toggle", "textarea", "duration", "select", "proxy"]);
         for (const field of fields) {
             assert.ok(field.key.trim());
             assert.ok(field.label.trim(), field.key);

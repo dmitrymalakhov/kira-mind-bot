@@ -1,32 +1,40 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import {
   Card,
   CardContent,
-  CardHeader,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  IconButton,
   Button,
   Box,
   CircularProgress,
   Divider,
-  FormControlLabel,
-  Checkbox,
-  Tooltip,
+  Stack,
+  Typography,
 } from '@mui/material';
 import SaveIcon from '@mui/icons-material/Save';
-import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import CloseIcon from '@mui/icons-material/Close';
+import { isValidProxyUrl } from '../../configValues';
 import { FieldInput } from './FieldInput';
-import { saveConfig, fetchConfig, restartService } from '../api';
+import { saveConfig, fetchConfig } from '../api';
 import type { SectionDef, ConfigResponse } from '../types';
 
 interface Props {
   section: SectionDef;
-  requiresRecreate?: boolean;
   config: ConfigResponse;
   onUpdate: (cfg: ConfigResponse) => void;
   onToast: (message: string, severity: 'success' | 'error') => void;
+  onDirtyChange?: (id: string, dirty: boolean) => void;
+  inline?: boolean;
+  open?: boolean;
+  onClose?: () => void;
 }
 
 export interface ConfigSectionHandle {
   getUpdates: () => Record<string, string | null>;
+  acceptSaved: (config: ConfigResponse, submitted: Record<string, string | null>) => void;
 }
 
 function getEntryValue(entry?: ConfigResponse[string]): string {
@@ -36,20 +44,41 @@ function getEntryValue(entry?: ConfigResponse[string]): string {
 }
 
 export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
-  function ConfigSection({ section, config, onUpdate, onToast, requiresRecreate = false }, ref) {
+  function ConfigSection({ section, config, onUpdate, onToast, onDirtyChange, open = false, onClose, inline = false }, ref) {
     const [localValues, setLocalValues] = useState<Record<string, string>>(() =>
       Object.fromEntries(section.fields.map((field) => [field.key, getEntryValue(config[field.key])]))
     );
     const [saving, setSaving] = useState(false);
-    const [autoRestart, setAutoRestart] = useState(false);
+    const previousConfig = useRef(config);
 
     useEffect(() => {
-      setLocalValues(
-        Object.fromEntries(section.fields.map((field) => [field.key, getEntryValue(config[field.key])]))
-      );
+      const previous = previousConfig.current;
+      previousConfig.current = config;
+      setLocalValues(values => Object.fromEntries(section.fields.map(field => [
+        field.key,
+        values[field.key] !== getEntryValue(previous[field.key])
+          ? values[field.key]
+          : getEntryValue(config[field.key]),
+      ])));
     }, [config, section.fields]);
 
+    const dirty = section.fields.some(field => {
+      const value = localValues[field.key] ?? '';
+      return !value.includes('••••') && value !== getEntryValue(config[field.key]);
+    });
+    useEffect(() => { onDirtyChange?.(section.id, dirty); }, [section.id, dirty, onDirtyChange]);
+
+    const acceptSaved = (saved: ConfigResponse, submitted: Record<string, string | null>) => {
+      setLocalValues(values => Object.fromEntries(section.fields.map(field => [
+        field.key,
+        Object.prototype.hasOwnProperty.call(submitted, field.key) && values[field.key] === submitted[field.key]
+          ? getEntryValue(saved[field.key])
+          : values[field.key],
+      ])));
+    };
+
     useImperativeHandle(ref, () => ({
+      acceptSaved,
       getUpdates() {
         const updates: Record<string, string | null> = {};
         for (const field of section.fields) {
@@ -61,6 +90,8 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
         return updates;
       },
     }));
+
+    const invalid = section.fields.some(field => field.type === 'proxy' && !isValidProxyUrl(localValues[field.key] ?? ''));
 
     const handleChange = (key: string, value: string) => {
       setLocalValues((prev) => ({ ...prev, [key]: value }));
@@ -79,18 +110,11 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
 
         const result = await saveConfig(updates);
         if (result.success) {
-          if (autoRestart) {
-            onToast('💾 Сохранено. Перезапускаю бота...', 'success');
-            await restartService('kira-mind-bot');
-            onToast('✅ Сохранено и бот перезапущен', 'success');
-          } else {
-            onToast(requiresRecreate ? 'Подключение сохранено. Для применения пересоздайте контейнеры бота и админки.' : result.message || '✅ Сохранено', 'success');
-          }
+          onToast('Сохранено. Для применения параметров подключения пересоздайте контейнеры.', 'success');
           const newCfg = await fetchConfig();
+          acceptSaved(newCfg, updates);
           onUpdate(newCfg);
-          setLocalValues(
-            Object.fromEntries(section.fields.map((field) => [field.key, getEntryValue(newCfg[field.key])]))
-          );
+          onClose?.();
         } else {
           onToast(result.error || 'Ошибка сохранения', 'error');
         }
@@ -104,54 +128,10 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
     const toggleFields = section.fields.filter((field) => field.type === 'toggle');
     const regularFields = section.fields.filter((field) => field.type !== 'toggle');
 
-    return (
-      <Card id={section.id} sx={{ mb: 2 }}>
-        <CardHeader
-          title={`${section.icon} ${section.title}`}
-          titleTypographyProps={{ variant: 'subtitle1', fontWeight: 600, color: 'secondary.main' }}
-          action={
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              {!requiresRecreate && <Tooltip title="Автоматически перезапустить бота после сохранения">
-                <FormControlLabel
-                  control={
-                    <Checkbox
-                      size="small"
-                      checked={autoRestart}
-                      onChange={(e) => setAutoRestart(e.target.checked)}
-                      sx={{ color: 'text.disabled', '&.Mui-checked': { color: 'primary.light' } }}
-                    />
-                  }
-                  label={<span style={{ fontSize: 11, color: '#64748b' }}>рестарт</span>}
-                  sx={{ mr: 0 }}
-                />
-              </Tooltip>}
-              <Button
-                variant="outlined"
-                size="small"
-                startIcon={
-                  saving ? (
-                    <CircularProgress size={14} color="inherit" />
-                  ) : autoRestart ? (
-                    <RestartAltIcon fontSize="small" />
-                  ) : (
-                    <SaveIcon fontSize="small" />
-                  )
-                }
-                onClick={handleSave}
-                disabled={saving}
-                sx={{
-                  borderColor: 'divider',
-                  color: 'text.secondary',
-                  '&:hover': { borderColor: 'primary.main', color: 'primary.light' },
-                }}
-              >
-                Сохранить
-              </Button>
-            </div>
-          }
-          sx={{ pb: 0 }}
-        />
-        <CardContent>
+    const content = <>
+      {inline && <Typography variant="subtitle1" component="h2" fontWeight={600} sx={{ mb: 2 }}>{section.title}</Typography>}
+        <Box sx={{ pt: inline ? 0 : 1 }}>
+          {!inline && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 3 }}>Параметры окружения применяются после пересоздания контейнеров.</Typography>}
           {regularFields.length > 0 && (
             <Box
               sx={{
@@ -170,8 +150,8 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
                     minWidth: 0,
                     gridColumn: {
                       xs: '1 / -1',
-                      sm: `span ${field.sm ?? (field.type === 'textarea' ? 12 : 6)}`,
-                      md: `span ${field.md ?? (field.type === 'textarea' ? 12 : 6)}`,
+                      sm: `span ${field.sm ?? (['textarea', 'proxy'].includes(field.type) ? 12 : 6)}`,
+                      md: `span ${field.md ?? (['textarea', 'proxy'].includes(field.type) ? 12 : 6)}`,
                     },
                   }}
                 >
@@ -197,8 +177,21 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
               onChange={handleChange}
             />
           ))}
-        </CardContent>
-      </Card>
-    );
+        </Box>
+        <DialogActions sx={{ px: 0, pt: 2, gap: 1, flexWrap: 'wrap', justifyContent: 'space-between' }}>
+          <Stack direction="row" spacing={1} sx={{ ml: 'auto !important' }}>
+
+            <Button variant="contained" disabled={saving || !dirty || invalid} onClick={() => void handleSave()} startIcon={saving ? <CircularProgress size={14} color="inherit" /> : <SaveIcon />}>Сохранить</Button>
+          </Stack>
+        </DialogActions>
+    </>;
+    if (inline) return <Card id={section.id}><CardContent>{content}</CardContent></Card>;
+    return <Dialog open={open} onClose={() => { if (!saving) onClose?.(); }} keepMounted fullWidth maxWidth="md" scroll="paper" aria-labelledby={`config-dialog-title-${section.id}`}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <DialogTitle id={`config-dialog-title-${section.id}`}>{section.title}</DialogTitle>
+        <IconButton aria-label="Закрыть настройки" disabled={saving} onClick={onClose} sx={{ mr: 1.5 }}><CloseIcon /></IconButton>
+      </Box>
+      <DialogContent dividers>{content}</DialogContent>
+    </Dialog>;
   }
 );

@@ -12,8 +12,11 @@ import {
   Typography,
   Alert,
   Divider,
+  Tab,
+  Tabs,
 } from '@mui/material';
 import SaveIcon from '@mui/icons-material/Save';
+import { CharacterReferenceSection } from './CharacterReferenceSection';
 import { fetchPersonality, savePersonality } from '../api';
 import type { PersonalityConfig, PersonalityProfile } from '../types';
 
@@ -245,6 +248,8 @@ export function PersonalitySection({ onToast }: Props) {
   });
   const [loading, setLoading] = useState(true);
   const [savingKira, setSavingKira] = useState(false);
+  const [tab, setTab] = useState<'character' | 'appearance'>('character');
+  const [appearanceVisited, setAppearanceVisited] = useState(false);
 
   useEffect(() => {
     fetchPersonality()
@@ -280,35 +285,38 @@ export function PersonalitySection({ onToast }: Props) {
     }
   };
 
-  if (loading) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-        <CircularProgress />
-      </Box>
-    );
-  }
-
   return (
     <Box>
-      <Alert
-        severity="info"
-        sx={{ mb: 2, bgcolor: '#0a1628', border: '1px solid #1e3a5f', color: '#93c5fd', fontSize: '13px' }}
-      >
-        Текущий город применяется без перезапуска. Остальные изменения — после перезапуска бота. Пустые поля используют значения из кода.
-      </Alert>
+      <Tabs value={tab} onChange={(_, next: 'character' | 'appearance') => { setTab(next); if (next === 'appearance') setAppearanceVisited(true); }} aria-label="Разделы личности" sx={{ mb: 3, borderBottom: '1px solid', borderColor: 'divider' }}>
+        <Tab value="character" label="Характер" id="personality-tab-character" aria-controls="personality-panel-character" />
+        <Tab value="appearance" label="Внешность" id="personality-tab-appearance" aria-controls="personality-panel-appearance" />
+      </Tabs>
+      <Box role="tabpanel" id="personality-panel-character" aria-labelledby="personality-tab-character" hidden={tab !== 'character'}>
+        {loading ? <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box> : <>
+        <Alert
+          severity="info"
+          sx={{ mb: 2, bgcolor: '#0a1628', border: '1px solid #1e3a5f', color: '#93c5fd', fontSize: '13px' }}
+        >
+          Текущий город применяется без перезапуска. Остальные изменения — после перезапуска бота. Пустые поля используют значения из кода.
+        </Alert>
 
-      <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.8 }}>
-        Личность бота
-      </Typography>
+        <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.8 }}>
+          Личность бота
+        </Typography>
 
-      <ProfileEditor
-        icon="🌸"
-        title={`${data.KiraMindBot.characterName.trim() || 'Персонаж'} — Личность и характер`}
-        values={data.KiraMindBot}
-        onChange={(key, value) => handleChange('KiraMindBot', key, value)}
-        onSave={handleSave}
-        saving={savingKira}
-      />
+        <ProfileEditor
+          icon="🌸"
+          title={`${data.KiraMindBot.characterName.trim() || 'Персонаж'} — Личность и характер`}
+          values={data.KiraMindBot}
+          onChange={(key, value) => handleChange('KiraMindBot', key, value)}
+          onSave={handleSave}
+          saving={savingKira}
+        />
+        </>}
+      </Box>
+      <Box role="tabpanel" id="personality-panel-appearance" aria-labelledby="personality-tab-appearance" hidden={tab !== 'appearance'}>
+        {appearanceVisited && <CharacterReferenceSection onToast={onToast} />}
+      </Box>
     </Box>
   );
 }

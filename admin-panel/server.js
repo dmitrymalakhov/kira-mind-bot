@@ -341,7 +341,7 @@ app.post('/api/logout', (req, res) => {
 });
 
 app.get('/api/config', requireAuth, async (req, res) => {
-  const vars = readEnvFile();
+  const vars = require('./configValues').mergeEditableDefaults(readEnvFile(), process.env, EDITABLE_KEYS);
   const result = {};
   for (const [key, value] of Object.entries(vars)) {
     if (SENSITIVE_KEYS.has(key) && value && value.length > 6) {
@@ -481,6 +481,11 @@ app.post('/api/ai-preset', requireAuth, async (req, res) => {
 });
 
 app.post('/api/config', requireAuth, async (req, res) => {
+  for (const key of ['OPENAI_BASE_URL', 'OPENAI_IMAGE_BASE_URL']) {
+    if (Object.hasOwn(req.body, key) && !require('./configValues').isValidProxyUrl(req.body[key])) {
+      return res.status(400).json({ error: 'Введите URL прокси с http:// или https:// без логина, пароля и параметров запроса.' });
+    }
+  }
   const envUpdates = {};
   const runtimeUpdates = {};
   for (const [key, value] of Object.entries(req.body)) {
@@ -1700,6 +1705,10 @@ app.get('/api/memory/graph', requireAuth, async (req, res) => {
   } finally {
     res.off('close', abortOnClose);
   }
+});
+
+require('./memoryDetail').registerMemoryDetailRoute(app, {
+  requireAuth, getMemoryProfile, getMemoryUserId, normalizeMemoryDomain, fetchExistingMemoryPayload, normalizeMemoryPoint,
 });
 
 app.get('/api/memory', requireAuth, async (req, res) => {

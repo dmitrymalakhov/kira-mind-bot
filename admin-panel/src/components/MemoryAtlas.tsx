@@ -9,11 +9,15 @@ import {
   FormControlLabel,
   MenuItem,
   Paper,
+  Stack,
   Switch,
   TextField,
   Tooltip,
   Typography,
 } from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
+import RemoveIcon from '@mui/icons-material/Remove';
+import { atlasNodeLabel, findAtlasNodes } from '../memoryAtlasPresentation';
 import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import PauseIcon from '@mui/icons-material/Pause';
@@ -23,7 +27,7 @@ import Graph from 'graphology';
 import forceAtlas2 from 'graphology-layout-forceatlas2';
 import FA2Layout from 'graphology-layout-forceatlas2/worker';
 import Sigma from 'sigma';
-import { fetchMemoryGraph } from '../api';
+import { fetchMemoryGraph, fetchMemoryRecord } from '../api';
 import type {
   MemoryGraphEdge,
   MemoryGraphEdgeKind,
@@ -185,7 +189,7 @@ function createAtlasGraph(data: MemoryGraphResponse) {
     const position = initialPosition(node, domainIndex.get(node.domain) || 0, domains.length);
     graph.addNode(node.id, {
       ...position,
-      label: node.label,
+      label: atlasNodeLabel(node),
       size: nodeSize(node),
       color: nodeColor(node),
       zIndex: node.isAnchor || node.nodeType === 'person' ? 2 : 1,
@@ -207,6 +211,14 @@ function createAtlasGraph(data: MemoryGraphResponse) {
   }
 
   return graph;
+}
+
+function visibleNeighbors(graph: AtlasGraph, node: string, kinds: Set<MemoryGraphEdgeKind>) {
+  const neighbors = new Set<string>();
+  graph.forEachEdge(node, (_edge, attributes, source, target) => {
+    if (kinds.has(attributes.kind)) neighbors.add(source === node ? target : source);
+  });
+  return [...neighbors].sort((a, b) => graph.degree(b) - graph.degree(a));
 }
 
 function percent(value: number) {
@@ -235,7 +247,11 @@ function NodeDetails({
   node,
   links,
   onSelect,
+  fullContent, detailLoading, detailError,
 }: {
+  fullContent?: string;
+  detailLoading?: boolean;
+  detailError?: boolean;
   node: MemoryGraphNode | null;
   links: NodeLink[];
   onSelect: (nodeId: string) => void;
@@ -256,7 +272,7 @@ function NodeDetails({
   }
 
   return (
-    <Box sx={{ p: 2.25, overflow: 'auto', height: '100%' }}>
+    <Box sx={{ p: 2.25, overflowWrap: 'anywhere' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
         <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: nodeColor(node), flex: '0 0 auto' }} />
         <Typography variant="overline" color="text.secondary">
@@ -264,13 +280,15 @@ function NodeDetails({
         </Typography>
       </Box>
       <Typography variant="subtitle2" fontWeight={700} sx={{ lineHeight: 1.45 }}>
-        {node.label}
+        {node.nodeType === 'person' ? node.label : 'Воспоминание'}
       </Typography>
-      {node.content && node.content !== node.label && (
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1.25, whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>
-          {node.content}
+      {node.nodeType !== 'person' && (
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1.25, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.7 }}>
+          {fullContent ?? (node.content || node.label)}
         </Typography>
       )}
+      {detailLoading && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>Загружаем полный текст…</Typography>}
+      {detailError && <Alert severity="warning" sx={{ mt: 1 }}>Не удалось загрузить полный текст. Показан сокращённый фрагмент.</Alert>}
       <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mt: 1.5 }}>
         <Chip size="small" variant="outlined" label={node.memoryKind} />
         <Chip size="small" variant="outlined" label={node.status} />
@@ -337,7 +355,7 @@ function NodeDetails({
               >
                 <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: EDGE_COLORS[edge.kind], mr: 0.8, flex: '0 0 auto' }} />
                 <Box sx={{ minWidth: 0 }}>
-                  <Typography variant="caption" display="block" noWrap>{neighbor.label}</Typography>
+                  <Typography variant="body2" sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' }}>{neighbor.label}</Typography>
                   <Typography variant="caption" color="text.disabled" display="block" noWrap>
                     {EDGE_LABELS[edge.kind]} · {relationLabel(edge)} · {percent(edge.weight)}
                   </Typography>
@@ -358,6 +376,7 @@ function NodeDetails({
 
 export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; refreshToken?: number }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const detailsRef = useRef<HTMLDivElement | null>(null);
   const graphRef = useRef<AtlasGraph | null>(null);
   const rendererRef = useRef<AtlasRenderer | null>(null);
   const layoutRef = useRef<FA2Layout<AtlasNodeAttributes, AtlasEdgeAttributes> | null>(null);
@@ -373,6 +392,8 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
   const [renderError, setRenderError] = useState('');
   const [nodeLimit, setNodeLimit] = useState(3000);
   const [includeIdentityNodes, setIncludeIdentityNodes] = useState(true);
+  const [nodeSearch, setNodeSearch] = useState('');
+  const [detail, setDetail] = useState<{ nodeId: string; content?: string; loading?: boolean; error?: boolean } | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [layoutRunning, setLayoutRunning] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -383,6 +404,8 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
     const controller = new AbortController();
     setLoading(true);
     setError('');
+    setSelectedNodeId(null);
+    selectedNodeRef.current = null;
     const { limit: _listLimit, offset: _offset, ...filters } = query;
     fetchMemoryGraph({
       ...filters,
@@ -424,25 +447,38 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
         enableEdgeEvents: false,
         hideEdgesOnMove: true,
         hideLabelsOnMove: true,
-        labelDensity: graph.order > 5000 ? 0.24 : 0.55,
+        labelDensity: 0.12,
+        labelSize: 12,
         labelGridCellSize: graph.order > 5000 ? 160 : 120,
         labelRenderedSizeThreshold: graph.order > 5000 ? 10 : 8,
         maxCameraRatio: 12,
         minCameraRatio: 0.05,
         renderEdgeLabels: false,
         labelColor: { color: '#DCE8F8' },
+        defaultDrawNodeHover: (context, node, settings) => {
+          context.save();
+          context.font = `${settings.labelWeight} ${settings.labelSize}px ${settings.labelFont}`;
+          const label = node.label || '', x = node.x + node.size + 7;
+          context.fillStyle = '#142238';
+          context.fillRect(x - 4, node.y - settings.labelSize, context.measureText(label).width + 8, settings.labelSize + 8);
+          context.fillStyle = '#F1F5F9';
+          context.fillText(label, x, node.y + settings.labelSize / 3);
+          context.beginPath(); context.arc(node.x, node.y, node.size + 2, 0, Math.PI * 2);
+          context.strokeStyle = '#E2E8F0'; context.lineWidth = 2; context.stroke();
+          context.restore();
+        },
         stagePadding: 36,
         zIndex: true,
         nodeReducer: (node, attributes) => {
           const focused = focusNodeRef.current;
-          if (!focused) return attributes;
+          if (!focused) return { ...attributes, label: attributes.atlasNode.nodeType === 'person' ? attributes.label : '' };
           if (node === focused) {
             return { ...attributes, highlighted: true, forceLabel: true, zIndex: 4 };
           }
           if (neighborSetRef.current.has(node)) {
-            return { ...attributes, forceLabel: neighborLabelSetRef.current.has(node), zIndex: 3 };
+            return { ...attributes, label: neighborLabelSetRef.current.has(node) ? attributes.label : '', forceLabel: false, zIndex: 3 };
           }
-          return { ...attributes, color: '#263552', label: '', zIndex: 0 };
+          return { ...attributes, color: '#17243A', label: '', size: 2, zIndex: 0 };
         },
         edgeReducer: (edge, attributes) => {
           if (!visibleEdgeKindsRef.current.has(attributes.kind)) return { ...attributes, hidden: true };
@@ -452,7 +488,7 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
           if (source === focused || target === focused) {
             return { ...attributes, color: EDGE_COLORS[attributes.kind], size: Math.max(1.3, attributes.size) };
           }
-          return { ...attributes, color: '#1E293B', size: 0.2 };
+          return { ...attributes, hidden: true };
         },
       });
     } catch (reason) {
@@ -474,9 +510,9 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
     const setFocus = (node: string | null) => {
       if (focusNodeRef.current === node) return;
       focusNodeRef.current = node;
-      const neighbors = node ? graph.neighbors(node) : [];
+      const neighbors = node ? visibleNeighbors(graph, node, visibleEdgeKindsRef.current) : [];
       neighborSetRef.current = new Set(neighbors);
-      neighborLabelSetRef.current = new Set(neighbors.slice(0, 40));
+      neighborLabelSetRef.current = new Set(neighbors.slice(0, 8));
       scheduleFocusRefresh();
     };
     renderer.on('enterNode', ({ node }) => setFocus(node));
@@ -543,30 +579,45 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
     [data, selectedNodeId],
   );
 
+  useEffect(() => {
+    if (!selectedNode?.memoryId || selectedNode.nodeType !== 'memory') { setDetail(null); return; }
+    const controller = new AbortController(), nodeId = selectedNode.id;
+    setDetail({ nodeId, loading: true });
+    void fetchMemoryRecord(selectedNode.domain, selectedNode.memoryId, { profile: query.profile, userId: query.userId }, controller.signal)
+      .then(record => { if (!controller.signal.aborted) setDetail({ nodeId, content: record.content }); })
+      .catch(() => { if (!controller.signal.aborted) setDetail({ nodeId, error: true }); });
+    return () => controller.abort();
+  }, [selectedNode, query.profile, query.userId]);
+
+  useEffect(() => { detailsRef.current?.scrollTo({ top: 0 }); }, [selectedNodeId]);
+
   const selectedLinks = useMemo<NodeLink[]>(() => {
     if (!data || !selectedNodeId) return [];
     const nodesById = new Map(data.nodes.map((node) => [node.id, node]));
     return data.edges
-      .filter((edge) => edge.source === selectedNodeId || edge.target === selectedNodeId)
+      .filter((edge) => visibleEdgeKinds.has(edge.kind) && (edge.source === selectedNodeId || edge.target === selectedNodeId))
       .map((edge) => ({
         edge,
         neighbor: nodesById.get(edge.source === selectedNodeId ? edge.target : edge.source),
       }))
       .filter((link): link is NodeLink => Boolean(link.neighbor))
       .sort((a, b) => b.edge.weight - a.edge.weight);
-  }, [data, selectedNodeId]);
+  }, [data, selectedNodeId, visibleEdgeKinds]);
 
   const selectLinkedNode = (nodeId: string) => {
     const graph = graphRef.current;
     const renderer = rendererRef.current;
+    setSelectedNodeId(nodeId);
     if (!graph || !renderer || !graph.hasNode(nodeId)) return;
     selectedNodeRef.current = nodeId;
     focusNodeRef.current = nodeId;
     setSelectedNodeId(nodeId);
-    const neighbors = graph.neighbors(nodeId);
+    const neighbors = visibleNeighbors(graph, nodeId, visibleEdgeKindsRef.current);
     neighborSetRef.current = new Set(neighbors);
-    neighborLabelSetRef.current = new Set(neighbors.slice(0, 40));
-    renderer.scheduleRefresh();
+    neighborLabelSetRef.current = new Set(neighbors.slice(0, 8));
+    // A scheduled refresh temporarily leaves raw graph coordinates in the cache.
+    // Process synchronously before using normalized coordinates for the camera.
+    renderer.refresh();
     const display = renderer.getNodeDisplayData(nodeId);
     if (display) {
       renderer.getCamera().animate({ x: display.x, y: display.y, ratio: Math.min(renderer.getCamera().ratio, 0.75) }, { duration: 300 });
@@ -589,6 +640,12 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
     else next.add(kind);
     setVisibleEdgeKinds(next);
     visibleEdgeKindsRef.current = next;
+    const focused = focusNodeRef.current, graph = graphRef.current;
+    if (focused && graph?.hasNode(focused)) {
+      const neighbors = visibleNeighbors(graph, focused, next);
+      neighborSetRef.current = new Set(neighbors);
+      neighborLabelSetRef.current = new Set(neighbors.slice(0, 8));
+    }
     rendererRef.current?.scheduleRefresh();
   };
 
@@ -610,6 +667,12 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
         layoutTimerRef.current = null;
       }, 4500);
     }
+  };
+
+  const nodeChoices = useMemo(() => findAtlasNodes(data?.nodes || [], nodeSearch), [data, nodeSearch]);
+  const clearSelection = () => {
+    setSelectedNodeId(null); selectedNodeRef.current = null; focusNodeRef.current = null;
+    neighborSetRef.current = new Set(); neighborLabelSetRef.current = new Set(); rendererRef.current?.scheduleRefresh();
   };
 
   return (
@@ -658,7 +721,7 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
           />
           <Tooltip title={layoutRunning ? 'Остановить раскладку' : 'Продолжить раскладку'}>
             <span>
-              <Button size="small" variant="outlined" onClick={toggleLayout} disabled={!data?.edges.length}>
+              <Button aria-label={layoutRunning ? 'Остановить раскладку' : 'Продолжить раскладку'} size="small" variant="outlined" onClick={toggleLayout} disabled={!data?.edges.length}>
                 {layoutRunning ? <PauseIcon fontSize="small" /> : <PlayArrowIcon fontSize="small" />}
               </Button>
             </span>
@@ -668,6 +731,7 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
               <Button
                 size="small"
                 variant="outlined"
+                aria-label="Вписать граф"
                 onClick={() => rendererRef.current?.getCamera().animatedReset({ duration: 350 })}
                 disabled={!data?.nodes.length}
               >
@@ -677,7 +741,7 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
           </Tooltip>
           <Tooltip title="Перезагрузить данные">
             <span>
-              <Button size="small" variant="outlined" onClick={() => setReloadToken((value) => value + 1)} disabled={loading}>
+              <Button aria-label="Перезагрузить атлас" size="small" variant="outlined" onClick={() => setReloadToken((value) => value + 1)} disabled={loading}>
                 <RefreshIcon fontSize="small" />
               </Button>
             </span>
@@ -727,14 +791,19 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
         variant="outlined"
         sx={{
           display: 'grid',
-          gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 1fr) 320px' },
-          minHeight: { xs: 560, md: 660 },
+          gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 1fr) 380px' },
+          alignItems: 'start',
           overflow: 'hidden',
           borderRadius: 1,
           bgcolor: '#08111F',
         }}
       >
-        <Box sx={{ position: 'relative', minHeight: { xs: 560, md: 660 }, overflow: 'hidden' }}>
+        <Box sx={{ position: 'relative', height: { xs: 420, md: 'clamp(520px, 72vh, 800px)' }, overflow: 'hidden' }}>
+          <Stack direction="row" spacing={1} sx={{ position: 'absolute', top: 12, left: 12, zIndex: 2 }}>
+            <Button aria-label="Приблизить граф" variant="outlined" size="small" onClick={() => rendererRef.current?.getCamera().animatedZoom({ duration: 200 })}><AddIcon /></Button>
+            <Button aria-label="Отдалить граф" variant="outlined" size="small" onClick={() => rendererRef.current?.getCamera().animatedUnzoom({ duration: 200 })}><RemoveIcon /></Button>
+            {selectedNodeId && <Button size="small" onClick={clearSelection}>Снять выбор</Button>}
+          </Stack>
           <Box ref={containerRef} sx={{ position: 'absolute', inset: 0 }} aria-label="WebGL-граф памяти" />
           {loading && (
             <Box sx={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', bgcolor: 'rgba(8,17,31,0.86)', zIndex: 5 }}>
@@ -757,12 +826,34 @@ export function MemoryAtlas({ query, refreshToken = 0 }: { query: MemoryQuery; r
               color="text.disabled"
               sx={{ position: 'absolute', left: 12, bottom: 8, pointerEvents: 'none' }}
             >
-              WebGL · ForceAtlas2 Worker {layoutRunning ? '· раскладка считается' : '· раскладка остановлена'}
+              {selectedNodeId ? 'Подсвечены связи выбранного узла' : 'Выберите узел на графе или найдите его в списке справа'} {layoutRunning ? '· размещаем узлы…' : ''}
             </Typography>
           )}
         </Box>
-        <Box sx={{ borderLeft: { lg: '1px solid' }, borderTop: { xs: '1px solid', lg: 'none' }, borderColor: 'divider', bgcolor: 'background.paper', minHeight: 0 }}>
-          <NodeDetails node={selectedNode} links={selectedLinks} onSelect={selectLinkedNode} />
+        <Box ref={detailsRef} sx={{ borderLeft: { lg: '1px solid' }, borderTop: { xs: '1px solid', lg: 'none' }, borderColor: 'divider', bgcolor: 'background.paper', minHeight: 0, maxHeight: { lg: 'clamp(520px, 72vh, 800px)' }, overflow: 'auto' }}>
+          <Box sx={{ p: 2 }}>
+            <TextField fullWidth size="small" type="search" label="Найти узел в атласе" value={nodeSearch}
+              helperText="Поиск по загруженным воспоминаниям"
+              onChange={event => setNodeSearch(event.target.value)}
+              onKeyDown={event => { if (event.key === 'Enter' && nodeChoices[0]) selectLinkedNode(nodeChoices[0].id); }} />
+            {(!selectedNode || nodeSearch.trim()) && <Stack spacing={0.5} sx={{ mt: 1.5 }}>
+              <Typography variant="caption" color="text.secondary">{nodeSearch.trim() ? 'Результаты · до 12 узлов' : 'Люди и связанные воспоминания'}</Typography>
+              {!nodeChoices.length && !loading && <Typography variant="body2">Ничего не найдено.</Typography>}
+              {nodeChoices.map(node => <Button key={node.id} aria-label={`Открыть узел: ${atlasNodeLabel(node)}`} onClick={() => { selectLinkedNode(node.id); setNodeSearch(''); }}
+                sx={{ textAlign: 'left', justifyContent: 'flex-start', textTransform: 'none', color: 'text.primary', p: 1 }}>
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography variant="body2" sx={{ overflowWrap: 'anywhere', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{node.label}</Typography>
+                  <Typography variant="caption" color="text.secondary">{node.nodeType === 'person' ? 'Человек' : DOMAIN_LABELS[node.domain] || node.domain} · связей: {node.degree}</Typography>
+                </Box>
+              </Button>)}
+            </Stack>}
+            {selectedNode && <Button size="small" sx={{ mt: 1 }} onClick={clearSelection}>Вернуться к списку</Button>}
+          </Box>
+          <Divider />
+          <NodeDetails node={selectedNode} links={selectedLinks} onSelect={selectLinkedNode}
+            fullContent={detail?.nodeId === selectedNodeId ? detail.content : undefined}
+            detailLoading={detail?.nodeId === selectedNodeId && detail.loading}
+            detailError={detail?.nodeId === selectedNodeId && detail.error} />
         </Box>
       </Paper>
     </Box>

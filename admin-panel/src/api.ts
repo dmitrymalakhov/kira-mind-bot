@@ -13,6 +13,7 @@ import type {
   MemoryGraphQuery,
   MemoryGraphResponse,
   MemoryQuery,
+  MemoryRecord,
   MemoryResponse,
   MonitoringHealthResponse,
   PersonalityConfig,
@@ -253,6 +254,13 @@ export async function fetchMemories(query: MemoryQuery = {}, signal?: AbortSigna
     throw new Error(body.error || 'Failed to load memories');
   }
   return r.json();
+}
+
+export async function fetchMemoryRecord(domain: string, id: string, scope: Pick<MemoryQuery, 'profile' | 'userId'>, signal?: AbortSignal): Promise<MemoryRecord> {
+  const params = toSearchParams(scope);
+  const response = await apiFetch(`/api/memory/${encodeURIComponent(domain)}/${encodeURIComponent(id)}?${params}`, { signal });
+  if (!response.ok) throw new Error('Не удалось загрузить полный текст воспоминания');
+  return (await response.json()).record;
 }
 
 export async function fetchMemoryGraph(query: MemoryGraphQuery = {}, signal?: AbortSignal): Promise<MemoryGraphResponse> {
