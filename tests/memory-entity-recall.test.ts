@@ -13,6 +13,8 @@ import * as ai from '../ai/chatCompletion';
 import * as today from '../utils/todayImportance';
 import { QdrantVectorService } from '../services/QdrantVectorService';
 import { AppDataSource } from '../data-source';
+import { isOwnerRecallEvidence } from '../utils/contactMemory';
+import { maybeStartContactMemoryLookup, handlePendingContactLookupText } from '../utils/contactMemoryLookup';
 
 const owner = '740893';
 const person: MemoryPerson = { personIds: ['synthetic-lada'], displayName: 'Лада Тестовая', contactId: '555123', evidenceIds: ['saved-link'] };
@@ -48,6 +50,89 @@ test('semantic plan accepts role synonyms and rejects invented spans, IDs and in
     assert.equal(botClaim?.references?.length, 0);
     const topic = parseMemoryQueryPlan(JSON.stringify({ answerQueries: ['проект'], references: [{ kind: 'topic', mention: 'мой проект', from: 'owner', relationPath: [] }] }), 'Что известно про мой проект?');
     assert.equal(topic?.references?.[0].kind, 'topic');
+});
+
+test('explicit self references bind owner topics and validate domains without accepting bot claims or other people', () => {
+    const plan = parseMemoryQueryPlan(JSON.stringify({ answerQueries: ['увлечения пользователя'], requestKind: 'overview', domains: ['hobbies', 'hobbies', 'not-a-domain'], references: [
+        { kind: 'person', mention: 'моих', from: 'owner', relationPath: [] },
+    ] }), 'Что известно о моих увлечениях?')!;
+    assert.equal(plan.references?.[0].from, 'owner'); assert.deepEqual(plan.domains, ['hobbies']);
+    const falseOwner = parseMemoryQueryPlan(JSON.stringify({ answerQueries: ['факты'], references: [
+        { kind: 'person', mention: 'Ладе', from: 'owner', relationPath: [] },
+        { kind: 'person', mention: 'мой', from: 'owner', relationPath: [] },
+    ] }), 'Что известно о Ладе?', [{ role: 'bot', content: 'мой профиль' }]);
+    assert.deepEqual(falseOwner?.references, []);
+});
+
+test('an explicit owner reference overrides the previous person without looking up a person named my hobbies', async t => {
+    const ctx = context(); saveMemoryFocus(ctx, [person], 'Предыдущий собеседник', ['saved-link']);
+    const lookup = t.mock.method(identity, 'findPersonIdentitiesForRecall', async () => { throw Error('Owner is authenticated context'); });
+    const result = await resolveMemoryQueryEntities(ctx, 'Расскажи о моих увлечениях', { answerQueries: ['увлечения пользователя'], contextQueries: [],
+        references: [{ kind: 'person', mention: 'моих', from: 'owner', relationPath: [] }] }, service([]));
+    assert.equal(result.people[0]?.owner, true); assert.deepEqual(result.people[0]?.personIds, ['user']);
+    assert.equal(result.people[0]?.contactId, undefined); assert.equal(lookup.mock.callCount(), 0);
+    assert.equal(result.unresolved, false);
+});
+
+test('owner facts exclude contact, bot, mixed-chat and conflicting person evidence', () => {
+    assert.equal(isOwnerRecallEvidence({ subject: 'user', tags: ['subject:user'] }), true);
+    for (const input of [
+        { subject: 'contact', tags: ['subject:user'] }, { subject: 'bot', tags: [] }, { subject: 'unknown', tags: [] },
+        { subject: 'user', tags: ['source_contact:synthetic'] }, { subject: 'user', tags: ['source_chat:synthetic'] },
+        { subject: 'user', tags: ['contact_id:555123'] }, { subject: 'user', tags: ['person_id:synthetic-lada'] },
+        { subject: 'user', tags: ['evidence_subject:bot'] }, { subject: undefined, tags: [] },
+    ]) assert.equal(isOwnerRecallEvidence(input), false, JSON.stringify(input));
+});
+
+test('legacy contact lookup cannot consume first-person topics or a new self question during clarification', async () => {
+    for (const question of ['Что ты знаешь об моих увлечениях?', 'Расскажи о моих планах', 'Что известно о моей работе?']) {
+        const ctx = context();
+        assert.equal(await maybeStartContactMemoryLookup(ctx, question), null);
+        ctx.session.pendingContactLookup = { contactName: 'Тестовый', originalMessage: 'Кто такой Тестовый?', candidateIds: [], createdAt: Date.now() };
+        assert.equal(await handlePendingContactLookupText(ctx, question), null);
+        assert.equal(ctx.session.pendingContactLookup, undefined);
+    }
+});
+
+test('owner topic overview reads authenticated subject evidence and addresses the user in the second person', async t => {
+    const ctx = context(); saveMemoryFocus(ctx, [person], 'Предыдущий человек', ['saved-link']);
+    const own = record('own-hobby', 'Увлекается тестовыми головоломками.', { subject: 'user', tags: ['subject:user'], domain: 'hobbies' });
+    t.mock.method(vector, 'getVectorService', () => ({ getOwnerMemories: async (userId: string, domains: string[], limit: number) => {
+        assert.equal(userId, owner); assert.deepEqual(domains, ['hobbies']); assert.equal(limit, 300);
+        return [own, record('foreign-hobby', 'Чужое увлечение.', { domain: 'hobbies' })];
+    }, searchAllDomains: async () => { throw Error('No embeddings for a topic overview'); } } as any));
+    const plan: MemoryQueryPlan = { answerQueries: ['хобби увлечения интересы пользователя'], contextQueries: [], domains: ['hobbies'], requestKind: 'overview',
+        references: [{ kind: 'person', mention: 'моих', from: 'owner', relationPath: [] }] };
+    const result = await getMultiQueryMemoryContextDetailed(ctx, 'Что ты знаешь о моих увлечениях?', 'full', { queryPlan: plan, trackAccess: false });
+    assert.deepEqual(result.recalledMemories.map(item => item.id), ['own-hobby']);
+    assert.match(result.context, /ты\/твои\/о тебе/); assert.ok(!result.context.includes('Чужое увлечение'));
+    assert.equal(validMemoryFocus(ctx)?.people[0]?.owner, true);
+});
+
+test('owner topic pool paginates only validated domains with owner, namespace and subject filters', async () => {
+    const calls: any[] = [];
+    const svc: any = new QdrantVectorService({ scroll: async (collection: string, args: any) => {
+        calls.push({ collection, args }); const start = Number(args.offset ?? 0), end = Math.min(75, start + args.limit);
+        return { points: Array.from({ length: end - start }, (_, i) => ({ id: `own-${start + i}`, payload: { ...record(`own-${start + i}`, 'Тестовый факт.'), subject: 'user', tags: ['subject:user'] } })), next_page_offset: end < 75 ? end : null };
+    } } as any);
+    assert.equal((await svc.getOwnerMemories(owner, ['hobbies'], 300)).length, 75);
+    assert.equal((await svc.getOwnerMemories(owner, ['../../foreign'], 300)).length, 0);
+    assert.equal(calls.length, 2);
+    for (const { collection, args } of calls) {
+        assert.ok(collection.endsWith('_hobbies')); assert.ok(args.limit <= 50);
+        assert.ok(args.filter.must.some((c: any) => c.key === 'userId' && c.match.value === owner));
+        assert.ok(args.filter.must.some((c: any) => c.key === 'botId'));
+        assert.ok(args.filter.must.some((c: any) => c.should?.some((s: any) => s.key === 'subject' && s.match.value === 'user')));
+        assert.ok(args.filter.must_not.some((c: any) => c.key === 'expiresAt'));
+    }
+});
+
+test('owner overview keeps topical relevance even when the planner does not narrow domains', () => {
+    const self: MemoryPerson = { personIds: ['user'], displayName: 'текущий пользователь', owner: true, evidenceIds: [] };
+    const noise = Array.from({ length: 60 }, (_, i) => record(`a-${i}`, 'Работает над тестовым проектом.', { domain: 'work' }));
+    const goal = record('z-plan', 'Планирует пройти тестовый курс.', { domain: 'education', memoryKind: 'goal' });
+    const selected = selectPersonEvidence([...noise, goal], self, 'планирует курс', true, 8, new Set(), true);
+    assert.equal(selected[0].id, goal.id);
 });
 
 test('foreground and deferred history both retain the preceding answer; cache uses full context', () => {

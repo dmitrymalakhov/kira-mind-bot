@@ -23,6 +23,7 @@ import { memoryContentExcerpt, memoryRerankCacheKey, parseMemoryRerankOrder } fr
 import { memoryQueryHistory, memoryQueryCacheKey, parseMemoryQueryPlan, validMemoryFocus, isMemoryContinuation } from './memoryQueryPlan';
 import type { MemoryQueryPlan } from '../types/memoryRecallTypes';
 import { PERSON_RELATION_TYPES } from './personRelation';
+import { PREDEFINED_DOMAINS } from '../constants/domains';
 import { resolveMemoryQueryEntities, personRecallScope, readPersonEvidence, selectPersonEvidence, selectRelationshipEvidence, formatPersonOverview, rememberResolvedSearch } from './memoryEntityRecall';
 import { scoreMemoryLexicalMatch } from './memoryRetrieval';
 
@@ -721,11 +722,13 @@ export async function generateMemoryQueries(userMessage: string, recentHistory?:
 Тебе нужно найти факты в долговременной памяти пользователя чтобы ответить на этот запрос.
 ${recentHistory && recentHistory.length > 0 ? 'Учти контекст разговора: местоимения («он», «она», «это», «там» и т.п.) относятся к предыдущим сообщениям — раскрой их в конкретные имена/объекты.\n' : ''}
 Верни JSON плана поиска, не ответ и не новые факты:
-{"answerQueries":["2–3 прямые фразы и синонимы"],"contextQueries":["до двух фоновых фраз"],"standaloneQuery":"самостоятельный вопрос с разрешёнными ссылками","requestKind":"identity|overview|relationship|specific","references":[{"kind":"person|topic","mention":"точный фрагмент вопроса или истории","from":"named|owner|focus","relationPath":[{"type":"тип связи","direction":"out|in|either","alternatives":[]}]}]}.
+{"answerQueries":["2–3 прямые фразы и синонимы"],"contextQueries":["до двух фоновых фраз"],"standaloneQuery":"самостоятельный вопрос с разрешёнными ссылками","requestKind":"identity|overview|relationship|specific","domains":[],"references":[{"kind":"person|topic","mention":"точный фрагмент вопроса или истории","from":"named|owner|focus","relationPath":[{"type":"тип связи","direction":"out|in|either","alternatives":[]}]}]}.
 overview — что известно, профиль, подробнее о человеке; specific — отдельный факт/совет; identity — кто имеется в виду; relationship — что связывает людей, история взаимодействий, общие дела/темы общения. Для relationship поисковые фразы описывают эти аспекты, не предполагают заранее работу, брак или конкретную тему.
+domains — до трёх подходящих разделов по явно запрошенной теме: ${Object.values(PREDEFINED_DOMAINS).join(', ')}; для всего профиля оставь [].
 Синонимы и описания ролей переводи в смысл сохранённых связей, а не в придуманное имя. Типы: ${PERSON_RELATION_TYPES.join(', ')}.
 partner_of означает романтического партнёра; spouse_of — брак как его частный случай. Для деловых партнёров используй подходящую профессиональную связь works_with/client_of или именованный поиск, не partner_of/spouse_of. Пол и конкретного человека из типа не выводи.
 from=owner: путь от владельца; named: точное упомянутое имя; focus: местоимение/продолжение про прежний предмет разговора. Для темы/проекта kind=topic. Не считай любое название человеком.
+«Я/обо мне/мой/мои/моих» в текущей пользовательской реплике относятся к владельцу, а не ассистенту или прошлому собеседнику. Для собственных фактов владельца from=owner и relationPath=[] допустимы: «Что ты знаешь об моих увлечениях?» → overview, domains=["hobbies"], reference={"kind":"person","mention":"моих","from":"owner","relationPath":[]}. Так же разбирай любые его личные темы. «Увлечения моей жены» требуют пути spouse_of, а не профиля владельца. «Твои увлечения» — ассистент, не owner. В query замени первое лицо на «пользователь», не приписывай ему новые факты.
 Если имя разрешается из истории, укажи from=named и скопируй точное имя в mention; focus используй, когда явного имени нет.
 relationPath — шаги от корня к искомому человеку: out идёт от субъекта к объекту, in наоборот, either только для симметричных связей. «Мой родитель»: parent_of/in; «мой ребёнок»: parent_of/out. Вложенные роли требуют полного пути. Если неоднозначно, не выбирай человека.
 Путь только УСТАНАВЛИВАЕТ, о ком спрашивают. Он не описывает связь, которую пользователь просит выяснить. «Что нас связывает с Мироном Тестовым?» → relationship, named, mention="Мироном Тестовым", relationPath=[]: ищем сведения о владельце и названном человеке, не переходим к коллеге Мирона. «Что мы с Ладой Тестовой обсуждаем?» → relationship, named, mention="Ладой Тестовой", relationPath=[]. Напротив, «Кто начальник Мирона Тестового?» требует пути от Мирона к начальнику. Не нормализуй падеж в mention: копируй исходный фрагмент буквально.
@@ -1343,14 +1346,14 @@ export async function getMultiQueryMemoryContextDetailed(
         return { context: entities.ambiguous ? 'Предмет поиска неоднозначен. Уточни конкретного человека; не выбирай по частоте или похожему имени.' :
             'Не удалось связать запрошенного человека с однозначной сохранённой личностью. Уточни имя или связь. Это ограничение разрешения ссылки, а не доказательство отсутствия сведений в памяти.', recalledMemories: [] };
     }
-    const personPools = service ? await Promise.all(entities.people.map(async person => ({ person, records: await readPersonEvidence(service, String(ctx.from?.id), person) }))) : [];
+    const personPools = service ? await Promise.all(entities.people.map(async person => ({ person, records: await readPersonEvidence(service, String(ctx.from?.id), person, person.owner ? generatedQueries.domains : []) }))) : [];
     const relationshipOverview = generatedQueries.requestKind === 'relationship';
     const overview = relationshipOverview || generatedQueries.requestKind === 'overview' || generatedQueries.requestKind === undefined && /(?:что.*(?:знаешь|помнишь)|подробнее|расскажи.*(?:о|про))/iu.test(userMessage);
     if (overview && personPools.some(pool => pool.records.length)) {
         const seen = new Set(isMemoryContinuation(userMessage) ? previousFocus?.evidenceIds ?? [] : []);
         const selection = personPools.map(pool => ({ ...pool, records: relationshipOverview
             ? selectRelationshipEvidence(pool.records, pool.person, [userMessage, ...generatedQueries.answerQueries, ...generatedQueries.contextQueries].join('\n'), 24, seen, entities.people.filter(person => person !== pool.person))
-            : selectPersonEvidence(pool.records, pool.person, entities.query, true, 24, seen) }));
+            : selectPersonEvidence(pool.records, pool.person, pool.person.owner ? generatedQueries.answerQueries.join(' ') : entities.query, true, 24, seen, pool.person.owner) }));
         const packed = formatPersonOverview(selection, 6500, relationshipOverview);
         const included = packed.included;
         rememberResolvedSearch(ctx, entities, included);

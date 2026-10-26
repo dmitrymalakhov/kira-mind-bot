@@ -1,5 +1,10 @@
 import type { PersonRelationType } from './personRelation';
 
+/** Linguistic reference only; it grants no evidence or authorization for actions. */
+export function hasOwnerSelfReference(text: string): boolean {
+    return /(?<![\p{L}\p{N}])(?:я|меня|мне|мной|мною|мой|моя|мо[её]|мои|моего|моей|моих|моим|моими|моему|мою|мо[её]м|i|me|my|mine|myself)(?![\p{L}\p{N}])/iu.test(text);
+}
+
 const ROLE_GROUPS: Array<{ pattern: RegExp; type: PersonRelationType; role: string }> = [
     { pattern: /^(?:жена|жену|жены|жене|женой|супруга|супругу|супруги|супруге|супругой)$/u, type: 'spouse_of', role: 'жена' },
     { pattern: /^(?:муж|мужа|мужу|мужем|муже|супруг|супруга|супругу|супругом|супруге)$/u, type: 'spouse_of', role: 'муж' },

@@ -14,6 +14,7 @@ import { reminderService } from '../services/ReminderService';
 import * as kernel from '../orchestration/runtime/kernel';
 import { browserConfirmationKey } from '../orchestration/runtime/confirmation';
 import * as relationship from '../utils/resolveRelationshipFromMemory';
+import * as contactLookup from '../utils/contactMemoryLookup';
 
 function ctx() {
     return { from: { id: 101 }, chat: { id: 101, type: 'private' }, update: { update_id: 11001 },
@@ -28,6 +29,7 @@ describe('new engine through the real message entry point', () => {
         t.mock.method(ChatGroupRepository, 'findAll', async () => []);
         const recall = t.mock.method(memory, 'fetchAgentMemoryContext', async () => ({ domain: 'personal', context: 'Синтетическое свидетельство совместной работы.', recalledMemories: [] }));
         const legacy = t.mock.method(relationship, 'resolveRelationshipFromMemory', async () => { throw Error('Duplicate resolver'); });
+        const legacyLookup = t.mock.method(contactLookup, 'maybeStartContactMemoryLookup', async () => { throw Error('Legacy topic interception'); });
         t.mock.method(completion, 'createJsonChatCompletionForTask', async (task: string) => {
             assert.equal(task, 'intentClassification');
             return { intent: 'РАЗГОВОР', confidenceLevel: 'ВЫСОКИЙ', details: { memoryNeed: 'full', memoryTask: 'lookup', relationshipRole: 'Мирон Тестовый', responseComplexity: 'routine' } } as any;
@@ -38,7 +40,7 @@ describe('new engine through the real message entry point', () => {
         });
         try {
             await processMessage(ctx(), 'Что нас связывает с Мироном Тестовым?');
-            assert.equal(recall.mock.callCount(), 1); assert.equal(legacy.mock.callCount(), 0);
+            assert.equal(recall.mock.callCount(), 1); assert.equal(legacy.mock.callCount(), 0); assert.equal(legacyLookup.mock.callCount(), 0);
         } finally {
             if (oldMode === undefined) delete process.env.KIRA_ORCHESTRATION_MODE; else process.env.KIRA_ORCHESTRATION_MODE = oldMode;
             if (oldDecisions === undefined) delete process.env.KIRA_DECISIONS_ENABLED; else process.env.KIRA_DECISIONS_ENABLED = oldDecisions;

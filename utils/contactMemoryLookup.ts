@@ -11,6 +11,7 @@ import {
 } from './contactMemory';
 import { devLog } from '../utils';
 import { getBotGenderedText } from '../persona';
+import { hasOwnerSelfReference } from './personalRecallIntent';
 
 const PENDING_CONTACT_LOOKUP_TTL_MS = 10 * 60 * 1000;
 const MAX_CONTACT_FACTS_IN_ANSWER = 18;
@@ -23,7 +24,7 @@ export interface ContactLookupResponse {
 }
 
 function isSelfReference(value: string): boolean {
-    return /^(меня|мне|обо мне|про меня|мой профиль|мою память)$/i.test(value.trim());
+    return hasOwnerSelfReference(value);
 }
 
 function isAssistantSelfReference(value: string): boolean {
@@ -250,6 +251,10 @@ export async function handlePendingContactLookupText(
         return { responseText: 'Ок, не смотрю память по контакту.' };
     }
     if (isAssistantSelfClarification(text)) {
+        ctx.session.pendingContactLookup = undefined;
+        return null;
+    }
+    if (hasOwnerSelfReference(text)) {
         ctx.session.pendingContactLookup = undefined;
         return null;
     }

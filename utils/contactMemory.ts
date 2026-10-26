@@ -201,6 +201,14 @@ export function isContactMemoryEntry(memory: { content: string; tags?: string[] 
     return hasContactMemoryTags(memory.tags) || Boolean(storedContactPrefix(memory.content));
 }
 
+export function isOwnerRecallEvidence(memory: { subject?: string; tags?: string[] }): boolean {
+    const tags = memory.tags ?? [];
+    if (!(memory.subject === 'user' || tags.includes('subject:user')) || !isEligibleForUserSynthesis(memory) ||
+        tags.some(tag => /^(?:subject|evidence_subject):(?:bot|system|contact|third_party|unknown)$/.test(tag))) return false;
+    const ownerRelation = tags.includes('person_relation') && (tags.includes('relation_subject:user') || tags.includes('relation_object:user'));
+    return ownerRelation || !hasContactMemoryTags(tags) && !tags.some(tag => tag.startsWith('person_id:') && tag !== 'person_id:user');
+}
+
 export function isMemoryEntryAllowedForContactScope(
     memory: { content: string; tags?: string[] | undefined; subject?: string },
     scope: ContactIdentityScope | null
@@ -208,6 +216,7 @@ export function isMemoryEntryAllowedForContactScope(
     if (scope?.requireEntityMatch) {
         if (scope.status !== 'resolved') return false;
         const tags = memory.tags ?? [];
+        if (scope.personIds?.includes('user')) return isOwnerRecallEvidence(memory);
         if (['bot', 'system', 'unknown'].includes(memory.subject ?? '') || tags.some(tag => /^(?:subject|evidence_subject):(?:bot|system|unknown)$/.test(tag))) return false;
         const candidateId = contactIdFromTags(tags);
         const scopeId = scope.contactId ?? (scope.contact ? String(scope.contact.id) : undefined);

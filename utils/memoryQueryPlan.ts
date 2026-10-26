@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import type { BotContext } from '../types';
 import type { MemoryQueryPlan, MemoryQueryReference, MemoryRecallFocus } from '../types/memoryRecallTypes';
 import { PERSON_RELATION_TYPES, SYMMETRIC_PERSON_RELATION_TYPES } from './personRelation';
+import { PREDEFINED_DOMAINS } from '../constants/domains';
+import { hasOwnerSelfReference } from './personalRecallIntent';
 
 export const MEMORY_FOCUS_TTL_MS = 30 * 60_000;
 const normalize = (text: string) => text.normalize('NFKC').toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
@@ -14,7 +16,7 @@ export function memoryQueryHistory(ctx: BotContext, message: string): Array<{ ro
 }
 
 export function memoryQueryCacheKey(message: string, history: Array<{ role: string; content: string }>): string {
-    return 'queries_v4:' + createHash('sha256').update(JSON.stringify({ message, history })).digest('hex');
+    return 'queries_v5:' + createHash('sha256').update(JSON.stringify({ message, history })).digest('hex');
 }
 
 export function parseMemoryQueryPlan(text: string, question: string, history: Array<{ role: string; content: string }> = []): MemoryQueryPlan | undefined {
@@ -35,13 +37,15 @@ export function parseMemoryQueryPlan(text: string, question: string, history: Ar
         const steps = Array.isArray(ref.relationPath) ? ref.relationPath : [];
         if (steps.length > 3 || steps.some((step: any) => !step || !PERSON_RELATION_TYPES.includes(step.type) ||
             !['out', 'in', 'either'].includes(step.direction) || step.direction === 'either' && !SYMMETRIC_PERSON_RELATION_TYPES.has(step.type))) continue;
-        if (ref.kind === 'person' && ref.from === 'owner' && !steps.length) continue;
+        if (ref.from === 'owner' && !steps.length && !hasOwnerSelfReference(ref.mention)) continue;
         const path = steps.map((step: any) => ({ type: step.type, direction: step.direction,
             alternatives: step.direction === 'either' && Array.isArray(step.alternatives)
                 ? [...new Set(step.alternatives.filter((type: any) => PERSON_RELATION_TYPES.includes(type) && SYMMETRIC_PERSON_RELATION_TYPES.has(type)))].slice(0, 3) as any : undefined }));
         references.push({ kind: ref.kind, mention: ref.mention.trim(), from: ref.from, relationPath: path });
     }
     return { answerQueries, contextQueries: queries(value.contextQueries), references,
+        domains: Array.isArray(value.domains) ? [...new Set(value.domains.filter((domain: unknown) =>
+            typeof domain === 'string' && Object.values(PREDEFINED_DOMAINS).includes(domain as any)))].slice(0, 3) as string[] : [],
         standaloneQuery: typeof value.standaloneQuery === 'string' && value.standaloneQuery.length <= 600 ? value.standaloneQuery.trim() : undefined,
         requestKind: ['identity', 'overview', 'relationship', 'specific'].includes(value.requestKind) ? value.requestKind : 'specific' };
 }

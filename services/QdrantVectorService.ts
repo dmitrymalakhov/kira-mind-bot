@@ -1413,8 +1413,19 @@ export class QdrantVectorService implements IDomainVectorService {
     async getMemoriesByTags(userId: string, tags: string[], limit = 300): Promise<SearchResult[]> {
         const keys = [...new Set(tags)].slice(0, 16);
         if (!keys.length) return [];
+        return this.readRecallPools(userId, Object.values(PREDEFINED_DOMAINS), { key: 'tags', match: { any: keys } }, limit);
+    }
+
+    async getOwnerMemories(userId: string, domains: string[] = [], limit = 300): Promise<SearchResult[]> {
+        const selected = domains.length ? [...new Set(domains)].filter(domain => Object.values(PREDEFINED_DOMAINS).includes(domain as any)).slice(0, 3) : Object.values(PREDEFINED_DOMAINS);
+        return this.readRecallPools(userId, selected, { should: [
+            { key: 'subject', match: { value: 'user' } }, { key: 'tags', match: { value: 'subject:user' } },
+        ] }, limit);
+    }
+
+    private async readRecallPools(userId: string, domains: string[], condition: { key: string; match: { any: string[] } } | { should: Array<{ key: string; match: { value: string } }> }, limit: number): Promise<SearchResult[]> {
         const max = Math.min(400, Math.max(1, limit));
-        const pools = await Promise.all(Object.values(PREDEFINED_DOMAINS).map(async domain => {
+        const pools = await Promise.all(domains.map(async domain => {
             const pool: SearchResult[] = [];
             let offset: string | number | undefined;
             const offsets = new Set<string>();
@@ -1423,7 +1434,7 @@ export class QdrantVectorService implements IDomainVectorService {
                     const page = await this.client.scroll(this.collectionFor(domain), {
                         filter: { must: [
                             { key: 'botId', match: { value: this.botId } }, { key: 'userId', match: { value: userId } },
-                            { key: 'tags', match: { any: keys } },
+                            condition,
                         ], must_not: this.activeMustNotFilter() },
                         limit: Math.min(50, Math.min(200, max) - pool.length), offset, with_payload: true, with_vector: false,
                     });

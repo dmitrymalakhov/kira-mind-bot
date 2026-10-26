@@ -717,7 +717,9 @@ export async function processMessage(
             if (pendingContactLookup) {
                 return pendingContactLookup;
             }
-            const contactLookup = await maybeStartContactMemoryLookup(ctx, message);
+            // Natural-language recall belongs to canonical entity/topic retrieval.
+            // The legacy matcher treats arbitrary multiword topics as contact names.
+            const contactLookup = orchestrationMode() === 'skills' ? null : await maybeStartContactMemoryLookup(ctx, message);
             if (contactLookup) {
                 return contactLookup;
             }

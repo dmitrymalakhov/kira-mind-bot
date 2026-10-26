@@ -104,7 +104,7 @@ export async function resolveMemoryQueryEntities(ctx: BotContext, question: stri
     let unresolved = false;
     const explicitTopic = refs.some(ref => ref.kind === 'topic' && ref.from !== 'focus');
     let requestedPerson = refs.some(ref => ref.kind === 'person');
-    for (const ref of refs.filter(ref => ref.kind === 'person')) {
+    for (const ref of refs.filter(ref => ref.kind === 'person' || ref.from === 'owner')) {
         let root: MemoryPerson | undefined;
         if (ref.from === 'named') {
             const named = await resolveNamedMemoryPerson(String(ctx.from?.id), ref.mention);
@@ -121,6 +121,9 @@ export async function resolveMemoryQueryEntities(ctx: BotContext, question: stri
             ambiguous ||= relation.ambiguous; root = relation.person;
             for (const memory of relation.memories) memories.set(memory.id, memory);
         }
+        if (ref.from === 'owner' && !ref.relationPath.length) root = {
+            personIds: ['user'], displayName: 'текущий пользователь (владелец диалога)', owner: true, evidenceIds: [],
+        };
         if (root) resolved.push(root); else unresolved = true;
     }
     // Model failure or old text-format models retain grounded focus for genuine
@@ -147,7 +150,14 @@ export function isUsablePersonEvidence(memory: SearchResult, person: MemoryPerso
         (!memory.expiresAt || new Date(memory.expiresAt).getTime() > now);
 }
 
-export async function readPersonEvidence(service: IDomainVectorService, owner: string, person: MemoryPerson): Promise<SearchResult[]> {
+export async function readPersonEvidence(service: IDomainVectorService, owner: string, person: MemoryPerson, domains: string[] = []): Promise<SearchResult[]> {
+    if (person.owner) {
+        const records = service.getOwnerMemories ? await service.getOwnerMemories(owner, domains, 300) :
+            service.getMemoriesByTags ? await service.getMemoriesByTags(owner, ['subject:user', 'person_id:user'], 300) :
+                await service.getMemoriesByTag(owner, 'subject:user');
+        return [...new Map(records.filter(record => isUsablePersonEvidence(record, person) && (!domains.length || domains.includes(record.domain)))
+            .map(record => [record.id, record])).values()];
+    }
     const tags = [...person.personIds.filter(id => id !== 'user').map(id => `person_id:${id}`),
         ...(person.contactId ? [`contact_id:${person.contactId}`] : []),
         `contact_name:${person.displayName}`, `contact:${person.displayName}`,
@@ -207,14 +217,15 @@ export function selectRelationshipEvidence(records: SearchResult[], person: Memo
 }
 
 /** Choose breadth for a profile, relevance for a specific question; names alone add no relevance. */
-export function selectPersonEvidence(records: SearchResult[], person: MemoryPerson, question: string, overview: boolean, limit = 24, seen: ReadonlySet<string> = new Set()): SearchResult[] {
+export function selectPersonEvidence(records: SearchResult[], person: MemoryPerson, question: string, overview: boolean, limit = 24, seen: ReadonlySet<string> = new Set(), preferTopic = false): SearchResult[] {
     const nameTokens = new Set(tokenizeMemoryRetrievalText([person.displayName, ...(person.aliases ?? [])].join(' ')));
     const topic = tokenizeMemoryRetrievalText(question).filter(token => !nameTokens.has(token)).join(' ');
     const score = (record: SearchResult) => {
         const kind = record.memoryKind ?? 'fact';
         const current = !record.status || record.status === 'active';
         const stable = ['fact', 'preference', 'boundary', 'relationship', 'trait', 'portrait'].includes(kind);
-        return (overview ? Number(current) * .5 + Number(stable) * .3 : scoreMemoryLexicalMatch(record.content, topic).score * 2) +
+        return (overview ? Number(current) * .5 + Number(stable) * .3 : 0) +
+            (!overview || preferTopic ? scoreMemoryLexicalMatch(record.content, topic).score * 2 : 0) +
             (record.confidence ?? .6) * .15 + (record.importance ?? .5) * .05 -
             (overview && seen.has(record.id) ? .75 : 0) -
             (record.tags.some(tag => tag === 'weak-evidence' || tag === 'needs-caution' || tag.startsWith('quality:') || tag === 'inference:ambiguous') ? .5 : 0);
@@ -235,6 +246,7 @@ export function selectPersonEvidence(records: SearchResult[], person: MemoryPers
 
 export function formatPersonOverview(people: Array<{ person: MemoryPerson; records: SearchResult[] }>, budget = 6500, relationship = false): { context: string; included: SearchResult[] } {
     const lines = ['Подтверждённый предмет поиска — конкретные люди ниже. Их факты не относятся к владельцу автоматически. План/завершённое событие не является текущим состоянием. Это ограниченная выборка, не весь профиль. reported/inferred/ambiguous и quality требуют оговорки, не выдавай пересказ или вывод за прямые слова человека. Отсутствие записи не доказывает отсутствие сведений в архиве. Не выводи новые факты из фрагментов.'];
+    if (people.some(item => item.person.owner)) lines[0] = 'Субъект «текущий пользователь (владелец диалога)» — автор текущего запроса, а не ассистент. Его «я/мои/обо мне» относятся к нему; в ответе обращайся «ты/твои/о тебе». Остальные люди — отдельные субъекты. Ниже только ограниченная выборка сохранённых сведений; планы, прошлые события, отрицания и временные границы не означают текущее состояние. Не выдумывай факты и не делай вывод об отсутствии сведений во всём архиве.';
     if (relationship) lines[0] += ' Вопрос о взаимодействии людей: ищи явно описанные совместные дела, разговоры и отношения в дословных фрагментах. pair=queried обозначает сохранённое ребро между запрошенными людьми (для одного человека — с владельцем); pair=context — только сведения о человеке, они сами по себе не доказывают общую работу или близость. Источник переписки и общие интересы не доказывают отношения. Отсутствие структурированного ребра не отменяет явно описанного в тексте взаимодействия. Отделяй подтверждённое от предположений.';
     const included: SearchResult[] = [];
     let remaining = budget - lines[0].length;

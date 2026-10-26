@@ -41,5 +41,7 @@ export interface MemoryQueryPlan {
     contextQueries: string[];
     standaloneQuery?: string;
     requestKind?: 'identity' | 'overview' | 'relationship' | 'specific';
+    /** Validated memory domains for the explicitly requested topic, never identities. */
+    domains?: string[];
     references?: MemoryQueryReference[];
 }
