@@ -14,7 +14,7 @@ export function memoryQueryHistory(ctx: BotContext, message: string): Array<{ ro
 }
 
 export function memoryQueryCacheKey(message: string, history: Array<{ role: string; content: string }>): string {
-    return 'queries_v3:' + createHash('sha256').update(JSON.stringify({ message, history })).digest('hex');
+    return 'queries_v4:' + createHash('sha256').update(JSON.stringify({ message, history })).digest('hex');
 }
 
 export function parseMemoryQueryPlan(text: string, question: string, history: Array<{ role: string; content: string }> = []): MemoryQueryPlan | undefined {
@@ -43,7 +43,7 @@ export function parseMemoryQueryPlan(text: string, question: string, history: Ar
     }
     return { answerQueries, contextQueries: queries(value.contextQueries), references,
         standaloneQuery: typeof value.standaloneQuery === 'string' && value.standaloneQuery.length <= 600 ? value.standaloneQuery.trim() : undefined,
-        requestKind: ['identity', 'overview', 'specific'].includes(value.requestKind) ? value.requestKind : 'specific' };
+        requestKind: ['identity', 'overview', 'relationship', 'specific'].includes(value.requestKind) ? value.requestKind : 'specific' };
 }
 
 export function validMemoryFocus(ctx: BotContext, now = Date.now()): MemoryRecallFocus | undefined {

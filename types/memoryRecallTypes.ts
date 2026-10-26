@@ -40,6 +40,6 @@ export interface MemoryQueryPlan {
     answerQueries: string[];
     contextQueries: string[];
     standaloneQuery?: string;
-    requestKind?: 'identity' | 'overview' | 'specific';
+    requestKind?: 'identity' | 'overview' | 'relationship' | 'specific';
     references?: MemoryQueryReference[];
 }

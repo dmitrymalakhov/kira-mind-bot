@@ -155,7 +155,55 @@ export async function readPersonEvidence(service: IDomainVectorService, owner: s
     ];
     const records = service.getMemoriesByTags ? await service.getMemoriesByTags(owner, tags, 300) :
         (await Promise.all(tags.map(tag => service.getMemoriesByTag(owner, tag)))).flat();
-    return [...new Map(records.filter(record => isUsablePersonEvidence(record, person)).map(record => [record.id, record])).values()];
+    // An edge may be stored on its other endpoint and have no person_id/contact_id
+    // tag for this person. Read endpoint tags explicitly instead of scanning all edges.
+    const endpointTags = person.personIds.filter(id => id !== 'user').slice(0, 12)
+        .flatMap(id => [`relation_subject_person_id:${id}`, `relation_object_person_id:${id}`]);
+    const relations: SearchResult[] = [];
+    for (let start = 0; start < endpointTags.length; start += 16) {
+        const batch = endpointTags.slice(start, start + 16);
+        relations.push(...(service.getMemoriesByTags ? await service.getMemoriesByTags(owner, batch, 100).catch(() => []) :
+            (await Promise.all(batch.map(tag => service.getMemoriesByTag(owner, tag).catch(() => [])))).flat())
+            .filter(record => record.tags.includes('person_relation')));
+    }
+    return [...new Map([...relations, ...records].filter(record => isUsablePersonEvidence(record, person)).map(record => [record.id, record])).values()].slice(0, 400);
+}
+
+/** A direct owner↔person edge is different from a person's relationship with someone else. */
+export function isOwnerPersonRelation(memory: SearchResult, person: MemoryPerson): boolean {
+    const tags = memory.tags;
+    return tags.includes('person_relation') && person.personIds.some(id =>
+        tags.includes(`relation_subject_person_id:${id}`) && tags.includes('relation_object:user') ||
+        tags.includes(`relation_object_person_id:${id}`) && tags.includes('relation_subject:user'));
+}
+
+function isQueriedPairRelation(memory: SearchResult, person: MemoryPerson, peers: MemoryPerson[]): boolean {
+    if (!peers.length) return isOwnerPersonRelation(memory, person);
+    return memory.tags.includes('person_relation') && person.personIds.some(id => peers.some(peer => peer.personIds.some(other =>
+        memory.tags.includes(`relation_subject_person_id:${id}`) && memory.tags.includes(`relation_object_person_id:${other}`) ||
+        memory.tags.includes(`relation_object_person_id:${id}`) && memory.tags.includes(`relation_subject_person_id:${other}`))));
+}
+
+/** Rank interaction evidence without declaring every fact about the person a joint fact. */
+export function selectRelationshipEvidence(records: SearchResult[], person: MemoryPerson, queries: string, limit = 24, seen: ReadonlySet<string> = new Set(), peers: MemoryPerson[] = []): SearchResult[] {
+    const names = tokenizeMemoryRetrievalText([person.displayName, ...(person.aliases ?? [])].join(' '));
+    const topic = tokenizeMemoryRetrievalText(queries).filter(token => !names.some(name => contactNamesLikelyMatch(token, name))).join(' ');
+    const score = (record: SearchResult) => Number(isQueriedPairRelation(record, person, peers)) * 10 +
+        scoreMemoryLexicalMatch(record.content, topic).score * 4 + Number(record.memoryKind === 'relationship') +
+        Number(!record.status || record.status === 'active') * .3 + (record.confidence ?? .6) * .2 -
+        Number(seen.has(record.id)) * .75 -
+        Number(record.tags.some(tag => tag === 'weak-evidence' || tag === 'needs-caution' || tag.startsWith('quality:') || tag === 'inference:ambiguous')) * .5;
+    const sorted = records.filter(record => isUsablePersonEvidence(record, person))
+        .sort((a, b) => score(b) - score(a) || a.id.localeCompare(b.id));
+    const selected: SearchResult[] = [], buckets = new Map<string, number>();
+    for (const record of sorted) {
+        const bucket = isQueriedPairRelation(record, person, peers) ? 'pair' : `${record.memoryKind ?? 'fact'}:${record.domain}`;
+        if ((buckets.get(bucket) ?? 0) >= (bucket === 'pair' ? 6 : 4)) continue;
+        selected.push(record); buckets.set(bucket, (buckets.get(bucket) ?? 0) + 1);
+        if (selected.length >= limit) return selected;
+    }
+    for (const record of sorted) { if (selected.length >= limit) break; if (!selected.includes(record)) selected.push(record); }
+    return selected;
 }
 
 /** Choose breadth for a profile, relevance for a specific question; names alone add no relevance. */
@@ -185,15 +233,17 @@ export function selectPersonEvidence(records: SearchResult[], person: MemoryPers
     return selected;
 }
 
-export function formatPersonOverview(people: Array<{ person: MemoryPerson; records: SearchResult[] }>, budget = 6500): { context: string; included: SearchResult[] } {
+export function formatPersonOverview(people: Array<{ person: MemoryPerson; records: SearchResult[] }>, budget = 6500, relationship = false): { context: string; included: SearchResult[] } {
     const lines = ['Подтверждённый предмет поиска — конкретные люди ниже. Их факты не относятся к владельцу автоматически. План/завершённое событие не является текущим состоянием. Это ограниченная выборка, не весь профиль. reported/inferred/ambiguous и quality требуют оговорки, не выдавай пересказ или вывод за прямые слова человека. Отсутствие записи не доказывает отсутствие сведений в архиве. Не выводи новые факты из фрагментов.'];
+    if (relationship) lines[0] += ' Вопрос о взаимодействии людей: ищи явно описанные совместные дела, разговоры и отношения в дословных фрагментах. pair=queried обозначает сохранённое ребро между запрошенными людьми (для одного человека — с владельцем); pair=context — только сведения о человеке, они сами по себе не доказывают общую работу или близость. Источник переписки и общие интересы не доказывают отношения. Отсутствие структурированного ребра не отменяет явно описанного в тексте взаимодействия. Отделяй подтверждённое от предположений.';
     const included: SearchResult[] = [];
     let remaining = budget - lines[0].length;
     // Interleave people so a comparison cannot silently omit the second person.
     for (let index = 0; index < 24; index++) for (const item of people) {
-        const record = item.records[index]; if (!record) continue;
+        const record = item.records[index]; if (!record || included.some(previous => previous.id === record.id)) continue;
+        const peers = people.filter(other => other !== item).map(other => other.person);
         const provenance = record.tags.filter(tag => tag.startsWith('inference:') || tag.startsWith('quality:') || tag === 'weak-evidence' || tag === 'needs-caution').join(',');
-        const text = `${item.person.displayName} [${record.domain}/${record.id}; subject=${record.subject ?? 'legacy'}; status=${record.status ?? 'active'}; confidence=${record.confidence ?? .6}; negated=${Boolean(record.negated)}${provenance ? `; ${provenance}` : ''}${record.validFrom ? `; from=${new Date(record.validFrom).toISOString()}` : ''}${record.validTo ? `; to=${new Date(record.validTo).toISOString()}` : ''}]: ${memoryContentExcerpt(record.content, '', 450)}`;
+        const text = `${item.person.displayName} [${record.domain}/${record.id}; subject=${record.subject ?? 'legacy'}; status=${record.status ?? 'active'}; confidence=${record.confidence ?? .6}; negated=${Boolean(record.negated)}${relationship ? `; pair=${isQueriedPairRelation(record, item.person, peers) ? 'queried' : 'context'}` : ''}${provenance ? `; ${provenance}` : ''}${record.validFrom ? `; from=${new Date(record.validFrom).toISOString()}` : ''}${record.validTo ? `; to=${new Date(record.validTo).toISOString()}` : ''}]: ${memoryContentExcerpt(record.content, '', 450)}`;
         if (text.length + 1 > remaining) continue;
         lines.push(text); remaining -= text.length + 1; included.push(record);
     }

@@ -1107,7 +1107,9 @@ export async function processMessage(
             enrichedContextFromMemory += `Текущая тема эпизода: ${options.turn.currentTopic}.\n`;
         }
 
-        const roleInMessage = classification.details.relationshipRole !== undefined
+        // The skills runtime already resolves people and paths in canonical recall.
+        // A second name-generating resolver can contradict that scope and adds an AI call.
+        const roleInMessage = orchestrationMode() === 'skills' ? null : classification.details.relationshipRole !== undefined
             ? classification.details.relationshipRole
             : await detectRelationshipInMessage(originalMessage);
         if (roleInMessage && !isFocusedPersonalRecall(originalMessage)) {

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import type { BotContext, SearchResult } from '../types';
 import type { MemoryPerson, MemoryQueryPlan } from '../types/memoryRecallTypes';
 import { parseMemoryQueryPlan, memoryQueryHistory, memoryQueryCacheKey, validMemoryFocus, saveMemoryFocus } from '../utils/memoryQueryPlan';
-import { followMemoryRelations, personRecallScope, readPersonEvidence, resolveMemoryQueryEntities, resolveNamedMemoryPerson, selectPersonEvidence } from '../utils/memoryEntityRecall';
+import { followMemoryRelations, personRecallScope, readPersonEvidence, resolveMemoryQueryEntities, resolveNamedMemoryPerson, selectPersonEvidence, selectRelationshipEvidence, formatPersonOverview } from '../utils/memoryEntityRecall';
 import { isMemoryEntryAllowedForContactScope } from '../utils/contactMemory';
 import { getMultiQueryMemoryContextDetailed } from '../utils/multiQueryMemory';
 import { fetchAgentMemoryContext } from '../utils/agentMemoryContext';
@@ -227,6 +227,82 @@ test('specific questions use the grounded person in hybrid search and reranking'
     });
     const result = await getMultiQueryMemoryContextDetailed(ctx, 'Что она предпочитает пить?', 'full', { queryPlan: plan, trackAccess: false });
     assert.equal(result.recalledMemories.length, 1);
+});
+
+test('relationship lookup retains the named person instead of traversing to their colleagues', async t => {
+    const question = 'Что нас связывает с Мироном Тестовым?';
+    const plan = parseMemoryQueryPlan(JSON.stringify({ answerQueries: ['история взаимодействий и общие дела'], requestKind: 'relationship', references: [
+        { kind: 'person', mention: 'Мироном Тестовым', from: 'named', relationPath: [] },
+    ] }), question)!;
+    assert.equal(plan.requestKind, 'relationship');
+    t.mock.method(identity, 'findPersonIdentitiesForRecall', async () => [
+        { id: 'synthetic-miron', displayName: 'Мирон Тестовый', aliases: [], telegramContactId: '555125' },
+    ] as any);
+    let traversals = 0;
+    const result = await resolveMemoryQueryEntities(context(), question, plan, { getMemoriesByTag: async () => { traversals++; return []; } } as any);
+    assert.equal(result.people[0]?.displayName, 'Мирон Тестовый');
+    assert.equal(result.unresolved, false); assert.equal(traversals, 0);
+});
+
+test('person evidence reads both edge endpoints even when the fact belongs to the other participant', async () => {
+    const pair = relation('owner-pair', 'works_with', 'user', 'synthetic-lada', 'Лада Тестовая');
+    const reverse = relation('reverse-pair', 'coworker_of', 'synthetic-lada', 'user', 'Лада Тестовая');
+    reverse.tags.push('contact_id:555124'); // storage attribution is not the relation's other endpoint
+    const other = relation('other-pair', 'works_with', 'user', 'synthetic-other', 'Элла Примерная');
+    const records = [pair, reverse, other, record('personal', 'Предпочитает улун.')];
+    const result = await readPersonEvidence(service(records), owner, person);
+    assert.deepEqual(new Set(result.map(item => item.id)), new Set(['owner-pair', 'reverse-pair', 'personal']));
+});
+
+test('interaction selection preserves direct pair evidence and topical facts without accepting other identities', () => {
+    const pair = relation('pair', 'works_with', 'user', 'synthetic-lada', 'Лада Тестовая');
+    const aiTopic = record('topic', 'Обсуждает архитектуру AI и нейросети.', { domain: 'work', memoryKind: 'event' });
+    const unrelated = Array.from({ length: 70 }, (_, i) => record(`tea-${i}`, 'Любит разные сорта чая.', { domain: 'hobbies' }));
+    const bad = record('wrong-person', 'Совместная работа и AI.', { tags: ['contact_id:555124'] });
+    const result = selectRelationshipEvidence([...unrelated, bad, aiTopic, pair], person, 'совместная работа темы обсуждений AI', 8);
+    assert.equal(result[0].id, 'pair'); assert.ok(result.includes(aiTopic)); assert.ok(!result.includes(bad));
+    const formatted = formatPersonOverview([{ person, records: result }], 6500, true);
+    assert.match(formatted.context, /pair=queried/); assert.match(formatted.context, /pair=context/);
+    assert.match(formatted.context, /не доказывают отношения/);
+});
+
+test('an unavailable supplementary edge lookup cannot discard the primary person facts', async () => {
+    const fact = record('primary', 'Синтетическое предпочтение.');
+    const result = await readPersonEvidence({ getMemoriesByTags: async (_owner: string, tags: string[]) => {
+        if (tags.some(tag => tag.startsWith('relation_'))) throw Error('Supplementary lookup unavailable');
+        return [fact];
+    } } as any, owner, person);
+    assert.deepEqual(result.map(item => item.id), ['primary']);
+});
+
+test('a relationship between two named people is not replaced by their separate owner relationships', () => {
+    const peer: MemoryPerson = { ...person, personIds: ['synthetic-ella'], displayName: 'Элла Примерная', contactId: '555124' };
+    const ownerEdge = relation('owner-edge', 'friend_of', 'user', 'synthetic-lada', 'Лада Тестовая');
+    const pair = relation('named-pair', 'works_with', 'synthetic-lada', 'synthetic-ella', 'Элла Примерная');
+    const selected = selectRelationshipEvidence([ownerEdge, pair], person, 'общие дела', 2, new Set(), [peer]);
+    assert.equal(selected[0].id, 'named-pair');
+    const formatted = formatPersonOverview([{ person, records: selected }, { person: peer, records: [pair] }], 6500, true);
+    assert.equal(formatted.included.filter(item => item.id === pair.id).length, 1);
+    assert.match(formatted.context, /named-pair;.*pair=queried/);
+    assert.match(formatted.context, /owner-edge;.*pair=context/);
+});
+
+test('relationship recall uses the existing planner once and reads evidence without embeddings or reranking', async t => {
+    const ctx = context(); saveMemoryFocus(ctx, [person], 'Обсуждаемый человек', ['saved-link']);
+    const plan: MemoryQueryPlan = { answerQueries: ['история совместных дел', 'темы обсуждений'], contextQueries: [], requestKind: 'relationship',
+        references: [{ kind: 'person', mention: 'ней', from: 'focus', relationPath: [] }] };
+    const records = [relation('pair', 'works_with', 'user', 'synthetic-lada', 'Лада Тестовая'),
+        record('topics', 'Обсуждает с владельцем тестовый проект AI.', { domain: 'work', memoryKind: 'event' }),
+        record('planned', 'Планирует совместную встречу.', { domain: 'work', memoryKind: 'event', status: 'planned', negated: true })];
+    t.mock.method(vector, 'getVectorService', () => ({ ...service(records), searchAllDomains: async () => { throw Error('Unexpected embeddings'); } } as any));
+    let calls = 0;
+    t.mock.method(ai, 'createChatCompletionForTask', async (_task: any, request: any) => {
+        calls++; assert.match(request.messages[1].content, /Путь только УСТАНАВЛИВАЕТ/);
+        return { choices: [{ message: { content: JSON.stringify(plan) } }] } as any;
+    });
+    const result = await getMultiQueryMemoryContextDetailed(ctx, 'Что нас с ней связывает?', 'full', { trackAccess: false, explain: true });
+    assert.equal(calls, 1); assert.equal(result.retrievalTrace?.reranker?.status, 'relationship_overview');
+    assert.equal(result.recalledMemories.length, 3); assert.match(result.context, /status=planned/); assert.match(result.context, /negated=true/);
 });
 
 test('identity pool paginates beyond fifty facts, deduplicates tags and preserves owner filters', async () => {

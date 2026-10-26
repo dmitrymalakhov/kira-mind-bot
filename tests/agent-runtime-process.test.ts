@@ -13,6 +13,7 @@ import { ChatGroupRepository } from '../services/ChatGroupRepository';
 import { reminderService } from '../services/ReminderService';
 import * as kernel from '../orchestration/runtime/kernel';
 import { browserConfirmationKey } from '../orchestration/runtime/confirmation';
+import * as relationship from '../utils/resolveRelationshipFromMemory';
 
 function ctx() {
     return { from: { id: 101 }, chat: { id: 101, type: 'private' }, update: { update_id: 11001 },
@@ -20,6 +21,30 @@ function ctx() {
 }
 
 describe('new engine through the real message entry point', () => {
+    test('canonical personal recall is not overwritten by the legacy role-to-name resolver', async t => {
+        const oldMode = process.env.KIRA_ORCHESTRATION_MODE; process.env.KIRA_ORCHESTRATION_MODE = 'skills';
+        const oldDecisions = process.env.KIRA_DECISIONS_ENABLED; delete process.env.KIRA_DECISIONS_ENABLED;
+        const oldOwner = config.allowedUserId; config.allowedUserId = 101;
+        t.mock.method(ChatGroupRepository, 'findAll', async () => []);
+        const recall = t.mock.method(memory, 'fetchAgentMemoryContext', async () => ({ domain: 'personal', context: 'Синтетическое свидетельство совместной работы.', recalledMemories: [] }));
+        const legacy = t.mock.method(relationship, 'resolveRelationshipFromMemory', async () => { throw Error('Duplicate resolver'); });
+        t.mock.method(completion, 'createJsonChatCompletionForTask', async (task: string) => {
+            assert.equal(task, 'intentClassification');
+            return { intent: 'РАЗГОВОР', confidenceLevel: 'ВЫСОКИЙ', details: { memoryNeed: 'full', memoryTask: 'lookup', relationshipRole: 'Мирон Тестовый', responseComplexity: 'routine' } } as any;
+        });
+        t.mock.method(kernel, 'runKiraRuntime', async (input: any) => {
+            assert.match(input.enrichedContextFromMemory, /Синтетическое свидетельство/);
+            return { responseText: 'Синтетический ответ.' };
+        });
+        try {
+            await processMessage(ctx(), 'Что нас связывает с Мироном Тестовым?');
+            assert.equal(recall.mock.callCount(), 1); assert.equal(legacy.mock.callCount(), 0);
+        } finally {
+            if (oldMode === undefined) delete process.env.KIRA_ORCHESTRATION_MODE; else process.env.KIRA_ORCHESTRATION_MODE = oldMode;
+            if (oldDecisions === undefined) delete process.env.KIRA_DECISIONS_ENABLED; else process.env.KIRA_DECISIONS_ENABLED = oldDecisions;
+            config.allowedUserId = oldOwner;
+        }
+    });
     test('classifies once, searches, creates a reminder and returns one combined answer', async t => {
         const oldMode = process.env.KIRA_ORCHESTRATION_MODE; process.env.KIRA_ORCHESTRATION_MODE = 'skills';
         const oldDecisions = process.env.KIRA_DECISIONS_ENABLED; delete process.env.KIRA_DECISIONS_ENABLED;

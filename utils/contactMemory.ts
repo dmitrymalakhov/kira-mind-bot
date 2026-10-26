@@ -212,8 +212,8 @@ export function isMemoryEntryAllowedForContactScope(
         const candidateId = contactIdFromTags(tags);
         const scopeId = scope.contactId ?? (scope.contact ? String(scope.contact.id) : undefined);
         if (tags.includes('person_relation')) {
-            const objectId = tags.find(tag => tag.startsWith('relation_object_person_id:'))?.split(':')[1];
-            if (objectId && scope.personIds?.includes(objectId)) return true;
+            const endpointIds = tags.filter(tag => /^relation_(?:subject|object)_person_id:/.test(tag)).map(tag => tag.split(':')[1]);
+            if (endpointIds.some(id => scope.personIds?.includes(id))) return true;
             if (scope.personIds?.includes('user') && (tags.includes('relation_subject:user') || tags.includes('relation_object:user'))) return true;
         }
         if (candidateId) return Boolean(scopeId && candidateId === scopeId);
