@@ -20,7 +20,7 @@ interface Props {
 }
 
 const TASK_LABELS: Record<string, string> = {
-  conversation: 'Обычный диалог', complexReasoning: 'Сложные ответы',
+  fastDialogue: 'Быстрый первый ответ', conversation: 'Разговор с контекстом', complexReasoning: 'Сложные ответы',
   defaultText: 'Повседневный текст', lightweightText: 'Короткие проверки',
   intentClassification: 'Понимание запроса', intentDedup: 'Проверка повторов',
   memoryExtraction: 'Извлечение фактов', memoryConsolidation: 'Упорядочивание памяти',
@@ -77,7 +77,7 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
               <Typography variant="subtitle1" component="h2" fontWeight={600}>Модель общения Киры</Typography>
               {active && (
                 <Alert severity="success">
-                  <Typography variant="body2">Сейчас Кира отвечает: <b>{modelLabel(active.models.conversation)}</b></Typography>
+                  <Typography variant="body2">Быстрый первый ответ: <b>{modelLabel(active.models.fastDialogue)}</b></Typography>
                   <Typography variant="body2">Сложные запросы: <b>{modelLabel(active.models.complexReasoning)}</b></Typography>
                 </Alert>
               )}
@@ -109,7 +109,7 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
                     <Chip size="small" color={changed ? 'warning' : 'success'} label={changed ? 'Предпросмотр — нажмите «Применить»' : 'Этот профиль сохранён'} />
                   </Stack>
                   <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
-                    {(['conversation', 'complexReasoning'] as const).map(task => (
+                    {(['fastDialogue', 'conversation', 'complexReasoning'] as const).map(task => (
                       <Box key={task} sx={{ flex: 1, p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
                         <Typography variant="caption" color="text.secondary">{TASK_LABELS[task]}</Typography>
                         <Typography variant="body2" fontWeight={600}>{modelLabel(preview.models[task])}</Typography>

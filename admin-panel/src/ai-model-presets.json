@@ -20,6 +20,7 @@
       "models": {
         "defaultText": { "provider": "openai", "model": "gpt-5.4" },
         "lightweightText": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "fastDialogue": { "provider": "openai", "model": "gpt-5.4-nano" },
         "complexReasoning": { "provider": "openai", "model": "gpt-5.4" },
         "intentClassification": { "provider": "openai", "model": "gpt-5.4" },
         "intentDedup": { "provider": "openai", "model": "gpt-5.4-nano" },
@@ -42,6 +43,7 @@
       "models": {
         "defaultText": { "provider": "openai", "model": "gpt-5.4-mini" },
         "lightweightText": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "fastDialogue": { "provider": "openai", "model": "gpt-5.4-nano" },
         "complexReasoning": { "provider": "openai", "model": "gpt-5.4" },
         "intentClassification": { "provider": "openai", "model": "gpt-5.4-mini" },
         "intentDedup": { "provider": "openai", "model": "gpt-5.4-nano" },
@@ -64,6 +66,7 @@
       "models": {
         "defaultText": { "provider": "openai", "model": "gpt-5.4-mini" },
         "lightweightText": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "fastDialogue": { "provider": "openai", "model": "gpt-5.4-nano" },
         "complexReasoning": { "provider": "openai", "model": "gpt-5.4" },
         "intentClassification": { "provider": "openai", "model": "gpt-5.4-nano" },
         "intentDedup": { "provider": "openai", "model": "gpt-5.4-nano" },
@@ -86,6 +89,7 @@
       "models": {
         "defaultText": { "provider": "openrouter", "model": "openrouter/auto" },
         "lightweightText": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "fastDialogue": { "provider": "openai", "model": "gpt-5.4-nano" },
         "complexReasoning": { "provider": "openai", "model": "gpt-5.4" },
         "intentClassification": { "provider": "openai", "model": "gpt-5.4-nano" },
         "intentDedup": { "provider": "openai", "model": "gpt-5.4-nano" },
@@ -102,12 +106,13 @@
     },
     "hybrid-gemini-gpt": {
       "name": "hybrid-gemini-gpt",
-      "title": "Gemini + GPT · Рекомендуемый баланс",
+      "title": "GPT + Gemini · Рекомендуемый баланс",
       "description": "Gemini Flash для диалога и сложных задач, Flash-Lite для фоновых сводок, GPT nano/mini для извлечения, маршрутизации и web.",
       "characteristics": { "quality": "Высокое", "cost": "Средняя", "stability": "Высокая", "gptDependency": "Умеренная" },
       "models": {
         "defaultText": { "provider": "gemini", "model": "gemini-3.5-flash-lite" },
         "lightweightText": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "fastDialogue": { "provider": "openai", "model": "gpt-5.4-nano" },
         "complexReasoning": { "provider": "gemini", "model": "gemini-3.6-flash" },
         "intentClassification": { "provider": "openai", "model": "gpt-5.4-nano" },
         "intentDedup": { "provider": "openai", "model": "gpt-5.4-nano" },
@@ -130,6 +135,7 @@
       "models": {
         "defaultText": { "provider": "gemini", "model": "gemini-3.5-flash-lite" },
         "lightweightText": { "provider": "gemini", "model": "gemini-3.5-flash-lite" },
+        "fastDialogue": { "provider": "gemini", "model": "gemini-3.5-flash-lite" },
         "complexReasoning": { "provider": "gemini", "model": "gemini-3.6-flash" },
         "intentClassification": { "provider": "gemini", "model": "gemini-3.6-flash" },
         "intentDedup": { "provider": "gemini", "model": "gemini-3.5-flash-lite" },
@@ -152,6 +158,7 @@
       "models": {
         "defaultText": { "provider": "zai", "model": "glm-4.7-flashx" },
         "lightweightText": { "provider": "zai", "model": "glm-4.7-flashx" },
+        "fastDialogue": { "provider": "zai", "model": "glm-4.7-flashx" },
         "complexReasoning": { "provider": "zai", "model": "glm-5.2" },
         "intentClassification": { "provider": "zai", "model": "glm-5.2" },
         "intentDedup": { "provider": "zai", "model": "glm-4.7-flashx" },
@@ -174,6 +181,7 @@
       "models": {
         "defaultText": { "provider": "openai", "model": "gpt-5.4-mini" },
         "lightweightText": { "provider": "openai", "model": "gpt-5.4-nano" },
+        "fastDialogue": { "provider": "openai", "model": "gpt-5.4-nano" },
         "complexReasoning": { "provider": "zai", "model": "glm-5.2" },
         "intentClassification": { "provider": "openai", "model": "gpt-5.4-nano" },
         "intentDedup": { "provider": "openai", "model": "gpt-5.4-nano" },
@@ -196,6 +204,7 @@
       "models": {
         "defaultText": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "fast" },
         "lightweightText": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "analysis" },
+        "fastDialogue": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "fast" },
         "complexReasoning": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "deep" },
         "intentClassification": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "analysis" },
         "intentDedup": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "analysis" },
@@ -218,6 +227,7 @@
       "models": {
         "defaultText": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "fast" },
         "lightweightText": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "analysis" },
+        "fastDialogue": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "fast" },
         "complexReasoning": { "provider": "openai", "model": "gpt-5.4" },
         "intentClassification": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "analysis" },
         "intentDedup": { "provider": "lmstudio", "model": "configured-local-model", "modelEnvKey": "LM_STUDIO_MODEL", "localRole": "analysis" },

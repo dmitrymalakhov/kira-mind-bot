@@ -79,6 +79,7 @@ export interface RuntimeDependencies {
     signal?: AbortSignal;
     forceLoop?: boolean;
     continuation?: RuntimeSessionState;
+    limits?: { rounds: number; calls: number };
 }
 
 async function decide(input: { context: ToolContext; tools: ToolDefinition[]; skills: SkillLoader }): Promise<RuntimeDecision> {
@@ -95,6 +96,7 @@ async function decide(input: { context: ToolContext; tools: ToolDefinition[]; sk
     const decision = await createJsonChatCompletionForTask<RuntimeDecision>('complexReasoning', {
         messages: [{ role: 'system', content: [
             'Ты ведущее ядро Киры. Разложи весь запрос на действия, выполняй их доступными инструментами и оценивай результаты. Не выводи внутренние рассуждения.',
+            ...(context.readOnly ? ['Это фоновый разбор вопроса: только чтение памяти, источников и research-агенты. Никаких изменений, переговоров, браузерных действий, сохранения фактов или обещаний таких действий.'] : []),
             'Верни JSON {"calls":[{"id":"unique_id","tool":"name","args":{},"dependsOn":[]}]} либо {"finish":true}, либо {"question":"один необходимый вопрос"}. Вопрос допустим только когда ответ действительно нужен. Сначала выполни доступную независимую работу.',
             'Все независимые read-вызовы можно включить в один batch. Зависимости задают порядок; если нужны данные предыдущего результата для аргументов, дождись следующего хода цикла. Не используй вымышленные ID или шаблоны вместо аргументов.',
             'Учитывай ВСЕ задачи пользователя, а не только основной intent. Различай зависимые и независимые действия. Перед изменением объекта найди его ID. Для браузера и переговоров используй agents.start, для исследований можно делегировать независимые направления research-агентам.',
@@ -190,7 +192,7 @@ function fastCalls(input: KiraRuntimeInput): RuntimeToolCall[] | undefined {
 }
 
 export async function runKiraRuntime(input: KiraRuntimeInput, dependencies: RuntimeDependencies = {}): Promise<ProcessingResult> {
-    const respond = dependencies.respond ?? (async (value, memoryContext, toolSynthesis) => conversationAgent(value.ctx, value.message, value.isForwarded, value.forwardFrom, value.messageHistory, value.classification, { domain: 'personal', context: memoryContext, allowSideEffects: false, allowSelfEvolution: !toolSynthesis }));
+    const respond = dependencies.respond ?? (async (value, memoryContext, toolSynthesis) => conversationAgent(value.ctx, value.message, value.isForwarded, value.forwardFrom, value.messageHistory, value.classification, { domain: 'personal', context: memoryContext, allowSideEffects: false, allowSelfEvolution: !toolSynthesis && !value.readOnly }));
     const classification = input.classification;
     if (!dependencies.forceLoop && !dependencies.continuation && classification.intent === 'НЕОПРЕДЕЛЕНО') {
         const result = await unclearIntentAgent(input.message, input.isForwarded, input.forwardFrom, input.messageHistory, classification, input.enrichedContextFromMemory ?? '');
@@ -264,7 +266,7 @@ export async function runKiraRuntime(input: KiraRuntimeInput, dependencies: Runt
         let first = continuation?.pendingCalls?.length ? continuation.pendingCalls : dependencies.forceLoop || continuation ? undefined : fastCalls(input);
         // Current external evidence is mandatory even when an action was the primary intent.
         if (classification.details.knowledgeSource === 'external_current' && !['БРАУЗЕР_ЗАДАЧА', 'ВЕБ_ПОИСК'].includes(classification.intent) && !hasCurrentEvidence()) first = undefined;
-        for (let round = 0; round < RUNTIME_LIMITS.rounds && !context.signal.aborted; round++) {
+        for (let round = 0; round < Math.min(dependencies.limits?.rounds ?? RUNTIME_LIMITS.rounds, RUNTIME_LIMITS.rounds) && !context.signal.aborted; round++) {
             const selection = first ? { calls: first, finish: false } : await (dependencies.decide ?? decide)({ context, tools: allowed, skills });
             const wasFast = Boolean(first); first = undefined;
             if (selection.question) {
@@ -287,7 +289,7 @@ export async function runKiraRuntime(input: KiraRuntimeInput, dependencies: Runt
                 continue;
             }
             validateCallGraph(calls, new Set(completed.keys()));
-            if (callCount + calls.length > RUNTIME_LIMITS.calls) { observations.push({ id: 'limit', tool: 'kernel', status: 'failed', summary: 'Достигнут лимит операций; часть задачи не выполнена.' }); break; }
+            if (callCount + calls.length > Math.min(dependencies.limits?.calls ?? RUNTIME_LIMITS.calls, RUNTIME_LIMITS.calls)) { observations.push({ id: 'limit', tool: 'kernel', status: 'failed', summary: 'Достигнут лимит операций; часть задачи не выполнена.' }); break; }
             callCount += calls.length;
             const pending = [...calls];
             while (pending.length && !context.signal.aborted) {
@@ -364,7 +366,7 @@ export async function runKiraRuntime(input: KiraRuntimeInput, dependencies: Runt
         const missingRequiredWeb = classification.details.knowledgeSource === 'external_current' && !hasCurrentEvidence();
         if (missingRequiredWeb) results.push({ responseText: 'Не удалось проверить актуальные сведения в интернете. Зависящие от них действия не подтверждены.' });
         const inspectionAnswered = input.images?.length && results.length && !hasCompoundActionRequest(input.message) && !classification.subIntents?.length && classification.intent === 'РАЗГОВОР';
-        if (!inspectionAnswered && !missingRequiredWeb && (!results.length || (state.status !== 'waiting' && !results.some(result => result.keyboard) && (['ВЕБ_ПОИСК', 'РАЗГОВОР'].includes(classification.intent) || hasCompoundActionRequest(input.message) || classification.subIntents?.length)))) {
+        if (!context.signal.aborted && !inspectionAnswered && !missingRequiredWeb && (!results.length || (state.status !== 'waiting' && !results.some(result => result.keyboard) && (['ВЕБ_ПОИСК', 'РАЗГОВОР'].includes(classification.intent) || hasCompoundActionRequest(input.message) || classification.subIntents?.length)))) {
             const answer = await respond(input, context.memoryContext.slice(-RUNTIME_LIMITS.contextChars), true);
             if (webText) answer.responseText = selectNewsDigestResponse(input.message, webText, answer.responseText);
             results.unshift(answer);

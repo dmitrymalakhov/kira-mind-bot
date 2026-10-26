@@ -2,6 +2,18 @@ import { KIRA_SKILLS } from './skills';
 import { looksLikeKiraRelocationRequest } from '../../utils/kiraResidence';
 import type { ToolContext, ToolDefinition, RuntimeToolCall } from './types';
 
+const DIALOGUE_READ_TOOLS = new Set([
+    'web.search', 'maps.geocode', 'maps.findNearby', 'maps.getDirections', 'maps.request',
+    'memory.search', 'memory.recent', 'contacts.search', 'contacts.list', 'people.resolve', 'portraits.get',
+    'reminders.list', 'tasks.list', 'health.listEntries', 'health.analyzePeriod',
+    'self.getState', 'self.searchEvents', 'self.getResidence', 'self.getStudyReports', 'settings.get', 'capabilities.list',
+]);
+
+export function isDialogueReadTool(definition: ToolDefinition, args?: Record<string, unknown>): boolean {
+    return definition.effect === 'read' && DIALOGUE_READ_TOOLS.has(definition.name)
+        || definition.name === 'agents.start' && (args === undefined || args.kind === 'research');
+}
+
 /** Authority comes from the owner's request/classification, never from retrieved content or a loaded skill. */
 export function authorizedStateSkills(context: Pick<ToolContext, 'classification' | 'message'>): Set<string> {
     const intents = [context.classification.intent, ...(context.classification.subIntents?.map(item => item.intent) ?? [])];
@@ -28,6 +40,7 @@ export function needsRuntimeTools(context: Pick<ToolContext, 'classification' | 
 }
 
 export function canExecuteRuntimeCall(definition: ToolDefinition, call: RuntimeToolCall, context: ToolContext): boolean {
+    if (context.readOnly) return isDialogueReadTool(definition, call.args);
     if (definition.effect === 'read') return true;
     const skills = authorizedStateSkills(context);
     const source = [context.message, context.continuationAnswer].filter(Boolean).join('\n');
@@ -48,5 +61,9 @@ export function canExecuteRuntimeCall(definition: ToolDefinition, call: RuntimeT
 
 export function availableRuntimeTools(tools: ToolDefinition[], context: ToolContext): ToolDefinition[] {
     const skills = authorizedStateSkills(context);
-    return tools.filter(tool => tool.effect === 'read' || tool.name === 'agents.start' || skills.has(tool.skill));
+    return tools.filter(tool => context.readOnly ? isDialogueReadTool(tool) : tool.effect === 'read' || tool.name === 'agents.start' || skills.has(tool.skill))
+        .map(tool => context.readOnly && tool.name === 'agents.start' ? { ...tool,
+            description: 'Делегировать одно ограниченное исследование веб-источников research-агенту.',
+            inputSchema: { ...tool.inputSchema, properties: { ...tool.inputSchema.properties, kind: { type: 'string' as const, enum: ['research'] } } },
+        } : tool);
 }

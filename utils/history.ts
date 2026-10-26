@@ -38,7 +38,7 @@ export async function addToHistory(
     ctx: BotContext,
     role: string,
     content: string,
-    options: { turn?: ConversationTurn } = {},
+    options: { turn?: ConversationTurn; deferAnalysis?: boolean } = {},
 ) {
     if (options.turn?.isForwardOnly) {
         // Пересланный материал передаётся отдельно через forwardContext и не
@@ -54,6 +54,14 @@ export async function addToHistory(
         timestamp: new Date(),
     });
     devLog('Added message to history:', { role, content });
+
+    if (options.deferAnalysis && !extractExplicitRememberFact(content)) {
+        // The existing evidence-aware, budget-gated extractor runs after the reply.
+        // No LLM extraction or summarization may block the first answer.
+        if (role === 'user') factAnalysisManager.scheduleAnalysis(ctx);
+        ctx.session.messageHistory = ctx.session.messageHistory.slice(0, 20);
+        return;
+    }
 
     if (role === 'user') {
         const currentHistoryItem = ctx.session.messageHistory[0];

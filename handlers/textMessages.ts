@@ -38,6 +38,8 @@ import { decideKnowledgeSource } from "../utils/knowledgeSource";
 import { handleRecurringTaskText } from "../services/recurringTaskService";
 import { orchestrationMode, hasCompoundActionRequest, cancelRuntimeContinuation } from '../orchestration/runtime/kernel';
 import { getForwardedMessageInfo } from "../utils/forwardedMessage";
+import { canUseFastDialogue, fastDialogueEnabled } from '../orchestration/fastDialogue';
+import { activateDialogueJob } from '../services/dialogueJobs';
 import {
     MEMORY_HEARS_RE,
     MEMORY_DELETE_RE,
@@ -410,7 +412,8 @@ export function registerTextMessageHandler(bot: Bot<BotContext>, options: { imme
                 .slice(0, 8)
                 .reverse()
                 .map(({ role, content }) => ({ role, content: content.slice(0, 2_000) }));
-            await addToHistory(ctx, 'user', message, { turn });
+            const fastHistory = canUseFastDialogue(ctx, turn);
+            await addToHistory(ctx, 'user', message, { turn, deferAnalysis: fastHistory });
             if (pendingGap) ctx.session.pendingMemoryGap = undefined;
 
             // Устанавливаем таймер для обработки одиночного сообщения
@@ -568,7 +571,7 @@ export function registerTextMessageHandler(bot: Bot<BotContext>, options: { imme
                         "",
                         ctx.session.messageHistory.slice().reverse(),
                         undefined,
-                        { voiceReplyRequested: voiceReplyRequested, turn }
+                        { voiceReplyRequested: voiceReplyRequested, turn, fastDialogue: true }
                     );
 
                     await saveRemindersFromResult(ctx, result);
@@ -617,10 +620,17 @@ export function registerTextMessageHandler(bot: Bot<BotContext>, options: { imme
                         return;
                     }
 
-                    await addToHistory(ctx, 'bot', result.responseText);
+                    await addToHistory(ctx, 'bot', result.responseText, { deferAnalysis: fastHistory });
 
                     // Единая отправка результата вместо дублированного if/else
                     const sentResult = await sendResultToUser(ctx, result, voiceReplyRequested);
+                    if (result.dialogueJobId) {
+                        ctx.dialogueJobId = result.dialogueJobId;
+                        if (!ctx.sessionStorageKey?.startsWith('api:')) {
+                            await flushSessionAfterAsyncWork(ctx, 'fast dialogue initial response');
+                            await activateDialogueJob(ctx, result.dialogueJobId);
+                        }
+                    }
                     ctx.session.lastSchedulableRequest = {
                         text: pendingBrowserTask?.originalTask ?? message,
                         messageId: ctx.message.message_id,
@@ -650,7 +660,7 @@ export function registerTextMessageHandler(bot: Bot<BotContext>, options: { imme
                     await checkLastFactSaveError(ctx);
 
                     // Reconsolidation
-                    reconsolidateAfterResponse(ctx, message, result.responseText, result.recalledMemories, turn).catch(() => {});
+                    if (!result.fastResponse) reconsolidateAfterResponse(ctx, message, result.responseText, result.recalledMemories, turn).catch(() => {});
                 }
                 } catch (timerError) {
                     console.error("Ошибка при обработке сообщения в setTimeout:", timerError);
@@ -660,7 +670,7 @@ export function registerTextMessageHandler(bot: Bot<BotContext>, options: { imme
                 }
             };
             // HTTP callers must await the same complete flow, including its session flush.
-            if (options.immediate) await processText();
+            if (options.immediate || fastDialogueEnabled()) await processText();
             else setTimeout(processText, 2000);
         } catch (error) {
             console.error("Ошибка при обработке сообщения:", error);

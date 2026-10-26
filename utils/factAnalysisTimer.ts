@@ -2,6 +2,7 @@ import { BotContext } from '../types';
 import { extractAndSaveFactsFromConversation } from './enhancedFactExtraction';
 import { persistSessionNow } from '../services/SessionStorage';
 import { isBackgroundFeatureEnabled } from '../services/backgroundFeatureService';
+import { summarizeDialogue } from '../services/dialogueSummarizer';
 
 interface PendingAnalysis {
     /** Контекст нужен для доступа к ctx.session при отложенном анализе (session обновляется по ссылке при MemorySessionStorage) */
@@ -87,6 +88,12 @@ class FactAnalysisManager {
                 analysis.ctx,
                 analysis.conversationStart
             );
+            if (analysis.ctx.session.messageHistory.length >= 10) {
+                const snapshot = analysis.ctx.session.messageHistory.slice();
+                const summary = await summarizeDialogue(snapshot, analysis.ctx.session.dialogueSummary);
+                // Change only the summary: a new foreground turn may have arrived during inference.
+                if (summary) analysis.ctx.session.dialogueSummary = summary;
+            }
             await persistSessionNow(analysis.ctx);
         } catch (error) {
             console.error('Error in delayed fact analysis:', error);

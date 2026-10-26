@@ -51,10 +51,11 @@ async function proxy(req: http.IncomingMessage, res: http.ServerResponse, endpoi
         const upstream = http.request({ host: '127.0.0.1', port: endpoint.port, path: req.url, method: req.method,
             headers: { authorization: `Bearer ${endpoint.token}`, ...(body ? {
                 'content-type': 'application/json', 'content-length': Buffer.byteLength(body),
-            } : {}), ...(typeof req.headers['idempotency-key'] === 'string' ? { 'idempotency-key': req.headers['idempotency-key'] } : {}) },
+            } : {}), ...(typeof req.headers.prefer === 'string' ? { prefer: req.headers.prefer } : {}),
+                ...(typeof req.headers['idempotency-key'] === 'string' ? { 'idempotency-key': req.headers['idempotency-key'] } : {}) },
         }, response => {
             res.statusCode = response.statusCode || 502;
-            for (const name of ['content-type', 'content-disposition', 'retry-after']) {
+            for (const name of ['content-type', 'content-disposition', 'retry-after', 'preference-applied']) {
                 if (response.headers[name]) res.setHeader(name, response.headers[name]!);
             }
             response.on('error', reject);
@@ -182,11 +183,12 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
                     return json(202, { status: 'restarting' });
                 } finally { connecting.delete(account.id); }
             }
-            const readable = req.method === 'GET' && (/^\/api\/v1\/(status|capabilities|history|reminders|tasks|settings|model-settings|scene)$/.test(route)
+            const readable = req.method === 'GET' && (/^\/api\/v1\/(status|capabilities|history|reminders|tasks|dialogue-jobs|settings|model-settings|scene)$/.test(route)
                 || /^\/api\/v1\/files\/[0-9a-f-]{36}$/.test(route));
             const writable = (req.method === 'POST' && /^\/api\/v1\/(messages|actions|scene\/turns|scene\/action-results)$/.test(route))
                 || (req.method === 'PATCH' && route === '/api/v1/settings')
-                || (req.method === 'PUT' && route === '/api/v1/model-settings');
+                || (req.method === 'PUT' && route === '/api/v1/model-settings')
+                || (req.method === 'DELETE' && /^\/api\/v1\/dialogue-jobs\/[0-9a-f-]{36}$/.test(route));
             if (!readable && !writable) throw new ApiError(404, 'not_found', 'Ресурс не найден.');
             if (!account.owner_id) throw new ApiError(409, 'telegram_pairing_required', 'Сначала подключи своего бота и открой ссылку подтверждения в Telegram.');
             await proxy(req, res, runtimes.endpoint(account), route);

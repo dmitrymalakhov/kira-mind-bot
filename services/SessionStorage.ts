@@ -614,7 +614,7 @@ export async function appendPersistedSentMessageContext(
 }
 
 export async function appendPersistedHistory(
-    chatId: number,
+    chatId: number | string,
     role: string,
     content: string
 ): Promise<void> {

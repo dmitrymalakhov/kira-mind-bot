@@ -335,6 +335,18 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "Prefer",
+            "in": "header",
+            "required": false,
+            "description": "Opt into a deferred answer. Without this header the complete answer is returned synchronously. Keep the same preference when replaying an Idempotency-Key.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "respond-async"
+              ]
+            }
           }
         ],
         "requestBody": {
@@ -1344,6 +1356,65 @@
           }
         }
       }
+    },
+    "/dialogue-jobs": {
+      "get": {
+        "summary": "Последние 20 фоновых разборов этого API-диалога",
+        "description": "Состояние и ответы для backgroundJob из /messages. Отображайте новое notice один раз, result — один раз по id; completed без result означает, что дополнение не требуется. Следующий пользовательский ход отменяет предыдущий разбор. Telegram-задачи здесь не возвращаются.",
+        "responses": {
+          "200": {
+            "description": "Список задач",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DialogueJob"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dialogue-jobs/{id}": {
+      "delete": {
+        "summary": "Остановить фоновый разбор в этом API-диалоге",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Идемпотентная отмена; false если задача уже завершена или не принадлежит этому каналу.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "cancelled": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1438,6 +1509,27 @@
             "items": {
               "$ref": "#/components/schemas/Message"
             }
+          },
+          "backgroundJob": {
+            "type": "object",
+            "required": [
+              "id",
+              "status",
+              "required"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "status": {
+                "type": "string"
+              },
+              "required": {
+                "type": "boolean"
+              }
+            },
+            "description": "Продолжение ответа. Получайте состояние через GET /dialogue-jobs; повторный POST /messages вернёт первоначальную квитанцию."
           }
         }
       },
@@ -1968,6 +2060,69 @@
                 }
               }
             }
+          }
+        }
+      },
+      "DialogueJob": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "phase",
+          "required"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "staged",
+              "queued",
+              "running",
+              "ready",
+              "delivering",
+              "completed",
+              "cancelled",
+              "superseded",
+              "failed",
+              "unknown"
+            ]
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "review",
+              "deep"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "notice": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       }

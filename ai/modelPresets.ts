@@ -20,6 +20,7 @@ export type AiProvider = 'openai' | 'openrouter' | 'gemini' | 'zai' | 'lmstudio'
 export type AiTaskKey =
     | 'defaultText'
     | 'lightweightText'
+    | 'fastDialogue'
     | 'complexReasoning'
     | 'intentClassification'
     | 'intentDedup'

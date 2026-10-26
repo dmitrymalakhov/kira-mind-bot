@@ -1,4 +1,5 @@
 import type { JsonSchema, ToolContext, ToolDefinition, ToolOutput } from './types';
+import { isDialogueReadTool } from './authorization';
 
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
@@ -62,6 +63,9 @@ export class ToolRegistry {
             return { status: 'failed', summary: 'Инструмент недоступен в этом контексте.' };
         }
         if (context.signal.aborted) return { status: 'failed', summary: 'Задача отменена.' };
+        if (context.readOnly && !isDialogueReadTool(tool, args)) {
+            return { status: 'failed', summary: 'Фоновый разбор не может изменять данные или выполнять внешние действия.' };
+        }
         try {
             if (JSON.stringify(args).length > 24_000) throw new Error('Аргументы слишком велики');
             validateToolArguments(tool.inputSchema, args);

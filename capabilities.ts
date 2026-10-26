@@ -30,6 +30,13 @@ export interface CapabilitiesAnswerOptions {
 
 export const BOT_COMMANDS: BotCommandDescription[] = [
     {
+        command: 'cancel_deep',
+        description: 'Остановить фоновый разбор вопроса',
+        scope: 'owner',
+        usage: '/cancel_deep',
+        showInTelegramMenu: true,
+    },
+    {
         command: "budget",
         description: "Режим экономии AI-бюджета",
         scope: "owner",

@@ -370,6 +370,11 @@ export type BotContext = Context & SessionFlavor<SessionData> & {
     /** Dedicated durable ledger for a background task; does not change its delivery channel. */
     agentRuntimeStorageKey?: string;
     agentRuntimeRequestKey?: string;
+    /** Durable foreground turn marker and optional deferred answer, assigned by the transport. */
+    dialogueTurnId?: string;
+    dialogueJobId?: string;
+    /** API clients must opt into deferred responses; Telegram supports them natively. */
+    allowDeferredDialogue?: boolean;
 };
 
 // Интерфейс для хранения истории сообщений

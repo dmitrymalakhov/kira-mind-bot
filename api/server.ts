@@ -89,6 +89,7 @@ export function createExternalApiServer(
                 if (path === `${PREFIX}/capabilities`) return json(200, await backend.capabilities());
                 if (path === `${PREFIX}/reminders`) return json(200, await backend.reminders());
                 if (path === `${PREFIX}/tasks`) return json(200, await backend.tasks());
+                if (path === `${PREFIX}/dialogue-jobs` && backend.dialogueJobs) return json(200, await backend.dialogueJobs());
                 if (path === `${PREFIX}/model-settings`) return json(200, await backend.modelSettings());
                 if (path === `${PREFIX}/scene`) return json(200, await backend.sceneCapabilities());
                 if (path === `${PREFIX}/history`) {
@@ -143,6 +144,11 @@ export function createExternalApiServer(
                         () => backend.sceneTurn(turn, preset)));
                 } finally { busy = false; }
             }
+            const dialogueJobMatch = path.match(/^\/api\/v1\/dialogue-jobs\/([0-9a-f-]{36})$/);
+            if (dialogueJobMatch && req.method === 'DELETE' && backend.cancelDialogueJob) {
+                req.resume();
+                return json(200, await backend.cancelDialogueJob(dialogueJobMatch[1]));
+            }
             if (path !== `${PREFIX}/messages` && path !== `${PREFIX}/actions`) {
                 throw new ApiError(404, 'not_found', 'Ресурс не найден.');
             }
@@ -153,6 +159,7 @@ export function createExternalApiServer(
             }
             const body = await readBody(req);
             const isAction = path.endsWith('/actions');
+            const deferredDialogue = !isAction && typeof req.headers.prefer === 'string' && req.headers.prefer.split(',').some(value => value.trim().toLowerCase() === 'respond-async');
             const field = isAction ? 'actionToken' : 'text';
             const value = body[field];
             if (Object.keys(body).some(key => key !== field) || typeof value !== 'string'
@@ -171,11 +178,12 @@ export function createExternalApiServer(
             busy = true;
             try {
                 // Actions also deduplicate across different client keys: one button may execute only once.
-                const fingerprint = hash(`${path}:${value}`);
+                const fingerprint = `${deferredDialogue ? 'async:' : ''}${hash(`${path}:${value}`)}`;
                 const result = await operations.run(`${options.ownerId}:request:${hash(idempotencyKey)}`, fingerprint,
                     () => isAction
                         ? operations.run(`${options.ownerId}:action:${hash(value)}`, fingerprint, () => backend.action(value))
-                        : backend.message(value.trim()));
+                        : backend.message(value.trim(), { deferredDialogue }));
+                if (deferredDialogue && result.backgroundJob) res.setHeader('Preference-Applied', 'respond-async');
                 json(200, result);
             } finally { busy = false; }
         } catch (error) {

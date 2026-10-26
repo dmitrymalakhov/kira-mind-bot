@@ -33,6 +33,8 @@ export interface KiraRuntimeInput {
     /** Server-bound media from this turn. Tool arguments cannot reference arbitrary paths/URLs. */
     images?: Buffer[];
     continuationAnswer?: string;
+    /** Deferred dialogue analysis may retrieve evidence but cannot mutate domain state. */
+    readOnly?: boolean;
 }
 
 export interface ToolObservation {
