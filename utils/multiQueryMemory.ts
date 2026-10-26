@@ -18,6 +18,7 @@ import {
 } from './contactMemory';
 import { isTodayImportanceRequest } from './todayImportanceIntent';
 import { MemoryRetrievalScoreDetails } from './memoryRetrieval';
+import { personalRecallQueries } from './personalRecallIntent';
 
 const ANSWER_RESULTS_PER_QUERY = 5;
 const CONTEXT_RESULTS_PER_QUERY = 2;
@@ -170,7 +171,7 @@ function isMemoryInventoryRequest(message: string): boolean {
 }
 
 function extractDeterministicQueries(message: string): string[] {
-    const queries = [message.slice(0, 120)];
+    const queries = [message.slice(0, 120), ...personalRecallQueries(message)];
     const stopWords = new Set([
         'Что', 'Кто', 'Как', 'Когда', 'Где', 'Куда', 'Почему', 'Зачем',
         'Расскажи', 'Покажи', 'Напомни', 'Помнишь', 'Помнишь ли',
@@ -178,7 +179,7 @@ function extractDeterministicQueries(message: string): string[] {
     const names = message.match(/[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+){0,2}/g) ?? [];
     queries.push(...names.filter(name => !stopWords.has(name.trim())));
 
-    const relationshipWords = message.match(/\b(жена|муж|мама|папа|сын|дочь|брат|сестра|коллега|друг|подруга|партн[её]р)\b/gi) ?? [];
+    const relationshipWords = message.match(/(?<![\p{L}])(жена|муж|мама|папа|сын|дочь|брат|сестра|коллега|друг|подруга|партн[её]р)(?![\p{L}])/giu) ?? [];
     for (const rel of relationshipWords) {
         queries.push(`${rel} имя`, `${rel} кто это`, `${rel} отношения`);
     }

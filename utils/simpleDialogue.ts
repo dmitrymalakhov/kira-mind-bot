@@ -20,13 +20,21 @@ export function simplePresenceReply(message: string, assistantName = ''): string
 
 export function isSimpleSocialMessage(message: string, assistantName = ''): boolean {
     const text = normalizeSocialMessage(message, assistantName);
-    return Boolean(simplePresenceReply(message, assistantName)) || /^(?:(?:привет|здравствуй|здравствуйте|хай|хей|доброе утро|добрый день|добрый вечер|hello|hi|hey)(?: как (?:ты|дела|настроение))?|как (?:ты|дела|настроение)|спасибо|спасибо большое|большое спасибо|благодарю|спокойной ночи|доброй ночи|до завтра|пока)$/u.test(text);
+    return Boolean(simplePresenceReply(message, assistantName) || simpleArrivalReply(message)) || /^(?:(?:привет|здравствуй|здравствуйте|хай|хей|доброе утро|добрый день|добрый вечер|hello|hi|hey)(?: как (?:ты|дела|настроение))?|как (?:ты|дела|настроение)|спасибо|спасибо большое|большое спасибо|благодарю|спокойной ночи|доброй ночи|до завтра|пока)$/u.test(text);
+}
+
+function simpleArrivalReply(message: string): string | undefined {
+    if (message.includes('?')) return undefined;
+    const text = normalizeSocialMessage(message).replace(/ё/g, 'е');
+    return /^(?:да )?(?:вот )?(?:я )?(?:(?:с работы|домой) (?:пришел|пришла|вернулся|вернулась)|(?:пришел|пришла|вернулся|вернулась) (?:с работы|домой))$/u.test(text)
+        ? 'С возвращением. Как прошёл день?' : undefined;
 }
 
 export function simpleSocialFallback(message: string, assistantName = ''): string | undefined {
     if (!isSimpleSocialMessage(message, assistantName)) return undefined;
     const text = normalizeSocialMessage(message, assistantName);
     if (simplePresenceReply(message, assistantName)) return simplePresenceReply(message, assistantName);
+    if (simpleArrivalReply(message)) return simpleArrivalReply(message);
     if (/спасибо|благодарю/u.test(text)) return 'Пожалуйста!';
     if (/ночи/u.test(text)) return 'Доброй ночи!';
     if (text === 'пока') return 'Пока!';

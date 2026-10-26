@@ -2,6 +2,10 @@ import { BotContext } from '../types';
 import { searchAllDomainsMemories } from './enhancedDomainMemory';
 import { devLog } from '../utils';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
+import { getVectorService } from '../services/VectorServiceFactory';
+import { recallOwnerRelationship } from './personalRelationshipRecall';
+import { readPersonIdentities } from '../services/PersonIdentityService';
+import { isPersonRoleLabel } from './personRelation';
 
 const MAX_QUERIES = 5;
 
@@ -104,7 +108,9 @@ ${factsText.slice(0, 3000)}
         const name = resp.choices[0]?.message?.content?.trim() || '';
         if (!name || name.toUpperCase() === 'NOT_FOUND') return null;
         const cleaned = name.replace(/^["']|["']$/g, '').trim();
-        if (cleaned.length < 2 || cleaned.length > 50) return null;
+        if (cleaned.length < 2 || cleaned.length > 50 || isPersonRoleLabel(cleaned)) return null;
+        const normalize = (value: string) => value.normalize('NFKC').toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+        if (!(` ${normalize(factsText.slice(0, 3000))} `).includes(` ${normalize(cleaned)} `)) return null;
         devLog('resolveRelationship: extracted name', cleaned);
         return cleaned;
     } catch (e) {
@@ -126,6 +132,11 @@ export async function resolveRelationshipFromMemory(
     if (!rel) return null;
 
     const context = userMessageContext || `переписку с ${rel}`;
+    const service = getVectorService();
+    if (service && ctx.chat?.type === 'private' && ctx.from?.id) {
+        const exact = await recallOwnerRelationship(service, String(ctx.from.id), context, Date.now(), { identities: readPersonIdentities }).catch(() => undefined);
+        if (exact?.context) return exact.complete ? exact.name ?? null : null;
+    }
     const queries = await generateMemorySearchQueries(rel, context);
 
     const seen = new Set<string>();

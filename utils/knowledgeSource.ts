@@ -1,4 +1,5 @@
 import type { ConversationReplyContext, KnowledgeSourceDecision } from '../types';
+import { isFocusedPersonalRecall } from './personalRecallIntent';
 
 const SELF_RE = /(?:кто\s+ты|расскажи\s+(?:о|про)\s+себя|тво[яйёе]\s+(?:жизн|биограф|истори|цель|памят))/iu;
 const PERSONAL_RE = /(?:обо?\s+мне|про\s+меня|(?:что|как)\s+мне(?:\s+сейчас)?\s+(?:делать|поступить|сказать|ответить|решить|справиться)|(?:как|что)\s+(?:поговорить|обсудить|сказать|ответить)[\s\S]{0,60}(?:жен|муж|мам|пап|друг|подруг|коллег)|у\s+меня|со\s+мной|мо(?:й|я|ё|и|его|ей|их)\s+(?:жен|муж|мам|пап|друг|подруг|работ|здоров|план|напомин|отнош|семь|коллег)|что\s+ты\s+(?:знаешь|помнишь)\s+(?:обо?\s+мне|про\s+))/iu;
@@ -121,6 +122,7 @@ export function decideKnowledgeSource(
         return { source: 'personal', requiresWeb: false, requestedFacets: [], reason: 'action-only personal reminder' };
     }
     if (
+        isFocusedPersonalRecall(text) ||
         PERSON_MEMORY_RE.test(text) ||
         EXPLICIT_PERSONAL_MEMORY_RE.test(text) ||
         PERSONAL_RULES_RE.test(text) ||

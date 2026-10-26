@@ -11,6 +11,7 @@ import { createJsonChatCompletionForTask } from "./ai/chatCompletion";
 import { llmCache, LLM_CACHE_TTL } from "./utils/llmCache";
 import { fetchAgentMemoryContext, buildMemoryContextBlock } from "./utils/agentMemoryContext";
 import type { RecalledMemoryRef } from "./utils/multiQueryMemory";
+import { isFocusedPersonalRecall } from './utils/personalRecallIntent';
 import { extractExplicitRememberFact } from "./utils/enhancedFactExtraction";
 import { buildProactiveSourceExplanation, resolveProactiveSourceQuestion } from './utils/proactiveSourceQuestion';
 import { detectRelationshipInMessage, resolveRelationshipFromMemory } from "./utils/resolveRelationshipFromMemory";
@@ -1107,7 +1108,7 @@ export async function processMessage(
         const roleInMessage = classification.details.relationshipRole !== undefined
             ? classification.details.relationshipRole
             : await detectRelationshipInMessage(originalMessage);
-        if (roleInMessage) {
+        if (roleInMessage && !isFocusedPersonalRecall(originalMessage)) {
             const resolvedName = await resolveRelationshipFromMemory(ctx, roleInMessage, originalMessage);
             if (resolvedName) {
                 enrichedContextFromMemory += `В запросе пользователя под «${roleInMessage}» имеется в виду: ${resolvedName} (из долговременной памяти).\n\n`;

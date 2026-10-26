@@ -9,6 +9,7 @@ import { DialogueJobRepository } from '../services/DialogueJobRepository';
 import { getActiveAiPresetName } from '../services/aiRuntimeConfigService';
 import { getModelPolicy } from '../services/modelPreferenceService';
 import { isBackgroundFeatureEnabled, getBackgroundFeaturePreference } from '../services/backgroundFeatureService';
+import { isFocusedPersonalRecall } from '../utils/personalRecallIntent';
 
 export function fastDialogueEnabled(): boolean {
     return process.env.KIRA_ORCHESTRATION_MODE !== 'legacy' && process.env.KIRA_FAST_DIALOGUE_ENABLED !== 'false';
@@ -29,6 +30,7 @@ export function fastDialogueInstructions(): string {
         'В этом же вызове добавь fastReply: {mode:"answer"|"review"|"defer"|"route",answer?:string}.',
         'answer: короткий законченный ответ на самостоятельный простой вопрос или приветствие, без поиска, действий и личных воспоминаний. memoryNeed=none, responseComplexity=routine.',
         'Приветствия, благодарность и проверка связи — обычный живой разговор: answer, 1–2 коротких предложения. Не превращай их в рассказ о своём настроении, событиях дня, биографии или состоянии памяти. Вопрос «как ты?» сам по себе не требует поиска по памяти или фонового review.',
+        'Самодостаточные бытовые реплики вроде «с работы пришёл» — тоже простой разговор. Для тёплого ответа на них не нужно вспоминать работодателя или запускать review/defer.',
         'review: такой же полезный и достоверный ответ уже возможен, но есть конкретная причина проверить, принесёт ли глубокий разбор существенное дополнение. Не выбирай review автоматически для каждого сообщения.',
         'defer: разговорный/исследовательский вопрос требует личной памяти, актуальных источников или сложного анализа. answer оставь пустым: система сама подтвердит начало работы. Не угадывай личные факты.',
         'route: любые действия, подтверждения, неясное намерение, вопросы о жизни персонажа и составные поручения. answer оставь пустым.',
@@ -46,6 +48,8 @@ export function deepWorkNotice(classification: MessageClassification, optional =
 
 export async function tryFastDialogueResult(ctx: BotContext, turn: ConversationTurn, classification: MessageClassification,
     knowledge: KnowledgeSourceDecision, history: MessageHistory[]): Promise<ProcessingResult | undefined> {
+    // A short factual lookup uses synchronous evidence retrieval, not a deferred research job.
+    if (isFocusedPersonalRecall(turn.userText)) return;
     const decision = classification.fastReply;
     if (!decision || !['answer', 'review', 'defer'].includes(decision.mode) || classification.confidenceLevel !== 'ВЫСОКИЙ') return;
     if (!['РАЗГОВОР', 'ВЕБ_ПОИСК'].includes(classification.intent) || classification.subIntents?.length ||

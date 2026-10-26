@@ -1,7 +1,17 @@
 import { AppDataSource } from '../data-source';
+import { In } from 'typeorm';
 import { PersonIdentityEntity } from '../entity/PersonIdentityEntity';
 import type { Contact } from '../stores/ContactsStore';
 import { config } from '../config';
+
+/** Read-only lookup; an old edge cannot authorize reading a different owner's identity. */
+export async function readPersonIdentities(ownerUserId: string, ids: string[]): Promise<PersonIdentityEntity[]> {
+    const valid = [...new Set(ids)].filter(id => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)).slice(0, 24);
+    if (!AppDataSource.isInitialized || !valid.length) return [];
+    return AppDataSource.getRepository(PersonIdentityEntity).find({ where: {
+        id: In(valid), profile: config.botUsername.toLowerCase(), ownerUserId,
+    } });
+}
 
 function aliasesFor(name: string, contact?: Contact): string[] {
     const normalizedUsername = normalizeTelegramUsername(contact?.username);

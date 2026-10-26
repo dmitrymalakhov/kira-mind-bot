@@ -59,6 +59,23 @@ test('self-contained question returns the answer in the routing call, without me
     assert.equal(calls.ai.mock.callCount(), 1); assert.equal(calls.recall.mock.callCount(), 0); assert.equal(calls.answer.mock.callCount(), 0); assert.equal(stage.mock.callCount(), 0);
 });
 
+test('short personal identity questions use synchronous retrieval even if fast classification wants to defer or answer', async t => {
+    const value=classification();value.fastReply={mode:'defer'};value.details.memoryNeed='full';value.details.relationshipRole='жена';
+    const calls=foreground(t,value);const stage=t.mock.method(DialogueJobRepository,'stage',async()=>{throw Error('No background for a focused fact');});
+    for(const message of ['Кто моя жена?','Ты помнишь где я работаю?']) {
+        const result=await processMessage(ctx(),message,false,'',[],undefined,{fastDialogue:true});
+        assert.equal(result.responseText,'Полный синхронный ответ.');assert.equal(result.dialogueJobId,undefined);
+    }
+    assert.equal(stage.mock.callCount(),0);assert.equal(calls.recall.mock.callCount(),2);
+});
+
+test('ordinary arrival updates do not trigger memory/deep jobs even when the classifier requests them', async t => {
+    const value=classification();value.fastReply={mode:'defer'};value.details.memoryNeed='full';
+    const calls=foreground(t,value);const stage=t.mock.method(DialogueJobRepository,'stage',async()=>{throw Error('No background for small talk');});
+    const result=await processMessage(ctx(),'Да вот с работы пришёл',false,'',[],undefined,{fastDialogue:true});
+    assert.match(result.responseText,/С возвращением/);assert.equal(calls.recall.mock.callCount(),0);assert.equal(stage.mock.callCount(),0);
+});
+
 test('greeting also uses exactly one compact fast call', async t => {
     const value = classification(); value.fastReply!.answer = 'Привет!';
     const calls = foreground(t, value);

@@ -45,6 +45,11 @@ export interface PersonRelationTagContext {
 
 const VALID_RELATION_TYPES = new Set<string>(PERSON_RELATION_TYPES);
 
+/** A role word is evidence about a relationship, not an independently named person. */
+export function isPersonRoleLabel(value: string | undefined): boolean {
+    return Boolean(value && /^(?:жена|муж|супруг(?:а)?|партн[её]р(?:ша)?|друг|подруга|коллега|брат|сестра|мама|папа|мать|отец|сын|дочь|реб[её]нок|wife|husband|spouse|partner)$/iu.test(value.trim()));
+}
+
 const RELATION_EVIDENCE_PATTERNS: Record<PersonRelationType, RegExp> = {
     spouse_of: /супруг|муж|жен[аы]|женат|замуж|в\s+браке|spouse|husband|wife/iu,
     partner_of: /партн[её]р|отношени|встреча(?:юсь|ется|ются)|partner|dating/iu,
@@ -124,7 +129,7 @@ export function normalizePersonRelationDescriptor(
 
     if (targetRole === 'third_party') {
         const targetName = normalizeName(candidate.targetName);
-        if (!targetName || !evidenceContainsExactName(context.evidence, targetName)) return undefined;
+        if (!targetName || isPersonRoleLabel(targetName) || !evidenceContainsExactName(context.evidence, targetName)) return undefined;
 
         const subjectName = context.subject === 'user' ? context.ownerName : context.contactName;
         if (subjectName && comparableText(subjectName) === comparableText(targetName)) return undefined;
