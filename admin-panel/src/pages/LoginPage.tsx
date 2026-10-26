@@ -18,7 +18,7 @@ export function LoginPage({ onLogin }: Props) {
   };
   return <Box sx={{ minHeight: '100dvh', display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' } }}>
     <Stack sx={{ display: { xs: 'none', md: 'flex' }, bgcolor: '#1C2823', color: '#F1F5EE', p: 7, justifyContent: 'space-between', position: 'relative', overflow: 'hidden' }}>
-      <Stack direction="row" spacing={1.5} alignItems="center"><BrandMark /><Typography sx={{ fontSize: 19, letterSpacing: '.13em' }}>KIRA MIND</Typography></Stack>
+      <Stack direction="row" spacing={1.5} alignItems="center"><BrandMark size={64} /><Typography sx={{ fontSize: 25, fontWeight: 400, letterSpacing: '-.025em' }}>Kira Mind</Typography></Stack>
       <Box sx={{ position: 'relative', zIndex: 1, maxWidth: 500 }}><Typography variant="overline" sx={{ color: '#ADC3A7' }}>Личное пространство</Typography>
         <Typography sx={{ fontSize: { md: 42, lg: 58 }, letterSpacing: '-.045em', lineHeight: 1.12, mt: 2 }}>Ваша Кира.<br />Всё под контролем.</Typography>
         <Typography sx={{ color: '#ADBCAF', mt: 3, maxWidth: 330, fontSize: 15, lineHeight: 1.8 }}>Модели, память и характер —<br />в одном спокойном пространстве.</Typography></Box>
@@ -27,7 +27,7 @@ export function LoginPage({ onLogin }: Props) {
     </Stack>
     <Stack sx={{ p: { xs: 3, md: 6 }, minHeight: '100dvh', justifyContent: 'center', alignItems: 'center' }}>
       <Box sx={{ width: '100%', maxWidth: 360 }}>
-        <Box sx={{ display: { md: 'none' }, mb: 4 }}><BrandMark size={46} /></Box>
+        <Box sx={{ display: { md: 'none' }, mb: 4 }}><BrandMark size={80} /></Box>
         <Typography variant="overline" color="text.secondary">Kira Mind</Typography><Typography variant="h4" component="h1" sx={{ mt: 1, mb: 1 }}>Добро пожаловать</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 4 }}>Войдите, чтобы настроить свою Киру.</Typography>
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}

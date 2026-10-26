@@ -142,9 +142,9 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
 
   const navigation = (
     <Stack sx={{ height: '100%', bgcolor: 'sidebar.surface' }}>
-      <Stack direction="row" alignItems="center" spacing={1.5} sx={{ px: 3, pt: 4, pb: 4.5 }}>
-        <BrandMark size={40} />
-        <Box><Typography sx={{ color: '#F1F5EE', fontSize: 19, fontWeight: 600, letterSpacing: '.12em' }}>KIRA <Box component="span" sx={{ fontWeight: 400, color: '#ADC0AF' }}>MIND</Box></Typography>
+      <Stack direction="row" alignItems="center" spacing={1} sx={{ px: 2.5, pt: 4, pb: 4.5 }}>
+        <BrandMark size={52} />
+        <Box><Typography sx={{ color: '#F1F5EE', fontSize: 21, fontWeight: 500, letterSpacing: '-.025em', whiteSpace: 'nowrap' }}>Kira <Box component="span" sx={{ fontWeight: 400, color: '#ADC0AF' }}>Mind</Box></Typography>
           <Typography sx={{ color: '#91A294', fontSize: 9, letterSpacing: '.035em', mt: .25 }}>ПАНЕЛЬ УПРАВЛЕНИЯ</Typography></Box>
       </Stack>
       <Box component="nav" aria-label="Основная навигация" sx={{ px: 2, flex: 1, overflowY: 'auto' }}>
