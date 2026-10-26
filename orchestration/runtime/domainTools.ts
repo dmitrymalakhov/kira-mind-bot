@@ -23,14 +23,13 @@ import { parseSettingsPatch } from '../../api/settings';
 import { BACKGROUND_FEATURE_KEYS } from '../../ai/backgroundFeatures';
 import { getCapabilitiesKnowledgeBase } from '../../capabilities';
 import { objectSchema, textSchema } from './registry';
-import { memoryConfirmationKey, contactMemoryConfirmationKey } from './confirmation';
+import { memoryConfirmationKey, contactMemoryConfirmationKey, telegramPeriodConfirmationKey } from './confirmation';
 import { listSchema, listPage } from './listing';
 import type { ProcessingResult } from '../../orchestrator';
 import type { ToolContext, ToolDefinition, ToolOutput } from './types';
 
-export function processingOutput(result: ProcessingResult, context?: ToolContext): ToolOutput {
-    const waiting = Boolean(result.keyboard || result.messageDraft || context?.ctx.session.pendingBrowserTask ||
-        context?.ctx.session.pendingHealthLog || context?.ctx.session.pendingHealthDiscomfort || context?.ctx.session.pendingContactMemory);
+export function processingOutput(result: ProcessingResult, awaitingInput = false): ToolOutput {
+    const waiting = Boolean(result.keyboard || result.messageDraft || awaitingInput);
     const status = result.operationStatus ?? (result.imageGenerated === false ? 'failed' : waiting ? 'needs_input' : 'ok');
     result.operationStatus = status;
     return { status, summary: result.responseText || 'Операция завершена.', result, question: result.clarificationQuestion };
@@ -129,6 +128,9 @@ export function domainTools(): ToolDefinition[] {
             inputSchema: objectSchema({ request: textSchema('Самодостаточная задача чтения из исходного запроса'), mode: { type: 'string', enum: ['unread', 'conversation'] }, contactQuery: textSchema('Однозначное имя или username'), groupQueries: { type: 'array', maxItems: 10, items: textSchema('Название чата', 200) }, saveFacts: { type: 'boolean' } }, ['request', 'mode']),
             async execute(args, context) {
                 const mode = args.mode;
+                if (context.ctx.session.studyChatRequest?.expiresAt && context.ctx.session.studyChatRequest.expiresAt <= Date.now()) context.ctx.session.studyChatRequest = undefined;
+                if (context.ctx.session.chatAnalysisPeriodRequest?.expiresAt && context.ctx.session.chatAnalysisPeriodRequest.expiresAt <= Date.now()) context.ctx.session.chatAnalysisPeriodRequest = undefined;
+                if (mode === 'conversation' && (context.ctx.session.studyChatRequest || context.ctx.session.chatAnalysisPeriodRequest || args.saveFacts && context.ctx.session.pendingContactMemory)) return { status: 'failed', summary: 'Сначала заверши предыдущий выбор периода или уточнение личности для изучения переписки.' };
                 let contactQuery = String(args.contactQuery ?? '');
                 const groupQueries = args.groupQueries as string[] | undefined;
                 if (mode === 'conversation' && !contactQuery && !groupQueries?.length) {
@@ -147,7 +149,11 @@ export function domainTools(): ToolDefinition[] {
                     contactQuery, groupChatQueries: groupQueries, analysisQuery: String(args.request), saveFactsAboutUser: args.saveFacts === true } };
                 const result = await readMessagesAgent(context.ctx, String(args.request), context.isForwarded, context.forwardFrom, context.messageHistory, classification, context.memoryContext, context.voiceReplyRequested === true);
                 if (result.keyboard && !context.ctx.session.studyChatRequest && !context.ctx.session.chatAnalysisPeriodRequest && !context.ctx.session.pendingContactMemory && result.operationStatus !== 'needs_input') { result.operationStatus ??= 'ok'; result.keyboard = undefined; }
-                return processingOutput(result, context);
+                const output = processingOutput(result);
+                const study = context.ctx.session.studyChatRequest;
+                const analysis = context.ctx.session.chatAnalysisPeriodRequest;
+                if (output.status === 'needs_input') output.confirmationKey = study?.requestId ? telegramPeriodConfirmationKey('study-chat', study.requestId) : analysis ? telegramPeriodConfirmationKey('chat-analysis', analysis.requestId) : contactMemoryConfirmationKey(context.ctx);
+                return output;
             },
         },
         {
@@ -159,7 +165,7 @@ export function domainTools(): ToolDefinition[] {
                 if (existing) return { status: 'failed', summary: 'В канале уже есть другой черновик. Подтверди или отмени его в предыдущем сообщении перед новым поручением.', result: { responseText: 'В канале уже есть черновик. Подтверди или отмени его в предыдущем сообщении перед новым поручением.' } };
                 const result = await sendMessagesAgent(context.ctx, String(args.request), context.isForwarded, context.forwardFrom, context.messageHistory, context.memoryContext);
                 result.operationStatus = result.keyboard ? 'needs_input' : 'failed';
-                return processingOutput(result, context);
+                return processingOutput(result);
             },
         },
         {
@@ -201,7 +207,7 @@ export function domainTools(): ToolDefinition[] {
                 if (!source.toLocaleLowerCase().includes(String(args.request).toLocaleLowerCase())) return { status: 'failed', summary: 'Наблюдение должно содержать исходные слова владельца; нельзя добавлять симптомы из вывода модели.' };
                 const result = await healthAgent(context.ctx, String(args.request), context.isForwarded, context.forwardFrom, context.messageHistory);
                 if (result.operationStatus === 'ok') result.keyboard = undefined;
-                return processingOutput(result, context);
+                return processingOutput(result);
             },
         },
         readTool('health.listEntries', 'health-diary', 'Получить записи своего дневника за период.', objectSchema({ days: { type: 'integer', minimum: 1, maximum: 180 } }), async (args, context) => {

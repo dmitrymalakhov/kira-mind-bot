@@ -9,6 +9,7 @@ import { createJsonChatCompletionForTask } from '../../ai/chatCompletion';
 import { persistAgentRuntime } from '../../services/SessionStorage';
 import { objectSchema, textSchema } from './registry';
 import { processingOutput } from './domainTools';
+import { contactMemoryConfirmationKey } from './confirmation';
 import type { AgentRunRecord, ToolContext, ToolDefinition, ToolOutput } from './types';
 
 const live = new Map<string, { controller: AbortController; context: ToolContext }>();
@@ -43,18 +44,24 @@ async function research(task: string, context: ToolContext): Promise<ToolOutput>
 
 async function run(kind: AgentRunRecord['kind'], task: string, args: Record<string, unknown>, context: ToolContext): Promise<ToolOutput> {
     if (kind === 'research') return research(task, context);
-    if (kind === 'browser') return processingOutput(await browserAgent(context.ctx, task, context.isForwarded, context.forwardFrom, context.messageHistory, { ...context.classification, intent: 'БРАУЗЕР_ЗАДАЧА' }, context.memoryContext), context);
+    if (kind === 'browser') {
+        const result = await browserAgent(context.ctx, task, context.isForwarded, context.forwardFrom, context.messageHistory, { ...context.classification, intent: 'БРАУЗЕР_ЗАДАЧА' }, context.memoryContext);
+        return processingOutput(result, Boolean(context.ctx.session.pendingBrowserTask));
+    }
     if (kind === 'negotiation') {
         if (NegotiationStore.getPendingStart(context.ctx.chat!.id) || NegotiationStore.getActiveSessionByChatId(context.ctx.chat!.id)) return { status: 'failed', summary: 'В этом чате уже подготовлены или идут переговоры. Сначала заверши или отмени их.' };
         const result = await negotiateOnBehalfAgent(context.ctx, task, context.isForwarded, context.forwardFrom, context.messageHistory, context.memoryContext);
         result.operationStatus = result.keyboard ? 'needs_input' : 'failed';
-        return processingOutput(result, context);
+        return processingOutput(result);
     }
     const contact = ContactsStore.getInstance().getContact(Number(args.contactId));
     if (!contact) return { status: 'failed', summary: 'Нужен однозначно выбранный контакт.' };
+    if (context.ctx.session.pendingContactMemory) return { status: 'failed', summary: 'Сначала заверши предыдущее уточнение личности.' };
     const period = String(args.period ?? 'month') as 'week' | 'month' | '3months' | 'year';
     const result = await studyChatAndSaveFacts(context.ctx, `${contact.firstName} ${contact.lastName ?? ''}`.trim(), contact.id, period);
-    return processingOutput(result, context);
+    const output = processingOutput(result);
+    if (output.status === 'needs_input') output.confirmationKey = contactMemoryConfirmationKey(context.ctx);
+    return output;
 }
 
 export function agentTools(): ToolDefinition[] {

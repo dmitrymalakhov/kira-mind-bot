@@ -21,7 +21,7 @@ import { executePlan } from "./orchestration/executor";
 import { Plan } from "./orchestration/types";
 import { runKiraRuntime, orchestrationMode, hasCompoundActionRequest, continueConfirmedRuntime, mergeRuntimeResults, continueQuestionRuntime, cancelRuntimeContinuation } from './orchestration/runtime/kernel';
 import { classifyWithDecisions, decisionsEnabled } from './ai/decisionRouting';
-import { contactMemoryConfirmationKey } from './orchestration/runtime/confirmation';
+import { contactMemoryConfirmationKey, CONTACT_MEMORY_PARENT_TOOLS } from './orchestration/runtime/confirmation';
 import { ChatGroupRepository } from "./services/ChatGroupRepository";
 import { handlePendingContactMemoryText } from "./utils/contactMemory";
 import { handlePendingContactLookupText, maybeStartContactMemoryLookup } from "./utils/contactMemoryLookup";
@@ -697,7 +697,7 @@ export async function processMessage(
             let contactMemorySaved: string | undefined;
             const contactMemoryResolution = await handlePendingContactMemoryText(ctx, message, summary => { contactMemorySaved = summary; });
             if (contactMemoryResolution) {
-                const remaining = contactMemorySaved && contactMemoryKey ? await continueConfirmedRuntime(ctx, ['memory.rememberContact'], contactMemorySaved, {}, contactMemoryKey) : undefined;
+                const remaining = contactMemorySaved && contactMemoryKey ? await continueConfirmedRuntime(ctx, CONTACT_MEMORY_PARENT_TOOLS, contactMemorySaved, {}, contactMemoryKey) : undefined;
                 return remaining ? mergeRuntimeResults([{ responseText: contactMemoryResolution }, remaining]) : { responseText: contactMemoryResolution };
             }
             const pendingContactLookup = await handlePendingContactLookupText(ctx, message);

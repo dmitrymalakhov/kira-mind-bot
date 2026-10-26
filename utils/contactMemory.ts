@@ -1,4 +1,5 @@
 import { InlineKeyboard } from 'grammy';
+import { randomBytes } from 'crypto';
 import { get as levenshtein } from 'fast-levenshtein';
 import { transliterate as toLatin } from 'transliteration';
 import { BotContext, SessionData } from '../types';
@@ -8,8 +9,8 @@ import { rememberFact } from './domainMemory';
 import { devLog } from '../utils';
 import { resolveOrCreatePersonIdentity } from '../services/PersonIdentityService';
 import { getBotGenderedText } from '../persona';
+import { PENDING_CONTACT_MEMORY_TTL_MS } from './contactMemoryConstants';
 
-const PENDING_CONTACT_MEMORY_TTL_MS = 10 * 60 * 1000;
 const RECENT_FACT_TTL_MS = 10 * 60 * 1000;
 
 export interface ContactMemoryFact {
@@ -535,6 +536,7 @@ export async function persistPendingContactFacts(
 
 function setPendingContactMemory(ctx: BotContext, fact: ContactMemoryFact, candidates: Contact[]): void {
     ctx.session.pendingContactMemory = {
+        confirmationId: randomBytes(8).toString('hex'),
         contactName: fact.contactName,
         content: fact.content,
         domain: fact.domain,
@@ -622,11 +624,12 @@ async function askContactClarification(
     }
 
     const keyboard = new InlineKeyboard();
+    const pending = ctx.session.pendingContactMemory!;
     for (const candidate of candidates.slice(0, 6)) {
-        keyboard.text(contactOptionLabel(candidate), `cmem:${candidate.id}`).row();
+        keyboard.text(contactOptionLabel(candidate), contactMemoryCallbackData(pending, String(candidate.id))).row();
     }
-    keyboard.text('Новый человек', 'cmem:new').row();
-    keyboard.text('Не сейчас', 'cmem:later');
+    keyboard.text('Новый человек', contactMemoryCallbackData(pending, 'new')).row();
+    keyboard.text('Не сейчас', contactMemoryCallbackData(pending, 'later'));
 
     await ctx.reply(
         `У меня несколько контактов по имени «${fact.contactName}». К кому сохранить этот факт?\n\n«${stripContactLead(fact.content, fact.contactName)}»`,
@@ -678,6 +681,7 @@ export async function saveContactMemoryFactOrAsk(
     if (mergePendingContactMemory(ctx, fact, [])) return { status: 'pending' };
 
     ctx.session.pendingContactMemory = {
+        confirmationId: randomBytes(8).toString('hex'),
         contactName,
         content: fact.content,
         domain: fact.domain,
@@ -703,7 +707,11 @@ export async function saveContactMemoryFactOrAsk(
     return { status: 'pending' };
 }
 
-export async function handleContactMemoryCallback(ctx: BotContext, callbackData: string, onSaved?: (summary: string) => void): Promise<boolean> {
+function contactMemoryCallbackData(pending: PendingContactMemory, choice: string): string {
+    return pending.confirmationId ? `cmem:${pending.confirmationId}:${choice}` : `cmem:${choice}`;
+}
+
+export async function handleContactMemoryCallback(ctx: BotContext, callbackData: string, onSaved?: (summary: string) => void, onCancelled?: () => void): Promise<boolean> {
     if (!callbackData.startsWith('cmem:')) return false;
 
     const pending = ctx.session.pendingContactMemory;
@@ -713,10 +721,20 @@ export async function handleContactMemoryCallback(ctx: BotContext, callbackData:
         return true;
     }
 
+    if (pending.confirmationId) {
+        const prefix = `cmem:${pending.confirmationId}:`;
+        if (!callbackData.startsWith(prefix)) {
+            await ctx.answerCallbackQuery({ text: 'Это кнопка другого уточнения. Используй последнее сообщение.' });
+            return true;
+        }
+        callbackData = `cmem:${callbackData.slice(prefix.length)}`;
+    }
+
     if (callbackData === 'cmem:later' || callbackData === 'cmem:cancel') {
         ctx.session.pendingContactMemory = undefined;
         await ctx.answerCallbackQuery({ text: 'Не сохраняю' });
         await ctx.editMessageText('Ок, не сохраняю этот факт в память.');
+        onCancelled?.();
         return true;
     }
 
@@ -733,7 +751,7 @@ export async function handleContactMemoryCallback(ctx: BotContext, callbackData:
             : true;
         const result = await persistPendingContactFacts(ctx, pending, retryContact, forceDetachedNew);
         if (result.failedAssertions.length > 0) {
-            const keyboard = new InlineKeyboard().text('Повторить сохранение', 'cmem:retry');
+            const keyboard = new InlineKeyboard().text('Повторить сохранение', contactMemoryCallbackData(pending, 'retry'));
             await ctx.answerCallbackQuery({ text: 'Часть фактов пока не сохранилась.' });
             await ctx.editMessageText(
                 `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}.`,
@@ -767,7 +785,7 @@ export async function handleContactMemoryCallback(ctx: BotContext, callbackData:
 
     const result = await persistPendingContactFacts(ctx, pending, contact);
     if (result.failedAssertions.length > 0) {
-        const keyboard = new InlineKeyboard().text('Повторить сохранение', 'cmem:retry');
+        const keyboard = new InlineKeyboard().text('Повторить сохранение', contactMemoryCallbackData(pending, 'retry'));
         await ctx.answerCallbackQuery({ text: 'Часть фактов пока не сохранилась.' });
         await ctx.editMessageText(
             `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}.`,

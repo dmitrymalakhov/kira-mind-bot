@@ -1,0 +1,1 @@
+export const PENDING_CONTACT_MEMORY_TTL_MS = 10 * 60 * 1000;

@@ -165,6 +165,8 @@ export interface SessionData {
     };
     /** Ожидает уточнения, к какому контакту относится извлечённый факт */
     pendingContactMemory?: {
+        /** Stable identity of this clarification, independent of retry timestamps. */
+        confirmationId?: string;
         contactName: string;
         content: string;
         domain: string;

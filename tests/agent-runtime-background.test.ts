@@ -91,3 +91,27 @@ test('redelivery of the same scheduled run cannot repeat an uncertain mutation',
     const result = await runKiraRuntime({ ctx, message: 'Напомни синтетическую задачу', classification: { intent: 'НАПОМИНАНИЕ', confidenceLevel: 'ВЫСОКИЙ', details: {} }, isForwarded: false, forwardFrom: '', messageHistory: [], recurringTaskRun: true }, { forceLoop: true, decide: async () => { throw new Error('The controller must not replay an uncertain mutation'); }, persist: async () => {} });
     assert.equal(result.operationStatus, 'unknown');
 });
+
+test('background identity clarification is persisted with its runtime and cannot replace an active clarification', async t => {
+    const database = repo(); t.mock.method(AppDataSource, 'getRepository', (() => database) as any);
+    const storage = new persistence.TypeORMSessionStorage(true); const owner = session();
+    await storage.write('101', owner);
+    const background = session(); background.agentRuntime = state('background');
+    background.pendingContactMemory = { confirmationId: 'background-fact', createdAt: Date.now(), candidateIds: [202] } as any;
+    await persistence.mergePersistedBackgroundContinuation(101, background, Date.now());
+    assert.equal((await storage.read('101'))?.pendingContactMemory?.confirmationId, 'background-fact');
+    const other = { ...background, pendingContactMemory: { ...background.pendingContactMemory!, confirmationId: 'other-fact' } };
+    await assert.rejects(persistence.mergePersistedBackgroundContinuation(101, other, Date.now()), persistence.BackgroundContinuationConflictError);
+    assert.equal((await storage.read('101'))?.pendingContactMemory?.confirmationId, 'background-fact');
+});
+
+test('a background clarification conflict pauses immediately and still delivers partial artifacts', async t => {
+    const calls: string[] = [];
+    t.mock.method(persistence.TypeORMSessionStorage.prototype, 'read', async () => undefined);
+    t.mock.method(orchestrator, 'processMessage', async () => ({ responseText: 'Часть работы готова', operationStatus: 'needs_input', artifacts: [{ kind: 'image', url: 'https://example.test/partial.png' }] }));
+    t.mock.method(persistence, 'mergePersistedBackgroundContinuation', async () => { throw new persistence.BackgroundContinuationConflictError(); });
+    const failed = t.mock.method(RecurringTaskRepository, 'failRun', async (...[_id, run]: Parameters<typeof RecurringTaskRepository.failRun>) => { assert.equal(run.pauseAfterFailure, true); assert.match(run.error, /другое уточнение/); return undefined as any; });
+    const complete = t.mock.method(RecurringTaskRepository, 'completeRun', async () => undefined as any);
+    await executeRecurringTask(bot(calls), task());
+    assert.equal(failed.mock.callCount(), 1); assert.equal(complete.mock.callCount(), 0); assert.equal(calls.filter(method => method === 'sendPhoto').length, 1);
+});

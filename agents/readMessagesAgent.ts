@@ -26,7 +26,7 @@ import {
     getMessagesInDateRange,
 } from "../utils/studyChatFlow";
 import { resolveRelationshipFromMemory } from "../utils/resolveRelationshipFromMemory";
-import { runUpdateLongTermMemoryAgent } from "./updateLongTermMemoryAgent";
+import { runUpdateLongTermMemoryAgentDetailed } from "./updateLongTermMemoryAgent";
 import { queueMessage as queueForReflection, markChatAsBot } from "../services/reflectionModeService";
 import { isBackgroundFeatureEnabled } from '../services/backgroundFeatureService';
 import { ChatGroupRepository } from "../services/ChatGroupRepository";
@@ -684,12 +684,25 @@ export function resetAllMessages(): boolean {
     }
 }
 
+function telegramResult(responseText: string, operationStatus: ProcessingResult['operationStatus'] = 'ok'): ProcessingResult {
+    return { responseText, operationStatus };
+}
+
 export async function getAnswerFromMessages(
     contactName: string,
     analysisQuery: string,
     memoryContext: string = "",
     voiceReplyRequested: boolean = false
 ): Promise<string | null> {
+    return (await getAnswerFromMessagesResult(contactName, analysisQuery, memoryContext, voiceReplyRequested)).responseText || null;
+}
+
+export async function getAnswerFromMessagesResult(
+    contactName: string,
+    analysisQuery: string,
+    memoryContext: string = "",
+    voiceReplyRequested: boolean = false
+): Promise<ProcessingResult> {
     try {
         devLog(`Analyzing conversation with contact "${contactName}" for query: "${analysisQuery}"`);
 
@@ -701,7 +714,7 @@ export async function getAnswerFromMessages(
 
         if (contacts.length === 0) {
             devLog(`No contacts found matching "${contactName}"`);
-            return `Не удалось найти контакт "${contactName}" в списке контактов. Пожалуйста, проверьте имя контакта и попробуйте снова.`;
+            return telegramResult(`Не удалось найти контакт "${contactName}" в списке контактов. Пожалуйста, проверьте имя контакта и попробуйте снова.`, 'failed');
         }
 
         // If multiple contacts found, use the first one
@@ -713,7 +726,7 @@ export async function getAnswerFromMessages(
         const telegramClient = await initTelegramClient();
         if (!telegramClient) {
             console.error("Failed to initialize Telegram client");
-            return "Не удалось подключиться к Telegram. Пожалуйста, проверьте статус подключения и попробуйте снова.";
+            return telegramResult("Не удалось подключиться к Telegram. Пожалуйста, проверьте статус подключения и попробуйте снова.", 'failed');
         }
 
         // Get conversation history with the contact
@@ -725,7 +738,7 @@ export async function getAnswerFromMessages(
             });
 
             if (!messages || messages.length === 0) {
-                return `Не найдено сообщений в переписке с контактом ${contact.firstName} ${contact.lastName || ''}. Возможно, у вас нет истории сообщений с этим контактом.`;
+                return telegramResult(`Не найдено сообщений в переписке с контактом ${contact.firstName} ${contact.lastName || ''}. Возможно, у вас нет истории сообщений с этим контактом.`);
             }
 
             devLog(`Retrieved ${messages.length} messages from the conversation`);
@@ -815,19 +828,19 @@ export async function getAnswerFromMessages(
             const analysisResult = response.choices[0]?.message?.content;
 
             if (!analysisResult) {
-                return "Не удалось проанализировать переписку. Пожалуйста, попробуйте сформулировать запрос иначе.";
+                return telegramResult("Не удалось проанализировать переписку. Пожалуйста, попробуйте сформулировать запрос иначе.", 'failed');
             }
 
-            return analysisResult;
+            return telegramResult(analysisResult);
 
         } catch (messageError) {
             console.error("Error retrieving messages:", messageError);
-            return "Произошла ошибка при получении сообщений из Telegram. Пожалуйста, попробуйте позже.";
+            return telegramResult("Произошла ошибка при получении сообщений из Telegram. Пожалуйста, попробуйте позже.", 'failed');
         }
 
     } catch (error) {
         console.error("Error in getAnswerFromMessages:", error);
-        return "Произошла ошибка при анализе переписки. Пожалуйста, попробуйте позже.";
+        return telegramResult("Произошла ошибка при анализе переписки. Пожалуйста, попробуйте позже.", 'failed');
     }
 }
 
@@ -878,12 +891,16 @@ export function getUnreadMessagesPreview(hours: number = 24): string | null {
  * @returns Сводка о новых сообщениях на естественном языке
  */
 export async function getMessagesSummary(hours: number = 24, memoryContext: string = ""): Promise<string | null> {
+    return (await getMessagesSummaryResult(hours, memoryContext)).responseText || null;
+}
+
+export async function getMessagesSummaryResult(hours: number = 24, memoryContext: string = ""): Promise<ProcessingResult> {
     try {
         // Получаем сообщения за указанный период
         const recentChats = messageStore.getRecentMessages(hours);
 
         if (recentChats.length === 0) {
-            return null;
+            return telegramResult('');
         }
 
         // Формируем контекст для OpenAI
@@ -944,10 +961,10 @@ export async function getMessagesSummary(hours: number = 24, memoryContext: stri
         // Получаем текст ответа
         const summary = response.choices[0]?.message?.content || "";
 
-        return summary;
+        return telegramResult(summary || 'Не удалось составить сводку сообщений.', summary ? 'ok' : 'failed');
     } catch (error) {
         console.error("Ошибка при создании сводки о сообщениях:", error);
-        return "Произошла ошибка при создании сводки о сообщениях. Пожалуйста, попробуйте позже.";
+        return telegramResult("Произошла ошибка при создании сводки о сообщениях. Пожалуйста, попробуйте позже.", 'failed');
     }
 }
 
@@ -1032,24 +1049,24 @@ async function studyGroupChatAndSaveFacts(
     memoryContext: string,
     period: StudyChatPeriod,
     voiceReplyRequested: boolean = false
-): Promise<string> {
+): Promise<ProcessingResult> {
     const client = await initTelegramClient();
-    if (!client) return "Не удалось подключиться к Telegram. Проверь статус подключения.";
+    if (!client) return telegramResult("Не удалось подключиться к Telegram. Проверь статус подключения.", 'failed');
 
     const group = await searchGroupByTitle(client, groupName);
     if (!group) {
-        return getBotGenderedText(
+        return telegramResult(getBotGenderedText(
             `Не нашла групповой чат с названием «${groupName}».`,
             `Не нашёл групповой чат с названием «${groupName}».`,
-        ) + " Проверь название — оно должно совпадать с тем, что в списке диалогов.";
+        ) + " Проверь название — оно должно совпадать с тем, что в списке диалогов.", 'failed');
     }
 
     const { startDate, endDate } = getChatAnalysisDateRange(period);
     const messages = await getMessagesInDateRange(group.id, startDate, endDate);
-    if (!messages || messages.length === 0) return `В чате «${group.title}» за ${CHAT_ANALYSIS_PERIOD_LABELS[period]} не найдено сообщений.`;
+    if (!messages || messages.length === 0) return telegramResult(`В чате «${group.title}» за ${CHAT_ANALYSIS_PERIOD_LABELS[period]} не найдено сообщений.`);
 
     const conversationText = formatGroupMessages(messages as Api.Message[]);
-    if (!conversationText.trim()) return `В чате «${group.title}» нет текстовых сообщений для анализа.`;
+    if (!conversationText.trim()) return telegramResult(`В чате «${group.title}» нет текстовых сообщений для анализа.`);
 
     const persona = getBotPersona();
     const style = getCommunicationStyle();
@@ -1082,9 +1099,14 @@ async function studyGroupChatAndSaveFacts(
         ? (analysisResult.value.choices[0]?.message?.content?.trim() || 'Не удалось проанализировать.')
         : 'Не удалось проанализировать сообщения чата.';
 
+    let status: ProcessingResult['operationStatus'] = analysisResult.status === 'fulfilled' && analysisResult.value.choices[0]?.message?.content?.trim() ? 'ok' : 'failed';
+
     if (factsResult.status === 'fulfilled' && factsResult.value.length > 0) {
         try {
-            const savedCount = await runUpdateLongTermMemoryAgent(ctx, factsResult.value);
+            const update = await runUpdateLongTermMemoryAgentDetailed(ctx, factsResult.value);
+            const savedCount = update.savedCount;
+            if (update.errors.length) status = 'failed';
+            else if (update.pendingFacts.length && status === 'ok') status = 'needs_input';
             if (savedCount > 0) {
                 if (voiceReplyRequested) {
                     const factLabel = savedCount === 1
@@ -1092,24 +1114,26 @@ async function studyGroupChatAndSaveFacts(
                         : savedCount < 5
                             ? 'важных факта'
                             : 'важных фактов';
-                    return `${analysisText} ` + getBotGenderedText(
+                    return telegramResult(`${analysisText} ` + getBotGenderedText(
                         `Я ещё сохранила ${savedCount} ${factLabel} в память.`,
                         `Я ещё сохранил ${savedCount} ${factLabel} в память.`,
-                    );
+                    ), status);
                 }
-                return `${analysisText}\n\n` + getBotGenderedText(
+                return telegramResult(`${analysisText}\n\n` + getBotGenderedText(
                     `💾 Сохранила ${savedCount} факт(ов) в долговременную память.`,
                     `💾 Сохранил ${savedCount} факт(ов) в долговременную память.`,
-                );
+                ), status);
             }
         } catch (e) {
+            status = 'failed';
             console.error('[studyGroupChatAndSaveFacts] save facts error:', e);
         }
     } else if (factsResult.status === 'rejected') {
+        status = 'failed';
         console.error('[studyGroupChatAndSaveFacts] fact extraction failed:', factsResult.reason);
     }
 
-    return analysisText;
+    return telegramResult(analysisText, status);
 }
 
 async function analyzeGroupChatMessages(
@@ -1118,29 +1142,29 @@ async function analyzeGroupChatMessages(
     memoryContext: string,
     period: StudyChatPeriod,
     voiceReplyRequested: boolean = false
-): Promise<string> {
+): Promise<ProcessingResult> {
     const client = await initTelegramClient();
     if (!client) {
-        return "Не удалось подключиться к Telegram. Проверь статус подключения.";
+        return telegramResult("Не удалось подключиться к Telegram. Проверь статус подключения.", 'failed');
     }
 
     const group = await searchGroupByTitle(client, groupName);
     if (!group) {
-        return getBotGenderedText(
+        return telegramResult(getBotGenderedText(
             `Не нашла групповой чат с названием «${groupName}».`,
             `Не нашёл групповой чат с названием «${groupName}».`,
-        ) + " Проверь название — оно должно совпадать с тем, что в списке диалогов.";
+        ) + " Проверь название — оно должно совпадать с тем, что в списке диалогов.", 'failed');
     }
 
     const { startDate, endDate } = getChatAnalysisDateRange(period);
     const messages = await getMessagesInDateRange(group.id, startDate, endDate);
     if (!messages || messages.length === 0) {
-        return `В чате «${group.title}» за ${CHAT_ANALYSIS_PERIOD_LABELS[period]} не найдено сообщений.`;
+        return telegramResult(`В чате «${group.title}» за ${CHAT_ANALYSIS_PERIOD_LABELS[period]} не найдено сообщений.`);
     }
 
     const conversationText = formatGroupMessages(messages as Api.Message[]);
     if (!conversationText.trim()) {
-        return `В чате «${group.title}» нет текстовых сообщений для анализа.`;
+        return telegramResult(`В чате «${group.title}» нет текстовых сообщений для анализа.`);
     }
 
     const persona = getBotPersona();
@@ -1168,7 +1192,8 @@ ${conversationText}`;
 
     const response = await createChatCompletionForTask('complexReasoning', completionOptions);
 
-    return response.choices[0]?.message?.content?.trim() || "Не удалось проанализировать сообщения чата.";
+    const text = response.choices[0]?.message?.content?.trim();
+    return telegramResult(text || "Не удалось проанализировать сообщения чата.", text ? 'ok' : 'failed');
 }
 
 async function analyzeMultipleGroupChats(
@@ -1177,10 +1202,10 @@ async function analyzeMultipleGroupChats(
     memoryContext: string,
     period: StudyChatPeriod,
     voiceReplyRequested: boolean = false
-): Promise<string> {
+): Promise<ProcessingResult> {
     const client = await initTelegramClient();
     if (!client) {
-        return "Не удалось подключиться к Telegram. Проверь статус подключения.";
+        return telegramResult("Не удалось подключиться к Telegram. Проверь статус подключения.", 'failed');
     }
 
     const results = await Promise.all(
@@ -1206,7 +1231,7 @@ async function analyzeMultipleGroupChats(
     const chats = results.filter(r => r.text);
 
     if (chats.length === 0) {
-        return errors.map(e => e.error).join('\n');
+        return telegramResult(errors.map(e => e.error).join('\n'), 'failed');
     }
 
     const persona = getBotPersona();
@@ -1240,7 +1265,8 @@ ${chatSections}${notFoundNote}`;
 
     const response = await createChatCompletionForTask('complexReasoning', completionOptions);
 
-    return response.choices[0]?.message?.content?.trim() || "Не удалось проанализировать сообщения чатов.";
+    const text = response.choices[0]?.message?.content?.trim();
+    return telegramResult(text || "Не удалось проанализировать сообщения чатов.", text && !errors.length ? 'ok' : 'failed');
 }
 
 interface ChatAnalysisPeriodRequest {
@@ -1262,7 +1288,7 @@ async function runChatAnalysisPeriodRequest(
     req: ChatAnalysisPeriodRequest,
     period: StudyChatPeriod
 ): Promise<ProcessingResult> {
-    let answer: string;
+    let answer: ProcessingResult;
 
     if (req.saveFactsAboutUser && req.groupNames.length === 1) {
         answer = await studyGroupChatAndSaveFacts(
@@ -1292,11 +1318,12 @@ async function runChatAnalysisPeriodRequest(
     }
 
     const result: ProcessingResult = {
-        responseText: withChatAnalysisPeriodHeader(answer, period, req.voiceReplyRequested === true),
+        ...answer,
+        responseText: withChatAnalysisPeriodHeader(answer.responseText, period, req.voiceReplyRequested === true),
         voiceReplyRequested: req.voiceReplyRequested === true,
     };
 
-    if (req.offerSaveGroup && ctx.session) {
+    if (req.offerSaveGroup && ctx.session && result.operationStatus === 'ok') {
         ctx.session.chatGroupState = { step: 'awaiting_name', pendingChatNames: req.groupNames };
         await persistSessionNow(ctx);
         result.keyboard = new InlineKeyboard().text('💾 Сохранить как группу', 'cg:quicksave');
@@ -1355,16 +1382,14 @@ export async function readMessagesAgent(
 ): Promise<ProcessingResult> {
     try {
         if (classification && classification.details.messagesCheckType === "ALL_MESSAGES") {
-            const summary = await getMessagesSummary(24, memoryContext);
+            const summary = await getMessagesSummaryResult(24, memoryContext);
 
-            if (!summary) {
+            if (!summary.responseText) {
                 return {
-                    responseText: "Нет новых сообщений за последние 24 часа."
+                    responseText: "Нет новых сообщений за последние 24 часа.", operationStatus: 'ok',
                 };
             }
-            return {
-                responseText: summary
-            };
+            return summary;
         }
 
         if (classification && classification.details.messagesCheckType === "ANALYZE_CONVERSATION") {
@@ -1522,15 +1547,15 @@ export async function readMessagesAgent(
             }
 
             await notifyUser(ctx, '🔍 Анализирую переписку с ' + displayName + '…');
-            const answer = await getAnswerFromMessages(
+            const answer = await getAnswerFromMessagesResult(
                 nameToSearch,
                 classification.details.analysisQuery,
                 memoryContext,
                 voiceReplyRequested
             );
 
-            if (answer) {
-                return { responseText: answer, voiceReplyRequested };
+            if (answer.responseText) {
+                return { ...answer, voiceReplyRequested };
             }
             return {
                 operationStatus: 'failed',
@@ -1576,7 +1601,7 @@ export async function handleStudyChatPeriodCallback(
             ctx.session.studyChatRequest = undefined;
             await persistSessionNow(ctx);
         }
-        return { responseText: "Сессия выбора периода истекла. Напиши снова: «изучи переписку с [имя] и запомни факты»." };
+        return { responseText: "Сессия выбора периода истекла. Напиши снова: «изучи переписку с [имя] и запомни факты».", operationStatus: 'failed' };
     }
     const processingKey = req.requestId || `${ctx.chat?.id ?? "chat"}:${req.contactId}`;
     if (processingStudyChatRequests.has(processingKey)) {
@@ -1590,6 +1615,8 @@ export async function handleStudyChatPeriodCallback(
 
     try {
         return await studyChatAndSaveFacts(ctx, req.contactName, req.contactId, period);
+    } catch {
+        return telegramResult('Не удалось завершить изучение переписки. Проверь сохранённые факты перед новым запуском.', 'unknown');
     } finally {
         processingStudyChatRequests.delete(processingKey);
     }
@@ -1608,7 +1635,7 @@ export async function handleChatAnalysisPeriodCallback(
         return { responseText: "Анализ этих чатов уже запущен. Дождись результата." };
     }
     if (!req || req.step !== "period") {
-        return { responseText: "Сессия выбора периода истекла. Напиши запрос на анализ чатов заново." };
+        return { responseText: "Сессия выбора периода истекла. Напиши запрос на анализ чатов заново.", operationStatus: 'failed' };
     }
     if (req.requestId !== requestId) {
         return { responseText: "Это старая кнопка выбора периода. Нажми период в последнем сообщении со сценарием." };
@@ -1618,7 +1645,7 @@ export async function handleChatAnalysisPeriodCallback(
             ctx.session.chatAnalysisPeriodRequest = undefined;
             await persistSessionNow(ctx);
         }
-        return { responseText: "Сессия выбора периода истекла. Напиши запрос на анализ чатов заново." };
+        return { responseText: "Сессия выбора периода истекла. Напиши запрос на анализ чатов заново.", operationStatus: 'failed' };
     }
 
     const processingKey = req.requestId;
@@ -1634,6 +1661,8 @@ export async function handleChatAnalysisPeriodCallback(
 
     try {
         return await runChatAnalysisPeriodRequest(ctx, req, period);
+    } catch {
+        return telegramResult('Не удалось завершить анализ чатов.', req.saveFactsAboutUser ? 'unknown' : 'failed');
     } finally {
         processingChatAnalysisRequests.delete(processingKey);
     }

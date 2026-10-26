@@ -185,7 +185,7 @@ test('failed chat study cannot masquerade as a completed delegated task', async 
 test('contact identity confirmation resumes its parent only on an acknowledged save', async t => {
     const value = input(); value.ctx.session.pendingContactMemory = { createdAt: 1000 } as any;
     const memoryCallback = t.mock.method(contactMemory, 'handleContactMemoryCallback', async (_ctx: any, _data: string, onSaved?: (summary: string) => void) => { onSaved?.('Подтверждённый факт'); return true; });
-    const resumed = t.mock.method(kernel, 'continueConfirmedRuntime', async (_ctx: any, names: string[], summary: string, _deps: any, key?: string) => { assert.deepEqual(names, ['memory.rememberContact']); assert.equal(key, 'cmem:1000'); assert.equal(summary, 'Подтверждённый факт'); return undefined; });
+    const resumed = t.mock.method(kernel, 'continueConfirmedRuntime', async (_ctx: any, names: string[], summary: string, _deps: any, key?: string) => { assert.deepEqual(names, ['memory.rememberContact', 'telegram.readMessages', 'agents.start']); assert.equal(key, 'cmem:1000'); assert.equal(summary, 'Подтверждённый факт'); return undefined; });
     const bot = new Bot<BotContext>('1234567890:abcdefghijklmnopqrstuvwxyzABCDE', { botInfo: { id: 1234567890, is_bot: true, first_name: 'Synthetic', username: 'synthetic_bot' } as any });
     bot.use(async (ctx, next) => { ctx.session = value.ctx.session; await next(); }); registerCallback(bot);
     const update = { update_id: 101, callback_query: { id: 'synthetic-callback', from: { id: 101, is_bot: false, first_name: 'Synthetic' }, data: 'cmem:202', message: { message_id: 1, date: 1, chat: { id: 101, type: 'private', first_name: 'Synthetic' } } } } as any;

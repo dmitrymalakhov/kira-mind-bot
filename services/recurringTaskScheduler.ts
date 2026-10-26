@@ -11,6 +11,7 @@ import {
     appendPersistedHistory,
     appendPersistedSentMessageContext,
     mergePersistedBackgroundContinuation,
+    BackgroundContinuationConflictError,
 } from "./SessionStorage";
 import { saveRemindersFromResult } from "../handlers/shared";
 import { computeFollowingRecurringRun, formatRecurringSchedule } from "../utils/recurringTaskSchedule";
@@ -255,7 +256,15 @@ export async function executeRecurringTask(
         if (result.reminderCreated && !isExplicitReminderRequest(executionPrompt)) {
             throw new Error("Вложенное напоминание заблокировано внутри регулярной задачи.");
         }
-        await mergePersistedBackgroundContinuation(task.chatId, ctx.session, startedAt);
+        try {
+            await mergePersistedBackgroundContinuation(task.chatId, ctx.session, startedAt);
+        } catch (error) {
+            if (!(error instanceof BackgroundContinuationConflictError)) throw error;
+            result.responseText = `${result.responseText}\n\n${error.message}`;
+            result.operationStatus = 'needs_input';
+            result.keyboard = undefined;
+            throw new RuntimeExecutionFailure(result);
+        }
         await saveRemindersFromResult(ctx, result);
         if (result.operationStatus && result.operationStatus !== 'ok') throw new RuntimeExecutionFailure(result);
         await sendRecurringResult(bot, task, result);

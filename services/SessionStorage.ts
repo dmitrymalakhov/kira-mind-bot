@@ -4,6 +4,7 @@ import { AppDataSource } from '../data-source';
 import { SessionEntity } from '../entity/SessionEntity';
 import type { BotContext, SentMessageContext, SessionData } from '../types';
 import { scopedBotKey } from '../utils/botIdentity';
+import { PENDING_CONTACT_MEMORY_TTL_MS } from '../utils/contactMemoryConstants';
 
 const MAX_HISTORY = 20;
 export const MAX_SENT_MESSAGE_CONTEXTS = 50;
@@ -700,6 +701,10 @@ export async function appendPersistedHistory(
  * выполнением. Так recurring task не перезаписывает живую Telegram-сессию,
  * но пользователь может ответить на уточнение browser/health-flow.
  */
+export class BackgroundContinuationConflictError extends Error {
+    constructor() { super('Фоновая задача остановлена: в диалоге уже ожидается другое уточнение личности. Заверши его перед новым запуском задачи.'); }
+}
+
 export async function mergePersistedBackgroundContinuation(
     chatId: number,
     data: SessionData,
@@ -713,6 +718,7 @@ export async function mergePersistedBackgroundContinuation(
         )
         : undefined;
     const patch: Partial<PersistedSession> = {
+        pendingContactMemory: isFresh(data.pendingContactMemory) ? data.pendingContactMemory : undefined,
         pendingBrowserTask: isFresh(data.pendingBrowserTask) ? data.pendingBrowserTask : undefined,
         pendingHealthLog: isFresh(data.pendingHealthLog) ? data.pendingHealthLog : undefined,
         pendingHealthDiscomfort: isFresh(data.pendingHealthDiscomfort) ? data.pendingHealthDiscomfort : undefined,
@@ -755,6 +761,10 @@ export async function mergePersistedBackgroundContinuation(
                 continue;
             }
             const existingExpiresAt = Number(existing?.expiresAt ?? 0);
+            if (field === 'pendingContactMemory' && existing && existingCreatedAt + PENDING_CONTACT_MEMORY_TTL_MS > now) {
+                if (existing.confirmationId && existing.confirmationId === incoming?.confirmationId) continue;
+                throw new BackgroundContinuationConflictError();
+            }
             if (existing && (existingCreatedAt >= startedAt - 1_000 || existingExpiresAt > now)) {
                 continue;
             }

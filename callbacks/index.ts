@@ -54,8 +54,8 @@ import { handleRecurringTaskCallback } from "../services/recurringTaskService";
 import { getBotGenderedText } from "../persona";
 import { saveRemindersFromResult as saveSharedRemindersFromResult } from '../handlers/shared';
 import { sendResultToUser } from '../handlers/shared';
-import { continueConfirmedRuntime, cancelRuntimeContinuation } from '../orchestration/runtime/kernel';
-import { contactMemoryConfirmationKey } from '../orchestration/runtime/confirmation';
+import { continueConfirmedRuntime, cancelRuntimeContinuation, replaceRuntimeConfirmation, mergeRuntimeResults } from '../orchestration/runtime/kernel';
+import { contactMemoryConfirmationKey, telegramPeriodConfirmationKey, hasPendingRuntimeConfirmation, CONTACT_MEMORY_PARENT_TOOLS } from '../orchestration/runtime/confirmation';
 import {
     buildReminderAssistanceRequest,
     getReminderAssistanceKnowledgeSourceText,
@@ -295,11 +295,12 @@ export function registerCallback(bot: Bot<BotContext>): void {
 
             const contactMemoryKey = contactMemoryConfirmationKey(ctx);
             let contactMemorySaved: string | undefined;
-            if (await handleContactMemoryCallback(ctx, callbackData, summary => { contactMemorySaved = summary; })) {
+            let contactMemoryCancelled = false;
+            if (await handleContactMemoryCallback(ctx, callbackData, summary => { contactMemorySaved = summary; }, () => { contactMemoryCancelled = true; })) {
                 if (contactMemorySaved && contactMemoryKey) {
-                    const remaining = await continueConfirmedRuntime(ctx, ['memory.rememberContact'], contactMemorySaved, {}, contactMemoryKey);
+                    const remaining = await continueConfirmedRuntime(ctx, CONTACT_MEMORY_PARENT_TOOLS, contactMemorySaved, {}, contactMemoryKey);
                     if (remaining) await sendResultToUser(ctx, remaining);
-                } else if (contactMemoryKey && ['cmem:cancel', 'cmem:later'].includes(callbackData)) await cancelRuntimeContinuation(ctx, ['memory.rememberContact'], contactMemoryKey);
+                } else if (contactMemoryKey && contactMemoryCancelled) await cancelRuntimeContinuation(ctx, CONTACT_MEMORY_PARENT_TOOLS, contactMemoryKey);
                 return;
             }
             if (await handleContactMemoryLookupCallback(ctx, callbackData)) {
@@ -890,7 +891,15 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     ).catch((error) => console.error("[telegram-edit] chat analysis progress update failed:", error));
                 }
 
+                const confirmationKey = telegramPeriodConfirmationKey('chat-analysis', requestId);
+                if (hasPendingRuntimeConfirmation(ctx, confirmationKey)) ctx.suppressAgentProgress = true;
                 const result = await handleChatAnalysisPeriodCallback(ctx, period, requestId);
+                if (result.operationStatus === 'ok') {
+                    const remaining = await continueConfirmedRuntime(ctx, ['telegram.readMessages'], result.responseText, {}, confirmationKey);
+                    if (remaining) { await sendResultToUser(ctx, mergeRuntimeResults([result, remaining])); return; }
+                } else if (result.operationStatus === 'needs_input' && contactMemoryConfirmationKey(ctx)) {
+                    await replaceRuntimeConfirmation(ctx, ['telegram.readMessages'], confirmationKey, contactMemoryConfirmationKey(ctx)!, result.responseText);
+                } else if (result.operationStatus === 'failed' || result.operationStatus === 'unknown') await cancelRuntimeContinuation(ctx, ['telegram.readMessages'], confirmationKey, result.responseText, result.operationStatus);
                 const replyOptions = result.keyboard ? { reply_markup: result.keyboard } : { reply_markup: new InlineKeyboard() };
                 if (result.voiceReplyRequested) {
                     if (callbackChatId && callbackMessageId) {
@@ -963,21 +972,24 @@ export function registerCallback(bot: Bot<BotContext>): void {
                     await editMessageTextIfChanged(ctx.api,
                         callbackChatId,
                         callbackMessageId,
-                        "Период выбран. Начинаю анализ и буду писать этапы отдельными сообщениями…",
+                        "Период выбран. Начинаю анализ переписки…",
                         { reply_markup: new InlineKeyboard() }
                     ).catch((error) => console.error("[telegram-edit] study chat progress update failed:", error));
                 }
 
+                const confirmationKey = requestId ? telegramPeriodConfirmationKey('study-chat', requestId) : undefined;
+                if (confirmationKey && hasPendingRuntimeConfirmation(ctx, confirmationKey)) ctx.suppressAgentProgress = true;
                 const studyResult = await handleStudyChatPeriodCallback(ctx, period, requestId);
                 const { responseText } = studyResult;
                 if (studyResult.operationStatus === 'ok') {
-                    const remaining = await continueConfirmedRuntime(ctx, ['telegram.readMessages'], responseText);
+                    const remaining = confirmationKey ? await continueConfirmedRuntime(ctx, ['telegram.readMessages'], responseText, {}, confirmationKey) : undefined;
                     if (remaining) {
                         remaining.responseText = `${responseText}\n\n${remaining.responseText}`;
                         await sendResultToUser(ctx, remaining);
                         return;
                     }
-                }
+                } else if (studyResult.operationStatus === 'needs_input' && confirmationKey && contactMemoryConfirmationKey(ctx)) await replaceRuntimeConfirmation(ctx, ['telegram.readMessages'], confirmationKey, contactMemoryConfirmationKey(ctx)!, responseText);
+                else if ((studyResult.operationStatus === 'failed' || studyResult.operationStatus === 'unknown') && confirmationKey) await cancelRuntimeContinuation(ctx, ['telegram.readMessages'], confirmationKey, responseText, studyResult.operationStatus);
                 if (callbackChatId && callbackMessageId && responseText.length <= MAX_MESSAGE_LENGTH) {
                     await editMessageTextIfChanged(ctx.api,
                         callbackChatId,

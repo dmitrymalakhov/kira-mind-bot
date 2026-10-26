@@ -8,5 +8,15 @@ export function memoryConfirmationKey(id: string, domain: string): string {
 
 export function contactMemoryConfirmationKey(ctx: BotContext): string | undefined {
     const pending = ctx.session.pendingContactMemory;
-    return pending ? `cmem:${pending.createdAt}` : undefined;
+    return pending ? `cmem:${pending.confirmationId ?? pending.createdAt}` : undefined;
+}
+
+export function telegramPeriodConfirmationKey(kind: 'chat-analysis' | 'study-chat', requestId: string): string {
+    return `${kind}:${requestId}`;
+}
+
+export const CONTACT_MEMORY_PARENT_TOOLS = ['memory.rememberContact', 'telegram.readMessages', 'agents.start'];
+
+export function hasPendingRuntimeConfirmation(ctx: BotContext, key: string): boolean {
+    return [ctx.session.agentRuntime, ...(ctx.session.agentRuntimePending ?? [])].some(run => run?.status === 'waiting' && run.observations?.some(item => item.status === 'needs_input' && item.confirmationKey === key));
 }

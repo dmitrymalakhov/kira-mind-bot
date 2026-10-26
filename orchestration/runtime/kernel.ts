@@ -256,6 +256,10 @@ export async function runKiraRuntime(input: KiraRuntimeInput, dependencies: Runt
     let exhausted = true;
     try {
         await skills.forIntents([classification.intent, ...(classification.subIntents?.map(intent => intent.intent) ?? [])]);
+        if (continuation) {
+            const resumeSkills = [...new Set([...(continuation.skills ?? []), ...(continuation.pendingCalls ?? []).map(callSkill).filter((id): id is string => Boolean(id))])];
+            await Promise.all(resumeSkills.map(id => skills.load(id)));
+        }
         let first = continuation?.pendingCalls?.length ? continuation.pendingCalls : dependencies.forceLoop || continuation ? undefined : fastCalls(input);
         // Current external evidence is mandatory even when an action was the primary intent.
         if (classification.details.knowledgeSource === 'external_current' && !['БРАУЗЕР_ЗАДАЧА', 'ВЕБ_ПОИСК'].includes(classification.intent) && !hasCurrentEvidence()) first = undefined;
@@ -415,6 +419,9 @@ export async function continueConfirmedRuntime(
     if (!waiting) return undefined;
     ctx.session.agentRuntimePending = ctx.session.agentRuntimePending?.filter(run => run.runId !== state.runId);
     waiting.status = 'ok'; waiting.summary = summary;
+    const childId = (waiting.data as { run?: { id?: string } } | undefined)?.run?.id;
+    const child = state.agents.find(agent => agent.id === childId && agent.status === 'waiting');
+    if (child) { child.status = 'completed'; child.summary = summary.slice(0, 1500); child.updatedAt = Date.now(); }
     if (state.completedCalls) state.completedCalls[waiting.id] = 'ok';
     for (const receipt of state.receipts) if (toolNames.includes(receipt.tool) && receipt.status === 'needs_input') { receipt.status = 'ok'; receipt.summary = summary; }
     if (!hasRemainingGoal(state)) {
@@ -427,6 +434,20 @@ export async function continueConfirmedRuntime(
         recurringTaskRun: state.backgroundRun,
         enrichedContextFromMemory: `Подтверждённые результаты предыдущих шагов:\n${JSON.stringify(state.observations)}`,
     }, { ...dependencies, continuation: state });
+}
+
+/** A verified domain step may hand its outstanding confirmation to the next domain step. */
+export async function replaceRuntimeConfirmation(ctx: KiraRuntimeInput['ctx'], toolNames: string[], previousKey: string, nextKey: string, summary: string): Promise<void> {
+    if (orchestrationMode() !== 'skills') return;
+    for (const state of [ctx.session.agentRuntime, ...(ctx.session.agentRuntimePending ?? [])]) {
+        if (state?.status !== 'waiting') continue;
+        const observation = state.observations?.find(item => item.status === 'needs_input' && toolNames.includes(item.tool) && item.confirmationKey === previousKey);
+        if (!observation) continue;
+        observation.confirmationKey = nextKey; observation.summary = summary;
+        state.updatedAt = Date.now();
+        await persistTransition(ctx, state);
+        return;
+    }
 }
 
 export function hasRuntimeQuestionAnswer(ctx: KiraRuntimeInput['ctx'], message: string, state = ctx.session.agentRuntime): boolean {
@@ -454,7 +475,7 @@ export async function continueQuestionRuntime(ctx: KiraRuntimeInput['ctx'], answ
     }, { ...dependencies, continuation: state });
 }
 
-export async function cancelRuntimeContinuation(ctx: KiraRuntimeInput['ctx'], toolNames: string[], confirmationKey?: string): Promise<void> {
+export async function cancelRuntimeContinuation(ctx: KiraRuntimeInput['ctx'], toolNames: string[], confirmationKey?: string, summary = 'Действие отменено владельцем.', status: 'failed' | 'unknown' = 'failed'): Promise<void> {
     if (orchestrationMode() !== 'skills') return;
     const candidates = [ctx.session.agentRuntime, ...(ctx.session.agentRuntimePending ?? [])];
     const changed: RuntimeSessionState[] = [];
@@ -462,8 +483,13 @@ export async function cancelRuntimeContinuation(ctx: KiraRuntimeInput['ctx'], to
         if (!state || state.status !== 'waiting' || !state.observations?.some(observation => observation.status === 'needs_input' && toolNames.includes(observation.tool) && (!confirmationKey || observation.confirmationKey === confirmationKey))) continue;
         state.status = 'failed'; state.pendingCalls = []; state.question = undefined; state.parameterCall = undefined; state.updatedAt = Date.now();
         changed.push(state);
-        for (const observation of state.observations) if (observation.status === 'needs_input' && toolNames.includes(observation.tool)) { observation.status = 'failed'; observation.summary = 'Действие отменено владельцем.'; }
-        for (const receipt of state.receipts) if (receipt.status === 'needs_input' && toolNames.includes(receipt.tool)) { receipt.status = 'failed'; receipt.summary = 'Действие отменено владельцем.'; }
+        for (const observation of state.observations) if (observation.status === 'needs_input' && toolNames.includes(observation.tool)) {
+            observation.status = status; observation.summary = summary;
+            const childId = (observation.data as { run?: { id?: string } } | undefined)?.run?.id;
+            const child = state.agents.find(agent => agent.id === childId && agent.status === 'waiting');
+            if (child) { child.status = 'failed'; child.summary = summary.slice(0, 1500); child.updatedAt = Date.now(); }
+        }
+        for (const receipt of state.receipts) if (receipt.status === 'needs_input' && toolNames.includes(receipt.tool)) { receipt.status = status; receipt.summary = summary; }
     }
     if (changed.length) {
         await persistAgentRuntime(ctx);
