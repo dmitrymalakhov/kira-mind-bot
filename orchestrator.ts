@@ -87,6 +87,7 @@ export interface MessageClassification {
         responseComplexity?: 'routine' | 'complex';
         memoryNeed?: 'none' | 'light' | 'full';
         relationshipRole?: string | null;
+        memoryTask?: 'none' | 'lookup' | 'analysis';
         urgency?: "ВЫСОКАЯ" | "СРЕДНЯЯ" | "НИЗКАЯ";
         timeReferences?: string[];
         imageDescription?: string; // Описание изображения, которое нужно сгенерировать
@@ -1068,7 +1069,8 @@ export async function processMessage(
 
         // Подтягиваем память после классификации, переиспользуя её сигналы.
         const initialMemory = await fetchAgentMemoryContext(ctx, originalMessage, {
-            memoryNeed: classification.details.memoryNeed,
+            memoryNeed: classification.details.memoryTask === 'lookup' ? 'full' : classification.details.memoryNeed,
+            replyPerson: replyContext ? { personId: replyContext.personId, contactId: replyContext.contactId, contactName: replyContext.contactName } : undefined,
             includeTodayImportance: !isTodayImportanceRequest(originalMessage),
         });
         const initialBlock = buildMemoryContextBlock(initialMemory);

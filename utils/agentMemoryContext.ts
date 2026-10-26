@@ -6,6 +6,7 @@ import { getVectorService } from '../services/VectorServiceFactory';
 import { recallOwnerRelationship } from './personalRelationshipRecall';
 import { isFocusedPersonalRecall, ownerRelationshipIntent } from './personalRecallIntent';
 import { readPersonIdentities } from '../services/PersonIdentityService';
+import { validMemoryFocus, isMemoryContinuation, saveMemoryFocus } from './memoryQueryPlan';
 
 export interface AgentMemoryContext {
     /** The new kernel handles mutations through tools, so synthesis is read-only. */
@@ -21,6 +22,7 @@ export interface AgentMemoryContextOptions {
     /** Детерминированная дневная сводка строит snapshot отдельно и не должна читать его дважды. */
     includeTodayImportance?: boolean;
     trackAccess?: boolean;
+    replyPerson?: import('../types/memoryRecallTypes').MemoryReplyPerson;
 }
 
 /**
@@ -49,7 +51,8 @@ export async function fetchAgentMemoryContext(
     const service = ownerRelationshipIntent(trimmed) ? getVectorService() : null;
     const relationship = service && ctx.from?.id
         ? await recallOwnerRelationship(service, String(ctx.from.id), trimmed, Date.now(), { identities: readPersonIdentities }).catch(() => undefined) : undefined;
-    const memoryNeed = focused || relationship?.context ? 'full' : options.memoryNeed && ['none', 'light', 'full'].includes(options.memoryNeed)
+    if (relationship?.complete && relationship.person) saveMemoryFocus(ctx, [relationship.person], trimmed, relationship.memories.map(memory => memory.id));
+    const memoryNeed = focused || relationship?.context || (validMemoryFocus(ctx) || options.replyPerson?.personId || options.replyPerson?.contactId) && isMemoryContinuation(trimmed) ? 'full' : options.memoryNeed && ['none', 'light', 'full'].includes(options.memoryNeed)
         ? options.memoryNeed : await classifyMemoryNeed(trimmed);
     if (memoryNeed === 'none') {
         devLog('Memory need: none — skipping retrieval for this message');
@@ -59,7 +62,7 @@ export async function fetchAgentMemoryContext(
     const [memory, todayImportanceContext] = await Promise.all([
         focused && relationship?.complete
             ? Promise.resolve({ context: '', recalledMemories: [] })
-            : getMultiQueryMemoryContextDetailed(ctx, trimmed, memoryNeed, { trackAccess: options.trackAccess }),
+            : getMultiQueryMemoryContextDetailed(ctx, trimmed, memoryNeed, { trackAccess: options.trackAccess, replyPerson: options.replyPerson }),
         options.includeTodayImportance === false
             ? Promise.resolve('')
             : buildTodayImportanceContext(ctx, trimmed),

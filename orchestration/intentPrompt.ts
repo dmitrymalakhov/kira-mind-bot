@@ -4,7 +4,8 @@ export const INTENT_CLASSIFIER_INSTRUCTIONS = `Классифицируй НОВ
 Формат: {"intent":"...","confidenceLevel":"ВЫСОКИЙ|СРЕДНИЙ|НИЗКИЙ","intentScores":[{"intent":"...","score":0.95},{"intent":"...","score":0.05}],"details":{"responseComplexity":"routine|complex","memoryNeed":"none|light|full","relationshipRole":null}}.
 intentScores — top-2 с оценками 0..1; при реально близких намерениях понизь уверенность и добавь clarificationQuestion. НЕОПРЕДЕЛЕНО — только действительно непонятный запрос.
 
-В details ВСЕГДА возвращай responseComplexity, memoryNeed и relationshipRole, включая команды.
+В details ВСЕГДА возвращай responseComplexity, memoryNeed, memoryTask и relationshipRole, включая команды.
+memoryTask=lookup для получения сохранённых фактов о людях, вещах, событиях, решениях и отношениях, включая синонимы и продолжения «что про неё знаешь», «расскажи подробнее». Это полноценный поиск и ответ сейчас, а не вопрос о возможностях бота. memoryTask=analysis для действительно нового сложного анализа; none, если личная память не нужна. lookup требует memoryNeed=full, но сам по себе не делает responseComplexity=complex.
 
 Интенты:
 - РАЗГОВОР: обычный диалог, объяснение, шутка, рассуждение, поддержка, рассказ о себе/жизни ассистента. Сложный вопрос тоже может быть РАЗГОВОР. «Нет, я имел в виду...» — исправление разговора, кроме новой явной команды.

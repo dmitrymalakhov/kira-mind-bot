@@ -78,6 +78,7 @@ async function buildBackgroundContext(
         isAllowedUser: true,
         lastIntentDedup: undefined,
         activePersonContext: undefined,
+        memoryRecallFocus: undefined,
         pendingImplicitReminder: undefined,
         pendingMemoryGap: undefined,
         pendingBrowserTask: undefined,

@@ -30,6 +30,7 @@ interface PersistedSession {
     sentMessages?: SessionData['sentMessages'];
     sentMessageContexts?: SessionData['sentMessageContexts'];
     activePersonContext?: SessionData['activePersonContext'];
+    memoryRecallFocus?: SessionData['memoryRecallFocus'];
     lastMemoryGapAt?: SessionData['lastMemoryGapAt'];
     lastImplicitReminderAt?: SessionData['lastImplicitReminderAt'];
     pendingImplicitReminder?: SessionData['pendingImplicitReminder'];
@@ -231,6 +232,7 @@ function extract(data: SessionData): PersistedSession {
         activePersonContext: data.activePersonContext && data.activePersonContext.expiresAt > now
             ? data.activePersonContext
             : undefined,
+        memoryRecallFocus: data.memoryRecallFocus && data.memoryRecallFocus.expiresAt > now ? data.memoryRecallFocus : undefined,
         lastMemoryGapAt: data.lastMemoryGapAt,
         lastImplicitReminderAt: data.lastImplicitReminderAt,
         pendingImplicitReminder: data.pendingImplicitReminder && now - data.pendingImplicitReminder.createdAt <= PENDING_DIALOGUE_CONTEXT_TTL_MS
@@ -291,6 +293,7 @@ function merge(initial: SessionData, persisted: PersistedSession): SessionData {
         sentMessages: persisted.sentMessages ?? initial.sentMessages,
         sentMessageContexts: persisted.sentMessageContexts ?? initial.sentMessageContexts,
         activePersonContext: persisted.activePersonContext ?? initial.activePersonContext,
+        memoryRecallFocus: persisted.memoryRecallFocus ?? initial.memoryRecallFocus,
         lastMemoryGapAt: persisted.lastMemoryGapAt ?? initial.lastMemoryGapAt,
         lastImplicitReminderAt: persisted.lastImplicitReminderAt ?? initial.lastImplicitReminderAt,
         pendingImplicitReminder: persisted.pendingImplicitReminder ?? initial.pendingImplicitReminder,

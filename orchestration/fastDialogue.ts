@@ -10,6 +10,7 @@ import { getActiveAiPresetName } from '../services/aiRuntimeConfigService';
 import { getModelPolicy } from '../services/modelPreferenceService';
 import { isBackgroundFeatureEnabled, getBackgroundFeaturePreference } from '../services/backgroundFeatureService';
 import { isFocusedPersonalRecall } from '../utils/personalRecallIntent';
+import { validMemoryFocus, isMemoryContinuation } from '../utils/memoryQueryPlan';
 
 export function fastDialogueEnabled(): boolean {
     return process.env.KIRA_ORCHESTRATION_MODE !== 'legacy' && process.env.KIRA_FAST_DIALOGUE_ENABLED !== 'false';
@@ -49,7 +50,7 @@ export function deepWorkNotice(classification: MessageClassification, optional =
 export async function tryFastDialogueResult(ctx: BotContext, turn: ConversationTurn, classification: MessageClassification,
     knowledge: KnowledgeSourceDecision, history: MessageHistory[]): Promise<ProcessingResult | undefined> {
     // A short factual lookup uses synchronous evidence retrieval, not a deferred research job.
-    if (isFocusedPersonalRecall(turn.userText)) return;
+    if (isFocusedPersonalRecall(turn.userText) || classification.details.memoryTask === 'lookup' || validMemoryFocus(ctx) && isMemoryContinuation(turn.userText)) return;
     const decision = classification.fastReply;
     if (!decision || !['answer', 'review', 'defer'].includes(decision.mode) || classification.confidenceLevel !== 'ВЫСОКИЙ') return;
     if (!['РАЗГОВОР', 'ВЕБ_ПОИСК'].includes(classification.intent) || classification.subIntents?.length ||
@@ -78,7 +79,8 @@ export async function tryFastDialogueResult(ctx: BotContext, turn: ConversationT
                     userId: ctx.from!.id, chatId: ctx.chat!.id, messageId: ctx.message?.message_id,
                     input: { message: turn.userText, initialAnswer: required ? '' : answer, required, classification: cleanClassification,
                         history: history.slice(-8).map(({ role, content }) => ({ role, content: content.slice(0, 1800) })),
-                        topic: turn.currentTopic?.slice(0, 400), preset: await getActiveAiPresetName(), modelPolicy: await getModelPolicy() } });
+                        topic: turn.currentTopic?.slice(0, 400), memoryRecallFocus: validMemoryFocus(ctx) ? structuredClone(validMemoryFocus(ctx)) : undefined,
+                        preset: await getActiveAiPresetName(), modelPolicy: await getModelPolicy() } });
                 if (!job || !['staged', 'queued', 'running'].includes(job.status)) { if (required) return; }
                 else jobId = job.id;
             } catch { if (required) return; }

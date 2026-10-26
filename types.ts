@@ -95,6 +95,7 @@ export interface SessionData {
         personId?: string;
         expiresAt: number;
     };
+    memoryRecallFocus?: import('./types/memoryRecallTypes').MemoryRecallFocus;
     domains: Record<string, DomainMemory>;
     /**
      * Компактная модель текущей ситуации в разговоре.

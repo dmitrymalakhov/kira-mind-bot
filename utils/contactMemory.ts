@@ -39,6 +39,10 @@ export interface ContactIdentityScope {
     queryName: string;
     displayName?: string;
     contact?: Contact;
+    personIds?: string[];
+    contactId?: string;
+    username?: string;
+    requireEntityMatch?: boolean;
     candidateNames?: string[];
 }
 
@@ -201,6 +205,23 @@ export function isMemoryEntryAllowedForContactScope(
     memory: { content: string; tags?: string[] | undefined; subject?: string },
     scope: ContactIdentityScope | null
 ): boolean {
+    if (scope?.requireEntityMatch) {
+        if (scope.status !== 'resolved') return false;
+        const tags = memory.tags ?? [];
+        if (['bot', 'system', 'unknown'].includes(memory.subject ?? '') || tags.some(tag => /^(?:subject|evidence_subject):(?:bot|system|unknown)$/.test(tag))) return false;
+        const candidateId = contactIdFromTags(tags);
+        const scopeId = scope.contactId ?? (scope.contact ? String(scope.contact.id) : undefined);
+        if (tags.includes('person_relation')) {
+            const objectId = tags.find(tag => tag.startsWith('relation_object_person_id:'))?.split(':')[1];
+            if (objectId && scope.personIds?.includes(objectId)) return true;
+            if (scope.personIds?.includes('user') && (tags.includes('relation_subject:user') || tags.includes('relation_object:user'))) return true;
+        }
+        if (candidateId) return Boolean(scopeId && candidateId === scopeId);
+        const personIds = tags.filter(tag => tag.startsWith('person_id:')).map(tag => tag.slice('person_id:'.length));
+        if (tags.includes('person_relation')) personIds.push(...tags.filter(tag => /^relation_(?:subject|object)_person_id:/.test(tag)).map(tag => tag.split(':').slice(1).join(':')));
+        if (personIds.length) return personIds.some(id => scope.personIds?.includes(id));
+        if (!isContactMemoryEntry(memory)) return Boolean(scope.personIds?.includes('user') && memory.subject === 'user');
+    }
     // Product document headings are not people's names. Only explicitly owner-
     // attributed syntheses may bypass that legacy prefix rule; mixed-chat and
     // contact sources retain the existing isolation checks.
@@ -213,7 +234,8 @@ export function isMemoryEntryAllowedForContactScope(
 
     const candidateContactId = contactIdFromTags(memory.tags);
     if (candidateContactId) {
-        return scope.contact ? candidateContactId === String(scope.contact.id) : false;
+        const scopeId = scope.contactId ?? (scope.contact ? String(scope.contact.id) : undefined);
+        return Boolean(scopeId && candidateContactId === scopeId);
     }
 
     const allowedUsernames = new Set(
@@ -224,6 +246,7 @@ export function isMemoryEntryAllowedForContactScope(
     if (scope.contact?.username) {
         allowedUsernames.add(normalizeContactLookupValue(scope.contact.username));
     }
+    if (scope.username) allowedUsernames.add(normalizeContactLookupValue(scope.username));
 
     const candidateUsername = contactUsernameFromTags(memory.tags);
     if (candidateUsername) {

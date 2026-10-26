@@ -20,6 +20,10 @@ export const PERSON_RELATION_TYPES = [
 ] as const;
 
 export type PersonRelationType = typeof PERSON_RELATION_TYPES[number];
+/** Query-time subtype closure, not a rewrite or inference of stored edges. */
+export const PERSON_RELATION_QUERY_SUBTYPES: Partial<Record<PersonRelationType, PersonRelationType[]>> = {
+    partner_of: ['spouse_of'],
+};
 export type PersonRelationTargetRole = 'user' | 'contact' | 'third_party';
 
 export interface PersonRelationDescriptor {

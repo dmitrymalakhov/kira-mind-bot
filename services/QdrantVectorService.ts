@@ -1410,6 +1410,39 @@ export class QdrantVectorService implements IDomainVectorService {
      * Возвращает все записи пользователя во всех доменах, содержащие указанный тег.
      * Используется для поиска психологических портретов по тегу `portrait:<Name>`.
      */
+    async getMemoriesByTags(userId: string, tags: string[], limit = 300): Promise<SearchResult[]> {
+        const keys = [...new Set(tags)].slice(0, 16);
+        if (!keys.length) return [];
+        const max = Math.min(400, Math.max(1, limit));
+        const pools = await Promise.all(Object.values(PREDEFINED_DOMAINS).map(async domain => {
+            const pool: SearchResult[] = [];
+            let offset: string | number | undefined;
+            const offsets = new Set<string>();
+            try {
+                while (pool.length < Math.min(200, max)) {
+                    const page = await this.client.scroll(this.collectionFor(domain), {
+                        filter: { must: [
+                            { key: 'botId', match: { value: this.botId } }, { key: 'userId', match: { value: userId } },
+                            { key: 'tags', match: { any: keys } },
+                        ], must_not: this.activeMustNotFilter() },
+                        limit: Math.min(50, Math.min(200, max) - pool.length), offset, with_payload: true, with_vector: false,
+                    });
+                    for (const point of page.points) pool.push({ ...this.mapSearchPoint(point, 1), domain });
+                    const next = page.next_page_offset;
+                    if ((typeof next !== 'string' && typeof next !== 'number') || !page.points.length || offsets.has(String(next))) break;
+                    offsets.add(String(next)); offset = next;
+                }
+            } catch { /* A missing domain does not erase other identity evidence. */ }
+            return pool;
+        }));
+        // Round-robin avoids a large first domain consuming the whole pool.
+        const selected = new Map<string, SearchResult>();
+        for (let index = 0; selected.size < max && pools.some(pool => index < pool.length); index++) {
+            for (const pool of pools) { const item = pool[index]; if (item) selected.set(item.id, item); if (selected.size >= max) break; }
+        }
+        return [...selected.values()];
+    }
+
     async getMemoriesByTag(userId: string, tag: string): Promise<SearchResult[]> {
         const results: SearchResult[] = [];
 

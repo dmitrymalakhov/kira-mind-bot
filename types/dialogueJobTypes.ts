@@ -13,6 +13,7 @@ export interface DialogueJobInput {
     classification: MessageClassification;
     history: Array<{ role: string; content: string }>;
     topic?: string;
+    memoryRecallFocus?: import('./memoryRecallTypes').MemoryRecallFocus;
     preset: AiPresetName;
     modelPolicy?: import('../ai/modelPreferences').ModelPolicy | null;
 }

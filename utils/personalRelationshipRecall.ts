@@ -2,16 +2,22 @@ import type { SearchResult } from '../types';
 import type { IDomainVectorService } from '../services/interfaces/IDomainVectorService';
 import { ownerRelationshipIntent } from './personalRecallIntent';
 import { isPersonRoleLabel } from './personRelation';
+import type { MemoryPerson, MemoryRelationStep } from '../types/memoryRecallTypes';
 
 export interface PersonalRelationshipRecall {
     context: string;
     complete: boolean;
     memories: SearchResult[];
     name?: string;
+    person?: MemoryPerson;
 }
 
-export interface RecallPersonIdentity { id: string; displayName: string; telegramContactId?: string }
-export interface RelationshipRecallOptions { identities?: (ownerUserId: string, ids: string[]) => Promise<RecallPersonIdentity[]> }
+export interface RecallPersonIdentity { id: string; displayName: string; telegramContactId?: string; aliases?: string[]; telegramUsername?: string | null }
+export interface RelationshipRecallOptions {
+    identities?: (ownerUserId: string, ids: string[]) => Promise<RecallPersonIdentity[]>;
+    step?: MemoryRelationStep;
+    anchor?: MemoryPerson;
+}
 
 function activeEvidence(memory: SearchResult, now: number): boolean {
     const tags = memory.tags ?? [];
@@ -37,15 +43,24 @@ export async function recallOwnerRelationship(
     options: RelationshipRecallOptions = {},
 ): Promise<PersonalRelationshipRecall> {
     const empty = { context: '', complete: false, memories: [] };
-    const intent = ownerRelationshipIntent(message);
+    const intent = options.step ? { type: options.step.type } : ownerRelationshipIntent(message);
     if (!intent) return empty;
     const records = await service.getMemoriesByTag(userId, `relation_type:${intent.type}`);
     const rawEdges = records.filter(memory => activeEvidence(memory, now)).flatMap(memory => {
         const tags = memory.tags ?? [];
         if (!tags.includes('person_relation') || !tags.includes(`relation_type:${intent.type}`)) return [];
-        const ownerSubject = tags.includes('relation_subject:user');
-        const ownerObject = tags.includes('relation_object:user');
+        const anchor = options.anchor;
+        const endpointMatches = (side: 'subject' | 'object') => !anchor || anchor.owner
+            ? tags.includes(`relation_${side}:user`)
+            : anchor.personIds.includes(tagValue(tags, `relation_${side}_person_id:`) ?? '') ||
+                side === 'subject' && Boolean(anchor.contactId && tagValue(tags, 'contact_id:') === anchor.contactId);
+        const ownerSubject = endpointMatches('subject');
+        const ownerObject = endpointMatches('object');
         if (ownerSubject === ownerObject) return [];
+        if (options.step?.direction === 'out' && !ownerSubject || options.step?.direction === 'in' && !ownerObject) return [];
+        if (anchor?.contactId && ownerSubject && tagValue(tags, 'contact_id:') && tagValue(tags, 'contact_id:') !== anchor.contactId) return [];
+        const otherIsOwner = tags.includes(ownerSubject ? 'relation_object:user' : 'relation_subject:user');
+        if (otherIsOwner) return [{ memory, personId: 'user', name: 'владелец', contactId: userId }];
         const personId = tagValue(tags, ownerSubject ? 'relation_object_person_id:' : 'relation_subject_person_id:');
         if (!personId || !/^[a-zA-Z0-9_-]{1,100}$/.test(personId)) return [];
         const name = tagValue(tags, ownerSubject ? 'relation_object_name:' : 'relation_subject_name:') ??
@@ -59,7 +74,7 @@ export async function recallOwnerRelationship(
         const identity = byId.get(edge.personId);
         if (identity?.telegramContactId && edge.contactId && identity.telegramContactId !== edge.contactId) return [];
         const contactId = identity?.telegramContactId || edge.contactId;
-        if (contactId === userId) return [];
+        if (contactId === userId && edge.personId !== 'user') return [];
         const name = identity?.displayName || edge.name;
         // A placeholder named 'wife' says that a relation exists; it is not another named person.
         if (isPersonRoleLabel(name) && !contactId) return [];
@@ -88,5 +103,10 @@ export async function recallOwnerRelationship(
         'Не выводи пол, новое имя или дополнительные отношения из типа связи. Опирайся на её текст; при противоречиях уточни, при слабой уверенности обозначь сомнение.',
         'Служебные ID не показывай пользователю. На точный вопрос дай краткий прямой ответ по этим свидетельствам.',
     ].join('\n');
-    return { context, complete: people.length === 1 && Boolean(name) && selected.some(edge => (edge.memory.confidence ?? .6) >= .75), memories, name: people.length === 1 ? name : undefined };
+    const complete = people.length === 1 && Boolean(name) && selected.some(edge => (edge.memory.confidence ?? .6) >= .75);
+    const identity = selected.map(edge => byId.get(edge.personId)).find(Boolean);
+    return { context, complete, memories, name: people.length === 1 ? name : undefined,
+        person: complete ? { personIds: [...new Set(selected.map(edge => edge.personId))], displayName: name!,
+            owner: selected[0].personId === 'user', contactId: selected[0].key.startsWith('telegram:') ? selected[0].key.slice('telegram:'.length) : undefined,
+            aliases: identity?.aliases, username: identity?.telegramUsername ?? undefined, evidenceIds: memories.map(memory => memory.id) } : undefined };
 }

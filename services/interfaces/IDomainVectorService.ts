@@ -39,4 +39,6 @@ export abstract class IDomainVectorService extends IVectorService {
      * Используется для получения психологических портретов по тегу `portrait:<Name>`.
      */
     abstract getMemoriesByTag(userId: string, tag: string): Promise<SearchResult[]>;
+    /** Bounded, paginated identity pool; no embedding or model call. */
+    abstract getMemoriesByTags?(userId: string, tags: string[], limit?: number): Promise<SearchResult[]>;
 }

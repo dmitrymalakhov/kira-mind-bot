@@ -13,6 +13,40 @@ export async function readPersonIdentities(ownerUserId: string, ids: string[]): 
     } });
 }
 
+/** Candidate lookup only; no aliases, mention times or identities are written. */
+export async function findPersonIdentitiesForRecall(ownerUserId: string, name: string, contactId?: string): Promise<PersonIdentityEntity[]> {
+    if (!AppDataSource.isInitialized || name.length > 120) return [];
+    const query = AppDataSource.getRepository(PersonIdentityEntity).createQueryBuilder('person')
+        .where('person.profile = :profile AND person.ownerUserId = :ownerUserId', { profile: config.botUsername.toLowerCase(), ownerUserId });
+    if (contactId) return query.andWhere('person.telegramContactId = :contactId', { contactId }).take(12).getMany();
+    const exact = await query.clone().andWhere(`(lower(person.displayName) = lower(:name) OR EXISTS (
+        SELECT 1 FROM jsonb_array_elements_text(person.aliases) alias(value) WHERE lower(alias.value) = lower(:name)
+    ))`, { name }).take(12).getMany();
+    if (exact.length) return exact;
+    const words = name.replace(/^@/, '').split(/\s+/).filter(Boolean);
+    if (words.length < 2) return [];
+    // Fuzzy full-name candidates remain candidates; the caller checks all parts
+    // with the shared contact matcher and rejects ambiguity.
+    for (const [index, word] of words.slice(0, 3).entries()) {
+        const prefix = word.toLocaleLowerCase('ru-RU').replace(/[^\p{L}]/gu, '').slice(0, Math.max(3, word.length - 3));
+        if (prefix.length < 3) return [];
+        query.andWhere(`lower(person.displayName) LIKE :part${index}`, { [`part${index}`]: `%${prefix}%` });
+    }
+    return query.take(12).getMany();
+}
+
+/** Full stored names in bounded dialogue context are search cues, never new facts. */
+export async function findMentionedPeopleForRecall(ownerUserId: string, text: string): Promise<PersonIdentityEntity[]> {
+    if (!AppDataSource.isInitialized || !text.trim()) return [];
+    const context = ` ${text.slice(0, 1000).normalize('NFKC').toLocaleLowerCase('ru-RU').replace(/[^\p{L}\p{N}@_-]+/gu, ' ').trim()} `;
+    return AppDataSource.getRepository(PersonIdentityEntity).createQueryBuilder('person')
+        .where('person.profile = :profile AND person.ownerUserId = :ownerUserId', { profile: config.botUsername.toLowerCase(), ownerUserId })
+        .andWhere(`((position(' ' || lower(person.displayName) || ' ' in :context) > 0 AND person.displayName LIKE '% %') OR EXISTS (
+            SELECT 1 FROM jsonb_array_elements_text(person.aliases) alias(value)
+            WHERE position(' ' || lower(alias.value) || ' ' in :context) > 0 AND (alias.value LIKE '% %' OR alias.value LIKE '@%')
+        ))`, { context }).take(12).getMany();
+}
+
 function aliasesFor(name: string, contact?: Contact): string[] {
     const normalizedUsername = normalizeTelegramUsername(contact?.username);
     return [...new Set([

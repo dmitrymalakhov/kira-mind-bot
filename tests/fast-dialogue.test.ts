@@ -69,6 +69,32 @@ test('short personal identity questions use synchronous retrieval even if fast c
     assert.equal(stage.mock.callCount(),0);assert.equal(calls.recall.mock.callCount(),2);
 });
 
+test('semantic memory lookup stays synchronous for arbitrary roles and followup wording', async t => {
+    const value = classification(); value.fastReply = { mode: 'defer' }; value.details.memoryTask = 'lookup'; value.details.memoryNeed = 'full';
+    const calls = foreground(t, value);
+    const stage = t.mock.method(DialogueJobRepository, 'stage', async () => { throw Error('Lookup is synchronous'); });
+    for (const message of ['Кто моя вторая половинка?', 'Что ты про неё знаешь?', 'Расскажи подробнее о тестовом проекте']) {
+        const result = await processMessage(ctx(), message, false, '', [], undefined, { fastDialogue: true });
+        assert.equal(result.responseText, 'Полный синхронный ответ.'); assert.equal(result.dialogueJobId, undefined);
+    }
+    assert.equal(stage.mock.callCount(), 0); assert.equal(calls.recall.mock.callCount(), 3);
+});
+
+test('deferred work snapshots grounded search focus instead of retaining a live session', async t => {
+    environment(t); t.mock.method(features, 'getBackgroundFeaturePreference', async () => true);
+    t.mock.method(preset, 'getActiveAiPresetName', async () => 'gpt-balanced');
+    let saved: any;
+    t.mock.method(DialogueJobRepository, 'stage', async (values: any) => { saved = values; return { id: 'snapshot-job', status: 'staged' } as DialogueJob; });
+    const context = ctx(); context.session.memoryRecallFocus = { ownerId: String(OWNER), channel: String(OWNER), people: [],
+        query: 'Тестовая тема', evidenceIds: ['synthetic-proof'], expiresAt: Date.now() + 60_000 };
+    const value = classification(); value.fastReply = { mode: 'defer' }; value.details.responseComplexity = 'complex';
+    await tryFastDialogueResult(context, { userText: 'Проанализируй ограничения задачи' }, value,
+        { source: 'personal', requiresWeb: false, requestedFacets: [], reason: 'synthetic' }, []);
+    assert.equal(saved.input.memoryRecallFocus.query, 'Тестовая тема');
+    context.session.memoryRecallFocus.query = 'Изменённая тема';
+    assert.equal(saved.input.memoryRecallFocus.query, 'Тестовая тема');
+});
+
 test('ordinary arrival updates do not trigger memory/deep jobs even when the classifier requests them', async t => {
     const value=classification();value.fastReply={mode:'defer'};value.details.memoryNeed='full';
     const calls=foreground(t,value);const stage=t.mock.method(DialogueJobRepository,'stage',async()=>{throw Error('No background for small talk');});

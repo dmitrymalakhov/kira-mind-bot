@@ -253,6 +253,8 @@ async function testBackgroundUpdatesPreserveStructuredContext() {
             },
         };
         session.sentMessages = { 88: 'Синтетическая подсказка' };
+        session.memoryRecallFocus = { ownerId: String(chatId), channel: String(chatId), people: [{ personIds: ['synthetic-person-id'], displayName: 'Лада Тестовая', evidenceIds: ['synthetic-memory-id'] }],
+            query: 'Синтетический предмет поиска', evidenceIds: ['synthetic-memory-id'], expiresAt: Date.now() + 60_000 };
         session.pendingContactLookup = {
             contactName: 'Тестовый Контакт',
             originalMessage: 'Синтетическая исходная реплика',
@@ -272,6 +274,8 @@ async function testBackgroundUpdatesPreserveStructuredContext() {
 
         const restored = await storage.read(String(chatId));
         assert.equal(restored?.sentMessageContexts?.[88]?.personId, 'synthetic-person-id');
+        assert.equal(restored?.memoryRecallFocus?.people[0]?.personIds[0], 'synthetic-person-id');
+        assert.equal(restored?.memoryRecallFocus?.channel, String(chatId));
         assert.equal(restored?.pendingContactLookup?.contactName, 'Тестовый Контакт');
         assert.equal(restored?.messageHistory?.[0]?.content, 'Фоновая запись');
         assert.equal(restored?.lastProactiveInsight?.messageId, 88);

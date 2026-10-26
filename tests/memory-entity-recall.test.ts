@@ -1,0 +1,249 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import type { BotContext, SearchResult } from '../types';
+import type { MemoryPerson, MemoryQueryPlan } from '../types/memoryRecallTypes';
+import { parseMemoryQueryPlan, memoryQueryHistory, memoryQueryCacheKey, validMemoryFocus, saveMemoryFocus } from '../utils/memoryQueryPlan';
+import { followMemoryRelations, personRecallScope, readPersonEvidence, resolveMemoryQueryEntities, resolveNamedMemoryPerson, selectPersonEvidence } from '../utils/memoryEntityRecall';
+import { isMemoryEntryAllowedForContactScope } from '../utils/contactMemory';
+import { getMultiQueryMemoryContextDetailed } from '../utils/multiQueryMemory';
+import { fetchAgentMemoryContext } from '../utils/agentMemoryContext';
+import * as vector from '../services/VectorServiceFactory';
+import * as identity from '../services/PersonIdentityService';
+import * as ai from '../ai/chatCompletion';
+import * as today from '../utils/todayImportance';
+import { QdrantVectorService } from '../services/QdrantVectorService';
+import { AppDataSource } from '../data-source';
+
+const owner = '740893';
+const person: MemoryPerson = { personIds: ['synthetic-lada'], displayName: 'Лада Тестовая', contactId: '555123', evidenceIds: ['saved-link'] };
+const context = (): BotContext => ({ from: { id: Number(owner) }, chat: { id: Number(owner), type: 'private' }, session: { messageHistory: [] } } as unknown as BotContext);
+function record(id: string, content: string, patch: Partial<SearchResult> = {}): SearchResult {
+    return { id, content, domain: 'family', tags: ['person_id:synthetic-lada', 'contact_id:555123', 'contact_name:Лада Тестовая'], subject: 'contact', status: 'active',
+        confidence: .95, importance: .7, timestamp: new Date('2026-01-01'), score: .8, memoryKind: 'fact', ...patch };
+}
+function relation(id: string, type: string, subject: string, object: string, name: string): SearchResult {
+    return record(id, `${name}: сохранённая связь.`, { tags: ['person_relation', `relation_type:${type}`,
+        subject === 'user' ? 'relation_subject:user' : `relation_subject_person_id:${subject}`,
+        object === 'user' ? 'relation_object:user' : `relation_object_person_id:${object}`,
+        object === 'user' ? `relation_subject_name:${name}` : `relation_object_name:${name}`], subject: subject === 'user' ? 'user' : 'contact' });
+}
+const service = (records: SearchResult[]) => ({ getMemoriesByTag: async (userId: string, tag: string) => {
+    assert.equal(userId, owner); return records.filter(item => item.tags.includes(tag));
+} } as any);
+const focusPlan = (mention = 'неё'): MemoryQueryPlan => ({ answerQueries: ['личные сведения'], contextQueries: [], requestKind: 'overview',
+    references: [{ kind: 'person', mention, from: 'focus', relationPath: [] }] });
+
+test('semantic plan accepts role synonyms and rejects invented spans, IDs and invalid directed paths', () => {
+    const question = 'Как зовут мою вторую половинку?';
+    const plan = parseMemoryQueryPlan(JSON.stringify({ answerQueries: ['супруга'], requestKind: 'identity', references: [
+        { kind: 'person', mention: 'мою вторую половинку', from: 'owner', relationPath: [{ type: 'spouse_of', direction: 'either' }] },
+        { kind: 'person', mention: 'несуществующий фрагмент', from: 'named', relationPath: [] },
+        { kind: 'person', mention: 'мою вторую половинку', from: 'owner', relationPath: [{ type: 'parent_of', direction: 'either' }] },
+    ] }), question);
+    assert.equal(plan?.references?.length, 1);
+    assert.equal(plan?.references?.[0].relationPath[0].type, 'spouse_of');
+    const botClaim = parseMemoryQueryPlan(JSON.stringify({ answerQueries: ['супруга'], references: [
+        { kind: 'person', mention: 'моя жена', from: 'owner', relationPath: [{ type: 'spouse_of', direction: 'either' }] },
+    ] }), 'Что про неё известно?', [{ role: 'bot', content: 'моя жена' }]);
+    assert.equal(botClaim?.references?.length, 0);
+    const topic = parseMemoryQueryPlan(JSON.stringify({ answerQueries: ['проект'], references: [{ kind: 'topic', mention: 'мой проект', from: 'owner', relationPath: [] }] }), 'Что известно про мой проект?');
+    assert.equal(topic?.references?.[0].kind, 'topic');
+});
+
+test('foreground and deferred history both retain the preceding answer; cache uses full context', () => {
+    const ctx = context();
+    const prior = { role: 'bot' as const, content: 'Сохранённый человек — Лада Тестовая.', timestamp: new Date() };
+    ctx.session.messageHistory = [{ role: 'user', content: 'Что про неё знаешь?', timestamp: new Date() }, prior];
+    assert.equal(memoryQueryHistory(ctx, 'Что про неё знаешь?').at(-1)?.content, prior.content);
+    ctx.session.messageHistory = [prior];
+    assert.equal(memoryQueryHistory(ctx, 'Что про неё знаешь?').at(-1)?.content, prior.content);
+    const prefix = 'x'.repeat(220);
+    assert.notEqual(memoryQueryCacheKey(prefix + 'A', []), memoryQueryCacheKey(prefix + 'B', []));
+    assert.notEqual(memoryQueryCacheKey('он', [{ role: 'bot', content: prefix + 'A' }]), memoryQueryCacheKey('он', [{ role: 'bot', content: prefix + 'B' }]));
+});
+
+test('grounded focus is owner/channel/expiry scoped and does not set mutation identity', () => {
+    const ctx = context(); saveMemoryFocus(ctx, [person], 'Тестовый вопрос', ['saved-link']);
+    assert.equal(validMemoryFocus(ctx)?.people[0].displayName, person.displayName);
+    assert.equal(ctx.session.activePersonContext, undefined);
+    assert.equal(validMemoryFocus({ ...ctx, sessionStorageKey: 'api:740893' } as BotContext), undefined);
+    assert.equal(validMemoryFocus({ ...ctx, from: { id: 740894 } } as BotContext), undefined);
+    assert.equal(validMemoryFocus(ctx, Date.now() + 31 * 60_000), undefined);
+});
+
+test('semantic synonyms traverse saved edges; unknown relations cannot invent a person', async t => {
+    t.mock.method(identity, 'readPersonIdentities', async () => []);
+    const saved = relation('spouse', 'spouse_of', 'user', 'synthetic-lada', 'Лада Тестовая');
+    const result = await followMemoryRelations(service([saved]), owner, undefined, [{ type: 'spouse_of', direction: 'either' }]);
+    assert.equal(result.person?.displayName, 'Лада Тестовая');
+    assert.equal(result.memories[0].id, 'spouse');
+    const alternative = await followMemoryRelations(service([saved]), owner, undefined, [{ type: 'partner_of', direction: 'either', alternatives: ['spouse_of'] }]);
+    assert.equal(alternative.person?.displayName, 'Лада Тестовая');
+    const subtype = await followMemoryRelations(service([saved]), owner, undefined, [{ type: 'partner_of', direction: 'either' }]);
+    assert.equal(subtype.person?.displayName, 'Лада Тестовая');
+    assert.equal((await followMemoryRelations(service([]), owner, undefined, [{ type: 'spouse_of', direction: 'either' }])).person, undefined);
+});
+
+test('nested relations follow the named intermediate person rather than the owner spouse', async t => {
+    t.mock.method(identity, 'readPersonIdentities', async () => []);
+    const records = [relation('own-spouse', 'spouse_of', 'user', 'synthetic-own', 'Собственная Тестовая'),
+        relation('friend', 'friend_of', 'user', 'synthetic-friend', 'Мирон Тестовый'),
+        relation('friend-spouse', 'spouse_of', 'synthetic-friend', 'synthetic-other', 'Элла Тестовая')];
+    const result = await followMemoryRelations(service(records), owner, undefined, [{ type: 'friend_of', direction: 'either' }, { type: 'spouse_of', direction: 'either' }]);
+    assert.equal(result.person?.displayName, 'Элла Тестовая');
+    assert.deepEqual(result.memories.map(memory => memory.id), ['friend', 'friend-spouse']);
+});
+
+test('directed parent/child and inverse stored predicates retain direction; multiple endpoints stay ambiguous', async t => {
+    t.mock.method(identity, 'readPersonIdentities', async () => []);
+    const records = [relation('parent', 'child_of', 'user', 'synthetic-parent', 'Родитель Тестовый'), relation('child', 'parent_of', 'user', 'synthetic-child', 'Ребёнок Тестовый')];
+    const parent = await followMemoryRelations(service(records), owner, undefined, [{ type: 'parent_of', direction: 'in' }]);
+    const child = await followMemoryRelations(service(records), owner, undefined, [{ type: 'parent_of', direction: 'out' }]);
+    assert.equal(parent.person?.displayName, 'Родитель Тестовый'); assert.equal(child.person?.displayName, 'Ребёнок Тестовый');
+    const ambiguous = await followMemoryRelations(service([...records, relation('other-parent', 'child_of', 'user', 'synthetic-other-parent', 'Другой Тестовый')]), owner, undefined, [{ type: 'parent_of', direction: 'in' }]);
+    assert.equal(ambiguous.ambiguous, true); assert.equal(ambiguous.person, undefined);
+});
+
+test('strict person scope rejects unrelated owner facts, name collisions and bot assertions', () => {
+    const scope = personRecallScope(person);
+    assert.equal(isMemoryEntryAllowedForContactScope(record('one', 'Любит улун.'), scope), true);
+    for (const item of [record('other', 'Другой человек.', { tags: ['person_id:synthetic-other', 'contact_name:Лада Тестовая'] }),
+        record('wrong-id', 'Соседний контакт.', { tags: ['contact_id:555124', 'person_id:synthetic-lada'] }),
+        record('owner', 'Владелец работает над проектом.', { subject: 'user', tags: [] }),
+        record('bot', 'Утверждение бота.', { subject: 'system' })]) assert.equal(isMemoryEntryAllowedForContactScope(item, scope), false, item.id);
+});
+
+test('registry lookup preserves ambiguity and never merges two people just by name', async t => {
+    const first = { id: 'synthetic-a', displayName: 'Необычная Тестовая', aliases: ['Необычная Тестовая'] } as any;
+    t.mock.method(identity, 'findPersonIdentitiesForRecall', async (user: string) => { assert.equal(user, owner); return [first, { ...first, id: 'synthetic-b' }]; });
+    const result = await resolveNamedMemoryPerson(owner, 'Необычная Тестовая');
+    assert.equal(result.ambiguous, true); assert.equal(result.person, undefined);
+});
+
+test('legacy dialogue without a focus recovers a stored identity from history, not facts claimed by the bot', async t => {
+    const ctx = context(); ctx.session.messageHistory = [{ role: 'bot', content: 'Речь шла о Ладе Тестовой.', timestamp: new Date() }];
+    t.mock.method(identity, 'findMentionedPeopleForRecall', async (user: string, text: string) => {
+        assert.equal(user, owner); assert.match(text, /Ладе Тестовой/);
+        return [{ id: 'synthetic-lada', displayName: 'Лада Тестовая', aliases: [], telegramContactId: '555123' }] as any;
+    });
+    const result = await resolveMemoryQueryEntities(ctx, 'Что ты про неё знаешь?', focusPlan(), service([]));
+    assert.equal(result.people[0]?.contactId, '555123');
+    assert.deepEqual(result.memories, [], 'history only selects a search subject; it contributes no facts');
+});
+
+test('full-name history lookup keeps punctuation boundaries and owner/profile restrictions', async t => {
+    const descriptor = Object.getOwnPropertyDescriptor(AppDataSource, 'isInitialized');
+    Object.defineProperty(AppDataSource, 'isInitialized', { configurable: true, value: true });
+    t.after(() => { if (descriptor) Object.defineProperty(AppDataSource, 'isInitialized', descriptor); });
+    let scoped = false, text = '';
+    const builder = { where(sql: string, params: any) { scoped = sql.includes('person.ownerUserId') && sql.includes('person.profile') && params.ownerUserId === owner; return this; },
+        andWhere(_sql: string, params: any) { text = params.context; return this; }, take(limit: number) { assert.equal(limit, 12); return this; },
+        async getMany() { return scoped && text.includes(' лада тестовая ') ? [{ id: 'synthetic-lada' }] : []; } };
+    t.mock.method(AppDataSource, 'getRepository', () => ({ createQueryBuilder: () => builder } as any));
+    const result = await identity.findMentionedPeopleForRecall(owner, 'Сохранённый человек — Лада Тестовая.');
+    assert.equal(result.length, 1); assert.equal(scoped, true);
+});
+
+test('a singular pronoun cannot choose one of several grounded people', async () => {
+    const ctx = context(); saveMemoryFocus(ctx, [person, { ...person, personIds: ['synthetic-other'], contactId: '555124' }], 'Сравнение людей', ['saved-link']);
+    const result = await resolveMemoryQueryEntities(ctx, 'Что ты про неё помнишь?', { answerQueries: ['подробности'], contextQueries: [] }, service([]));
+    assert.equal(result.ambiguous, true); assert.deepEqual(result.people, []);
+});
+
+test('the current structured reply overrides a previous search focus for a pronoun', async t => {
+    const ctx = context(); saveMemoryFocus(ctx, [person], 'Предыдущий человек', ['saved-link']);
+    t.mock.method(identity, 'readPersonIdentities', async (user: string, ids: string[]) => {
+        assert.equal(user, owner); assert.deepEqual(ids, ['synthetic-ella']);
+        return [{ id: 'synthetic-ella', displayName: 'Элла Примерная', telegramContactId: '555124' }] as any;
+    });
+    const result = await resolveMemoryQueryEntities(ctx, 'Что про неё известно?', focusPlan(), service([]), { personId: 'synthetic-ella' });
+    assert.equal(result.people[0]?.displayName, 'Элла Примерная');
+    assert.equal(result.people[0]?.contactId, '555124');
+});
+
+test('a comparison cannot silently omit an unresolved person', async t => {
+    t.mock.method(identity, 'findPersonIdentitiesForRecall', async (_owner: string, mention: string) => mention === 'Лада Тестовая'
+        ? [{ id: 'synthetic-lada', displayName: 'Лада Тестовая', aliases: [], telegramContactId: '555123' }] as any : []);
+    const result = await resolveMemoryQueryEntities(context(), 'Сравни Ладу и Эллу', { answerQueries: ['сравнение'], contextQueries: [], references: [
+        { kind: 'person', mention: 'Лада Тестовая', from: 'named', relationPath: [] }, { kind: 'person', mention: 'Элла Примерная', from: 'named', relationPath: [] },
+    ] }, service([]));
+    assert.equal(result.people.length, 1); assert.equal(result.unresolved, true);
+});
+
+test('explicit topic change does not inherit the previous person, while topic followups reuse the search query', async () => {
+    const ctx = context(); saveMemoryFocus(ctx, [person], 'Лада Тестовая', ['saved-link']);
+    const changed = await resolveMemoryQueryEntities(ctx, 'А что про проект Север?', { answerQueries: ['проект Север'], contextQueries: [], standaloneQuery: 'Что известно о проекте Север?',
+        references: [{ kind: 'topic', mention: 'проект Север', from: 'named', relationPath: [] }] }, service([]));
+    assert.deepEqual(changed.people, []); assert.equal(changed.requestedPerson, false);
+    saveMemoryFocus(ctx, [], 'проект Север', ['saved-project']);
+    const continued = await resolveMemoryQueryEntities(ctx, 'А какой у него срок?', { answerQueries: ['срок'], contextQueries: [] }, service([]));
+    assert.match(continued.query, /проект Север/); assert.deepEqual(continued.people, []);
+    const structured = await resolveMemoryQueryEntities(ctx, 'А какой у него срок?', { answerQueries: ['срок'], contextQueries: [], standaloneQuery: 'Какой срок?',
+        references: [{ kind: 'topic', mention: 'него', from: 'focus', relationPath: [] }] }, service([]));
+    assert.match(structured.query, /проект Север/);
+});
+
+test('person overview reads diverse stored facts without dense search or a second model', async t => {
+    const ctx = context(); saveMemoryFocus(ctx, [person], 'Кто мой близкий человек?', ['saved-link']);
+    const records = [record('tea', '[Лада Тестовая] Любит молочный улун.', { memoryKind: 'preference' }),
+        record('hobby', '[Лада Тестовая] Увлекается акварелью.', { domain: 'hobbies', memoryKind: 'preference' }),
+        record('boundary', '[Лада Тестовая] Предпочитает договариваться о встречах заранее.', { memoryKind: 'boundary' }),
+        record('bad', 'Чужая запись.', { tags: ['contact_id:555124'] }), record('old', 'Устаревшая запись.', { status: 'superseded' })];
+    t.mock.method(vector, 'getVectorService', () => ({ ...service(records), getMemoriesByTags: async () => records,
+        searchAllDomains: async () => { throw Error('No dense search needed for a person overview'); },
+        getAnchorMemories: async () => { throw Error('Unrelated owner facts must not enter the profile'); },
+    } as any));
+    let calls = 0;
+    t.mock.method(ai, 'createChatCompletionForTask', async () => { calls++; return { choices: [{ message: { content: JSON.stringify(focusPlan()) } }] } as any; });
+    t.mock.method(today, 'buildTodayImportanceContext', async () => '');
+    const result = await fetchAgentMemoryContext(ctx, 'Что ты про неё знаешь?', { memoryNeed: 'none' });
+    assert.equal(calls, 1);
+    for (const fragment of ['улун', 'акварель', 'заранее']) assert.ok(result.context.includes(fragment), fragment);
+    assert.ok(!result.context.includes('Чужая запись')); assert.ok(!result.context.includes('Устаревшая запись'));
+    assert.equal(result.recalledMemories?.length, 3);
+    assert.equal(validMemoryFocus(ctx)?.people[0].contactId, '555123');
+});
+
+test('profile breadth cannot be consumed entirely by repeated project facts', () => {
+    const work = Array.from({ length: 80 }, (_, index) => record(`work-${index}`, 'Работает над тестовым проектом.', { domain: 'work' }));
+    const tea = record('tea', 'Любит улун.', { memoryKind: 'preference' });
+    const result = selectPersonEvidence([...work, tea], person, 'Что известно?', true, 10);
+    assert.ok(result.some(item => item.id === 'tea'));
+    const expanded = selectPersonEvidence([...work, tea], person, 'Расскажи ещё', true, 10, new Set(result.map(item => item.id)));
+    assert.ok(expanded.some(item => !result.includes(item)), 'a continuation must surface additional records');
+});
+
+test('specific questions use the grounded person in hybrid search and reranking', async t => {
+    const ctx = context(); saveMemoryFocus(ctx, [person], 'Лада Тестовая', ['saved-link']);
+    const plan: MemoryQueryPlan = { answerQueries: ['предпочтения напитки'], contextQueries: [], requestKind: 'specific', standaloneQuery: 'Выдуманное имя: напитки',
+        references: [{ kind: 'person', mention: 'она', from: 'focus', relationPath: [] }] };
+    const records = Array.from({ length: 5 }, (_, index) => record(`drink-${index}`, `[Лада Тестовая] Напитки: вариант ${index}.`));
+    t.mock.method(vector, 'getVectorService', () => ({ ...service(records), getMemoriesByTags: async () => records, getAnchorMemories: async () => [],
+        searchAllDomains: async (query: string) => { assert.ok(!query.includes('Выдуманное имя')); return records; }, searchLexicalAllDomains: async () => [], getRelatedFacts: async () => [],
+    } as any));
+    t.mock.method(ai, 'createChatCompletionForTask', async (_task: any, request: any) => {
+        assert.match(request.messages[1].content, /Лада Тестовая/); assert.ok(!request.messages[1].content.includes('Выдуманное имя'));
+        return { choices: [{ message: { content: '1' } }] } as any;
+    });
+    const result = await getMultiQueryMemoryContextDetailed(ctx, 'Что она предпочитает пить?', 'full', { queryPlan: plan, trackAccess: false });
+    assert.equal(result.recalledMemories.length, 1);
+});
+
+test('identity pool paginates beyond fifty facts, deduplicates tags and preserves owner filters', async () => {
+    const calls: any[] = [];
+    const service: any = new QdrantVectorService({ scroll: async (collection: string, args: any) => {
+        calls.push(args);
+        if (!collection.endsWith('_family')) return { points: [] };
+        const start = Number(args.offset ?? 0), end = Math.min(125, start + args.limit);
+        return { points: Array.from({ length: end - start }, (_, index) => ({ id: `record-${start + index}`, payload: record(`record-${start + index}`, 'Тестовый факт.') })), next_page_offset: end < 125 ? end : null };
+    } } as any);
+    const result = await service.getMemoriesByTags(owner, ['person_id:synthetic-lada', 'contact_id:555123'], 300);
+    assert.equal(result.length, 125);
+    assert.ok(calls.some(call => call.offset === 50));
+    for (const call of calls) {
+        assert.ok(call.filter.must.some((condition: any) => condition.key === 'userId' && condition.match.value === owner));
+        assert.ok(call.filter.must.some((condition: any) => condition.key === 'botId'));
+        assert.ok(call.filter.must_not.some((condition: any) => condition.key === 'expiresAt'));
+        assert.ok(call.limit <= 50);
+    }
+});

@@ -61,6 +61,7 @@ export async function activateDialogueJob(ctx: BotContext, id?: string): Promise
 
 function backgroundContext(job: DialogueJob): BotContext {
     const session: SessionData = { reminders: [], domains: {}, messageHistory: job.input.history.map(item => ({ ...item, timestamp: job.createdAt })).reverse(),
+        memoryRecallFocus: job.input.memoryRecallFocus,
         dialogueSummary: '', lastSummarizedIndex: -1, sentMessages: {}, isAllowedUser: true };
     // Never retain a live foreground ctx/session or an HTTP transport after its response has ended.
     const denyDelivery = async () => { throw new Error('Deferred tools cannot deliver messages'); };
