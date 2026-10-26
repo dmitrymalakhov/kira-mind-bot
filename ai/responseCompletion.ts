@@ -67,7 +67,7 @@ async function createResponseWithModel(
 
     try {
         const result = await providerAdapter.createResponse(modelRef.model,
-            limitResponseGeneration(preset, taskKey, modelRef.provider, params));
+            limitResponseGeneration(preset, taskKey, modelRef.provider, params), modelRef.generation);
         const usage = getUsageTokens(result);
 
         recordAiUsage({

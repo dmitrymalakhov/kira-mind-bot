@@ -13,15 +13,18 @@ import * as usage from '../services/aiUsageLogService';
 const messages = [{ role: 'user' as const, content: 'Синтетическая задача' }];
 const completion = (content = '{}') => ({ choices: [{ message: { content } }] } as any);
 
-test('economy has no full GPT route; balance reserves it for complex synthesis', () => {
-    assert.ok(Object.values(aiPresets['gpt-lean'].models).every(ref => ref.model !== 'gpt-5.4'));
-    for (const name of ['gpt-balanced', 'gpt-lean', 'hybrid-openrouter-gpt', 'hybrid-lmstudio-gpt', 'glm-balanced'] as const) {
-        assert.equal(aiPresets[name].models.runtimePlanning.model, 'gpt-5.4-mini', name);
+test('economy uses Luna; balance reserves Sol for complex synthesis, with no Astra anywhere in GPT routes', () => {
+    assert.ok(Object.values(aiPresets['gpt-lean'].models).every(ref => ref.model !== 'gpt-6.1-sol'));
+    for (const preset of Object.values(aiPresets)) {
+        assert.ok(Object.values(preset.models).every(ref => !ref.model.includes('astra')));
     }
-    assert.equal(aiPresets['gpt-balanced'].models.complexReasoning.model, 'gpt-5.4');
-    assert.equal(aiPresets['gpt-max'].models.conversation.model, 'gpt-5.4');
+    for (const name of ['gpt-balanced', 'gpt-lean', 'hybrid-openrouter-gpt', 'hybrid-lmstudio-gpt', 'glm-balanced'] as const) {
+        assert.equal(aiPresets[name].models.runtimePlanning.model, 'gpt-6-luna', name);
+    }
+    assert.equal(aiPresets['gpt-balanced'].models.complexReasoning.model, 'gpt-6.1-sol');
+    assert.equal(aiPresets['gpt-max'].models.conversation.model, 'gpt-6.1-sol');
     for (const name of ['gpt-max', 'gpt-balanced', 'gpt-lean'] as const) {
-        assert.equal(aiPresets[name].models.memoryExtraction.model, 'gpt-5.4-mini');
+        assert.equal(aiPresets[name].models.memoryExtraction.model, 'gpt-6-luna');
     }
     for (const [name, provider] of [['gemini-full', 'gemini'], ['glm-full', 'zai'], ['lmstudio-local', 'lmstudio']] as const) {
         for (const task of ['runtimePlanning', 'intentClassification', 'conversation', 'messageAnalysis', 'complexReasoning'] as const) {
@@ -63,11 +66,12 @@ test('planning reaches the actual OpenAI request with the selected model and cap
     t.mock.method(openaiProviderAdapter.client.chat.completions, 'create', async (body: any) => { calls.push(body); return completion(); });
     await runWithChannelPreset('gpt-balanced', () => createChatCompletionForTask('runtimePlanning', { messages, max_tokens: 12000 }));
     await runWithChannelPreset('gpt-lean', () => createChatCompletionForTask('conversation', { messages }));
-    assert.deepEqual(calls.map(body => [body.model, body.max_completion_tokens]), [['gpt-5.4-mini', 4096], ['gpt-5.4-nano', 1536]]);
+    assert.deepEqual(calls.map(body => [body.model, body.max_completion_tokens]), [['gpt-6-luna', 4096], ['gpt-6-luna', 1536]]);
     assert.ok(calls.every(body => body.max_tokens === undefined));
+    assert.deepEqual(calls.map(body => body.reasoning_effort), ['low', 'none']);
 });
 
-test('JSON parse fallback retains the originating preset cap and never upgrades economy to full GPT', async t => {
+test('JSON parse fallback retains the originating preset cap and never upgrades economy to Sol', async t => {
     t.mock.method(usage, 'logAiUsage', async () => {});
     t.mock.method(console, 'warn', () => {});
     const calls: any[] = [];
@@ -78,7 +82,8 @@ test('JSON parse fallback retains the originating preset cap and never upgrades 
         messages, response_format: { type: 'json_object' }, max_completion_tokens: 20000,
     }));
     assert.deepEqual(result, { finish: true });
-    assert.deepEqual(calls.map(body => [body.model, body.max_completion_tokens]), [['gpt-5.4-mini', 3072], ['gpt-5.4-mini', 3072]]);
+    assert.deepEqual(calls.map(body => [body.model, body.max_completion_tokens]), [['gpt-6-luna', 3072], ['gpt-6-luna', 3072]]);
+    assert.ok(calls.every(body => body.reasoning_effort === 'low'));
 });
 
 test('Responses fallback keeps the economy output ceiling', async t => {
@@ -91,7 +96,7 @@ test('Responses fallback keeps the economy output ceiling', async t => {
         return { output: [] } as any;
     });
     await runWithChannelPreset('gpt-lean', () => createResponseForTask('complexReasoning', { input: 'Synthetic', max_output_tokens: 20000 }));
-    assert.deepEqual(calls.map(body => [body.model, body.max_output_tokens]), [['gpt-5.4-mini', 4096], ['gpt-5.4-mini', 4096]]);
+    assert.deepEqual(calls.map(body => [body.model, body.max_output_tokens]), [['gpt-6-luna', 4096], ['gpt-6-luna', 4096]]);
 });
 
 test('true-full retry and provider degradation keep the same ceiling without crossing providers', async t => {

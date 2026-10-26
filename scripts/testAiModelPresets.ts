@@ -22,7 +22,8 @@ function withPreset<T>(preset: string, fn: () => T): T {
 withPreset('hybrid-openrouter-gpt', () => {
     assert.deepStrictEqual(resolveModelForTask('intentClassification'), {
         provider: 'openai',
-        model: 'gpt-5.4-nano',
+        model: 'gpt-6-luna',
+        generation: { reasoningEffort: 'none' },
     });
     assert.deepStrictEqual(resolveModelForTask('conversation'), {
         provider: 'openrouter',
@@ -45,15 +46,18 @@ withPreset('hybrid-gemini-gpt', () => {
     });
     assert.deepStrictEqual(resolveModelForTask('memoryExtraction'), {
         provider: 'openai',
-        model: 'gpt-5.4-mini',
+        model: 'gpt-6-luna',
+        generation: { reasoningEffort: 'none' },
     });
     assert.deepStrictEqual(resolveModelForTask('intentClassification'), {
         provider: 'openai',
-        model: 'gpt-5.4-nano',
+        model: 'gpt-6-luna',
+        generation: { reasoningEffort: 'none' },
     });
     assert.deepStrictEqual(resolveModelForTask('webSearchReasoning'), {
         provider: 'openai',
-        model: 'gpt-5.4-mini',
+        model: 'gpt-6-luna',
+        generation: { reasoningEffort: 'none' },
     });
     assert.deepStrictEqual(resolveModelForTask('embedding'), {
         provider: 'openai',
@@ -117,11 +121,13 @@ withPreset('gemini-full', () => {
 withPreset('glm-balanced', () => {
     assert.deepStrictEqual(resolveModelForTask('intentClassification'), {
         provider: 'openai',
-        model: 'gpt-5.4-nano',
+        model: 'gpt-6-luna',
+        generation: { reasoningEffort: 'none' },
     });
     assert.deepStrictEqual(resolveModelForTask('intentDedup'), {
         provider: 'openai',
-        model: 'gpt-5.4-nano',
+        model: 'gpt-6-luna',
+        generation: { reasoningEffort: 'none' },
     });
     assert.deepStrictEqual(resolveModelForTask('conversation'), {
         provider: 'zai',
@@ -129,7 +135,8 @@ withPreset('glm-balanced', () => {
     });
     assert.deepStrictEqual(resolveModelForTask('browserPlanning'), {
         provider: 'openai',
-        model: 'gpt-5.4-nano',
+        model: 'gpt-6-luna',
+        generation: { reasoningEffort: 'none' },
     });
     assert.deepStrictEqual(resolveModelForTask('browserVision'), {
         provider: 'openai',
@@ -176,7 +183,8 @@ withPreset('gemini-direct-balanced', () => {
 
 assert.deepStrictEqual(getFallbackModel('conversation'), {
     provider: 'openai',
-    model: 'gpt-5.4-mini',
+    model: 'gpt-6-luna',
+    generation: { reasoningEffort: 'none' },
 });
 assert.deepStrictEqual(getFallbackModel('browserVision'), {
     provider: 'openai',

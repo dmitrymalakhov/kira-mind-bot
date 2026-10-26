@@ -29,7 +29,10 @@ const TASK_LABELS: Record<string, string> = {
   embedding: 'Векторы памяти', transcription: 'Распознавание голоса',
 };
 function modelLabel(ref?: AiModelRef) {
-  return ref ? `${getAiProviderDescriptor(ref.provider).label} · ${ref.model}` : 'Не определена';
+  if (!ref) return 'Не определена';
+  const efforts = { none: 'без рассуждения', low: 'низкое рассуждение', medium: 'среднее рассуждение', high: 'высокое рассуждение' };
+  const effort = ref.generation?.reasoningEffort;
+  return `${getAiProviderDescriptor(ref.provider).label} · ${ref.model}${effort ? ` · ${efforts[effort]}` : ''}`;
 }
 
 export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(

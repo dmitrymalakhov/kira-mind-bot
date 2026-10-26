@@ -34,5 +34,17 @@
     "glm-4.5v": {
       "supportsVision": true
     }
+  },
+  "openai": {
+    "gpt-6-luna": {
+      "supportsReasoningEffort": true,
+      "supportsEmbedding": false,
+      "supportsTranscription": false
+    },
+    "gpt-6.1-sol": {
+      "supportsReasoningEffort": true,
+      "supportsEmbedding": false,
+      "supportsTranscription": false
+    }
   }
 }

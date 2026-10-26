@@ -75,6 +75,7 @@ export interface AiProviderAdapter {
     createResponse(
         model: string,
         params: ResponseCreateParams,
+        generation?: AiModelRef['generation'],
     ): Promise<ResponseResult>;
     createEmbedding?(
         model: string,

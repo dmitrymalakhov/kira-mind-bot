@@ -44,7 +44,7 @@ export const lmstudioProviderAdapter: AiProviderAdapter = {
     async createChatCompletion(model, params, generation) {
         const normalized = this.normalizeChatParams(model, params);
         if (generation) {
-            normalized.max_tokens = Math.min(normalized.max_tokens ?? generation.maxTokens, generation.maxTokens);
+            if (generation.maxTokens !== undefined) normalized.max_tokens = Math.min(normalized.max_tokens ?? generation.maxTokens, generation.maxTokens);
             (normalized as Record<string, unknown>).reasoning_effort = generation.reasoningEffort;
             if (generation.temperature !== undefined) normalized.temperature = generation.temperature;
         }

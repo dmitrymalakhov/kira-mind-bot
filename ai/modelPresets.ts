@@ -46,7 +46,7 @@ export interface AiModelRef {
     model: string;
     modelEnvKey?: string;
     localRole?: import('./localModelRouting').LocalModelRole;
-    generation?: { maxTokens: number; reasoningEffort: 'none' | 'low' | 'medium' | 'high'; temperature?: number };
+    generation?: { maxTokens?: number; reasoningEffort: 'none' | 'low' | 'medium' | 'high'; temperature?: number };
 }
 
 /**

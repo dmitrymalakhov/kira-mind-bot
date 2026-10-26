@@ -68,6 +68,7 @@ export interface AiModelRef {
   provider: AiProvider;
   model: string;
   modelEnvKey?: string;
+  generation?: { reasoningEffort: 'none' | 'low' | 'medium' | 'high'; maxTokens?: number; temperature?: number };
 }
 
 export interface AiPresetConfig {
