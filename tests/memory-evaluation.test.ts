@@ -34,3 +34,9 @@ test('found evidence cannot be reported to synthesis as an empty search', () => 
         responseText: 'Есть сохранённый факт.', intent: 'РАЗГОВОР', evidenceIds: ['synthetic-one'], resolvedPeople: [], recallState: 'empty',
     }).failures, ['inconsistent_recall_summary']);
 });
+
+test('mentioning the expected name elsewhere cannot excuse a reversed verified identity answer', () => {
+    assert.deepEqual(evaluateMemoryEvidence({ knownAnswer: true, identityName: 'Лада Тестовая' }, {
+        responseText: 'Это Мирон Примеров. Он знаком с Ладой Тестовой.', evidenceIds: ['synthetic-edge'], resolvedPeople: [], identityVerified: true,
+    }).failures, ['identity_answer_mismatch']);
+});

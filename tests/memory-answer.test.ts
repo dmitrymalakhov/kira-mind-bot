@@ -13,7 +13,7 @@ import { saveMemoryFocus, validMemoryFocus, continueMemoryQueryPlan, parseMemory
 import { getMultiQueryMemoryContextDetailed, formatFactWithHistory } from '../utils/multiQueryMemory';
 import { readPersonEvidence } from '../utils/memoryEntityRecall';
 import { runKiraRuntime } from '../orchestration/runtime/kernel';
-import { MEMORY_ANSWER_RULES, buildMemoryAnswerPrompt } from '../utils/memoryAnswer';
+import { MEMORY_ANSWER_RULES, buildMemoryAnswerPrompt, confirmedMemoryIdentityAnswer } from '../utils/memoryAnswer';
 import { needsRuntimeTools } from '../orchestration/runtime/authorization';
 import { memoryAnswerEvalCases, checkMemoryAnswer } from '../scripts/fixtures/memory-answer.synthetic';
 
@@ -128,6 +128,19 @@ test('semantic memory lookup does not launch an operational task loop, but expli
     assert.equal(needsRuntimeTools({ classification, message: 'Какие задачи он обсуждал? И напомни завтра написать ему' }), true);
     assert.equal(needsRuntimeTools({ classification: { ...classification, details: { memoryTask: 'none' } }, message: 'Покажи мои регулярные задачи' }), true);
     assert.equal(needsRuntimeTools({ classification: { ...classification, details: { memoryTask: 'none' } }, message: 'Какие мои напоминания активны?' }), true);
+});
+
+test('a verified identity endpoint reaches the answer without model reinterpretation of other names in evidence', async t => {
+    const model = t.mock.method(ai, 'createChatCompletionForTask', async () => { throw Error('Verified name must not be regenerated'); });
+    const recall: any = { state: 'found', requestKind: 'identity', identityVerified: true, evidenceCount: 2, domains: [],
+        subjects: [{ name: 'Лада Тестовая', owner: false }] };
+    const result = await runKiraRuntime({ ctx: ctx(), message: 'Кто мой партнёр по жизни?', messageHistory: [], isForwarded: false, forwardFrom: '',
+        classification: { intent: 'РАЗГОВОР', confidenceLevel: 'ВЫСОКИЙ', details: { memoryTask: 'lookup', memoryNeed: 'full' } },
+        enrichedContextFromMemory: 'Мирон Примеров состоит в браке с Ладой Тестовой; целевой endpoint — Лада.', memoryRecall: recall });
+    assert.equal(result.responseText, 'Это Лада Тестовая.'); assert.equal(model.mock.callCount(), 0);
+    assert.equal(confirmedMemoryIdentityAnswer({ ...recall, subjects: [{ name: 'владелец', owner: true }] }), 'Это ты.');
+    for (const patch of [{ identityVerified: false }, { state: 'ambiguous' }, { evidenceCount: 0 }, { requestKind: 'overview' }, { subjects: [] }])
+        assert.equal(confirmedMemoryIdentityAnswer({ ...recall, ...patch }), undefined);
 });
 
 test('an exhausted topic pool is reported separately from newly retrieved evidence', async t => {

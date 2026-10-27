@@ -37,6 +37,8 @@ export interface MemoryRecallSummary {
     freshEvidenceCount?: number;
     /** Only the bounded current pool is exhausted, never a claim about the whole archive. */
     noNewEvidenceInPool?: boolean;
+    /** Only a successful scoped typed-relation resolver may set this flag. */
+    identityVerified?: boolean;
 }
 
 export interface MemoryRelationStep {

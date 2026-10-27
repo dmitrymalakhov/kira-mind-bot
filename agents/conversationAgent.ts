@@ -32,7 +32,7 @@ import { buildPersonalityMoodStyles, getPersonalityGenderForms } from "../utils/
 import { isSimpleSocialMessage } from '../utils/simpleDialogue';
 import { buildSafeAiErrorLog } from '../ai/errorDiagnostics';
 import { buildConversationFailureReply, isConversationContextOverflow } from '../utils/conversationFailureReply';
-import { buildMemoryAnswerPrompt, MEMORY_ANSWER_RULES } from '../utils/memoryAnswer';
+import { buildMemoryAnswerPrompt, MEMORY_ANSWER_RULES, confirmedMemoryIdentityAnswer } from '../utils/memoryAnswer';
 
 const MEDICAL_CONTEXT_RE = /(?:здоров|медицин|врач|доктор|клиник|больниц|симптом|болит|боль\b|температур|давлен|пульс|лекар|препарат|дозиров|анализ[ыа]?|обследован|диагноз|лечени|операц|процедур|риск|опасн|наркоз|анестез|госпитал|травм|инфекц|аллерг|сыпь|от[её]к|беременн|психиатр|психолог|терапи)/iu;
 
@@ -61,6 +61,9 @@ export async function conversationAgent(
         const memoryAnswer = ctx.chat?.type === 'private' && (classification?.details.memoryTask === 'lookup' ||
             injectedMemoryContext?.recall && (classification?.details.knowledgeSource === 'personal' ||
                 ['identity', 'overview', 'relationship', 'highlight', 'people_list'].includes(injectedMemoryContext.recall.requestKind ?? '')));
+        const identityAnswer = memoryAnswer && classification?.intent === 'РАЗГОВОР' && !classification.subIntents?.length
+            ? confirmedMemoryIdentityAnswer(injectedMemoryContext?.recall) : undefined;
+        if (identityAnswer) return { responseText: identityAnswer, skipOptionalFollowups: true };
         // Подготовка истории сообщений для контекста
         let historyContext = "";
         if (messageHistory.length > 0) {

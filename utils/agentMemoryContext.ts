@@ -84,8 +84,9 @@ export async function fetchAgentMemoryContext(
         recalledMemories: recalled.size,
         structuredRelationship: Boolean(relationship?.context),
     });
-    const recall = relationship?.complete && relationship.person
-        ? { state: 'found' as const, requestKind: 'identity' as const, subjects: [{ name: relationship.person.displayName, owner: false }], domains: [], evidenceCount: recalled.size }
+    const recall = focused && relationship?.complete && relationship.person
+        ? { state: 'found' as const, requestKind: 'identity' as const, identityVerified: true,
+            subjects: [{ name: relationship.person.displayName, owner: Boolean(relationship.person.owner) }], domains: [], evidenceCount: recalled.size }
         : memory.recall;
     return { domain: 'personal', context: enrichedContext, recalledMemories: [...recalled.values()], recall };
 }

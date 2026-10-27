@@ -34,7 +34,7 @@ export function isOwnerEmploymentRecall(message: string): boolean {
 
 export function isFocusedPersonalRecall(message: string): boolean {
     if (message.length > 180 || /[;\n]|\sи\s|(?:напомни|напиши|отправь|сохрани|удали|сравни|почему|представь|допустим|переведи|цитат|как\s+(?:мне|лучше))/iu.test(message)) return false;
-    return isOwnerEmploymentRecall(message) || Boolean(ownerRelationshipIntent(message) && /(?:кто|как\s+зовут|имя|помнишь)/iu.test(message));
+    return isOwnerEmploymentRecall(message) || Boolean(ownerRelationshipIntent(message) && /(?<![\p{L}])(?:кто|как\s+зовут|имя)(?![\p{L}])/iu.test(message));
 }
 
 export function personalRecallQueries(message: string): string[] {

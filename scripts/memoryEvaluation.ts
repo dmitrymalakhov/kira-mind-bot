@@ -8,6 +8,7 @@ export interface MemoryEvaluationExpectation {
     wantsNewEvidence?: boolean;
     availableUnseenEvidence?: number;
     allowEmptyContinuation?: boolean;
+    identityName?: string;
 }
 
 export interface MemoryEvaluationObservation {
@@ -18,6 +19,7 @@ export interface MemoryEvaluationObservation {
     freshEvidenceCount?: number;
     noNewEvidenceInPool?: boolean;
     recallState?: string;
+    identityVerified?: boolean;
 }
 
 export function evaluateMemoryEvidence(expected: MemoryEvaluationExpectation, actual: MemoryEvaluationObservation): {
@@ -33,6 +35,7 @@ export function evaluateMemoryEvidence(expected: MemoryEvaluationExpectation, ac
         person.personIds.some(id => expected.targetPersonIds!.includes(id)))) failures.push('person_not_resolved');
     if (expected.ownerSubject && !actual.resolvedPeople.some(person => person.owner)) failures.push('owner_not_resolved');
     if (expected.requiredEvidenceIds?.length && !expected.requiredEvidenceIds.some(id => evidence.has(id))) failures.push('identity_proof_lost');
+    if (expected.identityName && actual.identityVerified && actual.responseText.trim() !== `Это ${expected.identityName}.`) failures.push('identity_answer_mismatch');
     if (expected.wantsNewEvidence && (expected.availableUnseenEvidence ?? 0) > 0 && actual.freshEvidenceCount === 0) failures.push('new_evidence_lost');
     return { passed: failures.length === 0, failures, evidenceCount: evidence.size };
 }

@@ -6,6 +6,14 @@ export function memoryRecallSummary(plan: MemoryQueryPlan, people: MemoryPerson[
         domains: plan.domains ?? [], evidenceCount };
 }
 
+/** Do not ask a language model to re-identify an already proved endpoint. */
+export function confirmedMemoryIdentityAnswer(summary?: MemoryRecallSummary): string | undefined {
+    if (!summary?.identityVerified || summary.state !== 'found' || summary.requestKind !== 'identity' || summary.evidenceCount < 1 || summary.subjects.length !== 1) return undefined;
+    const subject = summary.subjects[0], name = subject.name.trim();
+    if (!name || name.length > 160 || /[\r\n\p{Cc}]/u.test(name)) return undefined;
+    return subject.owner ? 'Это ты.' : `Это ${name}.`;
+}
+
 /** One answer contract for every personal-memory intent, independent of names or roles. */
 export const MEMORY_ANSWER_RULES = `Ты отвечаешь на вопрос о сохранённых сведениях. Сначала дай содержательный ответ по найденным свидетельствам; стиль персонажа влияет на интонацию, а не заменяет факты.
 Текущая реплика пользователя — вопрос. История диалога и её сводки помогают понять ссылки, но прежние утверждения ассистента (включая «ничего не знаю») не являются фактами и не отменяют найденные записи. Рабочие сводки также не заменяют первичные свидетельства.

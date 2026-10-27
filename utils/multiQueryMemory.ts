@@ -18,7 +18,7 @@ import {
 } from './contactMemory';
 import { isTodayImportanceRequest } from './todayImportanceIntent';
 import { MemoryRetrievalScoreDetails } from './memoryRetrieval';
-import { personalRecallQueries } from './personalRecallIntent';
+import { personalRecallQueries, isFocusedPersonalRecall } from './personalRecallIntent';
 import { memoryContentExcerpt, memoryRerankCacheKey, parseMemoryRerankOrder } from './memoryRanking';
 import { memoryQueryHistory, memoryQueryCacheKey, parseMemoryQueryPlan, validMemoryFocus, isMemoryContinuation, saveMemoryFocus, continueMemoryQueryPlan, memoryFocusMatches } from './memoryQueryPlan';
 import type { MemoryQueryPlan, MemoryRecallSummary } from '../types/memoryRecallTypes';
@@ -1380,10 +1380,12 @@ export async function getMultiQueryMemoryContextDetailed(
             'Не удалось связать запрошенного человека с однозначной сохранённой личностью. Уточни имя или связь. Это ограничение разрешения ссылки, а не доказательство отсутствия сведений в памяти.', recalledMemories: [],
             recall: memoryRecallSummary(generatedQueries, [], entities.ambiguous ? 'ambiguous' : 'unresolved', 0) };
     }
-    if (generatedQueries.requestKind === 'identity' && entities.people.length && entities.memories.some(memory => memory.tags.includes('person_relation'))) {
+    if ((generatedQueries.requestKind === 'identity' || isFocusedPersonalRecall(userMessage)) && entities.people.length && entities.memories.some(memory => memory.tags.includes('person_relation'))) {
         const packed = formatResolvedMemoryIdentity(entities);
-        rememberResolvedSearch(ctx, entities, packed.included, generatedQueries);
-        return { context: packed.context, recall: memoryRecallSummary(generatedQueries, entities.people, 'found', packed.included.length),
+        const identityPlan = { ...generatedQueries, requestKind: 'identity' as const };
+        rememberResolvedSearch(ctx, entities, packed.included, identityPlan);
+        return { context: packed.context, recall: { ...memoryRecallSummary(identityPlan, entities.people, 'found', packed.included.length),
+            identityVerified: entities.people.length === 1 && packed.included.length > 0 },
             recalledMemories: packed.included.map(memory => ({ id: memory.id, domain: memory.domain, content: memory.content, score: 1,
                 memoryKind: memory.memoryKind, confidence: memory.confidence, status: memory.status, sourceMemoryIds: memory.sourceMemoryIds, sourceEpisodeId: memory.sourceEpisodeId })),
             retrievalTrace: explain ? { memoryNeed: need, queries: { answer: generatedQueries.answerQueries, context: [], associative: [] },

@@ -11,6 +11,7 @@ import * as vector from '../services/VectorServiceFactory';
 import * as identity from '../services/PersonIdentityService';
 import * as ai from '../ai/chatCompletion';
 import * as today from '../utils/todayImportance';
+import * as multi from '../utils/multiQueryMemory';
 import { QdrantVectorService } from '../services/QdrantVectorService';
 import { AppDataSource } from '../data-source';
 import { isOwnerRecallEvidence, recallPersonNameMatches } from '../utils/contactMemory';
@@ -64,7 +65,19 @@ test('a resolved identity path keeps its owner edge across a mismatched suggeste
         queryPlan: { answerQueries: ['партнёр'], contextQueries: [], requestKind: 'identity', domains: ['personal'],
             references: [{ kind: 'person', from: 'owner', mention: 'мой', relationPath: [{ type: 'partner_of', direction: 'either' }] }] } });
     assert.deepEqual(result.recalledMemories.map(m => m.id), ['saved-partnership']); assert.equal(result.retrievalTrace?.reranker?.status, 'identity_path');
+    assert.equal(result.recall?.identityVerified, true);
     assert.match(result.context, /from=user/); assert.match(result.context, /spouse_of/); assert.equal(model.mock.callCount(), 0);
+});
+
+test('remembered details about a relative are not shortened to an identity-only answer', async t => {
+    const saved = relation('saved-spouse', 'spouse_of', 'user', 'synthetic-lada', 'Лада Тестовая');
+    t.mock.method(identity, 'readPersonIdentities', async () => [{ id: 'synthetic-lada', displayName: person.displayName, telegramContactId: person.contactId }] as any);
+    t.mock.method(vector, 'getVectorService', () => service([saved]));
+    const profile = t.mock.method(multi, 'getMultiQueryMemoryContextDetailed', async () => ({ context: 'SYNTHETIC_RELATIVE_PROFILE', recalledMemories: [],
+        recall: { state: 'found', requestKind: 'overview', subjects: [{ name: person.displayName, owner: false }], domains: [], evidenceCount: 2 } }) as any);
+    const result = await fetchAgentMemoryContext(context(), 'Что ты помнишь о моей супруге?', { memoryNeed: 'full', includeTodayImportance: false, trackAccess: false });
+    assert.equal(profile.mock.callCount(), 1); assert.match(result.context, /SYNTHETIC_RELATIVE_PROFILE/);
+    assert.equal(result.recall?.requestKind, 'overview'); assert.equal(result.recall?.identityVerified, undefined);
 });
 
 test('semantic plan accepts role synonyms and rejects invented spans, IDs and invalid directed paths', () => {
