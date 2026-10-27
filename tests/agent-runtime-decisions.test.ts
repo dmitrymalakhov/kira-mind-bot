@@ -80,6 +80,20 @@ describe('optional Decisions routing adapter', () => {
         });
     });
 
+    test('carries MCP source selection in the same categorical request without inventing arguments', async t => {
+        t.mock.method(resolver, 'resolveModelForTaskAsync', async () => ({ presetName: 'gpt-balanced', modelRef: { provider: 'openai', model: 'synthetic-classifier' } }) as any);
+        const call = t.mock.method(decisionAdapter, 'createDecision', async () => ({ model: 'gpt-6-luna', answers: [
+            { type: 'choice', name: 'intent', choice: 'РАЗГОВОР', confidence: 0.95 },
+            { type: 'choice', name: 'memory', choice: 'none' }, { type: 'choice', name: 'complexity', choice: 'routine' }, { type: 'choice', name: 'role', choice: 'none' },
+            { type: 'choice', name: 'mcp_access', choice: 'read' },
+        ] }));
+        await enabled(async () => {
+            const result = await classifyWithDecisions('Получи синтетические данные из MCP');
+            assert.equal(result?.details.mcpAccess, 'read'); assert.equal(call.mock.callCount(), 1);
+            assert.equal((result?.details as any).mcpArguments, undefined);
+        });
+    });
+
     test('uses the existing OpenAI client transport for the new endpoint', async t => {
         const request = t.mock.method(openaiProviderAdapter.client, 'post', async () => ({ model: 'gpt-6-luna', answers: [] }) as any);
         await openaiProviderAdapter.createDecision!({ model: 'gpt-6-luna', input: 'synthetic', questions: [] });

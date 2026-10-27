@@ -14,6 +14,7 @@ const { registerBudgetModeRoutes } = require('./budgetMode');
 const { registerBackgroundFeatureRoutes } = require('./backgroundFeatures');
 const { registerLocalModelRoutes, readLocalRoutes, resolveLocalPreset } = require('./localModels');
 const { registerImageGenerationRoutes } = require('./imageGeneration');
+const { registerMcpRoutes } = require('./mcp');
 const {
   DEFAULT_MEMORY_EMBEDDING_PROFILE,
   getMemoryEmbeddingProfile,
@@ -404,6 +405,8 @@ registerBudgetModeRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTabl
 registerBackgroundFeatureRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
 registerLocalModelRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
 registerImageGenerationRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
+registerMcpRoutes(app, { requireAuth, runtimeDir: process.env.KIRA_RUNTIME_DATA_DIR || path.join(__dirname, '..', 'data'),
+  accountMode: process.env.KIRA_MCP_ACCOUNT_MODE === 'true' });
 
 app.get('/api/ai-preset', requireAuth, async (_req, res) => {
   const vars = readEnvFile();

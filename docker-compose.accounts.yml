@@ -4,6 +4,7 @@ services:
     profiles: [legacy]
   admin-panel:
     environment:
+      KIRA_MCP_ACCOUNT_MODE: "true"
       KIRA_BOT_CONTAINER_NAME: "${KIRA_INSTANCE_NAME:-kira-mind-bot}-kira-accounts-1"
       KIRA_RUNTIME_HEALTH_URL: http://kira-accounts:3100
   kira-accounts:

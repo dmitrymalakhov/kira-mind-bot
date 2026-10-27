@@ -25,6 +25,20 @@ import type { BackgroundFeature, BackgroundFeatureState } from '../../ai/backgro
 
 export const AUTH_REQUIRED_EVENT = 'kira:auth-required';
 
+export interface McpConnectionSettings { revision: string; configured: boolean; url: string; tokenConfigured: boolean; toolCount: number }
+export interface McpConnectionDraft { revision: string; url: string; token?: string }
+async function mcpApi(method = 'GET', data?: McpConnectionDraft | { revision: string }, suffix = '') {
+  const response = await apiFetch(`/api/mcp/money-maker${suffix}`, { method,
+    ...(data ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) } : {}) });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || 'Не удалось настроить MCP');
+  return body;
+}
+export function fetchMcpConnection(): Promise<McpConnectionSettings> { return mcpApi(); }
+export function saveMcpConnection(data: McpConnectionDraft): Promise<McpConnectionSettings> { return mcpApi('PUT', data); }
+export function deleteMcpConnection(revision: string): Promise<McpConnectionSettings> { return mcpApi('DELETE', { revision }); }
+export function checkMcpConnection(data: McpConnectionDraft): Promise<{ success: boolean; toolCount: number }> { return mcpApi('POST', data, '/check'); }
+
 export interface ImageGenerationConfig {
   settings: { enabled: boolean; model: string; size: string; quality: string };
   models: string[]; sizes: string[]; qualities: string[];

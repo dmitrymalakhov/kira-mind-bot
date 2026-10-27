@@ -20,7 +20,8 @@ import { domainTools, processingOutput } from './domainTools';
 import { reminderTools } from './reminderTools';
 import { taskTools } from './taskTools';
 import { agentTools } from './agents';
-import { availableRuntimeTools, canExecuteRuntimeCall, needsRuntimeTools } from './authorization';
+import { availableRuntimeTools, canExecuteRuntimeCall, needsRuntimeTools, isMcpRequest } from './authorization';
+import { mcpTools, confirmedMcpCallKey } from './mcpTools';
 import type { ProcessingResult } from '../../orchestrator';
 import type { KiraRuntimeInput, RuntimeDecision, RuntimeToolCall, ToolContext, ToolDefinition, ToolObservation, ToolOutput, RuntimeSessionState } from './types';
 
@@ -36,8 +37,8 @@ export function createKiraToolRegistry(): ToolRegistry {
         description: 'Выполнить самостоятельный запрос карт с использованием присланной геолокации.', inputSchema: objectSchema({ request: textSchema('Запрос о местах или маршруте') }),
         async execute(args, context) { return processingOutput(await mapsAgent([String(args.request), context.continuationAnswer ? `Уточнение владельца: ${context.continuationAnswer}` : ''].filter(Boolean).join('\n'), context.isForwarded, context.forwardFrom, context.messageHistory, context.lastLocation, context.memoryContext)); },
     }];
-    const definitions = [...domainTools(), ...reminderTools(), ...taskTools(), ...agentTools(), ...workflows].map(tool => ({ ...tool,
-        privateOnly: /^(?:memory\.|portraits\.|contacts\.|people\.|health\.|settings\.|agents\.|self\.(?:getState|searchEvents|runStudy|getStudyReports))/.test(tool.name),
+    const definitions = [...domainTools(), ...reminderTools(), ...taskTools(), ...agentTools(), ...mcpTools(), ...workflows].map(tool => ({ ...tool,
+        privateOnly: tool.privateOnly || /^(?:memory\.|portraits\.|contacts\.|people\.|health\.|settings\.|agents\.|self\.(?:getState|searchEvents|runStudy|getStudyReports))/.test(tool.name),
     }));
     return new ToolRegistry(definitions, context =>
         Number.isSafeInteger(config.allowedUserId) && config.allowedUserId > 0 && context.ctx.from?.id === config.allowedUserId);
@@ -167,6 +168,7 @@ function safeObservation(call: RuntimeToolCall, output: ToolOutput): ToolObserva
 
 function fastCalls(input: KiraRuntimeInput): RuntimeToolCall[] | undefined {
     const classification = input.classification;
+    if (isMcpRequest(input)) return undefined;
     if (input.images?.length) return [{ id: 'inspect_images', tool: 'images.inspect', args: { caption: input.message } }];
     if (classification.subIntents?.length || hasCompoundActionRequest(input.message)) return undefined;
     if (classification.intent === 'ВЕБ_ПОИСК' && classification.details.responseComplexity === 'complex') return undefined;
@@ -194,12 +196,14 @@ function fastCalls(input: KiraRuntimeInput): RuntimeToolCall[] | undefined {
 export async function runKiraRuntime(input: KiraRuntimeInput, dependencies: RuntimeDependencies = {}): Promise<ProcessingResult> {
     const respond = dependencies.respond ?? (async (value, memoryContext, toolSynthesis) => conversationAgent(value.ctx, value.message, value.isForwarded, value.forwardFrom, value.messageHistory, value.classification, { domain: 'personal', context: memoryContext, recall: value.memoryRecall, allowSideEffects: false, allowSelfEvolution: !toolSynthesis && !value.readOnly }));
     const classification = input.classification;
-    if (!dependencies.forceLoop && !dependencies.continuation && classification.intent === 'НЕОПРЕДЕЛЕНО') {
+    const mcpRequested = isMcpRequest(input);
+    const requiresWeb = classification.details.knowledgeSource === 'external_current';
+    if (!mcpRequested && !dependencies.forceLoop && !dependencies.continuation && classification.intent === 'НЕОПРЕДЕЛЕНО') {
         const result = await unclearIntentAgent(input.message, input.isForwarded, input.forwardFrom, input.messageHistory, classification, input.enrichedContextFromMemory ?? '');
         result.keyboard = buildQuickChoiceKeyboard(input.ctx, input.message, result.responseText, classification) ?? result.keyboard;
         return result;
     }
-    if (!dependencies.forceLoop && !dependencies.continuation && classification.intent === 'ВОЗМОЖНОСТИ_БОТА' && !classification.subIntents?.length && !hasCompoundActionRequest(input.message)) return { responseText: await answerCapabilitiesQuestion(input.message, { publicMode: input.ctx.from?.id !== config.allowedUserId }) };
+    if (!mcpRequested && !dependencies.forceLoop && !dependencies.continuation && classification.intent === 'ВОЗМОЖНОСТИ_БОТА' && !classification.subIntents?.length && !hasCompoundActionRequest(input.message)) return { responseText: await answerCapabilitiesQuestion(input.message, { publicMode: input.ctx.from?.id !== config.allowedUserId }) };
     if (!dependencies.forceLoop && !dependencies.continuation && !input.images?.length && classification.intent === 'РАЗГОВОР' && !classification.subIntents?.length && !hasCompoundActionRequest(input.message) && !needsRuntimeTools(input) && classification.details.knowledgeSource !== 'external_current') {
         if (isTodayImportanceRequest(input.message)) {
             const snapshot = await buildTodayImportanceSnapshot(input.ctx, input.message);
@@ -255,17 +259,18 @@ export async function runKiraRuntime(input: KiraRuntimeInput, dependencies: Runt
     let callCount = 0;
     let stopped = false;
     let webText = observations.find(observation => observation.tool === 'web.search' && observation.status === 'ok')?.summary ?? '';
-    const hasCurrentEvidence = () => observations.some(observation => observation.status === 'ok' && (observation.tool === 'web.search' || (observation.tool === 'agents.start' && ['research', 'browser'].includes(String((observation.data as { run?: { kind?: string } } | undefined)?.run?.kind)))));
+    const hasCurrentEvidence = () => observations.some(observation => observation.status === 'ok' && (observation.tool === 'web.search' || observation.tool === 'mcp.callReadTool' || (observation.tool === 'agents.start' && ['research', 'browser'].includes(String((observation.data as { run?: { kind?: string } } | undefined)?.run?.kind)))));
     let exhausted = true;
     try {
         await skills.forIntents([classification.intent, ...(classification.subIntents?.map(intent => intent.intent) ?? [])]);
+        if (mcpRequested) await skills.load('mcp');
         if (continuation) {
             const resumeSkills = [...new Set([...(continuation.skills ?? []), ...(continuation.pendingCalls ?? []).map(callSkill).filter((id): id is string => Boolean(id))])];
             await Promise.all(resumeSkills.map(id => skills.load(id)));
         }
         let first = continuation?.pendingCalls?.length ? continuation.pendingCalls : dependencies.forceLoop || continuation ? undefined : fastCalls(input);
         // Current external evidence is mandatory even when an action was the primary intent.
-        if (classification.details.knowledgeSource === 'external_current' && !['БРАУЗЕР_ЗАДАЧА', 'ВЕБ_ПОИСК'].includes(classification.intent) && !hasCurrentEvidence()) first = undefined;
+        if (requiresWeb && !['БРАУЗЕР_ЗАДАЧА', 'ВЕБ_ПОИСК'].includes(classification.intent) && !hasCurrentEvidence()) first = undefined;
         for (let round = 0; round < Math.min(dependencies.limits?.rounds ?? RUNTIME_LIMITS.rounds, RUNTIME_LIMITS.rounds) && !context.signal.aborted; round++) {
             const selection = first ? { calls: first, finish: false } : await (dependencies.decide ?? decide)({ context, tools: allowed, skills });
             const wasFast = Boolean(first); first = undefined;
@@ -276,7 +281,8 @@ export async function runKiraRuntime(input: KiraRuntimeInput, dependencies: Runt
                 results.push({ responseText: state.question }); state.status = 'waiting'; exhausted = false; break;
             }
             if (selection.finish || !selection.calls?.length) {
-                if (classification.details.knowledgeSource === 'external_current' && !hasCurrentEvidence()) {
+                if (requiresWeb && !hasCurrentEvidence()) {
+                    if (mcpRequested) { observations.push({ id: 'missing_mcp_evidence', tool: 'kernel', status: 'failed', summary: 'Запрошенные данные MCP не получены; не подменяй их общими сведениями.' }); exhausted = false; break; }
                     if (observations.some(o => o.tool === 'web.search' && o.status === 'failed')) { exhausted = false; break; }
                     selection.calls = [{ id: `required_web_${round}`, tool: 'web.search', args: { query: input.message } }];
                 } else { exhausted = false; break; }
@@ -317,7 +323,7 @@ export async function runKiraRuntime(input: KiraRuntimeInput, dependencies: Runt
                     if (definition.effect !== 'read') {
                         const independentMaintenance = /^(?:tasks\.(?:create|pause|resume|remove|runNow|update)|reminders\.(?:update|cancel)|settings\.update|agents\.cancel)$/.test(call.tool);
                         const literalReminder = call.tool === 'reminders.create' && typeof call.args.text === 'string' && input.message.toLocaleLowerCase().includes(call.args.text.toLocaleLowerCase());
-                        const requiresCurrentEvidence = classification.details.knowledgeSource === 'external_current' && classification.intent !== 'БРАУЗЕР_ЗАДАЧА' && !independentMaintenance && !literalReminder;
+                        const requiresCurrentEvidence = requiresWeb && classification.intent !== 'БРАУЗЕР_ЗАДАЧА' && !independentMaintenance && !literalReminder;
                         const isResearch = call.tool === 'agents.start' && call.args.kind === 'research';
                         if (requiresCurrentEvidence && !isResearch && !hasCurrentEvidence()) return { status: 'failed' as const, summary: 'Сначала получи проверенный веб-контекст; зависящее от него действие ещё не выполнено.' };
                         if (state.status === 'waiting') return { status: 'needs_input' as const, summary: 'Сначала требуется ответ на уже заданный вопрос.' };
@@ -364,8 +370,10 @@ export async function runKiraRuntime(input: KiraRuntimeInput, dependencies: Runt
         if (context.signal.aborted) { state.status = 'failed'; results.push({ responseText: 'Задача остановлена. Уже выполненные действия сохранены.' }); }
         const failures = observations.filter(observation => observation.status === 'failed' || observation.status === 'unknown');
         context.memoryContext += `\n\nКвитанции выполнения (источник правды о действиях):\n${JSON.stringify(observations)}`;
-        const missingRequiredWeb = classification.details.knowledgeSource === 'external_current' && !hasCurrentEvidence();
-        if (missingRequiredWeb) results.push({ responseText: 'Не удалось проверить актуальные сведения в интернете. Зависящие от них действия не подтверждены.' });
+        const missingRequiredWeb = requiresWeb && !hasCurrentEvidence();
+        if (missingRequiredWeb) results.push({ responseText: mcpRequested
+            ? 'Не удалось получить запрошенные актуальные данные из MCP-сервиса. Зависящие от них действия не подтверждены.'
+            : 'Не удалось проверить актуальные сведения в интернете. Зависящие от них действия не подтверждены.' });
         const inspectionAnswered = input.images?.length && results.length && !hasCompoundActionRequest(input.message) && !classification.subIntents?.length && classification.intent === 'РАЗГОВОР';
         if (!context.signal.aborted && !inspectionAnswered && !missingRequiredWeb && (!results.length || (state.status !== 'waiting' && !results.some(result => result.keyboard) && (['ВЕБ_ПОИСК', 'РАЗГОВОР'].includes(classification.intent) || hasCompoundActionRequest(input.message) || classification.subIntents?.length)))) {
             const answer = await respond(input, context.memoryContext.slice(-RUNTIME_LIMITS.contextChars), true);
@@ -472,7 +480,7 @@ export async function continueQuestionRuntime(ctx: KiraRuntimeInput['ctx'], answ
     const question = [...(state.observations ?? [])].reverse().find(observation => observation.tool === 'kernel.question' && observation.status === 'needs_input');
     if (question) { question.status = 'ok'; question.summary = `Ответ владельца на уточнение: ${answer}`; }
     if (state.parameterCall) state.pendingCalls = [state.parameterCall, ...(state.pendingCalls ?? [])];
-    return runKiraRuntime({ ctx, message: state.goal, continuationAnswer: answer, isForwarded: false, forwardFrom: '', messageHistory: ctx.session.messageHistory.slice().reverse(),
+    return runKiraRuntime({ ctx, message: state.goal, continuationAnswer: answer, confirmedMcpCall: confirmedMcpCallKey(state.parameterCall, answer), isForwarded: false, forwardFrom: '', messageHistory: ctx.session.messageHistory.slice().reverse(),
         classification: state.classification ?? { intent: 'РАЗГОВОР', confidenceLevel: 'ВЫСОКИЙ', details: {} },
         recurringTaskRun: state.backgroundRun,
         enrichedContextFromMemory: `Предыдущие результаты:\n${JSON.stringify(state.observations)}`,
