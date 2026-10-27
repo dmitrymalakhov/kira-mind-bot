@@ -348,7 +348,7 @@ ${historyContext}
                 {
                     role: "system",
                     content:
-                        (memoryAnswer ? `${MEMORY_ANSWER_RULES}\nСтиль общения: ${getCommunicationStyle()}\n` :
+                        (memoryAnswer ? `${MEMORY_ANSWER_RULES}\nГрамматический род ассистента: ${config.eventDescriptionGender}. Собственные глаголы согласуй с ним.\nСтиль общения: ${getCommunicationStyle()}\n` :
                             `${getBotPersona()}\nБиография: ${getBotBiography()}\nСтиль общения: ${getCommunicationStyle()}\n`) +
                         (isSimpleSocialMessage(message, config.characterName) ? 'На эту короткую реплику ответь естественно в 1–2 коротких предложениях. Проверка связи — не просьба рассказать о себе. Не пересказывай биографию, настроение, события дня и не добавляй список предложений помощи.\n' : '') +
                         `Сейчас: ${formattedDateTime}.\n` +
