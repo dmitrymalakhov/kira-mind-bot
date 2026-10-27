@@ -18,10 +18,6 @@ interface StatusResponse {
   serverTime: string;
 }
 
-const LABELS: Record<string, string> = {
-  'kira-mind-bot': '🌸 Kira',
-};
-
 function formatUptime(startedAt: string | null): string {
   if (!startedAt) return '';
   const ms = Date.now() - new Date(startedAt).getTime();
@@ -63,12 +59,9 @@ export function StatusBar() {
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
       {data.containers.map((c) => {
         const uptime = formatUptime(c.startedAt);
-        const label = LABELS[c.name] ?? c.name;
         const appearance = getStatusAppearance(c.status);
-        const statusText = c.status === 'running'
-          ? `${label} ${c.statusLabel}${uptime ? ` · ${uptime}` : ''}`
-          : `${label}: ${c.statusLabel}`;
-        const tooltipText = c.details || null;
+        const statusText = c.running ? 'Бот работает' : c.statusLabel;
+        const tooltipText = [c.name, uptime && `Работает ${uptime}`, c.details].filter(Boolean).join(' · ');
 
         const chip = (
           <Chip

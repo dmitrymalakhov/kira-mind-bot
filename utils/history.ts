@@ -38,7 +38,7 @@ export async function addToHistory(
     ctx: BotContext,
     role: string,
     content: string,
-    options: { turn?: ConversationTurn } = {},
+    options: { turn?: ConversationTurn; kind?: 'image' } = {},
 ) {
     if (options.turn?.isForwardOnly) {
         // Пересланный материал передаётся отдельно через forwardContext и не
@@ -52,6 +52,7 @@ export async function addToHistory(
         role,
         content,
         timestamp: new Date(),
+        ...(options.kind ? { kind: options.kind } : {}),
     });
     devLog('Added message to history:', { role, content });
 

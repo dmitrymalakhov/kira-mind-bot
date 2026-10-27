@@ -101,7 +101,7 @@ export function FieldInput({ field, value, onChange, displayValue }: Props) {
         onChange={(e) => onChange(field.key, e.target.value)}
         fullWidth
         helperText={helperText || ' '}
-        FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px', minHeight: '16px', lineHeight: 1.35 } }}
+        FormHelperTextProps={{ sx: { color: 'text.secondary', fontSize: '12px', minHeight: '16px', lineHeight: 1.5 } }}
       >
         {hasUnsupportedValue && (
           <MenuItem value={resolvedValue} disabled>
@@ -131,7 +131,7 @@ export function FieldInput({ field, value, onChange, displayValue }: Props) {
           required={field.required}
           helperText={field.hint || ' '}
           inputProps={{ style: { fontFamily: 'monospace', fontSize: '12px', lineHeight: 1.6 } }}
-          FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px', minHeight: '16px', lineHeight: 1.35 } }}
+          FormHelperTextProps={{ sx: { color: 'text.secondary', fontSize: '12px', minHeight: '16px', lineHeight: 1.5 } }}
         />
       </Box>
     );
@@ -181,7 +181,7 @@ export function FieldInput({ field, value, onChange, displayValue }: Props) {
       fullWidth
       placeholder={isMasked ? '(оставьте пустым чтобы не менять)' : field.placeholder}
       helperText={field.hint || ' '}
-      FormHelperTextProps={{ sx: { color: 'text.disabled', fontSize: '11px', minHeight: '16px', lineHeight: 1.35 } }}
+      FormHelperTextProps={{ sx: { color: 'text.secondary', fontSize: '12px', minHeight: '16px', lineHeight: 1.5 } }}
       InputProps={
         isPassword
           ? {

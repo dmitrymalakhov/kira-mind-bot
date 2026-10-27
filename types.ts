@@ -338,6 +338,8 @@ export interface SessionData {
             imageGenerated?: boolean;
             generatedImageUrl?: string;
             generatedImagePath?: string;
+            generatedImageDescription?: string;
+            generatedImageRequest?: string;
             icsFilePath?: string;
             messageDraft?: { contactId: number; text: string; scheduledTime?: Date };
             contactSelected?: boolean;
@@ -360,6 +362,8 @@ export interface ForwardedMessageGroup {
 export type BotContext = Context & SessionFlavor<SessionData> & {
     /** Server-assigned channel key; never accepted from an external request. */
     sessionStorageKey?: string;
+    /** Isolated background runs persist photos without replacing the live conversation session. */
+    persistOutgoingImageContext?: (context: SentMessageContext) => Promise<void>;
 };
 
 // Интерфейс для хранения истории сообщений
@@ -367,6 +371,8 @@ export interface MessageHistory {
     role: string;
     content: string;
     timestamp: Date;
+    /** Visual context for conversation, excluded from user-fact extraction. */
+    kind?: 'image';
 }
 
 export interface ProactiveInsightContext {
@@ -384,9 +390,9 @@ export interface ProactiveInsightContext {
 export interface SentMessageContext {
     messageId: number;
     text: string;
-    kind: 'plain' | 'structured' | 'proactive' | 'memory_card' | 'identity_gap' | 'system';
+    kind: 'plain' | 'structured' | 'proactive' | 'memory_card' | 'identity_gap' | 'system' | 'image';
     /** Способ доставки; не смешивается с семантическим kind. */
-    delivery?: 'text' | 'voice';
+    delivery?: 'text' | 'voice' | 'photo';
     contactId?: number;
     contactName?: string;
     personId?: string;

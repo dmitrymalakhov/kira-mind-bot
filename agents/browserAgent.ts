@@ -14,6 +14,8 @@ import { BrowserSessionStore } from '../services/BrowserSessionStore';
 import { BrowserCredentialService } from '../services/BrowserCredentialService';
 import { looksLikeBrowserTaskCancellation } from '../utils/browserTaskCancellation';
 import { RUNTIME_DATA_DIR } from '../utils/runtimeData';
+import { describeOutgoingImage } from '../services/outgoingImageDescription';
+import { replyWithPhotoAndStore } from '../handlers/shared';
 
 const MAX_ITERATIONS = 35;
 const MAX_MEMORY_LOOKUPS = 6;
@@ -2826,7 +2828,10 @@ async function takeJpeg(page: Page): Promise<Buffer> {
 async function sendScreenshot(ctx: BotContext, page: Page, caption?: string): Promise<void> {
     try {
         const buf = await takeJpeg(page);
-        await ctx.replyWithPhoto(new InputFile(buf, 'screen.jpg'), { caption });
+        const description = await describeOutgoingImage(buf)
+            ?? `Скриншот страницы${caption ? `: ${caption.slice(0, 500)}` : ' в браузере'}.`;
+        if (caption) await ctx.reply(caption);
+        await replyWithPhotoAndStore(ctx, new InputFile(buf, 'screen.jpg'), description);
     } catch (e) {
         devLog('browserAgent: screenshot send failed:', e);
     }

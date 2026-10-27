@@ -1,8 +1,8 @@
-import { generatedImageInput } from "../utils/generatedImage";
+import { generatedImageInput, generatedImageHistoryText } from "../utils/generatedImage";
 import fs from "fs";
 import path from "path";
 import { Bot, InputFile } from "grammy";
-import type { BotContext, SessionData } from "../types";
+import type { BotContext, SentMessageContext, SessionData } from "../types";
 import type { RecurringTask } from "../types/recurringTaskTypes";
 import { processMessage } from "../orchestrator";
 import { RecurringTaskRepository } from "./RecurringTaskRepository";
@@ -106,6 +106,10 @@ async function buildBackgroundContext(
         },
         session,
         api,
+        persistOutgoingImageContext: async (context: SentMessageContext) => {
+            await appendPersistedHistory(task.chatId, 'bot', context.text, { kind: 'image' });
+            await appendPersistedSentMessageContext(task.chatId, context);
+        },
         reply: (text: string, options?: any) => api.sendMessage(task.chatId, text, options),
         replyWithPhoto: (photo: any, options?: any) => api.sendPhoto(task.chatId, photo, options),
         replyWithDocument: (document: any, options?: any) => api.sendDocument(task.chatId, document, options),
@@ -144,7 +148,16 @@ async function sendRecurringResult(
     }
 
     if (result.imageGenerated && generatedImageInput(result)) {
-        await bot.api.sendPhoto(task.chatId, generatedImageInput(result)!);
+        const photo = await bot.api.sendPhoto(task.chatId, generatedImageInput(result)!);
+        const description = generatedImageHistoryText(result);
+        await appendPersistedHistory(task.chatId, 'bot', description, { kind: 'image' });
+        await appendPersistedSentMessageContext(task.chatId, {
+            messageId: photo.message_id,
+            text: description,
+            kind: 'image',
+            delivery: 'photo',
+            createdAt: Date.now(),
+        });
     }
     if (result.documentFilePath) {
         const filename = result.documentFilename || path.basename(result.documentFilePath);

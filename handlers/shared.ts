@@ -1,4 +1,4 @@
-import { generatedImageInput } from "../utils/generatedImage";
+import { generatedImageInput, generatedImageHistoryText } from "../utils/generatedImage";
 import { InlineKeyboard, InputFile } from "grammy";
 import { BotContext, ConversationReplyContext, SentMessageContext } from "../types";
 import * as fs from 'fs';
@@ -92,6 +92,25 @@ export async function replyAndStore(ctx: BotContext, text: string, options: any 
     storeSentMessageText(ctx, msg.message_id, text);
     storeSentMessageContext(ctx, msg.message_id, text);
     return msg;
+}
+
+/** Photos stay separate from spoken text; their visual context lives in history and reply metadata. */
+export async function replyWithPhotoAndStore(ctx: BotContext, photo: InputFile | string, description: string) {
+    const sent = await ctx.replyWithPhoto(photo);
+    storeSentMessageText(ctx, sent.message_id, description);
+    storeSentMessageContext(ctx, sent.message_id, description, { kind: 'image', delivery: 'photo' });
+    await addToHistory(ctx, 'bot', description, { kind: 'image' });
+    if (ctx.persistOutgoingImageContext) {
+        await ctx.persistOutgoingImageContext(ctx.session.sentMessageContexts![sent.message_id]);
+    }
+    return sent;
+}
+
+export async function sendGeneratedImageAndStore(ctx: BotContext, result: ProcessingResult) {
+    const photo = generatedImageInput(result);
+    if (!photo) return;
+    await ctx.api.sendChatAction(ctx.chat!.id, 'upload_photo');
+    return replyWithPhotoAndStore(ctx, photo, generatedImageHistoryText(result));
 }
 
 // ── Реакции ─────────────────────────────────────────────────
@@ -428,9 +447,7 @@ export async function sendResultToUser(
         } : {});
 
         try {
-            await ctx.api.sendChatAction(ctx.chat!.id, "upload_photo");
-            await ctx.replyWithPhoto(generatedImageInput(result)!);
-            await addToHistory(ctx, 'bot', '[Сгенерированное изображение отправлено]');
+            await sendGeneratedImageAndStore(ctx, result);
         } catch (imageError) {
             console.error("Ошибка при отправке сгенерированного изображения:", imageError);
             await ctx.reply("К сожалению, не удалось отправить сгенерированное изображение. Возможно, проблема с URL или сервисом генерации изображений.");

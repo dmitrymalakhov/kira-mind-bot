@@ -185,7 +185,7 @@ export async function extractAndSaveFactsFromConversation(
         const effectiveStartIndex = startIndex >= totalCount ? 0 : Math.max(0, startIndex);
         const newCount = Math.max(0, totalCount - effectiveStartIndex);
         const recentMessages = ctx.session.messageHistory.slice(0, Math.min(10, newCount));
-        const conversation = recentMessages.reverse();
+        const conversation = recentMessages.filter(message => message.kind !== 'image').reverse();
 
         if (conversation.length < 1) {
             devLog('Нет сообщений для анализа фактов');

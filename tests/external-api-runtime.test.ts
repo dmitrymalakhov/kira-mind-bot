@@ -123,6 +123,52 @@ test('mobile text awaits the shared orchestration result and retains owner ident
     assert.ok(stored!.messageHistory.some(item => item.role === 'bot' && item.content === 'Общий ответ'));
 });
 
+test('mobile text and button-generated local images retain visual history without merging photo and spoken text', async t => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'kira-api-image-history-'));
+    t.after(() => fs.rm(directory, { recursive: true, force: true }));
+    const filename = path.join(directory, 'scene.png');
+    await fs.writeFile(filename, Buffer.from('synthetic-image-bytes'));
+    let stored: SessionData | undefined;
+    t.mock.method(TypeORMSessionStorage.prototype, 'read', async () => stored);
+    t.mock.method(TypeORMSessionStorage.prototype, 'write', async (_key: string, value: SessionData) => { stored = value; });
+    t.mock.method(history, 'addToHistory', async (ctx: BotContext, role: string, content: string, options: { kind?: 'image' } = {}) => {
+        ctx.session.messageHistory.unshift({ role, content, timestamp: new Date(), ...options });
+    });
+    t.mock.method(reconsolidation, 'reconsolidateAfterResponse', async () => {});
+    let runs = 0;
+    const description = 'Я нарисовала кота-астронавта с рыбкой в лапах на синем фоне.';
+    const sunset = 'Я сохранила кота-астронавта с рыбкой в лапах и сделала фон оранжевым закатом.';
+    t.mock.method(orchestrator, 'processMessage', async (ctx: BotContext) => {
+        runs++;
+        if (runs === 1) ctx.session.pendingQuickChoices = {
+            image: { originalMessage: 'Нарисуй кота', choices: [{ label: 'Закат', message: 'Сделай фон закатом' }], createdAt: Date.now(), expiresAt: Date.now() + 60_000 },
+        };
+        else assert.ok(ctx.session.messageHistory.some(item => item.content === description));
+        return {
+            responseText: 'Вот картинка!', imageGenerated: true, generatedImagePath: filename,
+            generatedImageDescription: runs === 1 ? description : sunset,
+            keyboard: runs === 1 ? new InlineKeyboard().text('Закат', 'qch:image:0') : undefined,
+        };
+    });
+    const bot = new Bot<BotContext>(botToken, { botInfo: {
+        id: 1234567890, is_bot: true, first_name: 'Test', username: 'synthetic_bot',
+    } as any });
+    const backend = new BotApiBackend(bot, { token, ownerId: owner, host: '127.0.0.1', port: 3200 });
+    const reply = await backend.message('Нарисуй кота');
+    const text = reply.messages.find(item => item.type === 'text' && item.text === 'Вот картинка!')!;
+    const photo = reply.messages.find(item => item.type === 'photo')!;
+    assert.ok(text && photo);
+    assert.equal(photo.text, undefined);
+    const action = text.buttons![0][0].actionToken!;
+    const followUp = await backend.action(action);
+    assert.ok(followUp.messages.some(item => item.type === 'photo' && item.text === undefined));
+    assert.equal(runs, 2);
+    const visibleHistory = (await backend.history(20)).messages;
+    assert.ok(visibleHistory.some(item => item.role === 'assistant' && item.text === description));
+    assert.ok(visibleHistory.some(item => item.role === 'assistant' && item.text === sunset));
+    assert.ok(stored!.messageHistory.filter(item => item.kind === 'image').length === 2);
+});
+
 test('Telegram and mobile drafts cannot overwrite or send each other’s draft', () => {
     const key = `api:${owner}`;
     saveMessageDraft(owner, 730002, 'Telegram draft');

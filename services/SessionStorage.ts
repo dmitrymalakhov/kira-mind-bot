@@ -598,7 +598,8 @@ export async function appendPersistedSentMessageContext(
 export async function appendPersistedHistory(
     chatId: number,
     role: string,
-    content: string
+    content: string,
+    options: { kind?: 'image' } = {},
 ): Promise<void> {
     try {
         const repo = AppDataSource.getRepository(SessionEntity);
@@ -606,7 +607,7 @@ export async function appendPersistedHistory(
         const rawQuery = repositoryRawQuery(repo);
         if (rawQuery) {
             await ensureSessionRow(rawQuery, key);
-            const historyEntry = JSON.stringify({ role, content, timestamp: new Date() });
+            const historyEntry = JSON.stringify({ role, content, timestamp: new Date(), ...options });
             await rawQuery(`
                 UPDATE bot_sessions
                 SET data = jsonb_set(
@@ -637,6 +638,7 @@ export async function appendPersistedHistory(
             role,
             content,
             timestamp: new Date(),
+            ...options,
         });
 
         const next: PersistedSession = {

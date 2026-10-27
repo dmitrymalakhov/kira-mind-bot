@@ -1,7 +1,5 @@
 import { Bot, InlineKeyboard } from "grammy";
 import { InputFile } from "grammy/types";
-import * as fs from "fs";
-import * as path from "path";
 import { BotContext } from "../types";
 import { Reminder, ReminderStatus, cancelReminder, markReminderAsCompleted, postponeReminderUntil } from "../reminder";
 import { reminderAgent } from "../agents/reminderAgent";
@@ -52,7 +50,7 @@ import {
 } from "../utils/reminderTargetNotification";
 import { handleRecurringTaskCallback } from "../services/recurringTaskService";
 import { getBotGenderedText } from "../persona";
-import { saveRemindersFromResult as saveSharedRemindersFromResult } from '../handlers/shared';
+import { saveRemindersFromResult as saveSharedRemindersFromResult, sendResultToUser } from '../handlers/shared';
 import {
     buildReminderAssistanceRequest,
     getReminderAssistanceKnowledgeSourceText,
@@ -205,55 +203,7 @@ async function sendProcessingResult(ctx: BotContext, result: ProcessingResult) {
     }
 
     await addToHistory(ctx, "bot", result.responseText);
-    if (result.structuredResponseBlocks?.length) {
-        await sendStructured(ctx.api as any, ctx.chat!.id, result.structuredResponseBlocks, {
-            replyMarkup: result.keyboard,
-        });
-        return;
-    }
-    const replyOptions = result.keyboard ? { reply_markup: result.keyboard } : {};
-    await sendMessage(ctx, result.responseText, replyOptions);
-
-    if (result.reminderCreated && result.icsFilePath) {
-        try {
-            await ctx.api.sendChatAction(ctx.chat!.id, "upload_document");
-            const fileStream = fs.createReadStream(result.icsFilePath);
-            const filename = path.basename(result.icsFilePath);
-            await ctx.replyWithDocument(new InputFile(fileStream, filename), {
-                caption: "Открой этот файл, чтобы добавить событие в свой календарь.",
-            });
-            fs.unlinkSync(result.icsFilePath);
-        } catch (fileError) {
-            console.error("Ошибка при отправке ICS файла:", fileError);
-            await ctx.reply("К сожалению, не удалось отправить файл календаря. Но я всё равно напомню тебе о событии в назначенное время.");
-        }
-    }
-
-    if (result.documentFilePath) {
-        try {
-            await ctx.api.sendChatAction(ctx.chat!.id, "upload_document");
-            const fileStream = fs.createReadStream(result.documentFilePath);
-            const filename = result.documentFilename || path.basename(result.documentFilePath);
-            await ctx.replyWithDocument(new InputFile(fileStream, filename), result.documentCaption ? {
-                caption: result.documentCaption,
-            } : undefined);
-            fs.unlinkSync(result.documentFilePath);
-        } catch (fileError) {
-            console.error("Ошибка при отправке документа:", fileError);
-            await ctx.reply("Не удалось отправить документ. Попробуй запросить экспорт ещё раз.");
-        }
-    }
-
-    if (result.imageGenerated && result.generatedImageUrl) {
-        try {
-            await ctx.api.sendChatAction(ctx.chat!.id, "upload_photo");
-            await ctx.replyWithPhoto(result.generatedImageUrl);
-            await addToHistory(ctx, "bot", `[Сгенерированное изображение: ${result.generatedImageUrl}]`);
-        } catch (imageError) {
-            console.error("Ошибка при отправке сгенерированного изображения:", imageError);
-            await ctx.reply("К сожалению, не удалось отправить сгенерированное изображение. Возможно, проблема с URL или сервисом генерации изображений.");
-        }
-    }
+    await sendResultToUser(ctx, result);
 
     if (ctx.session.lastFactSaveError) {
         await ctx.reply(`⚠️ ${ctx.session.lastFactSaveError}`);

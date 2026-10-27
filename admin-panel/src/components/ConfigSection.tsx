@@ -1,18 +1,21 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import {
-  Card,
-  CardContent,
-  CardHeader,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  IconButton,
   Button,
   Box,
   CircularProgress,
   Divider,
   FormControlLabel,
   Checkbox,
-  Tooltip,
+  Stack,
+  Typography,
 } from '@mui/material';
 import SaveIcon from '@mui/icons-material/Save';
-import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import CloseIcon from '@mui/icons-material/Close';
 import { FieldInput } from './FieldInput';
 import { saveConfig, fetchConfig, restartService } from '../api';
 import type { SectionDef, ConfigResponse } from '../types';
@@ -22,10 +25,14 @@ interface Props {
   config: ConfigResponse;
   onUpdate: (cfg: ConfigResponse) => void;
   onToast: (message: string, severity: 'success' | 'error') => void;
+  onDirtyChange?: (id: string, dirty: boolean) => void;
+  open: boolean;
+  onClose: () => void;
 }
 
 export interface ConfigSectionHandle {
   getUpdates: () => Record<string, string | null>;
+  acceptSaved: (config: ConfigResponse, submitted: Record<string, string | null>) => void;
 }
 
 function getEntryValue(entry?: ConfigResponse[string]): string {
@@ -35,20 +42,42 @@ function getEntryValue(entry?: ConfigResponse[string]): string {
 }
 
 export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
-  function ConfigSection({ section, config, onUpdate, onToast }, ref) {
+  function ConfigSection({ section, config, onUpdate, onToast, onDirtyChange, open, onClose }, ref) {
     const [localValues, setLocalValues] = useState<Record<string, string>>(() =>
       Object.fromEntries(section.fields.map((field) => [field.key, getEntryValue(config[field.key])]))
     );
     const [saving, setSaving] = useState(false);
     const [autoRestart, setAutoRestart] = useState(false);
+    const previousConfig = useRef(config);
 
     useEffect(() => {
-      setLocalValues(
-        Object.fromEntries(section.fields.map((field) => [field.key, getEntryValue(config[field.key])]))
-      );
+      const previous = previousConfig.current;
+      previousConfig.current = config;
+      setLocalValues(values => Object.fromEntries(section.fields.map(field => [
+        field.key,
+        values[field.key] !== getEntryValue(previous[field.key])
+          ? values[field.key]
+          : getEntryValue(config[field.key]),
+      ])));
     }, [config, section.fields]);
 
+    const dirty = section.fields.some(field => {
+      const value = localValues[field.key] ?? '';
+      return !value.includes('••••') && value !== getEntryValue(config[field.key]);
+    });
+    useEffect(() => { onDirtyChange?.(section.id, dirty); }, [section.id, dirty, onDirtyChange]);
+
+    const acceptSaved = (saved: ConfigResponse, submitted: Record<string, string | null>) => {
+      setLocalValues(values => Object.fromEntries(section.fields.map(field => [
+        field.key,
+        Object.prototype.hasOwnProperty.call(submitted, field.key) && values[field.key] === submitted[field.key]
+          ? getEntryValue(saved[field.key])
+          : values[field.key],
+      ])));
+    };
+
     useImperativeHandle(ref, () => ({
+      acceptSaved,
       getUpdates() {
         const updates: Record<string, string | null> = {};
         for (const field of section.fields) {
@@ -86,10 +115,9 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
             onToast(result.message || '✅ Сохранено', 'success');
           }
           const newCfg = await fetchConfig();
+          acceptSaved(newCfg, updates);
           onUpdate(newCfg);
-          setLocalValues(
-            Object.fromEntries(section.fields.map((field) => [field.key, getEntryValue(newCfg[field.key])]))
-          );
+          onClose();
         } else {
           onToast(result.error || 'Ошибка сохранения', 'error');
         }
@@ -104,53 +132,13 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
     const regularFields = section.fields.filter((field) => field.type !== 'toggle');
 
     return (
-      <Card id={section.id} sx={{ mb: 2 }}>
-        <CardHeader
-          title={`${section.icon} ${section.title}`}
-          titleTypographyProps={{ variant: 'subtitle1', fontWeight: 600, color: 'secondary.main' }}
-          action={
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Tooltip title="Автоматически перезапустить бота после сохранения">
-                <FormControlLabel
-                  control={
-                    <Checkbox
-                      size="small"
-                      checked={autoRestart}
-                      onChange={(e) => setAutoRestart(e.target.checked)}
-                      sx={{ color: 'text.disabled', '&.Mui-checked': { color: 'primary.light' } }}
-                    />
-                  }
-                  label={<span style={{ fontSize: 11, color: '#64748b' }}>рестарт</span>}
-                  sx={{ mr: 0 }}
-                />
-              </Tooltip>
-              <Button
-                variant="outlined"
-                size="small"
-                startIcon={
-                  saving ? (
-                    <CircularProgress size={14} color="inherit" />
-                  ) : autoRestart ? (
-                    <RestartAltIcon fontSize="small" />
-                  ) : (
-                    <SaveIcon fontSize="small" />
-                  )
-                }
-                onClick={handleSave}
-                disabled={saving}
-                sx={{
-                  borderColor: 'divider',
-                  color: 'text.secondary',
-                  '&:hover': { borderColor: 'primary.main', color: 'primary.light' },
-                }}
-              >
-                Сохранить
-              </Button>
-            </div>
-          }
-          sx={{ pb: 0 }}
-        />
-        <CardContent>
+      <Dialog open={open} onClose={() => { if (!saving) onClose(); }} keepMounted fullWidth maxWidth="md" scroll="paper" aria-labelledby={`config-dialog-title-${section.id}`}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <DialogTitle id={`config-dialog-title-${section.id}`} sx={{ py: 1.5 }}>{section.title}</DialogTitle>
+          <IconButton aria-label="Закрыть настройки" disabled={saving} onClick={onClose} sx={{ mr: 1.5 }}><CloseIcon /></IconButton>
+        </Box>
+        <DialogContent dividers sx={{ pt: 3 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 3 }}>Параметры окружения применяются после пересоздания контейнеров.</Typography>
           {regularFields.length > 0 && (
             <Box
               sx={{
@@ -196,8 +184,19 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
               onChange={handleChange}
             />
           ))}
-        </CardContent>
-      </Card>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2, gap: 1, flexWrap: 'wrap', justifyContent: 'space-between' }}>
+          <FormControlLabel
+            control={<Checkbox size="small" checked={autoRestart} disabled={saving} onChange={event => setAutoRestart(event.target.checked)} />}
+            label={<Typography variant="body2" color="text.secondary">Перезапустить бота после сохранения</Typography>}
+            sx={{ ml: -1 }}
+          />
+          <Stack direction="row" spacing={1} sx={{ ml: 'auto !important' }}>
+            <Button disabled={saving} onClick={onClose}>Закрыть</Button>
+            <Button variant="contained" disabled={saving || !dirty} onClick={() => void handleSave()} startIcon={saving ? <CircularProgress size={14} color="inherit" /> : <SaveIcon />}>Сохранить</Button>
+          </Stack>
+        </DialogActions>
+      </Dialog>
     );
   }
 );

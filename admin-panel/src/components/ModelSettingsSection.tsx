@@ -1,26 +1,20 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Card,
-  CardContent, Chip, CircularProgress, MenuItem, Stack, TextField, Typography,
+  CardContent, CircularProgress, MenuItem, Stack, TextField, Tooltip, Typography,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import SaveIcon from '@mui/icons-material/Save';
 import { fetchAiPreset, saveAiPreset } from '../api';
-import type { AiModelRef, AiPresetName, AiPresetResponse, ConfigResponse } from '../types';
-import type { ConfigSectionHandle } from './ConfigSection';
-import { BudgetSettingsSection } from './BudgetSettingsSection';
+import type { AiModelRef, AiPresetName, AiPresetResponse } from '../types';
 import { getAiProviderDescriptor } from '../../../ai/providerMetadata';
 import { LocalModelSettings } from './LocalModelSettings';
-import { ImageGenerationSettings } from './ImageGenerationSettings';
 
 interface Props {
-  config: ConfigResponse;
-  onUpdate: (cfg: ConfigResponse) => void;
   onToast: (message: string, severity: 'success' | 'error') => void;
 }
 
 const TASK_LABELS: Record<string, string> = {
-  conversation: 'Обычный диалог', complexReasoning: 'Сложные ответы',
+  conversation: 'Диалог', complexReasoning: 'Сложные запросы',
   defaultText: 'Повседневный текст', lightweightText: 'Короткие проверки',
   intentClassification: 'Понимание запроса', intentDedup: 'Проверка повторов',
   memoryExtraction: 'Извлечение фактов', memoryConsolidation: 'Упорядочивание памяти',
@@ -32,123 +26,98 @@ function modelLabel(ref?: AiModelRef) {
   return ref ? `${getAiProviderDescriptor(ref.provider).label} · ${ref.model}` : 'Не определена';
 }
 
-export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
-  function ModelSettingsSection({ onToast }, ref) {
-    const [data, setData] = useState<AiPresetResponse | null>(null);
-    const [selected, setSelected] = useState<AiPresetName>('gpt-balanced');
-    const [loading, setLoading] = useState(true);
-    const [saving, setSaving] = useState(false);
-    const [showLocalModels, setShowLocalModels] = useState(false);
-    useImperativeHandle(ref, () => ({ getUpdates: () => ({}) }));
+export function ModelSettingsSection({ onToast }: Props) {
+  const [data, setData] = useState<AiPresetResponse | null>(null);
+  const [selected, setSelected] = useState<AiPresetName>('gpt-balanced');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
-    async function load() {
-      setLoading(true);
-      try {
-        const result = await fetchAiPreset();
-        setData(result);
-        setSelected(result.configuredPresetName);
-      } catch {
-        onToast('Не удалось загрузить модель Киры', 'error');
-      } finally { setLoading(false); }
-    }
-    useEffect(() => { void load(); }, []);
-
-    const active = data?.availablePresets.find(preset => preset.name === data.configuredPresetName);
-    const preview = data?.availablePresets.find(preset => preset.name === selected);
-    const changed = selected !== data?.configuredPresetName;
-
-    async function save() {
-      setSaving(true);
-      try {
-        const result = await saveAiPreset(selected);
-        if (!result.success) throw new Error(result.error || 'Не удалось сохранить модель');
-        await load();
-        onToast('Модель сохранена. Кира подхватит выбор в течение 5 секунд.', 'success');
-      } catch (error) {
-        onToast(error instanceof Error ? error.message : 'Ошибка соединения', 'error');
-      } finally { setSaving(false); }
-    }
-
-    return (
-      <>
-        <Card id="model-presets" sx={{ mb: 2 }}>
-          <CardContent>
-            <Stack spacing={2}>
-              <Typography variant="subtitle1" component="h2" fontWeight={600}>Модель общения Киры</Typography>
-              {active && (
-                <Alert severity="success">
-                  <Typography variant="body2">Сейчас Кира отвечает: <b>{modelLabel(active.models.conversation)}</b></Typography>
-                  <Typography variant="body2">Сложные запросы: <b>{modelLabel(active.models.complexReasoning)}</b></Typography>
-                </Alert>
-              )}
-              <Typography variant="body2" color="text.secondary">
-                Выберите профиль и нажмите «Применить». Профиль задаёт модели для общения и служебных задач.
-                Самостоятельные фоновые функции включаются отдельно ниже.
-              </Typography>
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', sm: 'flex-start' }}>
-                <TextField
-                  select fullWidth label="Модель и режим работы" value={selected}
-                  onChange={event => setSelected(event.target.value as AiPresetName)}
-                  disabled={loading || saving || !data}
-                  helperText="GPT работает через настроенный lmrouter. LM Studio использует модель на вашем компьютере. Гибрид сочетает оба варианта."
-                >
-                  {(data?.availablePresets ?? []).map(preset => (
-                    <MenuItem key={preset.name} value={preset.name} disabled={!preset.enabled}>
-                      {preset.title}{!preset.enabled ? ' · не настроен' : ''}
-                    </MenuItem>
-                  ))}
-                </TextField>
-                <Button variant="contained" onClick={() => void save()}
-                  disabled={loading || saving || !changed || !preview?.enabled}
-                  startIcon={saving ? <CircularProgress size={14} color="inherit" /> : <SaveIcon />}
-                >Применить</Button>
-              </Stack>
-              {preview && (
-                <>
-                  <Stack direction="row" spacing={1} flexWrap="wrap">
-                    <Chip size="small" color={changed ? 'warning' : 'success'} label={changed ? 'Предпросмотр — нажмите «Применить»' : 'Этот профиль сохранён'} />
-                  </Stack>
-                  <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
-                    {(['conversation', 'complexReasoning'] as const).map(task => (
-                      <Box key={task} sx={{ flex: 1, p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
-                        <Typography variant="caption" color="text.secondary">{TASK_LABELS[task]}</Typography>
-                        <Typography variant="body2" fontWeight={600}>{modelLabel(preview.models[task])}</Typography>
-                      </Box>
-                    ))}
-                  </Stack>
-                  <Typography variant="body2" color="text.secondary">{preview.description}</Typography>
-                  {!preview.enabled && <Alert severity="warning">{preview.unavailableReason}</Alert>}
-                  <Accordion disableGutters sx={{ bgcolor: 'transparent', '&:before': { display: 'none' } }}>
-                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                      <Typography variant="body2">Модели по задачам и профиль памяти</Typography>
-                    </AccordionSummary>
-                    <AccordionDetails>
-                      <Stack spacing={1}>
-                        {data && <Alert severity={data.memoryEmbeddingProfile.compatibility.status === 'mismatch' ? 'error' : 'info'}>
-                          Память: {data.memoryEmbeddingProfile.title} · {data.memoryEmbeddingProfile.model}. {data.memoryEmbeddingProfile.compatibility.summary}
-                          {' '}Смена профиля общения не меняет сохранённые векторы памяти.
-                        </Alert>}
-                        {Object.entries(preview.models).map(([task, model]) => (
-                          <Typography key={task} variant="body2"><b>{TASK_LABELS[task] || task}:</b> {modelLabel(model)}</Typography>
-                        ))}
-                      </Stack>
-                    </AccordionDetails>
-                  </Accordion>
-                </>
-              )}
-              {loading && <CircularProgress size={20} aria-label="Загрузка модели" />}
-              {(selected === 'lmstudio-local' || selected === 'hybrid-lmstudio-gpt')
-                ? <LocalModelSettings onToast={onToast} onSaved={() => void load()} />
-                : <Accordion expanded={showLocalModels} onChange={(_, expanded) => setShowLocalModels(expanded)}>
-                    <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography variant="body2">Настроить локальные модели LM Studio</Typography></AccordionSummary>
-                    <AccordionDetails>{showLocalModels && <LocalModelSettings onToast={onToast} onSaved={() => void load()} />}</AccordionDetails>
-                  </Accordion>}
-            </Stack>
-          </CardContent>
-        </Card>
-        <ImageGenerationSettings onToast={onToast} />
-        <BudgetSettingsSection onToast={onToast} />
-      </>
-    );
+  async function load() {
+    setLoading(true);
+    setError('');
+    try {
+      const result = await fetchAiPreset();
+      setData(result);
+      setSelected(result.configuredPresetName);
+    } catch { setError('Не удалось загрузить профиль ответов.'); }
+    finally { setLoading(false); }
   }
-);
+  useEffect(() => { void load(); }, []);
+
+  const preview = data?.availablePresets.find(preset => preset.name === selected);
+  const changed = Boolean(data && selected !== data.configuredPresetName);
+  const sameModel = preview?.models.conversation?.provider === preview?.models.complexReasoning?.provider
+    && preview?.models.conversation?.model === preview?.models.complexReasoning?.model;
+
+  async function save() {
+    setSaving(true);
+    setError('');
+    try {
+      const result = await saveAiPreset(selected);
+      if (!result.success) throw new Error(result.error || 'Не удалось сохранить профиль');
+      const next = await fetchAiPreset();
+      setData(next);
+      setSelected(next.configuredPresetName);
+      onToast('Профиль ответов сохранён', 'success');
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Ошибка соединения'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <Stack spacing={2} sx={{ height: '100%' }}>
+      <Card id="model-presets" sx={{ flex: 1 }}>
+        <CardContent>
+          <Stack spacing={2}>
+            <Typography variant="subtitle1" component="h2" fontWeight={600}>Ответы Киры</Typography>
+            {error && <Alert severity="error" action={<Button color="inherit" size="small" disabled={loading || saving} onClick={() => void load()}>Повторить</Button>}>{error}</Alert>}
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="stretch">
+              <TextField select size="small" fullWidth label="Профиль ответов" value={data ? selected : ''}
+                onChange={event => setSelected(event.target.value as AiPresetName)} disabled={loading || saving || !data}>
+                {(data?.availablePresets ?? []).map(preset => (
+                  <MenuItem key={preset.name} value={preset.name} disabled={!preset.enabled}>{preset.title}{!preset.enabled ? ' · не настроен' : ''}</MenuItem>
+                ))}
+              </TextField>
+              {changed && <Button variant="contained" onClick={() => void save()} disabled={saving || !preview?.enabled}
+                startIcon={saving ? <CircularProgress size={14} color="inherit" /> : undefined}>Применить</Button>}
+            </Stack>
+            {changed && <Typography variant="caption" color="warning.main">Выбран новый профиль. Примените, чтобы сохранить.</Typography>}
+            {loading && <CircularProgress size={18} aria-label="Загрузка профиля" />}
+            {preview && <>
+              <Stack spacing={1}>
+                {(sameModel ? ['conversation'] as const : ['conversation', 'complexReasoning'] as const).map(task => (
+                  <Stack direction="row" alignItems="baseline" spacing={2} key={task} sx={{ minWidth: 0 }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0, minWidth: 106 }}>{sameModel ? 'Модель' : TASK_LABELS[task]}</Typography>
+                    <Tooltip title={modelLabel(preview.models[task])}>
+                      <Typography variant="body2" noWrap sx={{ minWidth: 0 }}>{preview.models[task]?.model || 'Не определена'}</Typography>
+                    </Tooltip>
+                  </Stack>
+                ))}
+              </Stack>
+              {!preview.enabled && <Alert severity="warning">{preview.unavailableReason}</Alert>}
+            </>}
+            {data?.memoryEmbeddingProfile.compatibility.status === 'mismatch' && <Alert severity="error">{data.memoryEmbeddingProfile.compatibility.summary}</Alert>}
+          </Stack>
+        </CardContent>
+      </Card>
+      <Box>
+        <Card sx={{ mb: 2 }}><CardContent><LocalModelSettings onToast={onToast} onSaved={() => void load()} /></CardContent></Card>
+        {preview && <Accordion disableGutters>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />} id="model-routing-summary" aria-controls="model-routing-details">
+            <Typography variant="body2">Технические маршруты и память</Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{preview.description}</Typography>
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' }, gap: 1.5 }}>
+              {Object.entries(preview.models).map(([task, model]) => <Box key={task} sx={{ minWidth: 0 }}>
+                <Typography variant="caption" color="text.secondary">{TASK_LABELS[task] || task}</Typography>
+                <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>{modelLabel(model)}</Typography>
+              </Box>)}
+            </Box>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>Память: {data?.memoryEmbeddingProfile.title} · {data?.memoryEmbeddingProfile.model}. {data?.memoryEmbeddingProfile.compatibility.summary}</Typography>
+          </AccordionDetails>
+        </Accordion>}
+      </Box>
+    </Stack>
+  );
+}

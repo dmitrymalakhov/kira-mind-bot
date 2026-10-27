@@ -191,13 +191,13 @@ export async function mapsAgent(
                     queryResult.origin = `${lastLocation.latitude},${lastLocation.longitude}`;
                     devLog(`Using user's last location as origin: ${queryResult.origin}`);
                 }
-                return await processDirectionsQuery(queryResult, message, messageHistory);
+                return { ...await processDirectionsQuery(queryResult, message, messageHistory), generatedImageRequest: message };
 
             case "place_search":
-                return await processPlaceSearchQuery(queryResult, message, messageHistory);
+                return { ...await processPlaceSearchQuery(queryResult, message, messageHistory), generatedImageRequest: message };
 
             case "address_lookup":
-                return await processAddressLookupQuery(queryResult, message, messageHistory);
+                return { ...await processAddressLookupQuery(queryResult, message, messageHistory), generatedImageRequest: message };
 
             default:
                 return {
@@ -275,7 +275,8 @@ async function processDirectionsQuery(
         return {
             responseText,
             imageGenerated: true,
-            generatedImageUrl: mapUrl
+            generatedImageUrl: mapUrl,
+            generatedImageDescription: `На карте я отметила начало пути — ${queryResult.origin} — зелёным маркером A, а ${queryResult.destination} — красным маркером B.`,
         };
     } catch (error) {
         console.error("Error processing directions query:", error);
@@ -359,7 +360,8 @@ async function processPlaceSearchQuery(
             return {
                 responseText,
                 imageGenerated: true,
-                generatedImageUrl: mapUrl
+                generatedImageUrl: mapUrl,
+                generatedImageDescription: `На карте я отметила найденные места рядом с ${queryResult.location}: ${places.slice(0, 5).filter(place => place.geometry?.location).map(place => place.name).join(', ') || 'красные маркеры мест'}. Зелёный маркер S показывает центр поиска.`,
             };
         } else {
             return {
@@ -423,7 +425,8 @@ async function processAddressLookupQuery(
         return {
             responseText,
             imageGenerated: true,
-            generatedImageUrl: mapUrl
+            generatedImageUrl: mapUrl,
+            generatedImageDescription: `На карте я показала ${geocoded.formatted_address}; нужное место отмечено красным маркером.`,
         };
     } catch (error) {
         console.error("Error processing address lookup query:", error);

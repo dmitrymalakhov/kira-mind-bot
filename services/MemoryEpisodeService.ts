@@ -34,7 +34,7 @@ function botId(): string {
 }
 
 function asSourceMessages(messages: MessageHistory[]): MemorySourceMessage[] {
-    return messages.slice(-MAX_EPISODE_MESSAGES).map((m) => ({
+    return messages.filter(m => m.kind !== 'image').slice(-MAX_EPISODE_MESSAGES).map((m) => ({
         role: m.role,
         content: m.content,
         timestamp: m.timestamp instanceof Date ? m.timestamp : new Date(m.timestamp),
@@ -217,6 +217,7 @@ export async function updateWorkingMemoryFromMessages(
 
     const previous = ctx.session.workingMemory;
     const sourceMessages = asSourceMessages(messages);
+    if (sourceMessages.length === 0) return previous;
     const dialogue = sourceMessages
         .map((m) => `${m.role === 'user' ? 'Пользователь' : 'Бот'}: ${m.content.slice(0, 400)}`)
         .join('\n');

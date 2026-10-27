@@ -1,4 +1,5 @@
-import { generatedImageInput } from "../utils/generatedImage";
+import { generatedImageInput, generatedImageHistoryText } from "../utils/generatedImage";
+import { sendGeneratedImageAndStore } from '../handlers/shared';
 /**
  * Group Public Agent
  *
@@ -47,7 +48,7 @@ function pushGroupHistory(chatId: number, entry: GroupHistoryEntry): void {
     groupChatHistory.set(chatId, history);
 }
 
-async function classifyPublicMessage(message: string): Promise<PublicIntent> {
+async function classifyPublicMessage(message: string, chatId: number): Promise<PublicIntent> {
     try {
         const resp = await createChatCompletionForTask('memoryExtraction', {
             messages: [
@@ -57,7 +58,7 @@ async function classifyPublicMessage(message: string): Promise<PublicIntent> {
                 },
                 {
                     role: "user",
-                    content: `Message: "${message}"\n\nRules:\n- WEB_SEARCH: user asks to find/search info online, news, facts\n- MAPS: routes, addresses, places, navigation\n- IMAGE_GENERATION: draw/generate/create image/picture\n- CAPABILITIES: asks what the bot can do, whether it can do a specific thing, or how to ask it to do something\n- CONVERSATION: everything else (questions, chat, advice, etc.)`,
+                    content: `Recent context (only to resolve references): ${getGroupHistory(chatId).slice(-3).map(entry => `User: ${entry.userMessage}\nAssistant: ${entry.botResponse}`).join('\n')}\n\nNew message: "${message}"\n\nRules:\n- WEB_SEARCH: user asks to find/search info online, news, facts\n- MAPS: routes, addresses, places, navigation\n- IMAGE_GENERATION: draw/generate/create image/picture, or modify the previous image (such as changing its background)\n- CAPABILITIES: asks what the bot can do, whether it can do a specific thing, or how to ask it to do something\n- CONVERSATION: everything else, including questions about details in the previously sent image`,
                 },
             ],
             temperature: 1,
@@ -111,7 +112,7 @@ export async function handleGroupPublicUserMessage(ctx: BotContext): Promise<voi
     try {
         await ctx.api.sendChatAction(chatId, "typing");
 
-        const intent = await classifyPublicMessage(message);
+        const intent = await classifyPublicMessage(message, chatId);
 
         if (intent === "CAPABILITIES") {
             const response = await answerCapabilitiesQuestion(message, { publicMode: true });
@@ -120,13 +121,16 @@ export async function handleGroupPublicUserMessage(ctx: BotContext): Promise<voi
         }
 
         if (intent === "IMAGE_GENERATION") {
-            const result = await imageGenerationAgent(message, false, "", []);
+            const history = getGroupHistory(chatId).flatMap(entry => [
+                { role: 'user', content: entry.userMessage, timestamp: new Date() },
+                { role: 'bot', content: entry.botResponse, timestamp: new Date() },
+            ]);
+            const result = await imageGenerationAgent(message, false, "", history);
             let replyText: string;
             if (generatedImageInput(result)) {
-                await ctx.replyWithPhoto(generatedImageInput(result)!, {
-                    caption: result.responseText || undefined,
-                });
-                replyText = result.responseText || "[изображение]";
+                if (result.responseText) await ctx.reply(result.responseText);
+                await sendGeneratedImageAndStore(ctx, result);
+                replyText = [result.responseText, generatedImageHistoryText(result)].filter(Boolean).join('\n');
             } else {
                 replyText = result.responseText || "Не удалось сгенерировать изображение.";
                 await ctx.reply(replyText);

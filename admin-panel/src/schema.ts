@@ -61,13 +61,13 @@ const BASE_CONFIG_SCHEMA: SectionDef[] = [
       },
       {
         key: 'OPENAI_IMAGE_API_KEY',
-        label: 'Отдельный ключ OpenAI Image (необязательно)',
+        label: 'OpenAI Image API Key',
         type: 'password',
-        hint: 'Пустое поле использует OPENAI_API_KEY. Применяется после пересоздания контейнеров. Модель и референс выбираются в разделе «Модели».',
+        hint: 'Пустое поле использует OPENAI_API_KEY. Применяется после пересоздания контейнеров. Модель выбирается на вкладке «Изображения», референс — в «Личность → Внешность».',
       },
       {
         key: 'OPENAI_IMAGE_BASE_URL',
-        label: 'Отдельный OpenAI Image Base URL (необязательно)',
+        label: 'OpenAI Image Base URL',
         type: 'text',
         hint: 'Пустое поле использует OPENAI_BASE_URL, включая ваш lmrouter. Адрес должен включать /v1. Применяется после пересоздания контейнеров.',
       },

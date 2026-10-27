@@ -7,6 +7,8 @@ import { generateOpenAiImage, getImageSettings, CharacterReferenceRequiredError 
 import { parseImagePromptPlan, characterImagePlanningInstruction } from "../utils/imagePromptPlan";
 import { formatPromptDateTime } from "../utils/time";
 import { config } from "../config";
+import { promises as fs } from 'node:fs';
+import { describeOutgoingImage } from '../services/outgoingImageDescription';
 import {
     getKiraSelfMemoryState,
     getRecentKiraSelfEvents,
@@ -81,7 +83,7 @@ export async function imageGenerationAgent(
                 biography: getBotBiography(),
                 selfLifeContext,
                 formattedDateTime,
-            })
+            }) + historyContext
             : `
         Текущая дата и время: ${formattedDateTime}
         
@@ -112,7 +114,7 @@ export async function imageGenerationAgent(
                 },
                 {
                     role: "user",
-                    content: promptOptimizationQuery
+                    content: promptOptimizationQuery + '\nЕсли пользователь просит изменить прежнюю картинку, сохрани её сюжет и все детали из последнего описания в истории, кроме явно запрошенных изменений. Меняй только указанные элементы, не заменяя персонажей, предметы, одежду или их действия без просьбы.',
                 }
             ],
             temperature: 0.3,
@@ -124,6 +126,10 @@ export async function imageGenerationAgent(
         // A direct self-photo request cannot silently lose the canonical identity.
         const includesCharacter = isSelfPhotoRequest || plan.includesCharacter;
         const imagePath = await generateOpenAiImage(plan.prompt, includesCharacter);
+        // A failed read/vision pass must never discard a successful generation.
+        const generatedImageDescription = await fs.readFile(imagePath)
+            .then(data => describeOutgoingImage(data, imagePath.endsWith('.png') ? 'image/png' : imagePath.endsWith('.webp') ? 'image/webp' : 'image/jpeg', isSelfPhotoRequest))
+            .catch(() => undefined);
 
         // Успешно сгенерировали изображение
         return {
@@ -134,7 +140,9 @@ export async function imageGenerationAgent(
                     "Вот изображение, которое я создал по твоему запросу ✨",
                 ) + " Надеюсь, оно тебе понравится!",
             imageGenerated: true,
-            generatedImagePath: imagePath
+            generatedImagePath: imagePath,
+            generatedImageDescription,
+            generatedImageRequest: message,
         };
 
     } catch (error) {
