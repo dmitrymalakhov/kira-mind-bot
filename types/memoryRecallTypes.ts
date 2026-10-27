@@ -20,6 +20,20 @@ export interface MemoryRecallFocus {
     query: string;
     evidenceIds: string[];
     expiresAt: number;
+    /** Grounded search facets survive short follow-ups; never grants action scope. */
+    domains?: string[];
+    requestKind?: MemoryQueryPlan['requestKind'];
+    peopleQuery?: MemoryQueryPlan['peopleQuery'];
+    includeConversations?: boolean;
+}
+
+/** Retrieval outcome, separate from conversational summaries or assistant claims. */
+export interface MemoryRecallSummary {
+    state: 'found' | 'empty' | 'ambiguous' | 'unresolved' | 'unavailable';
+    requestKind?: MemoryQueryPlan['requestKind'];
+    subjects: Array<{ name: string; owner: boolean }>;
+    domains: string[];
+    evidenceCount: number;
 }
 
 export interface MemoryRelationStep {
@@ -44,5 +58,7 @@ export interface MemoryQueryPlan {
     peopleQuery?: { basis: 'relationships' | 'communication' | 'both'; relations: MemoryRelationStep[] };
     /** Validated memory domains for the explicitly requested topic, never identities. */
     domains?: string[];
+    /** Contextual topics of direct saved conversations, never promoted to owner facts. */
+    includeConversations?: boolean;
     references?: MemoryQueryReference[];
 }

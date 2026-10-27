@@ -6,6 +6,7 @@ import { isPersonRoleLabel, INVERSE_PERSON_RELATION_TYPES, PERSON_RELATION_QUERY
 import { isActiveRelationshipEvidence } from './personalRelationshipRecall';
 import { isUsablePersonEvidence } from './memoryEntityRecall';
 import { memoryContentExcerpt } from './memoryRanking';
+import { scoreMemoryLexicalMatch } from './memoryRetrieval';
 
 interface PersonEvidence { person: MemoryPerson; basis: 'relationship' | 'communication'; memory: SearchResult }
 export interface MemoryPeopleEntry { person: MemoryPerson; evidence: PersonEvidence[] }
@@ -107,4 +108,20 @@ export function formatMemoryPeople(collection: MemoryPeopleCollection, budget = 
     if (!collection.entries.length) lines.push('Подходящие свидетельства в этой выборке не найдены. Это ограничение поиска; не утверждай, что пользователь ни с кем не общается.');
     lines[1] = `Найдено в ограниченной выборке: ${collection.totalFound}. Показано: ${included.length}. Полнота архива не гарантируется${collection.truncated || included.length < collection.entries.length ? '; достигнута граница выборки' : ''}.`;
     return { context: lines.join('\n').slice(0, budget), included };
+}
+
+/** Broader contextual evidence is labelled separately; never added to the owner's fact pool. */
+export function formatTopicConversations(collection: MemoryPeopleCollection, query: string, seen: ReadonlySet<string> = new Set(), budget = 1800): { context: string; included: SearchResult[] } {
+    const candidates = collection.entries.flatMap(entry => entry.evidence.filter(item => item.basis === 'communication'))
+        .sort((a, b) => Number(seen.has(a.memory.id)) - Number(seen.has(b.memory.id)) ||
+            scoreMemoryLexicalMatch(b.memory.content, query).score - scoreMemoryLexicalMatch(a.memory.content, query).score);
+    if (!candidates.length) return { context: '', included: [] };
+    const lines = ['Отдельно — контекст прямых сохранённых переписок по теме. Это сведения из разговоров с названными людьми, не дополнительные факты о владельце. Источник подтверждает переписку и тему; он не доказывает, что автор/исполнитель описанного проекта — владелец, что собеседник его коллега или что они работают в одной компании. Используй только относящиеся к вопросу подробности, сохраняя их субъекта.'];
+    const included: SearchResult[] = [];
+    for (const item of candidates.slice(0, 6)) {
+        const row = `Переписка с ${item.person.displayName.slice(0, 100)} [subject=${item.memory.subject ?? 'legacy'}; ${item.memory.domain}; источник, не роль]: ${memoryContentExcerpt(item.memory.content, query, 240)}`;
+        if (lines.join('\n').length + row.length + 1 > budget) continue;
+        lines.push(row); included.push(item.memory);
+    }
+    return { context: included.length ? lines.join('\n') : '', included };
 }

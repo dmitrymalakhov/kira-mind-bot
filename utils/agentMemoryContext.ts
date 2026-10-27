@@ -1,5 +1,6 @@
 import { BotContext } from '../types';
-import { classifyMemoryNeed, getMultiQueryMemoryContextDetailed, RecalledMemoryRef } from './multiQueryMemory';
+import { classifyMemoryNeed, getMultiQueryMemoryContextDetailed, RecalledMemoryRef, MultiQueryMemoryContextResult } from './multiQueryMemory';
+import type { MemoryRecallSummary } from '../types/memoryRecallTypes';
 import { devLog } from '../utils';
 import { buildTodayImportanceContext } from './todayImportance';
 import { getVectorService } from '../services/VectorServiceFactory';
@@ -15,6 +16,7 @@ export interface AgentMemoryContext {
     domain: string;
     context: string;
     recalledMemories?: RecalledMemoryRef[];
+    recall?: MemoryRecallSummary;
 }
 
 export interface AgentMemoryContextOptions {
@@ -61,7 +63,7 @@ export async function fetchAgentMemoryContext(
 
     const [memory, todayImportanceContext] = await Promise.all([
         focused && relationship?.complete
-            ? Promise.resolve({ context: '', recalledMemories: [] })
+            ? Promise.resolve<MultiQueryMemoryContextResult>({ context: '', recalledMemories: [] })
             : getMultiQueryMemoryContextDetailed(ctx, trimmed, memoryNeed, { trackAccess: options.trackAccess, replyPerson: options.replyPerson }),
         options.includeTodayImportance === false
             ? Promise.resolve('')
@@ -82,14 +84,17 @@ export async function fetchAgentMemoryContext(
         recalledMemories: recalled.size,
         structuredRelationship: Boolean(relationship?.context),
     });
-    return { domain: 'personal', context: enrichedContext, recalledMemories: [...recalled.values()] };
+    const recall = relationship?.complete && relationship.person
+        ? { state: 'found' as const, requestKind: 'identity' as const, subjects: [{ name: relationship.person.displayName, owner: false }], domains: [], evidenceCount: recalled.size }
+        : memory.recall;
+    return { domain: 'personal', context: enrichedContext, recalledMemories: [...recalled.values()], recall };
 }
 
 function formatWorkingMemory(ctx: BotContext): string {
     const wm = ctx.session?.workingMemory;
     if (!wm?.summary?.trim()) return '';
     const lines = [
-        'Текущая рабочая память разговора:',
+        'Рабочая сводка разговора (поисковый контекст; не доказательства фактов, первичные записи ниже имеют приоритет):',
         `- Ситуация: ${wm.summary}`,
         wm.activeTopics?.length ? `- Активные темы: ${wm.activeTopics.join(', ')}` : '',
         wm.activeEntities?.length ? `- Активные люди/объекты: ${wm.activeEntities.join(', ')}` : '',

@@ -22,6 +22,7 @@
     "test:ts:memory": "ts-node scripts/runTsTestSuite.ts memory",
     "test:ts:interaction": "ts-node scripts/runTsTestSuite.ts interaction",
     "eval:memory": "ts-node scripts/runMemoryRetrievalEval.ts",
+    "eval:memory:answers": "ts-node scripts/runMemoryAnswerEval.ts",
     "lint": "npm run typecheck",
     "check:privacy": "node scripts/checkPrivacy.js",
     "typecheck": "npm exec tsc -- --noEmit --project tsconfig.server.json && npm --prefix admin-panel exec tsc -- -b",

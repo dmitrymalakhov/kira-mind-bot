@@ -81,10 +81,10 @@ export function domainTools(): ToolDefinition[] {
         }),
         readTool('memory.search', 'people-and-memory', 'Найти относящиеся к вопросу личные факты через общий retrieval с проверкой субъекта.', objectSchema({ query: textSchema('Вопрос для поиска') }), async (args, context) => {
             if (context.enrichedContextFromMemory !== undefined && String(args.query).trim() === context.message.trim()) {
-                return { status: 'ok', summary: context.enrichedContextFromMemory || 'Подтверждённых фактов не найдено.', context: context.enrichedContextFromMemory };
+                return { status: 'ok', summary: context.enrichedContextFromMemory || 'В текущем поиске подходящих фактов не найдено.', context: context.enrichedContextFromMemory, memoryRecall: context.memoryRecall };
             }
             const data = await getMultiQueryMemoryContextDetailed(context.ctx, String(args.query), 'full');
-            return { status: 'ok', summary: data.context || 'Подтверждённых фактов не найдено.', context: data.context, data: { context: data.context, recalledMemories: data.recalledMemories } };
+            return { status: 'ok', summary: data.context || 'В текущем поиске подходящих фактов не найдено.', context: data.context, memoryRecall: data.recall, data: { context: data.context, recalledMemories: data.recalledMemories } };
         }),
         readTool('memory.recent', 'people-and-memory', 'Получить последние записи памяти с их субъектами; не считать все записи фактами о владельце.', objectSchema({ limit: { type: 'integer', minimum: 1, maximum: 30 } }, []), async (args, context) => {
             const data = await getRecentMemories(context.ctx, Number(args.limit ?? 10));

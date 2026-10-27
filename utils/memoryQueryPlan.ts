@@ -16,7 +16,7 @@ export function memoryQueryHistory(ctx: BotContext, message: string): Array<{ ro
 }
 
 export function memoryQueryCacheKey(message: string, history: Array<{ role: string; content: string }>): string {
-    return 'queries_v6:' + createHash('sha256').update(JSON.stringify({ message, history })).digest('hex');
+    return 'queries_v8:' + createHash('sha256').update(JSON.stringify({ message, history })).digest('hex');
 }
 
 export function parseMemoryQueryPlan(text: string, question: string, history: Array<{ role: string; content: string }> = []): MemoryQueryPlan | undefined {
@@ -43,7 +43,7 @@ export function parseMemoryQueryPlan(text: string, question: string, history: Ar
                 ? [...new Set(step.alternatives.filter((type: any) => PERSON_RELATION_TYPES.includes(type) && SYMMETRIC_PERSON_RELATION_TYPES.has(type)))].slice(0, 3) as any : undefined }));
         references.push({ kind: ref.kind, mention: ref.mention.trim(), from: ref.from, relationPath: path });
     }
-    return { answerQueries, contextQueries: queries(value.contextQueries), references,
+    return { answerQueries, contextQueries: queries(value.contextQueries), references, includeConversations: value.includeConversations === true,
         domains: Array.isArray(value.domains) ? [...new Set(value.domains.filter((domain: unknown) =>
             typeof domain === 'string' && Object.values(PREDEFINED_DOMAINS).includes(domain as any)))].slice(0, 3) as string[] : [],
         standaloneQuery: typeof value.standaloneQuery === 'string' && value.standaloneQuery.length <= 600 ? value.standaloneQuery.trim() : undefined,
@@ -64,14 +64,29 @@ export function validMemoryFocus(ctx: BotContext, now = Date.now()): MemoryRecal
 
 /** Admission/fallback cue only; actual identity is read from grounded focus, never from this regex. */
 export function isMemoryContinuation(message: string): boolean {
-    return /(?<![\p{L}])(?:он|она|они|него|нее|неё|нему|ней|ним|них|ему|её|его|их|это|этого|этом|этой|там)(?![\p{L}])|(?:подробнее|что\s+ещ[её]|расскажи\s+ещ[её]|продолжи)/iu.test(message);
+    return /(?<![\p{L}])(?:он|она|они|него|нее|неё|нему|ней|ним|них|ему|её|его|их|это|этого|этом|этой|там)(?![\p{L}])|(?:подробнее|(?:что|кто)\s+ещ[её]|расскажи\s+ещ[её]|продолжи)/iu.test(message);
 }
 
-export function saveMemoryFocus(ctx: BotContext, people: MemoryRecallFocus['people'], query: string, evidenceIds: string[], now = Date.now()): void {
+/** Keep an explicitly established topic on continuations, without carrying it to a new question. */
+export function continueMemoryQueryPlan(plan: MemoryQueryPlan, question: string, focus?: MemoryRecallFocus): MemoryQueryPlan {
+    if (!focus || !isMemoryContinuation(question) || plan.references?.some(ref => ref.from !== 'focus')) return plan;
+    return { ...plan, domains: plan.domains?.length ? plan.domains : focus.domains,
+        includeConversations: plan.domains?.length ? plan.includeConversations : plan.includeConversations || focus.includeConversations,
+        ...(focus.requestKind === 'people_list' && !focus.people.length && !plan.peopleQuery &&
+            /^(?:а\s+)?(?:что\s+ещ[её]|кто\s+ещ[её]|расскажи\s+ещ[её]|продолжи|подробнее)[\s?!.,]*$/iu.test(question.trim())
+            ? { requestKind: 'people_list', peopleQuery: focus.peopleQuery,
+                references: [{ kind: 'person', mention: 'я', from: 'owner', relationPath: [] }] } : {}),
+    };
+}
+
+export function saveMemoryFocus(ctx: BotContext, people: MemoryRecallFocus['people'], query: string, evidenceIds: string[], now = Date.now(), plan?: MemoryQueryPlan): void {
     if (!evidenceIds.length || ctx.chat?.type !== 'private') return;
     const previous = validMemoryFocus(ctx, now);
     const keys = (items: MemoryRecallFocus['people']) => items.map(person => person.contactId ?? [...person.personIds].sort().join(',')).sort().join(';');
-    const seen = people.length && previous && keys(previous.people) === keys(people) ? previous.evidenceIds : [];
+    const sameScope = previous && keys(previous.people) === keys(people) &&
+        JSON.stringify(previous.domains ?? []) === JSON.stringify(plan?.domains ?? []) && previous.requestKind === plan?.requestKind;
+    const seen = sameScope ? previous.evidenceIds : [];
     ctx.session.memoryRecallFocus = { ownerId: String(ctx.from?.id), channel: ctx.sessionStorageKey ?? String(ctx.chat?.id),
-        people: people.slice(0, 4), query: query.slice(0, 600), evidenceIds: [...new Set([...evidenceIds, ...seen])].slice(0, 200), expiresAt: now + MEMORY_FOCUS_TTL_MS };
+        people: people.slice(0, 4), query: query.slice(0, 600), evidenceIds: [...new Set([...evidenceIds, ...seen])].slice(0, 200), expiresAt: now + MEMORY_FOCUS_TTL_MS,
+        domains: plan?.domains, requestKind: plan?.requestKind, peopleQuery: plan?.peopleQuery, includeConversations: plan?.includeConversations };
 }

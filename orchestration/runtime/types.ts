@@ -27,6 +27,7 @@ export interface KiraRuntimeInput {
     classification: MessageClassification;
     lastLocation?: { latitude: number; longitude: number; address?: string };
     enrichedContextFromMemory?: string;
+    memoryRecall?: import('../../types/memoryRecallTypes').MemoryRecallSummary;
     voiceReplyRequested?: boolean;
     suppressProgress?: boolean;
     recurringTaskRun?: boolean;
@@ -51,6 +52,7 @@ export interface ToolOutput {
     summary: string;
     data?: unknown;
     context?: string;
+    memoryRecall?: import('../../types/memoryRecallTypes').MemoryRecallSummary;
     result?: ProcessingResult;
     confirmationKey?: string;
     /** A missing parameter, as opposed to an existing domain-specific confirmation UI. */

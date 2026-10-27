@@ -1139,7 +1139,7 @@ export async function processMessage(
             if (suspended?.ledgerKey) runtimeCtx.agentRuntimeStorageKey = suspended.ledgerKey;
             let result = await runKiraRuntime({
                 ctx: runtimeCtx, message: executionMessage, isForwarded, forwardFrom, messageHistory, classification,
-                lastLocation, enrichedContextFromMemory,
+                lastLocation, enrichedContextFromMemory, memoryRecall: initialMemory.recall,
                 voiceReplyRequested: options.voiceReplyRequested === true,
                 suppressProgress: options.suppressProgress === true,
                 recurringTaskRun: options.recurringTaskRun === true || suspended?.backgroundRun === true,

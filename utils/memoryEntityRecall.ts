@@ -103,7 +103,7 @@ export async function resolveMemoryQueryEntities(ctx: BotContext, question: stri
     let unresolved = false;
     const explicitTopic = refs.some(ref => ref.kind === 'topic' && ref.from !== 'focus');
     let requestedPerson = refs.some(ref => ref.kind === 'person');
-    for (const ref of refs.filter(ref => ref.kind === 'person' || ref.from === 'owner')) {
+    for (const ref of refs.filter(ref => ref.kind === 'person' || ref.from === 'owner' || ref.from === 'focus')) {
         let root: MemoryPerson | undefined;
         if (ref.from === 'named') {
             const named = await resolveNamedMemoryPerson(String(ctx.from?.id), ref.mention);
@@ -150,7 +150,7 @@ export function isUsablePersonEvidence(memory: SearchResult, person: MemoryPerso
 }
 
 export async function readPersonEvidence(service: IDomainVectorService, owner: string, person: MemoryPerson, domains: string[] = []): Promise<SearchResult[]> {
-    const eligibility = { acceptCandidate: (record: SearchResult) => isUsablePersonEvidence(record, person) };
+    const eligibility = { acceptCandidate: (record: SearchResult) => isUsablePersonEvidence(record, person) && (!domains.length || domains.includes(record.domain)) };
     if (person.owner) {
         const records = service.getOwnerMemories ? await service.getOwnerMemories(owner, domains, 300, eligibility) :
             service.getMemoriesByTags ? await service.getMemoriesByTags(owner, ['subject:user', 'person_id:user'], 300, eligibility) :
@@ -178,7 +178,7 @@ export async function readPersonEvidence(service: IDomainVectorService, owner: s
             (await Promise.all(batch.map(tag => service.getMemoriesByTag(owner, tag).catch(() => [])))).flat())
             .filter(record => record.tags.includes('person_relation')));
     }
-    return [...new Map([...relations, ...records].filter(record => isUsablePersonEvidence(record, person)).map(record => [record.id, record])).values()].slice(0, 400);
+    return [...new Map([...relations, ...records].filter(eligibility.acceptCandidate).map(record => [record.id, record])).values()].slice(0, 400);
 }
 
 /** A direct owner↔person edge is different from a person's relationship with someone else. */
@@ -272,6 +272,6 @@ export function formatPersonOverview(people: Array<{ person: MemoryPerson; recor
     return { context: lines.join('\n'), included };
 }
 
-export function rememberResolvedSearch(ctx: BotContext, entities: MemoryEntityResolution, records: Array<{ id: string }>): void {
-    saveMemoryFocus(ctx, entities.people, entities.query, [...entities.memories.map(record => record.id), ...records.map(record => record.id)]);
+export function rememberResolvedSearch(ctx: BotContext, entities: MemoryEntityResolution, records: Array<{ id: string }>, plan?: MemoryQueryPlan): void {
+    saveMemoryFocus(ctx, entities.people, entities.query, [...entities.memories.map(record => record.id), ...records.map(record => record.id)], Date.now(), plan);
 }
