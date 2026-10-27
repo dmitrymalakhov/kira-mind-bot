@@ -20,7 +20,9 @@ export type AiProvider = 'openai' | 'openrouter' | 'gemini' | 'zai' | 'lmstudio'
 export type AiTaskKey =
     | 'defaultText'
     | 'lightweightText'
+    | 'fastDialogue'
     | 'complexReasoning'
+    | 'runtimePlanning'
     | 'intentClassification'
     | 'intentDedup'
     | 'conversation'
@@ -44,7 +46,9 @@ export interface AiModelRef {
     model: string;
     modelEnvKey?: string;
     localRole?: import('./localModelRouting').LocalModelRole;
-    generation?: { maxTokens: number; reasoningEffort: 'none' | 'low' | 'medium' | 'high'; temperature?: number };
+    /** A selected free/local dialogue route must never silently fall back to a different content policy. */
+    allowFallback?: boolean;
+    generation?: { maxTokens?: number; reasoningEffort: 'none' | 'low' | 'medium' | 'high'; temperature?: number };
 }
 
 /**
@@ -75,6 +79,8 @@ export interface AiPresetConfig {
     name: AiPresetName;
     title: string;
     description: string;
+    /** Per-request output ceilings; lower caller limits and configured local roles still apply. */
+    outputTokenLimits?: Partial<Record<AiTaskKey, number>>;
     characteristics?: {
         quality: string;
         cost: string;

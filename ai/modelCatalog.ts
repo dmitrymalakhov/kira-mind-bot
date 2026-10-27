@@ -10,6 +10,16 @@ export interface AiModelCatalogEntry {
 }
 
 export const AI_MODEL_CATALOG: Readonly<Record<string, AiModelCatalogEntry>> = {
+    'openai:gpt-6-luna': {
+        provider: 'openai', model: 'gpt-6-luna', modalities: ['text', 'vision'],
+        maxContextTokens: 1050000, maxOutputTokens: 128000,
+        supportsReasoning: true, supportsCaching: true, preferredApi: 'responses',
+    },
+    'openai:gpt-6.1-sol': {
+        provider: 'openai', model: 'gpt-6.1-sol', modalities: ['text', 'vision'],
+        maxContextTokens: 1050000, maxOutputTokens: 128000,
+        supportsReasoning: true, supportsCaching: true, preferredApi: 'responses',
+    },
     'openai:gpt-5.4': {
         provider: 'openai',
         model: 'gpt-5.4',

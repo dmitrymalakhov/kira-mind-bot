@@ -4,6 +4,7 @@ import { AppDataSource } from '../data-source';
 import { SessionEntity } from '../entity/SessionEntity';
 import type { BotContext, SentMessageContext, SessionData } from '../types';
 import { scopedBotKey } from '../utils/botIdentity';
+import { PENDING_CONTACT_MEMORY_TTL_MS } from '../utils/contactMemoryConstants';
 
 const MAX_HISTORY = 20;
 export const MAX_SENT_MESSAGE_CONTEXTS = 50;
@@ -15,6 +16,8 @@ const SESSION_SNAPSHOT = Symbol('persistedSessionSnapshot');
 
 /** Подмножество SessionData, которое мы сохраняем в БД. */
 interface PersistedSession {
+    agentRuntime?: SessionData['agentRuntime'];
+    agentRuntimePending?: SessionData['agentRuntimePending'];
     apiActionVersion?: string;
     messageHistory: SessionData['messageHistory'];
     dialogueSummary: SessionData['dialogueSummary'];
@@ -27,6 +30,7 @@ interface PersistedSession {
     sentMessages?: SessionData['sentMessages'];
     sentMessageContexts?: SessionData['sentMessageContexts'];
     activePersonContext?: SessionData['activePersonContext'];
+    memoryRecallFocus?: SessionData['memoryRecallFocus'];
     lastMemoryGapAt?: SessionData['lastMemoryGapAt'];
     lastImplicitReminderAt?: SessionData['lastImplicitReminderAt'];
     pendingImplicitReminder?: SessionData['pendingImplicitReminder'];
@@ -209,6 +213,8 @@ async function ensureSessionRow(rawQuery: RawQuery, key: string): Promise<void> 
 function extract(data: SessionData): PersistedSession {
     const now = Date.now();
     return {
+        agentRuntime: data.agentRuntime,
+        agentRuntimePending: data.agentRuntimePending?.slice(-4),
         apiActionVersion: data.apiActionVersion,
         // messageHistory is stored newest-first; keep the head or we persist the oldest messages.
         messageHistory: (data.messageHistory ?? []).slice(0, MAX_HISTORY),
@@ -226,6 +232,7 @@ function extract(data: SessionData): PersistedSession {
         activePersonContext: data.activePersonContext && data.activePersonContext.expiresAt > now
             ? data.activePersonContext
             : undefined,
+        memoryRecallFocus: data.memoryRecallFocus && data.memoryRecallFocus.expiresAt > now ? data.memoryRecallFocus : undefined,
         lastMemoryGapAt: data.lastMemoryGapAt,
         lastImplicitReminderAt: data.lastImplicitReminderAt,
         pendingImplicitReminder: data.pendingImplicitReminder && now - data.pendingImplicitReminder.createdAt <= PENDING_DIALOGUE_CONTEXT_TTL_MS
@@ -273,6 +280,8 @@ function extract(data: SessionData): PersistedSession {
 function merge(initial: SessionData, persisted: PersistedSession): SessionData {
     return {
         ...initial,
+        agentRuntime: persisted.agentRuntime ?? initial.agentRuntime,
+        agentRuntimePending: persisted.agentRuntimePending ?? initial.agentRuntimePending,
         messageHistory: persisted.messageHistory ?? initial.messageHistory,
         dialogueSummary: persisted.dialogueSummary ?? initial.dialogueSummary,
         lastSummarizedIndex: persisted.lastSummarizedIndex ?? initial.lastSummarizedIndex,
@@ -284,6 +293,7 @@ function merge(initial: SessionData, persisted: PersistedSession): SessionData {
         sentMessages: persisted.sentMessages ?? initial.sentMessages,
         sentMessageContexts: persisted.sentMessageContexts ?? initial.sentMessageContexts,
         activePersonContext: persisted.activePersonContext ?? initial.activePersonContext,
+        memoryRecallFocus: persisted.memoryRecallFocus ?? initial.memoryRecallFocus,
         lastMemoryGapAt: persisted.lastMemoryGapAt ?? initial.lastMemoryGapAt,
         lastImplicitReminderAt: persisted.lastImplicitReminderAt ?? initial.lastImplicitReminderAt,
         pendingImplicitReminder: persisted.pendingImplicitReminder ?? initial.pendingImplicitReminder,
@@ -510,9 +520,20 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
 }
 
 export async function persistSessionNow(ctx: BotContext): Promise<void> {
-    const key = ctx.sessionStorageKey ?? (ctx.chat?.id != null ? String(ctx.chat.id) : undefined);
+    const key = ctx.agentRuntimeStorageKey ?? ctx.sessionStorageKey ?? (ctx.chat?.id != null ? String(ctx.chat.id) : undefined);
     if (!key || !ctx.session) return;
-    await new TypeORMSessionStorage(Boolean(ctx.sessionStorageKey)).write(key, ctx.session);
+    const value = ctx.agentRuntimeStorageKey ? { ...ctx.session } : ctx.session;
+    if (ctx.agentRuntimeStorageKey) delete (value as SessionWithSnapshot)[SESSION_SNAPSHOT];
+    await new TypeORMSessionStorage(Boolean(ctx.agentRuntimeStorageKey || ctx.sessionStorageKey)).write(key, value);
+}
+
+/** Write-ahead persistence must fail closed before a tool can mutate external state. */
+export async function persistAgentRuntime(ctx: BotContext): Promise<void> {
+    const key = ctx.agentRuntimeStorageKey ?? ctx.sessionStorageKey ?? (ctx.chat?.id != null ? String(ctx.chat.id) : undefined);
+    if (!key || !ctx.session) throw new Error('Нет контекста для журнала выполнения');
+    const value = ctx.agentRuntimeStorageKey ? { ...ctx.session } : ctx.session;
+    if (ctx.agentRuntimeStorageKey) delete (value as SessionWithSnapshot)[SESSION_SNAPSHOT];
+    await new TypeORMSessionStorage(true).write(key, value);
 }
 
 /**
@@ -596,7 +617,7 @@ export async function appendPersistedSentMessageContext(
 }
 
 export async function appendPersistedHistory(
-    chatId: number,
+    chatId: number | string,
     role: string,
     content: string,
     options: { kind?: 'image' } = {},
@@ -685,6 +706,10 @@ export async function appendPersistedHistory(
  * выполнением. Так recurring task не перезаписывает живую Telegram-сессию,
  * но пользователь может ответить на уточнение browser/health-flow.
  */
+export class BackgroundContinuationConflictError extends Error {
+    constructor() { super('Фоновая задача остановлена: в диалоге уже ожидается другое уточнение личности. Заверши его перед новым запуском задачи.'); }
+}
+
 export async function mergePersistedBackgroundContinuation(
     chatId: number,
     data: SessionData,
@@ -698,6 +723,7 @@ export async function mergePersistedBackgroundContinuation(
         )
         : undefined;
     const patch: Partial<PersistedSession> = {
+        pendingContactMemory: isFresh(data.pendingContactMemory) ? data.pendingContactMemory : undefined,
         pendingBrowserTask: isFresh(data.pendingBrowserTask) ? data.pendingBrowserTask : undefined,
         pendingHealthLog: isFresh(data.pendingHealthLog) ? data.pendingHealthLog : undefined,
         pendingHealthDiscomfort: isFresh(data.pendingHealthDiscomfort) ? data.pendingHealthDiscomfort : undefined,
@@ -709,12 +735,17 @@ export async function mergePersistedBackgroundContinuation(
     const serializablePatch = Object.fromEntries(
         Object.entries(patch).filter(([, value]) => value !== undefined),
     );
-    if (Object.keys(serializablePatch).length === 0) return;
+    const waitingRuntime = data.agentRuntime?.status === 'waiting' && data.agentRuntime.startedAt >= startedAt - 1000 ? data.agentRuntime : undefined;
+    if (Object.keys(serializablePatch).length === 0 && !waitingRuntime) return;
 
     const repo = AppDataSource.getRepository(SessionEntity);
     const key = scopedBotKey(chatId);
     const mergePatch = (persisted: Partial<PersistedSession>): Partial<PersistedSession> => {
         const next = { ...persisted } as Record<string, unknown>;
+        if (waitingRuntime) {
+            if (persisted.agentRuntime && ['waiting', 'running'].includes(persisted.agentRuntime.status)) next.agentRuntimePending = [...(persisted.agentRuntimePending ?? []).filter(run => run.runId !== waitingRuntime.runId), waitingRuntime].slice(-4);
+            else next.agentRuntime = waitingRuntime;
+        }
         const now = Date.now();
         for (const [field, value] of Object.entries(serializablePatch)) {
             if (field === "pendingQuickChoices") {
@@ -735,6 +766,10 @@ export async function mergePersistedBackgroundContinuation(
                 continue;
             }
             const existingExpiresAt = Number(existing?.expiresAt ?? 0);
+            if (field === 'pendingContactMemory' && existing && existingCreatedAt + PENDING_CONTACT_MEMORY_TTL_MS > now) {
+                if (existing.confirmationId && existing.confirmationId === incoming?.confirmationId) continue;
+                throw new BackgroundContinuationConflictError();
+            }
             if (existing && (existingCreatedAt >= startedAt - 1_000 || existingExpiresAt > now)) {
                 continue;
             }

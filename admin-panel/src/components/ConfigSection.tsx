@@ -1,5 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import {
+  Card,
+  CardContent,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -9,15 +11,14 @@ import {
   Box,
   CircularProgress,
   Divider,
-  FormControlLabel,
-  Checkbox,
   Stack,
   Typography,
 } from '@mui/material';
 import SaveIcon from '@mui/icons-material/Save';
 import CloseIcon from '@mui/icons-material/Close';
+import { isValidProxyUrl } from '../../configValues';
 import { FieldInput } from './FieldInput';
-import { saveConfig, fetchConfig, restartService } from '../api';
+import { saveConfig, fetchConfig } from '../api';
 import type { SectionDef, ConfigResponse } from '../types';
 
 interface Props {
@@ -26,8 +27,10 @@ interface Props {
   onUpdate: (cfg: ConfigResponse) => void;
   onToast: (message: string, severity: 'success' | 'error') => void;
   onDirtyChange?: (id: string, dirty: boolean) => void;
-  open: boolean;
-  onClose: () => void;
+  inline?: boolean;
+  saveLabel?: string;
+  open?: boolean;
+  onClose?: () => void;
 }
 
 export interface ConfigSectionHandle {
@@ -42,12 +45,11 @@ function getEntryValue(entry?: ConfigResponse[string]): string {
 }
 
 export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
-  function ConfigSection({ section, config, onUpdate, onToast, onDirtyChange, open, onClose }, ref) {
+  function ConfigSection({ section, config, onUpdate, onToast, onDirtyChange, open = false, onClose, inline = false, saveLabel = 'Сохранить' }, ref) {
     const [localValues, setLocalValues] = useState<Record<string, string>>(() =>
       Object.fromEntries(section.fields.map((field) => [field.key, getEntryValue(config[field.key])]))
     );
     const [saving, setSaving] = useState(false);
-    const [autoRestart, setAutoRestart] = useState(false);
     const previousConfig = useRef(config);
 
     useEffect(() => {
@@ -90,6 +92,8 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
       },
     }));
 
+    const invalid = section.fields.some(field => field.type === 'proxy' && !isValidProxyUrl(localValues[field.key] ?? ''));
+
     const handleChange = (key: string, value: string) => {
       setLocalValues((prev) => ({ ...prev, [key]: value }));
     };
@@ -107,17 +111,11 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
 
         const result = await saveConfig(updates);
         if (result.success) {
-          if (autoRestart) {
-            onToast('💾 Сохранено. Перезапускаю бота...', 'success');
-            await restartService('kira-mind-bot');
-            onToast('✅ Сохранено и бот перезапущен', 'success');
-          } else {
-            onToast(result.message || '✅ Сохранено', 'success');
-          }
+          onToast('Сохранено. Для применения параметров подключения пересоздайте контейнеры.', 'success');
           const newCfg = await fetchConfig();
           acceptSaved(newCfg, updates);
           onUpdate(newCfg);
-          onClose();
+          onClose?.();
         } else {
           onToast(result.error || 'Ошибка сохранения', 'error');
         }
@@ -131,14 +129,10 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
     const toggleFields = section.fields.filter((field) => field.type === 'toggle');
     const regularFields = section.fields.filter((field) => field.type !== 'toggle');
 
-    return (
-      <Dialog open={open} onClose={() => { if (!saving) onClose(); }} keepMounted fullWidth maxWidth="md" scroll="paper" aria-labelledby={`config-dialog-title-${section.id}`}>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <DialogTitle id={`config-dialog-title-${section.id}`} sx={{ py: 1.5 }}>{section.title}</DialogTitle>
-          <IconButton aria-label="Закрыть настройки" disabled={saving} onClick={onClose} sx={{ mr: 1.5 }}><CloseIcon /></IconButton>
-        </Box>
-        <DialogContent dividers sx={{ pt: 3 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 3 }}>Параметры окружения применяются после пересоздания контейнеров.</Typography>
+    const content = <>
+      {inline && <Typography variant="subtitle1" component="h2" fontWeight={600} sx={{ mb: 2 }}>{section.title}</Typography>}
+        <Box sx={{ pt: inline ? 0 : 1 }}>
+          {!inline && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 3 }}>Параметры окружения применяются после пересоздания контейнеров.</Typography>}
           {regularFields.length > 0 && (
             <Box
               sx={{
@@ -157,8 +151,8 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
                     minWidth: 0,
                     gridColumn: {
                       xs: '1 / -1',
-                      sm: `span ${field.sm ?? (field.type === 'textarea' ? 12 : 6)}`,
-                      md: `span ${field.md ?? (field.type === 'textarea' ? 12 : 6)}`,
+                      sm: `span ${field.sm ?? (['textarea', 'proxy'].includes(field.type) ? 12 : 6)}`,
+                      md: `span ${field.md ?? (['textarea', 'proxy'].includes(field.type) ? 12 : 6)}`,
                     },
                   }}
                 >
@@ -184,19 +178,21 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
               onChange={handleChange}
             />
           ))}
-        </DialogContent>
-        <DialogActions sx={{ px: 3, py: 2, gap: 1, flexWrap: 'wrap', justifyContent: 'space-between' }}>
-          <FormControlLabel
-            control={<Checkbox size="small" checked={autoRestart} disabled={saving} onChange={event => setAutoRestart(event.target.checked)} />}
-            label={<Typography variant="body2" color="text.secondary">Перезапустить бота после сохранения</Typography>}
-            sx={{ ml: -1 }}
-          />
+        </Box>
+        <DialogActions sx={{ px: 0, pt: 2, gap: 1, flexWrap: 'wrap', justifyContent: 'space-between' }}>
           <Stack direction="row" spacing={1} sx={{ ml: 'auto !important' }}>
-            <Button disabled={saving} onClick={onClose}>Закрыть</Button>
-            <Button variant="contained" disabled={saving || !dirty} onClick={() => void handleSave()} startIcon={saving ? <CircularProgress size={14} color="inherit" /> : <SaveIcon />}>Сохранить</Button>
+
+            <Button variant="contained" disabled={saving || !dirty || invalid} onClick={() => void handleSave()} startIcon={saving ? <CircularProgress size={14} color="inherit" /> : <SaveIcon />}>{saveLabel}</Button>
           </Stack>
         </DialogActions>
-      </Dialog>
-    );
+    </>;
+    if (inline) return <Card id={section.id}><CardContent>{content}</CardContent></Card>;
+    return <Dialog open={open} onClose={() => { if (!saving) onClose?.(); }} keepMounted fullWidth maxWidth="md" scroll="paper" aria-labelledby={`config-dialog-title-${section.id}`}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <DialogTitle id={`config-dialog-title-${section.id}`}>{section.title}</DialogTitle>
+        <IconButton aria-label="Закрыть настройки" disabled={saving} onClick={onClose} sx={{ mr: 1.5 }}><CloseIcon /></IconButton>
+      </Box>
+      <DialogContent dividers>{content}</DialogContent>
+    </Dialog>;
   }
 );

@@ -7,10 +7,12 @@ import type {
   HealthLogsResponse,
   AiPresetName,
   AiPresetResponse,
+  ModelPreferencesResponse,
   MemoryFormPayload,
   MemoryGraphQuery,
   MemoryGraphResponse,
   MemoryQuery,
+  MemoryRecord,
   MemoryResponse,
   MonitoringHealthResponse,
   PersonalityConfig,
@@ -88,6 +90,16 @@ export async function fetchAiPreset(): Promise<AiPresetResponse> {
     throw new Error(body.error || 'Failed to load AI preset');
   }
   return r.json();
+}
+
+export async function fetchModelPreferences(): Promise<ModelPreferencesResponse> {
+  const r = await apiFetch('/api/model-preferences');
+  if (!r.ok) throw new Error('Не удалось загрузить настройки моделей');
+  return r.json();
+}
+export async function saveModelPreferences(preferences: import('../../ai/modelPreferences').StrategyRequest) {
+  const r = await apiFetch('/api/model-preferences', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(preferences) });
+  return r.json() as Promise<{ success: boolean; error?: string }>;
 }
 
 export async function fetchBudgetMode(): Promise<{ mode: BudgetMode }> {
@@ -241,6 +253,13 @@ export async function fetchMemories(query: MemoryQuery = {}, signal?: AbortSigna
     throw new Error(body.error || 'Failed to load memories');
   }
   return r.json();
+}
+
+export async function fetchMemoryRecord(domain: string, id: string, scope: Pick<MemoryQuery, 'profile' | 'userId'>, signal?: AbortSignal): Promise<MemoryRecord> {
+  const params = toSearchParams(scope);
+  const response = await apiFetch(`/api/memory/${encodeURIComponent(domain)}/${encodeURIComponent(id)}?${params}`, { signal });
+  if (!response.ok) throw new Error('Не удалось загрузить полный текст воспоминания');
+  return (await response.json()).record;
 }
 
 export async function fetchMemoryGraph(query: MemoryGraphQuery = {}, signal?: AbortSignal): Promise<MemoryGraphResponse> {

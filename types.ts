@@ -42,6 +42,9 @@ export interface ChatPromptWatchWizardState {
 }
 
 export interface SessionData {
+    /** Durable, channel-scoped execution journal; never contains credentials or image bytes. */
+    agentRuntime?: import('./orchestration/runtime/types').RuntimeSessionState;
+    agentRuntimePending?: import('./orchestration/runtime/types').RuntimeSessionState[];
     /** Last mobile interaction; invalidates buttons from earlier API turns. */
     apiActionVersion?: string;
     reminders: Reminder[];
@@ -92,6 +95,7 @@ export interface SessionData {
         personId?: string;
         expiresAt: number;
     };
+    memoryRecallFocus?: import('./types/memoryRecallTypes').MemoryRecallFocus;
     domains: Record<string, DomainMemory>;
     /**
      * Компактная модель текущей ситуации в разговоре.
@@ -162,6 +166,8 @@ export interface SessionData {
     };
     /** Ожидает уточнения, к какому контакту относится извлечённый факт */
     pendingContactMemory?: {
+        /** Stable identity of this clarification, independent of retry timestamps. */
+        confirmationId?: string;
         contactName: string;
         content: string;
         domain: string;
@@ -360,10 +366,20 @@ export interface ForwardedMessageGroup {
 }
 
 export type BotContext = Context & SessionFlavor<SessionData> & {
+    /** Internal orchestration collects intermediate progress into one final response. */
+    suppressAgentProgress?: boolean;
     /** Server-assigned channel key; never accepted from an external request. */
     sessionStorageKey?: string;
     /** Isolated background runs persist photos without replacing the live conversation session. */
     persistOutgoingImageContext?: (context: SentMessageContext) => Promise<void>;
+    /** Dedicated durable ledger for a background task; does not change its delivery channel. */
+    agentRuntimeStorageKey?: string;
+    agentRuntimeRequestKey?: string;
+    /** Durable foreground turn marker and optional deferred answer, assigned by the transport. */
+    dialogueTurnId?: string;
+    dialogueJobId?: string;
+    /** API clients must opt into deferred responses; Telegram supports them natively. */
+    allowDeferredDialogue?: boolean;
 };
 
 // Интерфейс для хранения истории сообщений

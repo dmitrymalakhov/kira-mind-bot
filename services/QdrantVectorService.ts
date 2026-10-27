@@ -1,6 +1,6 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { v4 as uuidv4 } from 'uuid';
-import { IDomainVectorService } from './interfaces/IDomainVectorService';
+import { IDomainVectorService, MemoryCandidateOptions, MemoryPoolReadOptions } from './interfaces/IDomainVectorService';
 import { MemoryEntry, SearchOptions, SearchResult, MemoryStats, DomainConfig, SearchStrategy, DomainStats, DomainTrend, MemoryRelation, MemoryRelationType } from '../types';
 import { PREDEFINED_DOMAINS, DOMAIN_SEARCH_THRESHOLDS } from '../constants/domains';
 import { config } from '../config';
@@ -502,6 +502,15 @@ export class QdrantVectorService implements IDomainVectorService {
 
         const pending = (async () => {
             try {
+                // Existing indexes are readable even when the caller has no
+                // schema-write permission (for example a diagnostic replay).
+                // Do not make a redundant create request a prerequisite for search.
+                if (typeof this.client.getCollection === 'function') {
+                    try {
+                        const info = await this.client.getCollection(collectionName);
+                        if (info.payload_schema?.content?.data_type === 'text') return true;
+                    } catch { /* Preserve the existing creation fallback if metadata is unavailable. */ }
+                }
                 await this.client.createPayloadIndex(collectionName, {
                     wait: true,
                     field_name: 'content',
@@ -723,9 +732,11 @@ export class QdrantVectorService implements IDomainVectorService {
         return results.map(r => r.content).join('\n');
     }
 
-    async searchAllDomains(query: string, userId: string, limit = 5): Promise<SearchResult[]> {
+    async searchAllDomains(query: string, userId: string, limit = 5, options: MemoryCandidateOptions = {}): Promise<SearchResult[]> {
         const vector = await this.embed(query);
-        const perDomainLimit = Math.min(10, Math.max(3, limit));
+        const perDomainLimit = options.acceptCandidate
+            ? Math.min(60, Math.max(15, limit * 3))
+            : Math.min(10, Math.max(3, limit));
 
         // Параллельный поиск по всем доменам — эмбеддинг уже готов
         const domainSearches = Object.values(PREDEFINED_DOMAINS).map(async (domain) => {
@@ -757,7 +768,10 @@ export class QdrantVectorService implements IDomainVectorService {
             else devLog('searchAllDomains domain error:', r.reason);
         }
 
-        return this.applyImportanceRecencyRanking(allResults).slice(0, limit);
+        const eligible = options.acceptCandidate ? allResults.filter(options.acceptCandidate) : allResults;
+        return (options.relevanceOnly
+            ? eligible.sort((a, b) => b.score - a.score)
+            : this.applyImportanceRecencyRanking(eligible)).slice(0, limit);
     }
 
     /**
@@ -765,37 +779,48 @@ export class QdrantVectorService implements IDomainVectorService {
      * Финальный score рассчитывается общим fusion-слоем; здесь score нужен лишь
      * для ограничения числа кандидатов до объединения с dense-выдачей.
      */
-    async searchLexicalAllDomains(query: string, userId: string, limit = 20): Promise<SearchResult[]> {
+    async searchLexicalAllDomains(query: string, userId: string, limit = 20, options: MemoryCandidateOptions = {}): Promise<SearchResult[]> {
         const queryTokens = tokenizeMemoryRetrievalText(query).slice(0, 12);
         if (queryTokens.length === 0) return [];
 
-        const perDomainLimit = Math.min(25, Math.max(5, limit));
+        const perDomainLimit = Math.min(60, Math.max(10, limit * 2));
         const domainSearches = Object.values(PREDEFINED_DOMAINS).map(async (domain) => {
             const collection = this.collectionFor(domain);
             await this.ensureCollectionCompatibility(collection);
             if (!await this.ensureMemoryTextIndex(collection)) return [] as SearchResult[];
 
-            const scroll = await this.client.scroll(collection, {
-                filter: {
-                    must: [
-                        { key: 'botId', match: { value: this.botId } },
-                        { key: 'userId', match: { value: userId } },
-                    ],
+            const scopeFilter = {
+                must: [
+                    { key: 'botId', match: { value: this.botId } },
+                    { key: 'userId', match: { value: userId } },
+                ],
+                must_not: this.activeMustNotFilter(),
+            };
+            const conditions = queryTokens.map(token => ({ key: 'content', match: { text: token } }));
+            // OR scroll is ordered by point ID, not relevance. A separate AND pool
+            // prevents early common-word hits from hiding precise multi-word facts.
+            const filters = [
+                ...(conditions.length > 1 ? [{ ...scopeFilter, must: [...scopeFilter.must, ...conditions] }] : []),
+                { ...scopeFilter,
                     min_should: {
-                        conditions: queryTokens.map(token => ({
-                            key: 'content',
-                            match: { text: token },
-                        })),
+                        conditions,
                         min_count: 1,
                     },
-                    must_not: this.activeMustNotFilter(),
                 },
+            ];
+            const branches = await Promise.allSettled(filters.map(filter => this.client.scroll(collection, {
+                filter,
                 limit: perDomainLimit,
                 with_payload: true,
                 with_vector: false,
-            });
+            })));
+            const points = new Map<string, Awaited<ReturnType<QdrantClient['scroll']>>['points'][number]>();
+            for (const branch of branches) {
+                if (branch.status === 'fulfilled') for (const point of branch.value.points ?? []) points.set(String(point.id), point);
+                else devLog('Lexical candidate branch unavailable:', branch.reason);
+            }
 
-            return (scroll.points ?? [])
+            return [...points.values()]
                 .filter(point => Boolean(point.payload?.content && point.payload?.timestamp))
                 .map(point => {
                     const content = String(point.payload!.content);
@@ -807,7 +832,7 @@ export class QdrantVectorService implements IDomainVectorService {
                     const candidateScore = Math.max(lexical, entity * 0.9);
                     return this.mapSearchPoint(point, candidateScore);
                 })
-                .filter(result => result.score >= 0.18);
+                .filter(result => result.score >= 0.18 && (!options.acceptCandidate || options.acceptCandidate(result)));
         });
 
         const settled = await Promise.allSettled(domainSearches);
@@ -1394,6 +1419,63 @@ export class QdrantVectorService implements IDomainVectorService {
      * Возвращает все записи пользователя во всех доменах, содержащие указанный тег.
      * Используется для поиска психологических портретов по тегу `portrait:<Name>`.
      */
+    async getMemoriesByTags(userId: string, tags: string[], limit = 300, options?: MemoryPoolReadOptions): Promise<SearchResult[]> {
+        const keys = [...new Set(tags)].slice(0, 16);
+        if (!keys.length) return [];
+        return this.readRecallPools(userId, Object.values(PREDEFINED_DOMAINS), { key: 'tags', match: { any: keys } }, limit, options?.acceptCandidate ? 1000 : 200, options);
+    }
+
+    async getOwnerMemories(userId: string, domains: string[] = [], limit = 300, options?: MemoryPoolReadOptions): Promise<SearchResult[]> {
+        const selected = domains.length ? [...new Set(domains)].filter(domain => Object.values(PREDEFINED_DOMAINS).includes(domain as any)).slice(0, 3) : Object.values(PREDEFINED_DOMAINS);
+        return this.readRecallPools(userId, selected, { should: [
+            { key: 'subject', match: { value: 'user' } }, { key: 'tags', match: { value: 'subject:user' } },
+        ] }, limit, options?.acceptCandidate ? domains.length ? 2000 : 500 : 200, options);
+    }
+
+    async getPeopleMemories(userId: string, domains: string[] = [], limit = 200, options?: MemoryPoolReadOptions): Promise<SearchResult[]> {
+        const selected = domains.length ? [...new Set(domains)].filter(domain => Object.values(PREDEFINED_DOMAINS).includes(domain as any)).slice(0, 3) : Object.values(PREDEFINED_DOMAINS);
+        return this.readRecallPools(userId, selected, { should: [
+            { key: 'subject', match: { value: 'contact' } }, { key: 'tags', match: { value: 'subject:contact' } },
+            { key: 'tags', match: { value: 'person_relation' } },
+        ] }, limit, domains.length ? 3000 : 500, options);
+    }
+
+    private async readRecallPools(userId: string, domains: string[], condition: { key: string; match: { any: string[] } } | { should: Array<{ key: string; match: { value: string } }> }, limit: number, scanLimit: number, options?: MemoryPoolReadOptions): Promise<SearchResult[]> {
+        const max = Math.min(400, Math.max(1, limit));
+        const pools = await Promise.all(domains.map(async domain => {
+            const pool: SearchResult[] = [];
+            let scanned = 0;
+            let offset: string | number | undefined;
+            const offsets = new Set<string>();
+            try {
+                while (pool.length < Math.min(200, max) && scanned < scanLimit) {
+                    const page = await this.client.scroll(this.collectionFor(domain), {
+                        filter: { must: [
+                            { key: 'botId', match: { value: this.botId } }, { key: 'userId', match: { value: userId } },
+                            condition,
+                        ], must_not: this.activeMustNotFilter() },
+                        limit: Math.min(50, options?.acceptCandidate ? 50 : Math.min(200, max) - pool.length, scanLimit - scanned), offset, with_payload: true, with_vector: false,
+                    });
+                    scanned += page.points.length;
+                    for (const point of page.points) {
+                        const candidate = { ...this.mapSearchPoint(point, 1), domain };
+                        if (pool.length < Math.min(200, max) && (!options?.acceptCandidate || options.acceptCandidate(candidate))) pool.push(candidate);
+                    }
+                    const next = page.next_page_offset;
+                    if ((typeof next !== 'string' && typeof next !== 'number') || !page.points.length || offsets.has(String(next))) break;
+                    offsets.add(String(next)); offset = next;
+                }
+            } catch { /* A missing domain does not erase other identity evidence. */ }
+            return pool;
+        }));
+        // Round-robin avoids a large first domain consuming the whole pool.
+        const selected = new Map<string, SearchResult>();
+        for (let index = 0; selected.size < max && pools.some(pool => index < pool.length); index++) {
+            for (const pool of pools) { const item = pool[index]; if (item) selected.set(item.id, item); if (selected.size >= max) break; }
+        }
+        return [...selected.values()];
+    }
+
     async getMemoriesByTag(userId: string, tag: string): Promise<SearchResult[]> {
         const results: SearchResult[] = [];
 

@@ -1,5 +1,5 @@
 {
-  "name": "synthetic-memory-retrieval-v1",
+  "name": "synthetic-memory-retrieval-v2",
   "defaultK": 1,
   "thresholds": {
     "minHybridRecallAtK": 0.8,
@@ -8,6 +8,44 @@
     "minRecallLift": 0.3
   },
   "cases": [
+    {
+      "id": "single-employment-cue",
+      "query": "работает",
+      "relevantIds": ["employer"],
+      "candidates": [
+        { "id": "employer", "content": "Пользователь работает в компании «Тестовый Маяк».", "semanticScore": 0.36, "semanticCandidate": false },
+        { "id": "work-topic", "content": "На работе обсуждали новый проект.", "semanticScore": 0.68 }
+      ]
+    },
+    {
+      "id": "single-preference-cue",
+      "query": "улун",
+      "relevantIds": ["oolong"],
+      "candidates": [
+        { "id": "oolong", "content": "Пользователь предпочитает молочный улун вечером.", "semanticScore": 0.31, "semanticCandidate": false },
+        { "id": "coffee", "content": "Иногда по утрам пьёт кофе.", "semanticScore": 0.69 }
+      ]
+    },
+    {
+      "id": "recall-question-wrapper",
+      "query": "Ты помнишь, где синий блокнот?",
+      "relevantIds": ["blue-notebook"],
+      "forbiddenIds": ["blue-envelope"],
+      "candidates": [
+        { "id": "blue-notebook", "content": "Синий блокнот лежит в сейфе.", "semanticScore": 0.38, "semanticCandidate": false },
+        { "id": "blue-envelope", "content": "Синий конверт лежит в ящике.", "semanticScore": 0.78 },
+        { "id": "notebooks", "content": "Заметки обычно хранит в облаке.", "semanticScore": 0.72 }
+      ]
+    },
+    {
+      "id": "semantic-without-token-overlap",
+      "query": "Чем я занимаюсь профессионально?",
+      "relevantIds": ["profession"],
+      "candidates": [
+        { "id": "profession", "content": "Основная специальность пользователя — инженер систем автоматизации.", "semanticScore": 0.88 },
+        { "id": "generic-profession", "content": "Любит читать про профессиональное развитие.", "semanticScore": 0.66 }
+      ]
+    },
     {
       "id": "exact-flight-id",
       "query": "Когда рейс S7-104?",

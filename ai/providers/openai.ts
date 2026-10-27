@@ -2,6 +2,7 @@ import { OpenAI } from 'openai';
 import { config } from '../../config';
 import { getAiProviderDescriptor } from '../providerMetadata';
 import type { AiProviderAdapter, AiProviderCapabilities } from './types';
+import { gpt6Family, normalizeGpt6Chat, normalizeGpt6Response } from './openaiCompatibility';
 import {
     applyChatTokenParamMode,
     resolveModelCapabilities,
@@ -23,6 +24,18 @@ const OPENAI_CAPABILITIES: AiProviderCapabilities = {
         supportsOpenAiCompatibleTransport: true,
     },
     modelCapabilityOverrides: {
+        'gpt-6-luna': {
+            chatTokenParam: 'max_completion_tokens',
+            supportsReasoningEffort: true,
+            supportsEmbedding: false,
+            supportsTranscription: false,
+        },
+        'gpt-6.1-sol': {
+            chatTokenParam: 'max_completion_tokens',
+            supportsReasoningEffort: true,
+            supportsEmbedding: false,
+            supportsTranscription: false,
+        },
         'gpt-5.4': {
             chatTokenParam: 'max_completion_tokens',
         },
@@ -44,22 +57,26 @@ const openaiClient = new OpenAI({
 export const openaiProviderAdapter: AiProviderAdapter = {
     provider: 'openai',
     client: openaiClient,
+    async createDecision(params) {
+        return this.client.post('/decisions', { body: params, timeout: 5_000, maxRetries: 0 });
+    },
     capabilities: OPENAI_CAPABILITIES,
     descriptor: getAiProviderDescriptor('openai'),
     getModelCapabilities(model) {
-        return resolveModelCapabilities(OPENAI_CAPABILITIES, model);
+        const family = gpt6Family(model);
+        return resolveModelCapabilities(OPENAI_CAPABILITIES, family === 'luna' ? 'gpt-6-luna' : family === 'sol' ? 'gpt-6.1-sol' : model);
     },
     normalizeChatParams(model, params) {
         const capabilities = this.getModelCapabilities(model);
-        return applyChatTokenParamMode(params, capabilities.chatTokenParam);
+        return applyChatTokenParamMode(normalizeGpt6Chat(model, params), capabilities.chatTokenParam);
     },
-    async createChatCompletion(model, params) {
+    async createChatCompletion(model, params, generation) {
         return this.client.chat.completions.create({
-            ...this.normalizeChatParams(model, params),
+            ...this.normalizeChatParams(model, normalizeGpt6Chat(model, params, generation?.reasoningEffort)),
             model,
         });
     },
-    async createResponse(model, params) {
+    async createResponse(model, params, generation) {
         const capabilities = this.getModelCapabilities(model);
 
         if (!capabilities.supportsResponsesApi) {
@@ -67,7 +84,7 @@ export const openaiProviderAdapter: AiProviderAdapter = {
         }
 
         return this.client.responses.create({
-            ...params,
+            ...normalizeGpt6Response(model, params, generation?.reasoningEffort),
             model,
         });
     },

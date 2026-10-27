@@ -1241,12 +1241,14 @@ export async function searchMemories(ctx: BotContext, query: string, options?: S
     }
 }
 
-export async function searchAllDomainsMemories(ctx: BotContext, query: string, limit = 5) {
+export async function searchAllDomainsMemories(ctx: BotContext, query: string, limit = 5, acceptCandidate?: (candidate: SearchResult) => boolean) {
     const svc = vectorService();
     if (!svc) return [];
     try {
         devLog('Searching all domains:', { query: query.slice(0, 100), limit });
-        const res = await svc.searchAllDomains(query, String(ctx.from?.id), limit);
+        const candidates = await svc.searchAllDomains(query, String(ctx.from?.id), limit,
+            acceptCandidate ? { relevanceOnly: true, acceptCandidate } : undefined);
+        const res = acceptCandidate ? candidates.filter(acceptCandidate) : candidates;
         devLog('Cross-domain result count:', res.length);
         if (res.length === 0) {
             console.warn(`⚠️ Кросс-доменный поиск не нашел фактов: "${query.slice(0, 120)}"`);
@@ -1266,7 +1268,8 @@ export async function searchAllDomainsMemories(ctx: BotContext, query: string, l
 export async function searchHybridAllDomainsMemories(
     ctx: BotContext,
     query: string,
-    limit = 5
+    limit = 5,
+    acceptCandidate?: (candidate: SearchResult) => boolean,
 ): Promise<Array<HybridMemoryRetrievalResult<SearchResult>>> {
     const svc = vectorService();
     if (!svc) return [];
@@ -1274,19 +1277,21 @@ export async function searchHybridAllDomainsMemories(
     const semanticLimit = Math.max(12, limit * 3);
     const lexicalLimit = Math.max(20, limit * 4);
     const [semantic, lexical] = await Promise.all([
-        svc.searchAllDomains(query, String(ctx.from?.id), semanticLimit).catch((error) => {
+        svc.searchAllDomains(query, String(ctx.from?.id), semanticLimit, { relevanceOnly: true, acceptCandidate }).catch((error) => {
             console.error('Cross-domain vector search error', error);
             return [] as SearchResult[];
         }),
         svc.searchLexicalAllDomains
-            ? svc.searchLexicalAllDomains(query, String(ctx.from?.id), lexicalLimit).catch((error) => {
+            ? svc.searchLexicalAllDomains(query, String(ctx.from?.id), lexicalLimit, { acceptCandidate }).catch((error) => {
                 devLog('Cross-domain lexical search unavailable:', error);
                 return [] as SearchResult[];
             })
             : Promise.resolve([] as SearchResult[]),
     ]);
 
-    const results = fuseMemoryRetrievalCandidates(query, semantic, lexical, limit);
+    // Recheck for alternate vector backends that do not implement candidate options.
+    const allowed = (items: SearchResult[]) => acceptCandidate ? items.filter(acceptCandidate) : items;
+    const results = fuseMemoryRetrievalCandidates(query, allowed(semantic), allowed(lexical), limit);
     devLog('Hybrid cross-domain retrieval:', {
         semanticCandidates: semantic.length,
         lexicalCandidates: lexical.length,
@@ -1719,7 +1724,7 @@ export async function deleteMemoryById(
     domain: string
 ): Promise<void> {
     const svc = vectorService();
-    if (!svc) return;
+    if (!svc) throw new Error('Сервис памяти недоступен; удаление не подтверждено');
     await svc.deleteMemory(memoryId, domain);
     devLog('🗑️ Факт удалён по ID:', memoryId);
 }

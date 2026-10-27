@@ -16,6 +16,7 @@ import { createPlatformServer } from '../platform/server';
 import { createBrowserProxy, publicAddress } from '../platform/browserProxy';
 import { createExternalApiServer } from '../api/server';
 import type { ApiSettings } from '../api/settings';
+import { parsePreferences } from '../ai/modelPreferences';
 
 class MemoryApiOperations implements ApiOperationStore {
     private results = new Map<string, { fingerprint: string; result: ApiReply }>();
@@ -181,6 +182,7 @@ test('two API accounts register/login, pair separate bots, and route history, fi
             let executions = 0;
             let sceneExecutions = 0;
             let modelPreset: unknown = null;
+            let modelPreferences = { quality: 'high' };
             const internalToken = secrets.derive(id, 'api');
             let settings: ApiSettings = { budgetMode: 'normal', budgetModes: [], telegram: { personalSessionConfigured: false }, features: [] };
             const worker = createExternalApiServer({ token: internalToken, ownerId: Number(store.accounts.get(id)!.owner_id), host: '127.0.0.1', port: 0 }, {
@@ -191,6 +193,11 @@ test('two API accounts register/login, pair separate bots, and route history, fi
                 action: async () => ({ messages: [] }),
                 turnReady: async () => {},
                 modelSettings: async () => ({ accountId: id, preset: modelPreset }),
+                modelPreferences: async () => ({ accountId: id, preferences: modelPreferences }),
+                updateModelPreferences: async body => {
+                    try { modelPreferences = parsePreferences(body); } catch { throw new ApiError(400, 'invalid_preferences', 'Invalid'); }
+                    return { accountId: id, preferences: modelPreferences };
+                },
                 saveModelSettings: async body => { modelPreset = body.preset; return { accountId: id, preset: modelPreset }; },
                 sceneCapabilities: async () => ({ accountId: id, version: 1 }),
                 sceneReady: async () => null,
@@ -202,6 +209,11 @@ test('two API accounts register/login, pair separate bots, and route history, fi
             await listen(worker); workers.push(worker);
             endpoints.set(id, { port: (worker.address() as AddressInfo).port, token: internalToken });
         }
+        assert.equal((await call('/api/v1/model-preferences')).status, 401);
+        assert.equal((await call('/api/v1/model-preferences', 'PUT', a, { quality: 'standard' })).data.accountId, first.data.account.id);
+        assert.equal((await call('/api/v1/model-preferences', 'GET', a)).data.preferences.quality, 'standard');
+        assert.equal((await call('/api/v1/model-preferences', 'GET', b)).data.preferences.quality, 'high');
+        assert.equal((await call('/api/v1/model-preferences', 'PUT', a, { quality: 'maximum', accountId: second.data.account.id })).status, 400);
         for (const [token, id] of [[a, first.data.account.id], [b, second.data.account.id]]) {
             assert.equal((await call('/api/v1/history', 'GET', token)).data.messages[0].text, id);
             const result = await call('/api/v1/messages', 'POST', token, { text: 'Привет' }, 'same-key-for-both');

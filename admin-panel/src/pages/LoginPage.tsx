@@ -1,114 +1,42 @@
 import { useState } from 'react';
-import {
-  Box,
-  Card,
-  CardContent,
-  TextField,
-  Button,
-  Typography,
-  Alert,
-  Avatar,
-  CircularProgress,
-} from '@mui/material';
-import SmartToyIcon from '@mui/icons-material/SmartToy';
+import { Box, TextField, Button, Typography, Alert, CircularProgress, Stack } from '@mui/material';
+import { BrandMark } from '../components/BrandMark';
 import { login, fetchConfig } from '../api';
 import type { ConfigResponse } from '../types';
-
-interface Props {
-  onLogin: (config: ConfigResponse) => void;
-}
-
+interface Props { onLogin: (config: ConfigResponse) => void }
 export function LoginPage({ onLogin }: Props) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
-
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault(); setLoading(true); setError('');
     try {
       const result = await login(username, password);
-      if (result.success) {
-        const cfg = await fetchConfig();
-        onLogin(cfg);
-      } else {
-        setError(result.error || 'Неверный логин или пароль');
-      }
-    } catch {
-      setError('Ошибка соединения');
-    } finally {
-      setLoading(false);
-    }
+      if (result.success) onLogin(await fetchConfig()); else setError(result.error || 'Неверный логин или пароль');
+    } catch { setError('Ошибка соединения'); } finally { setLoading(false); }
   };
-
-  return (
-    <Box
-      sx={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        bgcolor: 'background.default',
-        p: 2,
-      }}
-    >
-      <Card sx={{ width: '100%', maxWidth: 400 }}>
-        <CardContent sx={{ p: 4 }}>
-          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 4 }}>
-            <Avatar sx={{ bgcolor: 'primary.dark', width: 56, height: 56, mb: 2 }}>
-              <SmartToyIcon fontSize="large" />
-            </Avatar>
-            <Typography variant="h5" fontWeight={700} color="primary.light">
-              Kira Mind
-            </Typography>
-            <Typography variant="body2" color="text.secondary" mt={0.5}>
-              Панель управления ботом
-            </Typography>
-          </Box>
-
-          {error && (
-            <Alert severity="error" sx={{ mb: 2, bgcolor: '#1a0a0a', border: '1px solid #7f1d1d' }}>
-              {error}
-            </Alert>
-          )}
-
-          <form onSubmit={handleSubmit}>
-            <TextField
-              label="Логин"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              fullWidth
-              required
-              autoFocus
-              autoComplete="username"
-              sx={{ mb: 2 }}
-            />
-            <TextField
-              label="Пароль"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              fullWidth
-              required
-              autoComplete="current-password"
-              sx={{ mb: 3 }}
-            />
-            <Button
-              type="submit"
-              variant="contained"
-              fullWidth
-              size="large"
-              disabled={loading}
-              sx={{ py: 1.4, fontWeight: 600, fontSize: '15px' }}
-            >
-              {loading ? <CircularProgress size={22} color="inherit" /> : 'Войти'}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-    </Box>
-  );
+  return <Box sx={{ minHeight: '100dvh', display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' } }}>
+    <Stack sx={{ display: { xs: 'none', md: 'flex' }, bgcolor: '#1C2823', color: '#F1F5EE', p: 7, justifyContent: 'space-between', position: 'relative', overflow: 'hidden' }}>
+      <Stack direction="row" spacing={1.5} alignItems="center"><BrandMark size={64} /><Typography sx={{ fontSize: 25, fontWeight: 400, letterSpacing: '-.025em' }}>Kira Mind</Typography></Stack>
+      <Box sx={{ position: 'relative', zIndex: 1, maxWidth: 500 }}><Typography variant="overline" sx={{ color: '#ADC3A7' }}>Личное пространство</Typography>
+        <Typography sx={{ fontSize: { md: 42, lg: 58 }, letterSpacing: '-.045em', lineHeight: 1.12, mt: 2 }}>Ваша Кира.<br />Всё под контролем.</Typography>
+        <Typography sx={{ color: '#ADBCAF', mt: 3, maxWidth: 330, fontSize: 15, lineHeight: 1.8 }}>Модели, память и характер —<br />в одном спокойном пространстве.</Typography></Box>
+      <Typography variant="caption" sx={{ color: '#8FA092' }}>Kira Mind / Панель управления</Typography>
+      <Box aria-hidden="true" sx={{ position: 'absolute', width: 560, height: 560, right: -260, bottom: -260, border: '1px solid #5E7854', borderRadius: '50%', '&:before, &:after': { content: '""', position: 'absolute', inset: 45, border: '1px solid #42583D', borderRadius: '50%' }, '&:after': { inset: 100 } }} />
+    </Stack>
+    <Stack sx={{ p: { xs: 3, md: 6 }, minHeight: '100dvh', justifyContent: 'center', alignItems: 'center' }}>
+      <Box sx={{ width: '100%', maxWidth: 360 }}>
+        <Box sx={{ display: { md: 'none' }, mb: 4 }}><BrandMark size={80} /></Box>
+        <Typography variant="overline" color="text.secondary">Kira Mind</Typography><Typography variant="h4" component="h1" sx={{ mt: 1, mb: 1 }}>Добро пожаловать</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 4 }}>Войдите, чтобы настроить свою Киру.</Typography>
+        {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+        <Box component="form" onSubmit={handleSubmit}><Stack spacing={2.5}>
+          <TextField label="Логин" value={username} onChange={event => setUsername(event.target.value)} fullWidth required autoFocus autoComplete="username" />
+          <TextField label="Пароль" type="password" value={password} onChange={event => setPassword(event.target.value)} fullWidth required autoComplete="current-password" />
+          <Button type="submit" variant="contained" fullWidth disabled={loading} sx={{ minHeight: 46 }}>{loading ? <CircularProgress size={22} color="inherit" /> : 'Войти в пространство'}</Button>
+        </Stack></Box>
+      </Box>
+    </Stack>
+  </Box>;
 }

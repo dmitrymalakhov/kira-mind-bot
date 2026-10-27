@@ -9,6 +9,7 @@ const path = require('path');
 const http = require('http');
 const { Pool } = require('pg');
 const { AI_PRESETS, AI_PRESET_NAMES, parseAiPresetName } = require('./aiPresetRegistry');
+const { registerModelPreferenceRoutes } = require('./modelPreferences');
 const { registerBudgetModeRoutes } = require('./budgetMode');
 const { registerBackgroundFeatureRoutes } = require('./backgroundFeatures');
 const { registerLocalModelRoutes, readLocalRoutes, resolveLocalPreset } = require('./localModels');
@@ -340,15 +341,8 @@ app.post('/api/logout', (req, res) => {
 });
 
 app.get('/api/config', requireAuth, async (req, res) => {
-  const vars = readEnvFile();
-  const result = {};
-  for (const [key, value] of Object.entries(vars)) {
-    if (SENSITIVE_KEYS.has(key) && value && value.length > 6) {
-      result[key] = { value: value.slice(0, 4) + '••••', masked: true };
-    } else {
-      result[key] = { value, masked: false };
-    }
-  }
+  const vars = require('./configValues').mergeEditableDefaults(readEnvFile(), process.env, EDITABLE_KEYS);
+  const result = require('./configValues').maskConfigValues(vars, SENSITIVE_KEYS);
   for (const [key, value] of Object.entries(SYSTEM_DEFAULT_CONFIG)) {
     if (!(key in result)) {
       result[key] = { value, masked: false, source: 'system_default' };
@@ -402,6 +396,9 @@ async function readMemoryEmbeddingProfileState(pool, vars) {
     profile,
   };
 }
+
+registerModelPreferenceRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile,
+  memoryProfile: async (pool, vars) => (await readMemoryEmbeddingProfileState(pool, vars)).profile.name });
 
 registerBudgetModeRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable });
 registerBackgroundFeatureRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
@@ -465,7 +462,7 @@ app.post('/api/ai-preset', requireAuth, async (req, res) => {
       return res.status(400).json({ error: availability.unavailableReason || 'AI preset недоступен без обязательных API ключей' });
     }
     await pool.query(
-      'INSERT INTO bot_settings (key, value, "updatedAt") VALUES ($1, $2, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = now()',
+      'WITH removed AS (DELETE FROM bot_settings WHERE key = \'AI_MODEL_POLICY\') INSERT INTO bot_settings (key, value, "updatedAt") VALUES ($1, $2, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = now()',
       ['AI_MODEL_PRESET', preset]
     );
     res.json({ success: true, configuredPresetName: preset, message: 'AI preset сохранён. Бот подхватит его без перезапуска.' });
@@ -477,6 +474,11 @@ app.post('/api/ai-preset', requireAuth, async (req, res) => {
 });
 
 app.post('/api/config', requireAuth, async (req, res) => {
+  for (const key of ['OPENAI_BASE_URL', 'OPENAI_IMAGE_BASE_URL']) {
+    if (Object.hasOwn(req.body, key) && !require('./configValues').isValidProxyUrl(req.body[key])) {
+      return res.status(400).json({ error: 'Введите URL прокси с http:// или https:// без логина, пароля и параметров запроса.' });
+    }
+  }
   const envUpdates = {};
   const runtimeUpdates = {};
   for (const [key, value] of Object.entries(req.body)) {
@@ -1696,6 +1698,10 @@ app.get('/api/memory/graph', requireAuth, async (req, res) => {
   } finally {
     res.off('close', abortOnClose);
   }
+});
+
+require('./memoryDetail').registerMemoryDetailRoute(app, {
+  requireAuth, getMemoryProfile, getMemoryUserId, normalizeMemoryDomain, fetchExistingMemoryPayload, normalizeMemoryPoint,
 });
 
 app.get('/api/memory', requireAuth, async (req, res) => {

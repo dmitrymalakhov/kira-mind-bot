@@ -13,6 +13,7 @@ import {
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import type { FieldDef } from '../types';
+import { isValidProxyUrl } from '../../configValues';
 import { DurationInput } from './DurationInput';
 
 interface Props {
@@ -39,6 +40,8 @@ export function FieldInput({ field, value, onChange, displayValue }: Props) {
     }
     setShowDerivedValue(true);
   }, [value, displayValue]);
+
+  if (field.type === 'proxy') return <ProxyField field={field} value={value} onChange={onChange} />;
 
   if (field.type === 'toggle') {
     return (
@@ -208,4 +211,23 @@ export function FieldInput({ field, value, onChange, displayValue }: Props) {
       }
     />
   );
+}
+
+function ProxyField({ field, value, onChange }: Props) {
+  const isProxy = (url: string) => Boolean(url.trim()) && !/^https:\/\/api\.openai\.com\/v1\/?$/i.test(url.trim());
+  const [enabled, setEnabled] = useState(() => isProxy(value));
+  const previousUrl = useRef(isProxy(value) ? value : '');
+  useEffect(() => { setEnabled(isProxy(value)); if (isProxy(value)) previousUrl.current = value; }, [value]);
+  const invalid = enabled && !isValidProxyUrl(value);
+  return <Box sx={{ gridColumn: '1 / -1' }}>
+    <FormControlLabel label={field.label} control={<Switch checked={enabled} onChange={(_, checked) => {
+      if (value) previousUrl.current = value;
+      setEnabled(checked);
+      onChange(field.key, checked ? previousUrl.current : '');
+    }} />} />
+    <Typography variant="body2" color="text.secondary" sx={{ mb: enabled ? 2 : 0 }}>{field.hint}</Typography>
+    {enabled && <TextField fullWidth size="small" label="URL прокси" placeholder={field.placeholder || 'https://proxy.example/v1'}
+      value={value} error={invalid} helperText={invalid ? 'Введите URL с http:// или https://' : 'Адрес API с /v1. Применяется после пересоздания контейнеров.'}
+      onChange={event => { previousUrl.current = event.target.value; onChange(field.key, event.target.value); }} />}
+  </Box>;
 }

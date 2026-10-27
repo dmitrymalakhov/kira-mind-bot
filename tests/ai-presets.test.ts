@@ -12,7 +12,9 @@ import { getEnvAiPresetName } from "../services/aiRuntimeConfigService";
 const TASK_KEYS: AiTaskKey[] = [
     "defaultText",
     "lightweightText",
+    "fastDialogue",
     "complexReasoning",
+    "runtimePlanning",
     "intentClassification",
     "intentDedup",
     "conversation",
@@ -84,9 +86,9 @@ describe("AI preset registry", () => {
 });
 
 describe("AI model fallback and environment selection", () => {
-    test("uses nano for lightweight structured tasks", () => {
-        for (const task of ["lightweightText", "intentClassification", "intentDedup", "browserPlanning"] as AiTaskKey[]) {
-            assert.deepEqual(getFallbackModel(task), { provider: "openai", model: "gpt-5.4-nano" });
+    test("uses Luna without reasoning for lightweight structured tasks", () => {
+        for (const task of ["fastDialogue", "lightweightText", "intentClassification", "intentDedup", "browserPlanning"] as AiTaskKey[]) {
+            assert.deepEqual(getFallbackModel(task), { provider: "openai", model: "gpt-6-luna", generation: { reasoningEffort: "none" } });
         }
     });
 
@@ -94,15 +96,15 @@ describe("AI model fallback and environment selection", () => {
         assert.deepEqual(getFallbackModel("browserVision"), { provider: "openai", model: "gpt-4o" });
     });
 
-    test("uses mini for remaining text task types", () => {
-        const nanoTasks = new Set<AiTaskKey>(["lightweightText", "intentClassification", "intentDedup", "browserPlanning"]);
+    test("uses Luna with task-specific reasoning for remaining text tasks", () => {
+        const nanoTasks = new Set<AiTaskKey>(["fastDialogue", "lightweightText", "intentClassification", "intentDedup", "browserPlanning"]);
         for (const task of TASK_KEYS.filter((key) => !nanoTasks.has(key) && !["complexReasoning", "browserVision", "embedding", "transcription"].includes(key))) {
-            assert.deepEqual(getFallbackModel(task), { provider: "openai", model: "gpt-5.4-mini" }, task);
+            assert.deepEqual(getFallbackModel(task), { provider: "openai", model: "gpt-6-luna", generation: { reasoningEffort: ["runtimePlanning", "memoryConsolidation"].includes(task) ? "low" : "none" } }, task);
         }
     });
 
-    test("preserves a strong fallback for complex reasoning", () => {
-        assert.deepEqual(getFallbackModel("complexReasoning"), { provider: "openai", model: "gpt-5.4" });
+    test("uses Luna low fallback without escalating the economy preset", () => {
+        assert.deepEqual(getFallbackModel("complexReasoning"), { provider: "openai", model: "gpt-6-luna", generation: { reasoningEffort: "low" } });
     });
 
     test("uses task-specific fallbacks for embeddings and transcription", () => {

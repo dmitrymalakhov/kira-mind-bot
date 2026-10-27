@@ -295,7 +295,7 @@ export function PersonalitySection({ onToast }: Props) {
         {loading ? <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box> : <>
         <Alert
           severity="info"
-          sx={{ mb: 2, bgcolor: '#0a1628', border: '1px solid #1e3a5f', color: '#93c5fd', fontSize: '13px' }}
+          sx={{ mb: 2, bgcolor: '#EEF4F4', border: '1px solid #D8E5E6', color: '#365C68', fontSize: '13px' }}
         >
           Текущий город применяется без перезапуска. Остальные изменения — после перезапуска бота. Пустые поля используют значения из кода.
         </Alert>

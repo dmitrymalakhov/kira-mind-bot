@@ -25,6 +25,7 @@ export interface ApiMessage {
 
 export interface ApiReply {
     messages: ApiMessage[];
+    backgroundJob?: { id: string; status: string; required: boolean };
 }
 
 export interface ApiBackend {
@@ -33,9 +34,13 @@ export interface ApiBackend {
     history(limit: number): Promise<unknown>;
     reminders(): Promise<unknown>;
     tasks(): Promise<unknown>;
+    dialogueJobs?(): Promise<unknown>;
+    cancelDialogueJob?(id: string): Promise<unknown>;
     settings?(): Promise<ApiSettings>;
+    modelPreferences?(): Promise<unknown>;
+    updateModelPreferences?(body: unknown): Promise<unknown>;
     updateSettings?(patch: ApiSettingsPatch): Promise<ApiSettings>;
-    message(text: string): Promise<ApiReply>;
+    message(text: string, options?: { deferredDialogue?: boolean }): Promise<ApiReply>;
     action(token: string): Promise<ApiReply>;
     file(id: string): Promise<{ data: Buffer; filename: string }>;
     /** The app's text mode (API_AI_MODEL_PRESET): catalog, its selection and the server's global mode. */

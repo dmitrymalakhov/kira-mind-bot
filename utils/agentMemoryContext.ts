@@ -1,18 +1,30 @@
 import { BotContext } from '../types';
-import { classifyMemoryNeed, getMultiQueryMemoryContextDetailed, RecalledMemoryRef } from './multiQueryMemory';
+import { classifyMemoryNeed, getMultiQueryMemoryContextDetailed, RecalledMemoryRef, MultiQueryMemoryContextResult } from './multiQueryMemory';
+import type { MemoryRecallSummary } from '../types/memoryRecallTypes';
 import { devLog } from '../utils';
 import { buildTodayImportanceContext } from './todayImportance';
+import { getVectorService } from '../services/VectorServiceFactory';
+import { recallOwnerRelationship } from './personalRelationshipRecall';
+import { isFocusedPersonalRecall, ownerRelationshipIntent } from './personalRecallIntent';
+import { readPersonIdentities } from '../services/PersonIdentityService';
+import { validMemoryFocus, isMemoryContinuation, saveMemoryFocus } from './memoryQueryPlan';
 
 export interface AgentMemoryContext {
+    /** The new kernel handles mutations through tools, so synthesis is read-only. */
+    allowSideEffects?: boolean;
+    allowSelfEvolution?: boolean;
     domain: string;
     context: string;
     recalledMemories?: RecalledMemoryRef[];
+    recall?: MemoryRecallSummary;
 }
 
 export interface AgentMemoryContextOptions {
     memoryNeed?: 'none' | 'light' | 'full';
     /** Детерминированная дневная сводка строит snapshot отдельно и не должна читать его дважды. */
     includeTodayImportance?: boolean;
+    trackAccess?: boolean;
+    replyPerson?: import('../types/memoryRecallTypes').MemoryReplyPerson;
 }
 
 /**
@@ -37,7 +49,12 @@ export async function fetchAgentMemoryContext(
     }
 
     // Классифицируем потребность в памяти до запуска тяжёлого retrieval
-    const memoryNeed = options.memoryNeed && ['none', 'light', 'full'].includes(options.memoryNeed)
+    const focused = isFocusedPersonalRecall(trimmed);
+    const service = ownerRelationshipIntent(trimmed) ? getVectorService() : null;
+    const relationship = service && ctx.from?.id
+        ? await recallOwnerRelationship(service, String(ctx.from.id), trimmed, Date.now(), { identities: readPersonIdentities }).catch(() => undefined) : undefined;
+    if (relationship?.complete && relationship.person) saveMemoryFocus(ctx, [relationship.person], trimmed, relationship.memories.map(memory => memory.id));
+    const memoryNeed = focused || relationship?.context || (validMemoryFocus(ctx) || options.replyPerson?.personId || options.replyPerson?.contactId) && isMemoryContinuation(trimmed) ? 'full' : options.memoryNeed && ['none', 'light', 'full'].includes(options.memoryNeed)
         ? options.memoryNeed : await classifyMemoryNeed(trimmed);
     if (memoryNeed === 'none') {
         devLog('Memory need: none — skipping retrieval for this message');
@@ -45,29 +62,40 @@ export async function fetchAgentMemoryContext(
     }
 
     const [memory, todayImportanceContext] = await Promise.all([
-        getMultiQueryMemoryContextDetailed(ctx, trimmed, memoryNeed),
+        focused && relationship?.complete
+            ? Promise.resolve<MultiQueryMemoryContextResult>({ context: '', recalledMemories: [] })
+            : getMultiQueryMemoryContextDetailed(ctx, trimmed, memoryNeed, { trackAccess: options.trackAccess, replyPerson: options.replyPerson }),
         options.includeTodayImportance === false
             ? Promise.resolve('')
             : buildTodayImportanceContext(ctx, trimmed),
     ]);
     const context = memory.context;
     const working = formatWorkingMemory(ctx);
-    const enrichedContext = [working, todayImportanceContext, context].filter(Boolean).join('\n\n');
+    const enrichedContext = [working, todayImportanceContext, context, relationship?.context,
+        'Если поиск не нашёл нужный факт, это не означает, что пользователь его никогда не сообщал. Не утверждай «ты не называл»; обозначь ограничение текущего поиска.',
+    ].filter(Boolean).join('\n\n');
+    const recalled = new Map(memory.recalledMemories.map(item => [item.id, item]));
+    for (const item of relationship?.memories ?? []) recalled.set(item.id, { id: item.id, domain: item.domain, content: item.content, score: 1, confidence: item.confidence, status: item.status, sourceMemoryIds: item.sourceMemoryIds, sourceEpisodeId: item.sourceEpisodeId });
     devLog('Fetched memory context (enrichment)', {
         memoryNeed,
         hasTodayImportanceContext: Boolean(todayImportanceContext),
         hasContext: Boolean(enrichedContext),
         contextLength: enrichedContext.length,
-        recalledMemories: memory.recalledMemories.length,
+        recalledMemories: recalled.size,
+        structuredRelationship: Boolean(relationship?.context),
     });
-    return { domain: 'personal', context: enrichedContext, recalledMemories: memory.recalledMemories };
+    const recall = focused && relationship?.complete && relationship.person
+        ? { state: 'found' as const, requestKind: 'identity' as const, identityVerified: true,
+            subjects: [{ name: relationship.person.displayName, owner: Boolean(relationship.person.owner) }], domains: [], evidenceCount: recalled.size }
+        : memory.recall;
+    return { domain: 'personal', context: enrichedContext, recalledMemories: [...recalled.values()], recall };
 }
 
 function formatWorkingMemory(ctx: BotContext): string {
     const wm = ctx.session?.workingMemory;
     if (!wm?.summary?.trim()) return '';
     const lines = [
-        'Текущая рабочая память разговора:',
+        'Рабочая сводка разговора (поисковый контекст; не доказательства фактов, первичные записи ниже имеют приоритет):',
         `- Ситуация: ${wm.summary}`,
         wm.activeTopics?.length ? `- Активные темы: ${wm.activeTopics.join(', ')}` : '',
         wm.activeEntities?.length ? `- Активные люди/объекты: ${wm.activeEntities.join(', ')}` : '',

@@ -37,9 +37,9 @@ describe("deterministic planner routes", () => {
         assert.equal(completion.mock.callCount(), 0);
     });
 
-    test("uses the strong route once for a compound action plan", async (t) => {
+    test("uses the dedicated planning route once for a compound action plan", async (t) => {
         const completion = t.mock.method(chatCompletion, 'createChatCompletionForTask', async (task: AiTaskKey) => {
-            assert.equal(task, 'complexReasoning');
+            assert.equal(task, 'runtimePlanning');
             return { choices: [{ message: { content: JSON.stringify({ steps: [
                 { agentId: 'webSearch' }, { agentId: 'sendMessage' },
             ] }) } }] } as any;

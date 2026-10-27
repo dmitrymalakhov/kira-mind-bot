@@ -29,6 +29,7 @@ import { startChatGroupTracker } from "./services/chatGroupTracker";
 import { startChatPromptWatchPolling } from "./services/chatPromptWatchers";
 import { startInboxGuardianScheduler } from "./services/inboxGuardianScheduler";
 import { startRecurringTaskScheduler } from "./services/recurringTaskScheduler";
+import { registerDialogueLifecycle, startDialogueJobScheduler } from './services/dialogueJobs';
 import { initReflectionMode } from "./services/reflectionModeService";
 import { REACTIONS_ENABLED, ALLOWED_REACTIONS } from "./handlers/shared";
 
@@ -44,6 +45,7 @@ console.log('🤖 Бот создан успешно');
 if (process.env.KIRA_RUNTIME_HEALTH_DISABLED !== 'true') startRuntimeHealthServer();
 
 // Регистрация всех обработчиков
+registerDialogueLifecycle(bot);
 registerForwardedTextGuard(bot);
 registerCommandHandlers(bot);
 console.log('⚙️ Обработчики команд зарегистрированы');
@@ -130,6 +132,7 @@ async function startBot() {
         startMorningDigestScheduler(bot);
         startInboxGuardianScheduler(bot);
         startRecurringTaskScheduler(bot);
+        startDialogueJobScheduler(bot);
         startChatGroupTracker(bot);
         startChatPromptWatchPolling(bot.api);
         await bot.api.setMyCommands(getTelegramMenuCommands());

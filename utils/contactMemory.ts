@@ -1,4 +1,5 @@
 import { InlineKeyboard } from 'grammy';
+import { randomBytes } from 'crypto';
 import { get as levenshtein } from 'fast-levenshtein';
 import { transliterate as toLatin } from 'transliteration';
 import { BotContext, SessionData } from '../types';
@@ -8,8 +9,9 @@ import { rememberFact } from './domainMemory';
 import { devLog } from '../utils';
 import { resolveOrCreatePersonIdentity } from '../services/PersonIdentityService';
 import { getBotGenderedText } from '../persona';
+import { PENDING_CONTACT_MEMORY_TTL_MS } from './contactMemoryConstants';
+import { isEligibleForUserSynthesis } from './userSynthesisFilter';
 
-const PENDING_CONTACT_MEMORY_TTL_MS = 10 * 60 * 1000;
 const RECENT_FACT_TTL_MS = 10 * 60 * 1000;
 
 export interface ContactMemoryFact {
@@ -37,7 +39,18 @@ export interface ContactIdentityScope {
     queryName: string;
     displayName?: string;
     contact?: Contact;
+    personIds?: string[];
+    contactId?: string;
+    username?: string;
+    requireEntityMatch?: boolean;
     candidateNames?: string[];
+}
+
+/** Source provenance only; the caller must independently validate person/owner scope. */
+export function hasDirectContactConversationSource(memory: { sourceMessageIds?: string[] }, contactId?: string): boolean {
+    if (!contactId || !/^[1-9]\d*$/.test(contactId)) return false;
+    const prefix = `tg:${contactId}:`;
+    return Boolean(memory.sourceMessageIds?.some(id => typeof id === 'string' && id.startsWith(prefix) && /^[1-9]\d*$/.test(id.slice(prefix.length))));
 }
 
 const NON_CONTACT_LEADING_WORDS_SOURCE = [
@@ -70,6 +83,17 @@ export function contactDisplayName(contact: Contact): string {
 export function contactOptionLabel(contact: Contact): string {
     const display = contactDisplayName(contact);
     return contact.username ? `${display} (@${contact.username})` : display;
+}
+
+export function ambiguousMemoryDeletionGuard(query: string): string | null {
+    const trimmed = query.trim();
+    const bare = /^@[a-zA-Z0-9_]{3,32}$/.test(trimmed) || /^[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+){0,2}$/u.test(trimmed);
+    const target = bare ? trimmed : query.match(/^(@[a-zA-Z0-9_]{3,32}|[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+){0,2})(?=\s|$|[:,.-])/u)?.[1]?.trim();
+    if (!target) return null;
+    const resolution = resolveContactIdentity(target);
+    if (resolution.status !== 'ambiguous') return null;
+    const variants = resolution.candidates.slice(0, 6).map(contactOptionLabel).join(', ');
+    return `Имя «${target}» неоднозначно (${variants}). Уточни фамилию или username, чтобы я ` + getBotGenderedText('не выбрала', 'не выбрал') + ' не тот факт.';
 }
 
 export function contactIdentityTags(contactName: string, contact?: Contact): string[] {
@@ -184,17 +208,50 @@ export function isContactMemoryEntry(memory: { content: string; tags?: string[] 
     return hasContactMemoryTags(memory.tags) || Boolean(storedContactPrefix(memory.content));
 }
 
+export function isOwnerRecallEvidence(memory: { subject?: string; tags?: string[] }): boolean {
+    const tags = memory.tags ?? [];
+    if (!(memory.subject === 'user' || tags.includes('subject:user')) || !isEligibleForUserSynthesis(memory) ||
+        tags.some(tag => /^(?:subject|evidence_subject):(?:bot|system|contact|third_party|unknown)$/.test(tag))) return false;
+    const ownerRelation = tags.includes('person_relation') && (tags.includes('relation_subject:user') || tags.includes('relation_object:user'));
+    return ownerRelation || !hasContactMemoryTags(tags) && !tags.some(tag => tag.startsWith('person_id:') && tag !== 'person_id:user');
+}
+
 export function isMemoryEntryAllowedForContactScope(
-    memory: { content: string; tags?: string[] | undefined },
+    memory: { content: string; tags?: string[] | undefined; subject?: string },
     scope: ContactIdentityScope | null
 ): boolean {
+    if (scope?.requireEntityMatch) {
+        if (scope.status !== 'resolved') return false;
+        const tags = memory.tags ?? [];
+        if (scope.personIds?.includes('user')) return isOwnerRecallEvidence(memory);
+        if (['bot', 'system', 'unknown'].includes(memory.subject ?? '') || tags.some(tag => /^(?:subject|evidence_subject):(?:bot|system|unknown)$/.test(tag))) return false;
+        const candidateId = contactIdFromTags(tags);
+        const scopeId = scope.contactId ?? (scope.contact ? String(scope.contact.id) : undefined);
+        if (tags.includes('person_relation')) {
+            const endpointIds = tags.filter(tag => /^relation_(?:subject|object)_person_id:/.test(tag)).map(tag => tag.split(':')[1]);
+            if (endpointIds.some(id => scope.personIds?.includes(id))) return true;
+            if (scope.personIds?.includes('user') && (tags.includes('relation_subject:user') || tags.includes('relation_object:user'))) return true;
+        }
+        if (candidateId) return Boolean(scopeId && candidateId === scopeId);
+        const personIds = tags.filter(tag => tag.startsWith('person_id:')).map(tag => tag.slice('person_id:'.length));
+        if (tags.includes('person_relation')) personIds.push(...tags.filter(tag => /^relation_(?:subject|object)_person_id:/.test(tag)).map(tag => tag.split(':').slice(1).join(':')));
+        if (personIds.length) return personIds.some(id => scope.personIds?.includes(id));
+        if (!isContactMemoryEntry(memory)) return Boolean(scope.personIds?.includes('user') && memory.subject === 'user');
+    }
+    // Product document headings are not people's names. Only explicitly owner-
+    // attributed syntheses may bypass that legacy prefix rule; mixed-chat and
+    // contact sources retain the existing isolation checks.
+    const ownerDocument = /^\[(?:(?:ЭПИЗОД|ГЛАВА|МОДЕЛЬ) ПАМЯТИ:|ИНДЕКС (?:СОМНЕНИЙ|ОТКРЫТЫХ ЛИНИЙ) ПАМЯТИ\])/u.test(memory.content);
+    if (ownerDocument && !hasContactMemoryTags(memory.tags) &&
+        (memory.subject === 'user' || memory.tags?.includes('subject:user')) && isEligibleForUserSynthesis(memory)) return true;
     if (!isContactMemoryEntry(memory)) return true;
     if (!scope) return false;
     if (scope.status === 'ambiguous') return false;
 
     const candidateContactId = contactIdFromTags(memory.tags);
     if (candidateContactId) {
-        return scope.contact ? candidateContactId === String(scope.contact.id) : false;
+        const scopeId = scope.contactId ?? (scope.contact ? String(scope.contact.id) : undefined);
+        return Boolean(scopeId && candidateContactId === scopeId);
     }
 
     const allowedUsernames = new Set(
@@ -205,6 +262,7 @@ export function isMemoryEntryAllowedForContactScope(
     if (scope.contact?.username) {
         allowedUsernames.add(normalizeContactLookupValue(scope.contact.username));
     }
+    if (scope.username) allowedUsernames.add(normalizeContactLookupValue(scope.username));
 
     const candidateUsername = contactUsernameFromTags(memory.tags);
     if (candidateUsername) {
@@ -346,6 +404,14 @@ export function contactNamesLikelyMatch(left: string, right: string): boolean {
         return leftTokens.length === rightTokens.length && matchedTokens >= 1;
     }
     return matchedTokens >= 2;
+}
+
+/** Candidate matching for read-only recall. The caller must still reject multiple identities. */
+export function recallPersonNameMatches(storedName: string, mention: string): boolean {
+    if (contactNamesLikelyMatch(storedName, mention)) return true;
+    const query = normalizeContactLookupValue(mention);
+    if (!query || query.includes(' ') || query.length < 3) return false;
+    return normalizeContactLookupValue(storedName).split(/\s+/).some(part => isCloseToken(query, part));
 }
 
 function plausibleContactMatches(query: string, contacts: Contact[]): Contact[] {
@@ -524,6 +590,7 @@ export async function persistPendingContactFacts(
 
 function setPendingContactMemory(ctx: BotContext, fact: ContactMemoryFact, candidates: Contact[]): void {
     ctx.session.pendingContactMemory = {
+        confirmationId: randomBytes(8).toString('hex'),
         contactName: fact.contactName,
         content: fact.content,
         domain: fact.domain,
@@ -611,11 +678,12 @@ async function askContactClarification(
     }
 
     const keyboard = new InlineKeyboard();
+    const pending = ctx.session.pendingContactMemory!;
     for (const candidate of candidates.slice(0, 6)) {
-        keyboard.text(contactOptionLabel(candidate), `cmem:${candidate.id}`).row();
+        keyboard.text(contactOptionLabel(candidate), contactMemoryCallbackData(pending, String(candidate.id))).row();
     }
-    keyboard.text('Новый человек', 'cmem:new').row();
-    keyboard.text('Не сейчас', 'cmem:later');
+    keyboard.text('Новый человек', contactMemoryCallbackData(pending, 'new')).row();
+    keyboard.text('Не сейчас', contactMemoryCallbackData(pending, 'later'));
 
     await ctx.reply(
         `У меня несколько контактов по имени «${fact.contactName}». К кому сохранить этот факт?\n\n«${stripContactLead(fact.content, fact.contactName)}»`,
@@ -667,6 +735,7 @@ export async function saveContactMemoryFactOrAsk(
     if (mergePendingContactMemory(ctx, fact, [])) return { status: 'pending' };
 
     ctx.session.pendingContactMemory = {
+        confirmationId: randomBytes(8).toString('hex'),
         contactName,
         content: fact.content,
         domain: fact.domain,
@@ -692,7 +761,11 @@ export async function saveContactMemoryFactOrAsk(
     return { status: 'pending' };
 }
 
-export async function handleContactMemoryCallback(ctx: BotContext, callbackData: string): Promise<boolean> {
+function contactMemoryCallbackData(pending: PendingContactMemory, choice: string): string {
+    return pending.confirmationId ? `cmem:${pending.confirmationId}:${choice}` : `cmem:${choice}`;
+}
+
+export async function handleContactMemoryCallback(ctx: BotContext, callbackData: string, onSaved?: (summary: string) => void, onCancelled?: () => void): Promise<boolean> {
     if (!callbackData.startsWith('cmem:')) return false;
 
     const pending = ctx.session.pendingContactMemory;
@@ -702,10 +775,20 @@ export async function handleContactMemoryCallback(ctx: BotContext, callbackData:
         return true;
     }
 
+    if (pending.confirmationId) {
+        const prefix = `cmem:${pending.confirmationId}:`;
+        if (!callbackData.startsWith(prefix)) {
+            await ctx.answerCallbackQuery({ text: 'Это кнопка другого уточнения. Используй последнее сообщение.' });
+            return true;
+        }
+        callbackData = `cmem:${callbackData.slice(prefix.length)}`;
+    }
+
     if (callbackData === 'cmem:later' || callbackData === 'cmem:cancel') {
         ctx.session.pendingContactMemory = undefined;
         await ctx.answerCallbackQuery({ text: 'Не сохраняю' });
         await ctx.editMessageText('Ок, не сохраняю этот факт в память.');
+        onCancelled?.();
         return true;
     }
 
@@ -722,7 +805,7 @@ export async function handleContactMemoryCallback(ctx: BotContext, callbackData:
             : true;
         const result = await persistPendingContactFacts(ctx, pending, retryContact, forceDetachedNew);
         if (result.failedAssertions.length > 0) {
-            const keyboard = new InlineKeyboard().text('Повторить сохранение', 'cmem:retry');
+            const keyboard = new InlineKeyboard().text('Повторить сохранение', contactMemoryCallbackData(pending, 'retry'));
             await ctx.answerCallbackQuery({ text: 'Часть фактов пока не сохранилась.' });
             await ctx.editMessageText(
                 `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}.`,
@@ -738,6 +821,7 @@ export async function handleContactMemoryCallback(ctx: BotContext, callbackData:
         await ctx.answerCallbackQuery({ text: retryContact ? 'Сохранено в память' : 'Сохранено как новый человек' });
         await ctx.editMessageText(getBotGenderedText("Сохранила факты:", "Сохранил факты:") +
             `\n${result.savedContents.join('\n')}`);
+        onSaved?.(`Подтверждено сохранение фактов: ${result.savedContents.join('; ')}`);
         return true;
     }
 
@@ -755,7 +839,7 @@ export async function handleContactMemoryCallback(ctx: BotContext, callbackData:
 
     const result = await persistPendingContactFacts(ctx, pending, contact);
     if (result.failedAssertions.length > 0) {
-        const keyboard = new InlineKeyboard().text('Повторить сохранение', 'cmem:retry');
+        const keyboard = new InlineKeyboard().text('Повторить сохранение', contactMemoryCallbackData(pending, 'retry'));
         await ctx.answerCallbackQuery({ text: 'Часть фактов пока не сохранилась.' });
         await ctx.editMessageText(
             `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}.`,
@@ -770,10 +854,11 @@ export async function handleContactMemoryCallback(ctx: BotContext, callbackData:
         `Сохранил как факты о ${contactDisplayName(contact)}:`,
     ) + `\n\n${result.savedContents.join('\n')}`);
     devLog('Contact memory disambiguated via callback:', result.savedContents);
+    if (result.savedContents.length) onSaved?.(`Подтверждено сохранение фактов: ${result.savedContents.join('; ')}`);
     return true;
 }
 
-export async function handlePendingContactMemoryText(ctx: BotContext, message: string): Promise<string | null> {
+export async function handlePendingContactMemoryText(ctx: BotContext, message: string, onSaved?: (summary: string) => void): Promise<string | null> {
     const pending = ctx.session.pendingContactMemory;
     if (!pending || Date.now() - pending.createdAt > PENDING_CONTACT_MEMORY_TTL_MS) {
         if (pending) ctx.session.pendingContactMemory = undefined;
@@ -798,6 +883,7 @@ export async function handlePendingContactMemoryText(ctx: BotContext, message: s
             return `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}. Попробуй ещё раз позже.`;
         }
         ctx.session.pendingContactMemory = undefined;
+        if (result.savedContents.length) onSaved?.(`Подтверждено сохранение фактов: ${result.savedContents.join('; ')}`);
         return getBotGenderedText("Сохранила оставшиеся факты:", "Сохранил оставшиеся факты:") +
             `\n${result.savedContents.join('\n')}`;
     }
@@ -815,6 +901,7 @@ export async function handlePendingContactMemoryText(ctx: BotContext, message: s
             return `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}. Напиши «повтори».`;
         }
         ctx.session.pendingContactMemory = undefined;
+        if (result.savedContents.length) onSaved?.(`Подтверждено сохранение фактов: ${result.savedContents.join('; ')}`);
         return getBotGenderedText(
             `Сохранила как факты о ${contactDisplayName(narrowed[0])}:`,
             `Сохранил как факты о ${contactDisplayName(narrowed[0])}:`,
@@ -832,6 +919,7 @@ export async function handlePendingContactMemoryText(ctx: BotContext, message: s
             return `Сохранено: ${result.savedContents.length}. Осталось: ${result.failedAssertions.length}. Напиши «повтори».`;
         }
         ctx.session.pendingContactMemory = undefined;
+        if (result.savedContents.length) onSaved?.(`Подтверждено сохранение фактов: ${result.savedContents.join('; ')}`);
         return getBotGenderedText(
             `Сохранила как факты о ${resolution.displayName}:`,
             `Сохранил как факты о ${resolution.displayName}:`,

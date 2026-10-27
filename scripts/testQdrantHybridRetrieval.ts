@@ -41,7 +41,7 @@ async function main() {
         assert.equal(results[0].id, 'flight');
         assert.ok(results[0].score >= 0.8);
 
-        const travelCall = scrollCalls.find(call => call.collection.endsWith('_travel'));
+        const travelCall = scrollCalls.find(call => call.collection.endsWith('_travel') && call.args.filter.min_should);
         assert.ok(travelCall);
         assert.deepEqual(
             travelCall!.args.filter.min_should.conditions.map((condition: any) => condition.match.text),

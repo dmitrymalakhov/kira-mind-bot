@@ -13,7 +13,8 @@ export function getTransitionalTaskFallbackModel(taskKey: AiTaskKey): AiModelRef
     return getTaskFallbackModel(taskKey);
 }
 
-export function allowsCrossProviderFallback(presetName: string): boolean {
+export function allowsCrossProviderFallback(presetName: string, modelRef?: AiModelRef): boolean {
+    if (modelRef?.allowFallback === false) return false;
     const parsedPresetName = parseAiPresetName(presetName);
     if (!parsedPresetName) return true;
     return !isTrueFullAiPreset(parsedPresetName);

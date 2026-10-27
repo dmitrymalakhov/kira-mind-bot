@@ -21,6 +21,7 @@ COPY admin-panel/src/timezones.json ./src/timezones.json
 COPY ai/*.json /app/ai/
 COPY ai/memoryEmbeddingHttp.js /app/ai/memoryEmbeddingHttp.js
 COPY ai/localModelRouting.js /app/ai/localModelRouting.js
+COPY ai/modelPreferences.js /app/ai/modelPreferences.js
 COPY ai/backgroundFeatureState.js /app/ai/backgroundFeatureState.js
 COPY ai/imageGeneration.js /app/ai/imageGeneration.js
 COPY assets/characters/kira /app/assets/characters/kira

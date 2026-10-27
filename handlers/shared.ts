@@ -230,6 +230,7 @@ export async function saveRemindersFromResult(
     service: Pick<typeof reminderService, 'createReminder'> = reminderService,
     resolveReminderTarget: typeof resolveTargetChat = resolveTargetChat,
 ) {
+    if (result.remindersPersisted) return;
     if (!result.reminderCreated && !result.reminderCreationFailures?.length) return;
     const list = result.reminderDetailsList ?? (result.reminderDetails ? [result.reminderDetails] : []);
     const requestedTargetNotificationCandidates: Reminder[] = [];
@@ -244,6 +245,7 @@ export async function saveRemindersFromResult(
             if (reminder.targetChat) requestedTargetNotificationCandidates.push(reminder);
         } catch (error) {
             console.error('[reminder] create failed:', error);
+            result.reminderPersistenceUncertain = true;
             failures.push({
                 text: details.text,
                 error: error instanceof Error ? error.message : String(error),
@@ -408,6 +410,18 @@ export async function sendResultToUser(
     result: ProcessingResult,
     voiceRequested = false,
 ): Promise<{ message_id: number }> {
+    if (result.artifacts?.length) {
+        const sent = await replyProcessingResult(ctx, result, voiceRequested);
+        for (const artifact of result.artifacts) {
+            if (artifact.kind === 'image') {
+                const image = generatedImageInput({ generatedImagePath: artifact.path, generatedImageUrl: artifact.url });
+                if (image) await replyWithPhotoAndStore(ctx, image, generatedImageHistoryText(artifact));
+            } else if (artifact.path) {
+                await sendDocumentFromResult(ctx, { responseText: '', documentFilePath: artifact.path, documentFilename: artifact.filename, documentCaption: artifact.caption });
+            }
+        }
+        return sent;
+    }
     // ICS-файл (календарное событие)
     if (result.reminderCreated && result.icsFilePath) {
         const sent = await replyAndStore(ctx, result.responseText, result.keyboard ? {

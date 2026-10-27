@@ -9,7 +9,7 @@ import type { LocalModelRole, LocalModelRoutes } from '../../../ai/localModelRou
 import roles from '../../../ai/local-model-roles.json';
 import { apiFetch } from '../api';
 
-interface Model { id: string; label: string; loaded: boolean; uncensored: boolean; loadedIds: string[]; }
+interface Model { id: string; label: string; loaded: boolean; loadedIds: string[]; }
 interface Props { onToast: (message: string, severity: 'success' | 'error') => void; onSaved: () => void; }
 
 export function LocalModelSettings({ onToast, onSaved }: Props) {
@@ -54,7 +54,7 @@ export function LocalModelSettings({ onToast, onSaved }: Props) {
       {(Object.keys(roles) as LocalModelRole[]).map(role => {
         const route = settings[role];
         const choices = [...models];
-        if (route.model && !choices.some(model => model.id === route.model)) choices.push({ id: route.model, label: route.model, loaded: models.some(model => model.loadedIds.includes(route.model)), loadedIds: [], uncensored: false });
+        if (route.model && !choices.some(model => model.id === route.model)) choices.push({ id: route.model, label: route.model, loaded: models.some(model => model.loadedIds.includes(route.model)), loadedIds: [] });
         const update = (patch: Partial<typeof route>) => setSettings(current => ({ ...current, [role]: { ...current[role], ...patch } }));
         return <Box key={role} sx={{ minWidth: 0, p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
           <Stack spacing={2}>
@@ -64,7 +64,7 @@ export function LocalModelSettings({ onToast, onSaved }: Props) {
             </Stack>
             <TextField select size="small" fullWidth label={`Модель: ${roles[role].label}`} value={route.model} disabled={loading || saving} onChange={event => update({ model: event.target.value })}>
               {!route.model && <MenuItem value="">Выберите модель</MenuItem>}
-              {choices.map(model => <MenuItem key={model.id} value={model.id}>{model.label}{model.uncensored ? ' · Uncensored' : ''}{model.loaded ? ' · загружена' : ''}</MenuItem>)}
+              {choices.map(model => <MenuItem key={model.id} value={model.id}>{model.label}{model.loaded ? ' · загружена' : ''}</MenuItem>)}
             </TextField>
             <Accordion disableGutters sx={{ bgcolor: 'transparent', border: 0, mb: '0 !important' }}>
               <AccordionSummary expandIcon={<ExpandMoreIcon />} id={`local-parameters-${role}`} aria-controls={`local-parameters-details-${role}`} sx={{ px: 0, minHeight: '40px !important', '& .MuiAccordionSummary-content': { my: '8px !important' } }}>

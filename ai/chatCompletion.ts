@@ -12,6 +12,7 @@ import { parseLLMJson } from '../utils';
 import { allowsCrossProviderFallback, errorToMessage, getTaskFallbackModel } from './runtimeSupport';
 import { resolveRetryPolicy } from './providers/policyDefaults';
 import { runSameProviderDegradationChain } from './executionPolicy';
+import { limitChatGeneration } from './generationLimits';
 
 const MAX_PRESET_REFRESHES_PER_REQUEST = 3;
 
@@ -45,7 +46,9 @@ function getErrorIdentityParser(modelRef: AiModelRef): ErrorIdentityParser | und
 function isSameRoute(left: AiTaskRoute, right: AiTaskRoute): boolean {
     return left.presetName === right.presetName
         && left.modelRef.provider === right.modelRef.provider
-        && left.modelRef.model === right.modelRef.model;
+        && left.modelRef.model === right.modelRef.model
+        && left.modelRef.allowFallback === right.modelRef.allowFallback
+        && JSON.stringify(left.modelRef.generation) === JSON.stringify(right.modelRef.generation);
 }
 
 async function maybeDelayRetry(
@@ -127,7 +130,8 @@ async function createChatCompletionWithModel(
     const fallbackUsed = stage === 'fallback';
 
     try {
-        const result = await providerAdapter.createChatCompletion(modelRef.model, params, modelRef.generation);
+        const result = await providerAdapter.createChatCompletion(modelRef.model,
+            limitChatGeneration(preset, taskKey, modelRef.provider, params, modelRef.generation?.maxTokens), modelRef.generation);
 
         recordAiUsage({
             taskKey,
@@ -243,7 +247,7 @@ async function createChatCompletionForTaskWithTrace(
             const diagnostics = classifyAiErrorForProvider(error, getErrorIdentityParser(route.modelRef));
 
             if (!diagnostics.retryable) {
-                if (!allowsCrossProviderFallback(route.presetName)) throw error;
+                if (!allowsCrossProviderFallback(route.presetName, route.modelRef)) throw error;
                 return createFallbackExecution(taskKey, params, error, route, traceId, attempt + 1);
             }
 
@@ -254,7 +258,7 @@ async function createChatCompletionForTaskWithTrace(
             // Провайдерная multi-retry-политика применяется только для true-full
             // (без cross-provider подушки) и увеличивает число попыток: так временную
             // перегрузку Gemini можно пережить без немедленного fallback на GPT.
-            const crossProviderAllowed = allowsCrossProviderFallback(route.presetName);
+            const crossProviderAllowed = allowsCrossProviderFallback(route.presetName, route.modelRef);
             const providerAdapter = getAiProviderAdapter(route.modelRef.provider);
             const policy = crossProviderAllowed
                 ? resolveRetryPolicy(undefined)
@@ -266,7 +270,7 @@ async function createChatCompletionForTaskWithTrace(
             const primaryRetriesRemaining = Math.max(0, maxPrimaryRetries - primaryRetriesUsed);
 
             if (primaryRetriesRemaining <= 0) {
-                if (!allowsCrossProviderFallback(route.presetName)) {
+                if (!allowsCrossProviderFallback(route.presetName, route.modelRef)) {
                     // Same-provider degradation: проходим по цепочке моделей того же
                     // провайдера, пока одна не ответит или цепочка не иссякнет.
                     const { result, attempt: degradedAttempt, model: degradedModel } = await runSameProviderDegradationChain<ChatCompletion>(
@@ -360,6 +364,7 @@ export async function createFallbackChatCompletion(
     attempt = 1,
     originalModelRef?: AiModelRef,
 ): Promise<ChatCompletion> {
+    if (originalModelRef?.allowFallback === false) throw originalError;
     const fallbackModel = getTaskFallbackModel(taskKey);
     const originalErrorParser = originalModelRef
         ? getErrorIdentityParser(originalModelRef)
@@ -398,7 +403,7 @@ export async function createJsonChatCompletionForTask<T>(
     if (parsed) return parsed;
 
     const invalidJsonError = new Error('AI response contained invalid JSON');
-    if (!allowsCrossProviderFallback(execution.route.presetName)) {
+    if (!allowsCrossProviderFallback(execution.route.presetName, execution.route.modelRef)) {
         recordJsonResolutionFailure(
             taskKey,
             execution.route.presetName,
@@ -417,7 +422,7 @@ export async function createJsonChatCompletionForTask<T>(
             taskKey,
             params,
             invalidJsonError,
-            'json-parse-fallback',
+            execution.route.presetName,
             trace.traceId,
             execution.attempt + 1,
         );

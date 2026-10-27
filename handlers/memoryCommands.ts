@@ -5,7 +5,7 @@ import { getVectorService } from '../services/VectorServiceFactory';
 import { factAnalysisManager } from '../utils/factAnalysisTimer';
 import { config } from '../config';
 import { repairLegacyContactIdentities } from '../utils/contactMemoryRepair';
-import { contactOptionLabel, resolveContactIdentity } from '../utils/contactMemory';
+import { ambiguousMemoryDeletionGuard } from '../utils/contactMemory';
 import { runMemoryConsolidationForContext } from '../services/MemoryConsolidationService';
 import { runMemorySchemaConsolidationForContext } from '../services/MemorySchemaConsolidationService';
 import { runMemorySleepCycleForUser } from '../services/MemorySleepCycleService';
@@ -14,6 +14,9 @@ import { getReflectionMemoryNoiseReasons } from '../utils/reflectionMemoryFilter
 import { esc, heading, table, list, blockquote, paragraph, RichBlock } from '../utils/richMessage';
 import { sendStructuredBlocks } from '../utils';
 import { getBotGenderedText } from '../persona';
+import { continueConfirmedRuntime, cancelRuntimeContinuation, orchestrationMode, hasCompoundActionRequest } from '../orchestration/runtime/kernel';
+import { memoryConfirmationKey } from '../orchestration/runtime/confirmation';
+import { sendResultToUser } from './shared';
 
 function isAdmin(ctx: BotContext): boolean {
     return ctx.from?.id === config.adminUserId;
@@ -83,29 +86,6 @@ function reflectionCleanupReasonLabel(reason: string): string {
         default:
             return reason;
     }
-}
-
-function isBareContactQuery(query: string): boolean {
-    const trimmed = query.trim();
-    return /^@[a-zA-Z0-9_]{3,32}$/.test(trimmed) ||
-        /^[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+){0,2}$/u.test(trimmed);
-}
-
-function ambiguousContactGuard(query: string): string | null {
-    const target = isBareContactQuery(query)
-        ? query.trim()
-        : query.match(/^(@[a-zA-Z0-9_]{3,32}|[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]+){0,2})(?=\s|$|[:,.-])/u)?.[1]?.trim();
-    if (!target) return null;
-
-    const resolution = resolveContactIdentity(target);
-    if (resolution.status !== 'ambiguous') return null;
-
-    const variants = resolution.candidates
-        .slice(0, 6)
-        .map(contactOptionLabel)
-        .join(', ');
-    return `Имя «${target}» неоднозначно (${variants}). Уточни фамилию или username, чтобы я ` +
-        getBotGenderedText("не выбрала", "не выбрал") + " не тот факт.";
 }
 
 export function registerMemoryCommands(bot: Bot<BotContext>) {
@@ -447,8 +427,9 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
     );
 
     // "Забудь что я..." — поиск с подтверждением перед удалением
-    bot.hears(/^(забудь[,\s]|удали из памяти|убери из памяти)/i, async (ctx) => {
+    bot.hears(/^(забудь[,\s]|удали из памяти|убери из памяти)/i, async (ctx, next) => {
         const raw = ctx.message?.text || '';
+        if (orchestrationMode() === 'skills' && hasCompoundActionRequest(raw)) { await next(); return; }
         const query = raw
             .replace(/^(забудь[,\s]+что я|забудь[,\s]+про|забудь[,\s]+|удали из памяти[,\s]+|убери из памяти[,\s]+)/i, '')
             .trim();
@@ -458,7 +439,7 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
             return;
         }
 
-        const guard = ambiguousContactGuard(query);
+        const guard = ambiguousMemoryDeletionGuard(query);
         if (guard) {
             await ctx.reply(guard);
             return;
@@ -492,10 +473,14 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
         const [, memoryId, domain] = match;
         await deleteMemoryById(ctx, memoryId, domain);
         await ctx.editMessageText('Готово, этот факт удалён из памяти.');
+        const continuation = await continueConfirmedRuntime(ctx, ['memory.forget'], 'Владелец подтвердил удаление; выбранный факт удалён.', {}, memoryConfirmationKey(memoryId, domain));
+        if (continuation) await sendResultToUser(ctx, continuation);
     });
 
-    bot.callbackQuery('mem_del_cancel', async (ctx) => {
+    bot.callbackQuery(/^mem_del_cancel(?::mem:[a-f0-9]{24})?$/, async (ctx) => {
         await ctx.answerCallbackQuery();
+        const key = ctx.callbackQuery.data.slice('mem_del_cancel:'.length);
+        if (ctx.callbackQuery.data.startsWith('mem_del_cancel:')) await cancelRuntimeContinuation(ctx, ['memory.forget'], key);
         await ctx.editMessageText('Удаление отменено.');
     });
 
@@ -614,7 +599,7 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
             return;
         }
 
-        const guard = ambiguousContactGuard(query);
+        const guard = ambiguousMemoryDeletionGuard(query);
         if (guard) {
             await ctx.reply(guard);
             return;

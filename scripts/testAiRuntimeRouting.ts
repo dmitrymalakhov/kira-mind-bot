@@ -208,13 +208,13 @@ async function main() {
         };
         // End-to-end selection -> preset -> actual request, without an extra routing call.
         for (const [preset, task, provider, model] of [
-            ['gpt-balanced', 'lightweightText', 'openai', 'gpt-5.4-nano'],
-            ['gpt-balanced', 'memoryExtraction', 'openai', 'gpt-5.4-mini'],
-            ['gpt-balanced', selectConversationTask({ details: { responseComplexity: 'routine' } }), 'openai', 'gpt-5.4-mini'],
-            ['gpt-balanced', selectConversationTask({ details: { responseComplexity: 'complex' } }), 'openai', 'gpt-5.4'],
-            ['gpt-lean', selectConversationTask(undefined, true), 'openai', 'gpt-5.4'],
-            ['gpt-balanced', selectConversationTask({ subIntents: [{ intent: 'ВЕБ_ПОИСК' }] }), 'openai', 'gpt-5.4'],
-            ['gpt-balanced', selectConversationTask(), 'openai', 'gpt-5.4-mini'],
+            ['gpt-balanced', 'lightweightText', 'openai', 'gpt-6-luna'],
+            ['gpt-balanced', 'memoryExtraction', 'openai', 'gpt-6-luna'],
+            ['gpt-balanced', selectConversationTask({ details: { responseComplexity: 'routine' } }), 'openai', 'gpt-6-luna'],
+            ['gpt-balanced', selectConversationTask({ details: { responseComplexity: 'complex' } }), 'openai', 'gpt-6.1-sol'],
+            ['gpt-lean', selectConversationTask(undefined, true), 'openai', 'gpt-6-luna'],
+            ['gpt-balanced', selectConversationTask({ subIntents: [{ intent: 'ВЕБ_ПОИСК' }] }), 'openai', 'gpt-6.1-sol'],
+            ['gpt-balanced', selectConversationTask(), 'openai', 'gpt-6-luna'],
             ['gemini-full', 'lightweightText', 'gemini', 'gemini-3.5-flash-lite'],
             ['gemini-full', 'complexReasoning', 'gemini', 'gemini-3.6-flash'],
             ['glm-full', 'lightweightText', 'zai', 'glm-4.7-flashx'],
@@ -464,7 +464,8 @@ async function main() {
                 messages: [{ role: 'user', content: 'hello' }],
                 max_completion_tokens: 128,
                 temperature: 1,
-                model: 'gpt-5.4-mini',
+                model: 'gpt-6-luna',
+                reasoning_effort: 'none',
             },
         });
 
@@ -527,7 +528,8 @@ async function main() {
             body: {
                 messages: [{ role: 'user', content: 'classify' }],
                 max_completion_tokens: 64,
-                model: 'gpt-5.4-mini',
+                model: 'gpt-6-luna',
+                reasoning_effort: 'none',
             },
         });
         geminiMutableClient.chat.completions.create = originalGeminiChatCreate;
@@ -549,7 +551,8 @@ async function main() {
             body: {
                 input: 'find current docs',
                 tools: [{ type: 'web_search_preview' }],
-                model: 'gpt-5.4-mini',
+                model: 'gpt-6-luna',
+                reasoning: { effort: 'none' },
             },
         });
 

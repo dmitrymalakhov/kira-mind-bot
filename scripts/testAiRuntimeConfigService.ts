@@ -20,6 +20,7 @@ async function main(): Promise<void> {
     const originalIsInitialized = Object.getOwnPropertyDescriptor(AppDataSource, 'isInitialized');
     const repo: InMemorySettingsRepo = {
         async findOneBy(criteria) {
+            if (criteria.key === 'AI_MODEL_POLICY') return null;
             assert.strictEqual(criteria.key, 'AI_MODEL_PRESET');
             reads += 1;
             if (failReads) throw new Error('database unavailable');

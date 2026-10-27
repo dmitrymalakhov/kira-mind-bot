@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Box, CircularProgress } from '@mui/material';
 import { LoginPage } from './pages/LoginPage';
 import { Dashboard } from './components/Dashboard';
+import { BrandMark } from './components/BrandMark';
 import { AUTH_REQUIRED_EVENT, fetchConfig } from './api';
 import type { ConfigResponse } from './types';
 
@@ -47,13 +48,16 @@ export default function App() {
       <Box
         sx={{
           display: 'flex',
+          flexDirection: 'column',
+          gap: 3,
           alignItems: 'center',
           justifyContent: 'center',
           height: '100vh',
           bgcolor: 'background.default',
         }}
       >
-        <CircularProgress sx={{ color: 'primary.main' }} />
+        <BrandMark size={96} />
+        <CircularProgress size={24} aria-label="Загрузка Kira Mind" sx={{ color: 'primary.main' }} />
       </Box>
     );
   }

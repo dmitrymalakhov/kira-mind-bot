@@ -12,7 +12,7 @@ export interface ConfigResponse {
   [key: string]: ConfigEntry;
 }
 
-export type FieldType = 'text' | 'password' | 'number' | 'toggle' | 'textarea' | 'duration' | 'select';
+export type FieldType = 'text' | 'proxy' | 'password' | 'number' | 'toggle' | 'textarea' | 'duration' | 'select';
 
 export interface FieldOption {
   value: string;
@@ -68,12 +68,14 @@ export interface AiModelRef {
   provider: AiProvider;
   model: string;
   modelEnvKey?: string;
+  generation?: { reasoningEffort: 'none' | 'low' | 'medium' | 'high'; maxTokens?: number; temperature?: number };
 }
 
 export interface AiPresetConfig {
   name: AiPresetName;
   title: string;
   description: string;
+  outputTokenLimits?: Record<string, number>;
   characteristics?: {
     quality: string;
     cost: string;
@@ -127,6 +129,23 @@ export interface AiPresetResponse {
   availablePresets: AiPresetConfig[];
   memoryEmbeddingProfile: MemoryEmbeddingProfileStatus;
   source: ConfigSourceInfo;
+}
+
+export type { ModelPreferences } from '../../ai/modelPreferences';
+export interface ModelPreferencesResponse {
+  mode: 'automatic' | 'manual' | 'custom';
+  providers: typeof import('../../ai/modelPreferences').API_PROVIDERS;
+  providerPlans: ModelPreferencesResponse['plans'];
+  catalog: Array<Pick<AiModelRef, 'provider'|'model'>>;
+  localRoutes: import('../../ai/localModelRouting').LocalModelRoutes;
+  preferences: import('../../ai/modelPreferences').ModelPreferences;
+  activePlan: import('../../ai/modelPreferences').ModelPolicy | null;
+  manualPreset: AiPresetName;
+  localConnected: boolean; serviceConnected: boolean; localError?: string;
+  plans: Array<Partial<import('../../ai/modelPreferences').ModelPolicy> & {
+    preferences: import('../../ai/modelPreferences').ModelPreferences;
+    available: boolean; unavailableReason?: string;
+  }>;
 }
 
 export type MonitoringCheckStatus = 'ok' | 'warn' | 'down' | 'disabled';

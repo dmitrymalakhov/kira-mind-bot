@@ -1,5 +1,6 @@
 import { Bot, Context } from 'grammy';
 import { randomUUID } from 'node:crypto';
+import { readModelPreferences, saveModelPreferences } from '../services/modelPreferenceService';
 import type { Update, UserFromGetMe } from 'grammy/types';
 import { config } from '../config';
 import { BOT_CAPABILITIES } from '../capabilities';
@@ -22,6 +23,8 @@ import { ApiModelCatalog, ApiModelSettingsStore, BotSettingsApiModelStore, apiTu
 import { runWithChannelPreset } from '../services/aiRuntimeConfigService';
 import { SceneService, type SceneTurn } from './scene';
 import type { AiPresetName } from '../ai/modelPresets';
+import { registerDialogueLifecycle, publicDialogueJob, activateDialogueJob } from '../services/dialogueJobs';
+import { DialogueJobRepository } from '../services/DialogueJobRepository';
 
 /** Same handlers, orchestrator, identity and knowledge; only the delivery and session channel differ. */
 export class BotApiBackend implements ApiBackend {
@@ -39,6 +42,7 @@ export class BotApiBackend implements ApiBackend {
         this.actions = new ApiActionTokens(options.token, options.ownerId);
         this.botInfo = bot.botInfo;
         this.dispatcher = new Bot<BotContext>(config.botToken, { botInfo: this.botInfo });
+        registerDialogueLifecycle(this.dispatcher);
         registerCallback(this.dispatcher);
         registerCommandHandlers(this.dispatcher);
         registerTextMessageHandler(this.dispatcher, { immediate: true });
@@ -52,10 +56,12 @@ export class BotApiBackend implements ApiBackend {
 
     async capabilities() {
         return { input: ['text', 'actions'], output: ['text', 'photo', 'document', 'voice'],
-            settings: ['modelMode'], scene: { version: 1 }, capabilities: BOT_CAPABILITIES };
+            settings: ['modelMode', 'modelPreferences'], scene: { version: 1 }, deferredDialogue: { preference: 'respond-async', results: '/api/v1/dialogue-jobs', cancellation: true }, capabilities: BOT_CAPABILITIES };
     }
 
     settings() { return readUserSettings(); }
+    modelPreferences() { return readModelPreferences(); }
+    updateModelPreferences(body: unknown) { return saveModelPreferences(body); }
     updateSettings(patch: ApiSettingsPatch) { return updateUserSettings(patch); }
     private sceneService?: SceneService;
     private get scene() { return this.sceneService ??= new SceneService(this.options.ownerId, this.models); }
@@ -90,15 +96,18 @@ export class BotApiBackend implements ApiBackend {
         })), hasMore: tasks.length > 100 };
     }
 
+    async dialogueJobs() { return { jobs: (await DialogueJobRepository.list(this.sessionKey)).map(publicDialogueJob) }; }
+    async cancelDialogueJob(id: string) { return { cancelled: await DialogueJobRepository.cancel(this.sessionKey, id) }; }
+
     file(id: string) { return this.files.read(id); }
 
-    async message(text: string): Promise<ApiReply> {
+    async message(text: string, options: { deferredDialogue?: boolean } = {}): Promise<ApiReply> {
         const command = text.match(/^\/[a-zA-Z0-9_]+(?:@[a-zA-Z0-9_]+)?/);
         return this.dispatch({ update_id: 0, message: {
             message_id: nextApiMessageId(), date: Math.floor(Date.now() / 1000),
             from: this.owner(), chat: this.chat(), text,
             ...(command ? { entities: [{ type: 'bot_command', offset: 0, length: command[0].length }] } : {}),
-        } });
+        } }, false, undefined, options.deferredDialogue === true);
     }
 
     async action(token: string): Promise<ApiReply> {
@@ -116,7 +125,7 @@ export class BotApiBackend implements ApiBackend {
     private owner() { return { id: this.options.ownerId, is_bot: false, first_name: 'Владелец' }; }
     private chat() { return { id: this.options.ownerId, type: 'private' as const, first_name: 'Владелец' }; }
 
-    private async dispatch(update: Update, confirmation = false, expectedVersion?: string): Promise<ApiReply> {
+    private async dispatch(update: Update, confirmation = false, expectedVersion?: string, deferredDialogue = false): Promise<ApiReply> {
         const persisted = await this.storage.read(this.sessionKey);
         if (expectedVersion !== undefined && persisted?.apiActionVersion !== expectedVersion) {
             throw new ApiError(410, 'action_expired', 'Кнопка относится к предыдущему запросу. Повтори исходный запрос.');
@@ -134,10 +143,17 @@ export class BotApiBackend implements ApiBackend {
             apiActionVersion: version,
         });
         ctx.sessionStorageKey = this.sessionKey;
+        ctx.allowDeferredDialogue = deferredDialogue;
         // The app's own text mode, read once per turn; null follows the server's global preset.
         const preset = await apiTurnPreset(this.models);
         await runWithChannelPreset(preset, async () => { await this.dispatcher.middleware()(ctx, async () => {}); });
         await this.storage.write(this.sessionKey, ctx.session);
-        return transport.result();
+        if (ctx.dialogueJobId) await activateDialogueJob(ctx, ctx.dialogueJobId);
+        const result = transport.result();
+        if (ctx.dialogueJobId) {
+            const job = await DialogueJobRepository.find(ctx.dialogueJobId, this.sessionKey);
+            if (job) result.backgroundJob = { id: job.id, status: job.status, required: job.input.required };
+        }
+        return result;
     }
 }

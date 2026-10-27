@@ -84,6 +84,29 @@ test('settings require authentication, validate the entire patch and accept idem
     assert.equal(disallowed.headers.get('allow'), 'GET, PATCH');
 });
 
+test('model preferences use authenticated GET/PUT and only accept one quality axis with three levels', async t => {
+    const { parsePreferences } = await import('../ai/modelPreferences');
+    let saved = { quality: 'high' };
+    let writes = 0;
+    const f = await fixture(t, {
+        modelPreferences: async () => ({ preferences: saved, scope: 'account' }),
+        updateModelPreferences: async body => {
+            try { saved = parsePreferences(body); } catch { throw new ApiError(400, 'invalid_preferences', 'Invalid'); }
+            writes++; return { success: true, preferences: saved };
+        },
+    });
+    assert.equal((await fetch(f.url + '/model-preferences')).status, 401);
+    assert.equal((await f.request('/model-preferences')).status, 200);
+    for (const body of [{ ...saved, userId: 123 }, { ...saved, model: 'gpt-6-astra' }, { ...saved, cost: 'unlimited' }]) {
+        assert.equal((await f.request('/model-preferences', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).status, 400);
+    }
+    assert.equal(writes, 0);
+    assert.equal((await f.request('/model-preferences', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quality: 'standard' }) })).status, 200);
+    assert.equal(saved.quality, 'standard'); assert.equal(writes, 1);
+    assert.equal((await f.request('/model-preferences', { method: 'POST' })).status, 405);
+});
+
 test('every route including files requires a bearer token; errors carry no private details', async t => {
     const f = await fixture(t);
     for (const path of ['/status', '/history', '/files/12345678-1234-4123-8123-123456789012']) {
@@ -106,6 +129,36 @@ test('authenticated discovery, history limits and binary downloads', async t => 
     const file = await f.request('/files/12345678-1234-4123-8123-123456789012');
     assert.equal(await file.text(), 'synthetic file');
     assert.match(file.headers.get('content-disposition')!, /filename\*=UTF-8''/);
+});
+
+test('deferred dialogue results and cancellation are authenticated and do not accept a caller channel', async t => {
+    const id = '12345678-1234-4123-8123-123456789012';
+    const cancelled: string[] = [];
+    const f = await fixture(t, { dialogueJobs: async () => ({ jobs: [{ id, status: 'completed', result: 'Синтетический ответ' }] }),
+        cancelDialogueJob: async jobId => { cancelled.push(jobId); return { cancelled: true }; } });
+    assert.equal((await fetch(f.url + '/dialogue-jobs')).status, 401);
+    assert.equal((await fetch(f.url + `/dialogue-jobs/${id}`, { method: 'DELETE' })).status, 401);
+    assert.equal((await (await f.request('/dialogue-jobs')).json()).jobs[0].result, 'Синтетический ответ');
+    assert.equal((await f.request('/dialogue-jobs/not-an-id', { method: 'DELETE' })).status, 404);
+    assert.equal((await f.request(`/dialogue-jobs/${id}`, { method: 'DELETE' })).status, 200);
+    assert.deepEqual(cancelled, [id]); assert.equal(f.executions(), 0);
+});
+
+test('deferred answers require client opt-in and participate in idempotency', async t => {
+    const preferences: boolean[] = [];
+    const f = await fixture(t, { message: async (_text, options) => {
+        preferences.push(options?.deferredDialogue === true);
+        return { messages: [], ...(options?.deferredDialogue ? { backgroundJob: { id: '12345678-1234-4123-8123-123456789012', status: 'queued', required: true } } : {}) };
+    } });
+    await f.post('/messages', { text: 'Синтетический вопрос' }, 'sync-request-001');
+    const headers = { 'Content-Type': 'application/json', 'Idempotency-Key': 'async-request-001', Prefer: 'respond-async' };
+    const init = { method: 'POST', headers, body: JSON.stringify({ text: 'Синтетический вопрос' }) };
+    const response = await f.request('/messages', init);
+    assert.equal(response.status, 200); assert.equal(response.headers.get('Preference-Applied'), 'respond-async');
+    const first = await response.json();
+    assert.deepEqual(await (await f.request('/messages', init)).json(), first);
+    assert.equal((await f.post('/messages', { text: 'Синтетический вопрос' }, 'async-request-001')).status, 409);
+    assert.deepEqual(preferences, [false, true]);
 });
 
 test('message retries replay the receipt, and a reused key with different text conflicts', async t => {

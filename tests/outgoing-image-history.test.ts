@@ -17,6 +17,7 @@ import { describeOutgoingImage } from '../services/outgoingImageDescription';
 import { generatedImageHistoryText, normalizeImageDescription } from '../utils/generatedImage';
 import { sendResultToUser, resolveReplyTo, replyWithPhotoAndStore } from '../handlers/shared';
 import { mergeProcessingResults } from '../orchestration/executor';
+import { mergeRuntimeResults } from '../orchestration/runtime/kernel';
 import { extractAndSaveFactsFromConversation } from '../utils/enhancedFactExtraction';
 import { FactExtractionService, type DialoguePair } from '../services/FactExtractionService';
 import { executeRecurringTask } from '../services/recurringTaskScheduler';
@@ -162,6 +163,33 @@ test('photo and speech stay separate; history, Reply and restart preserve the sc
     assert.equal(resolveReplyTo(ctx).replyContext?.delivery, 'photo');
 });
 
+test('skills runtime preserves each image scene through single and nested multi-result delivery', async () => {
+    const first = { responseText: 'Первая картинка.', imageGenerated: true, generatedImageUrl: 'https://example.test/cat.png', generatedImageDescription: cat };
+    assert.equal(mergeRuntimeResults([first]).generatedImageDescription, cat);
+    const second = { responseText: 'Вторая картинка.', imageGenerated: true, generatedImageUrl: 'https://example.test/selfie.png', generatedImageDescription: selfie };
+    const merged = mergeRuntimeResults([mergeRuntimeResults([first, second]), { responseText: 'Обе готовы.' }]);
+    assert.deepEqual(merged.artifacts?.map(image => image.generatedImageDescription), [cat, selfie]);
+    const { ctx, deliveries } = context();
+    await sendResultToUser(ctx, merged);
+    assert.equal(deliveries.length, 3);
+    assert.ok(deliveries.slice(1).every(delivery => delivery.photo && !delivery.options?.caption));
+    assert.deepEqual(ctx.session.messageHistory.map(item => item.content), [selfie, cat]);
+    assert.ok(ctx.session.messageHistory.every(item => item.kind === 'image'));
+    assert.equal(ctx.session.sentMessageContexts?.[2].text, cat);
+    assert.equal(ctx.session.sentMessageContexts?.[3].text, selfie);
+});
+
+test('an artifact-only image keeps its request fallback and failed delivery saves no visual context', async () => {
+    const merged = mergeRuntimeResults([{ responseText: 'Готово.', artifacts: [{ kind: 'image', url: 'https://example.test/cat.png', generatedImageRequest: 'Нарисуй кота с рыбкой' }] }]);
+    const { ctx } = context();
+    ctx.replyWithPhoto = async () => { throw new Error('synthetic delivery failure'); };
+    await assert.rejects(sendResultToUser(ctx, merged), /synthetic delivery failure/);
+    assert.equal(ctx.session.messageHistory.length, 0);
+    const successful = context();
+    await sendResultToUser(successful.ctx, merged);
+    assert.match(successful.ctx.session.messageHistory[0].content, /Нарисуй кота с рыбкой/);
+});
+
 test('visual descriptions are excluded from delayed fact extraction and episodic evidence', async t => {
     const { ctx } = context();
     ctx.session.messageHistory = [
@@ -203,7 +231,10 @@ test('recurring runs persist both generated photos and browser photos without re
     t.mock.method(RecurringTaskRepository, 'failRun', async () => { assert.fail('task must succeed'); });
     t.mock.method(orchestrator, 'processMessage', async (ctx: BotContext) => {
         await replyWithPhotoAndStore(ctx, new InputFile(png), 'На скриншоте я показала страницу с котом.');
-        return { responseText: 'Готово!', imageGenerated: true, generatedImageUrl: 'https://maps.invalid/static', generatedImageDescription: cat };
+        return mergeRuntimeResults([
+            { responseText: 'Готово!', imageGenerated: true, generatedImageUrl: 'https://maps.invalid/static', generatedImageDescription: cat },
+            { responseText: 'И селфи.', imageGenerated: true, generatedImageUrl: 'https://example.test/selfie.png', generatedImageDescription: selfie },
+        ]);
     });
     let photoId = 0;
     const bot: any = { api: {
@@ -219,8 +250,9 @@ test('recurring runs persist both generated photos and browser photos without re
         consecutiveFailures: 0, runCount: 0,
     };
     await executeRecurringTask(bot, task);
-    assert.equal(photoId, 2);
-    assert.equal(persisted.filter(entry => entry[3]?.kind === 'image').length, 2);
-    assert.equal(contexts.filter(entry => entry.delivery === 'photo').length, 2);
+    assert.equal(photoId, 3);
+    assert.equal(persisted.filter(entry => entry[3]?.kind === 'image').length, 3);
+    assert.equal(contexts.filter(entry => entry.delivery === 'photo').length, 3);
     assert.ok(persisted.some(entry => entry[2] === cat));
+    assert.ok(persisted.some(entry => entry[2] === selfie));
 });
