@@ -1351,9 +1351,17 @@ export async function getMultiQueryMemoryContextDetailed(
     if (generatedQueries.requestKind === 'people_list') {
         if (ctx.chat?.type !== 'private' || !service) return { context: '', recalledMemories: [] };
         const collection = await recallMemoryPeople(service, String(ctx.from?.id), generatedQueries);
+        const continuingList = previousFocus?.requestKind === 'people_list' && isMemoryContinuation(userMessage) &&
+            JSON.stringify(previousFocus.domains ?? []) === JSON.stringify(generatedQueries.domains ?? []) &&
+            JSON.stringify(previousFocus.peopleQuery) === JSON.stringify(generatedQueries.peopleQuery);
+        if (continuingList) {
+            const shown = new Set(previousFocus.evidenceIds);
+            collection.entries = collection.entries.filter(entry => entry.evidence.some(item => !shown.has(item.memory.id)));
+        }
         const packed = formatMemoryPeople(collection);
+        if (continuingList && !packed.included.length) packed.context += '\nНовых людей сверх уже показанных в этой ограниченной выборке не найдено. Не повторяй прежний список и не утверждай полноту всего архива.';
         // A collection is a topic, not a truncated single-person action context.
-        ctx.session.memoryRecallFocus = undefined;
+        if (!continuingList) ctx.session.memoryRecallFocus = undefined;
         saveMemoryFocus(ctx, [], userMessage, packed.included.map(record => record.id), Date.now(), generatedQueries);
         return { context: packed.context, recall: memoryRecallSummary(generatedQueries, [], packed.included.length ? 'found' : 'empty', packed.included.length), recalledMemories: packed.included.map(memory => ({ id: memory.id, domain: memory.domain, content: memory.content, score: 1,
             memoryKind: memory.memoryKind, confidence: memory.confidence, status: memory.status, sourceMemoryIds: memory.sourceMemoryIds, sourceEpisodeId: memory.sourceEpisodeId })),

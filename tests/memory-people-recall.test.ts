@@ -120,6 +120,17 @@ test('people inventory integrates without embeddings or models and stores a topi
     assert.equal(group.context, '');
 });
 
+test('a people-list continuation keeps its domain and does not repeat already shown people', async t => {
+    t.mock.method(identity, 'listPersonIdentitiesForRecall', async () => people as any);
+    t.mock.method(vector, 'getVectorService', () => service([fact('direct'), fact('second', 1)]));
+    const ctx = context();
+    await getMultiQueryMemoryContextDetailed(ctx, 'С кем я общаюсь по работе?', 'full', { queryPlan: plan(), trackAccess: false });
+    const continued = await getMultiQueryMemoryContextDetailed(ctx, 'А кто ещё?', 'full', { queryPlan: { answerQueries: ['другие люди'], contextQueries: [], requestKind: 'overview' }, trackAccess: false });
+    assert.equal(continued.recall?.requestKind, 'people_list'); assert.deepEqual(continued.recall?.domains, ['work']);
+    assert.equal(continued.recalledMemories.length, 0); assert.match(continued.context, /Новых людей сверх уже показанных/);
+    assert.deepEqual(validMemoryFocus(ctx)?.evidenceIds, ['direct', 'second']);
+});
+
 test('interesting fact reads a reliable profile candidate even without literal query words', async t => {
     t.mock.method(identity, 'findPersonIdentitiesForRecall', async () => [people[1]] as any);
     const records = [fact('good', 1, { content: 'Увлекается синтетическими головоломками.', domain: 'hobbies', memoryKind: 'preference' }),
