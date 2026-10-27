@@ -4,6 +4,7 @@ import { ApiBackend, ApiError, ApiOperationStore } from './contracts';
 import { ExternalApiOptions } from './options';
 import { parseSettingsPatch } from './settings';
 import { MAX_SCENE_BODY_BYTES, parseSceneTurn } from './scene';
+import { MAX_PHOTO_BODY_BYTES, parsePhotoTurn } from './photos';
 
 const PREFIX = '/api/v1';
 const MAX_BODY_BYTES = 64 * 1024;
@@ -90,6 +91,34 @@ export function createExternalApiServer(
                 res.setHeader('Allow', 'GET, PATCH');
                 req.resume();
                 throw new ApiError(405, 'method_not_allowed', 'Ожидается GET или PATCH.');
+            }
+            if (path === `${PREFIX}/photos`) {
+                if (req.method !== 'POST') {
+                    res.setHeader('Allow', 'POST');
+                    req.resume();
+                    throw new ApiError(405, 'method_not_allowed', 'Ожидается POST.');
+                }
+                const body = await readBody(req, MAX_PHOTO_BODY_BYTES);
+                const turn = parsePhotoTurn(body);
+                const key = req.headers['idempotency-key'];
+                if (typeof key !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(key)) {
+                    throw new ApiError(400, 'idempotency_key_required', 'Нужен Idempotency-Key: 8–128 букв, цифр, _ или -.');
+                }
+                try { await backend.turnReady(); }
+                catch (error) {
+                    if (error instanceof ApiError && error.status === 503) throw new ApiError(503, 'vision_unavailable', error.message);
+                    throw error;
+                }
+                const preset = await backend.photoReady(); // before a receipt; no pixels are persisted
+                if (busy) {
+                    res.setHeader('Retry-After', '2');
+                    throw new ApiError(409, 'conversation_busy', 'Предыдущий запрос ещё выполняется.');
+                }
+                busy = true;
+                try {
+                    return json(200, await operations.run(`${options.ownerId}:photo:${hash(key)}`, hash(JSON.stringify(body)),
+                        () => backend.photo(turn.photo.data, turn.text, preset)));
+                } finally { busy = false; }
             }
             if (req.method === 'GET') {
                 if (path === `${PREFIX}/status`) return json(200, await backend.status());

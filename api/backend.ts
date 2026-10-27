@@ -8,6 +8,7 @@ import { BotContext, SessionData } from '../types';
 import { registerCallback } from '../callbacks';
 import { registerCommandHandlers } from '../handlers/commands';
 import { registerTextMessageHandler } from '../handlers/textMessages';
+import { handleOwnerPhoto } from '../handlers/photoMessages';
 import { TypeORMSessionStorage } from '../services/SessionStorage';
 import { ReminderRegistry } from '../stores/ReminderRegistry';
 import { RecurringTaskRepository } from '../services/RecurringTaskRepository';
@@ -21,10 +22,11 @@ import type { ApiSettingsPatch } from './settings';
 import { ApiModelCatalog, ApiModelSettingsStore, BotSettingsApiModelStore, apiTurnPreset, buildApiModelSettings,
     saveApiModelSelection } from './modelSettings';
 import { runWithChannelPreset } from '../services/aiRuntimeConfigService';
-import { SceneService, type SceneTurn } from './scene';
+import { SceneService, type SceneTurn, type VisionRoute } from './scene';
 import type { AiPresetName } from '../ai/modelPresets';
 import { registerDialogueLifecycle, publicDialogueJob, activateDialogueJob } from '../services/dialogueJobs';
 import { DialogueJobRepository } from '../services/DialogueJobRepository';
+import { MAX_PHOTO_BYTES, PHOTO_STORAGE_NOTE, photoVisionRoute } from './photos';
 
 /** Same handlers, orchestrator, identity and knowledge; only the delivery and session channel differ. */
 export class BotApiBackend implements ApiBackend {
@@ -34,6 +36,7 @@ export class BotApiBackend implements ApiBackend {
     private readonly actions: ApiActionTokens;
     private readonly sessionKey: string;
     private readonly botInfo: UserFromGetMe;
+    private readonly photoInputs = new Map<string, Buffer>();
 
     constructor(private readonly bot: Bot<BotContext>, private readonly options: ExternalApiOptions,
                 private readonly models: ApiModelSettingsStore = new BotSettingsApiModelStore(),
@@ -45,6 +48,12 @@ export class BotApiBackend implements ApiBackend {
         registerDialogueLifecycle(this.dispatcher);
         registerCallback(this.dispatcher);
         registerCommandHandlers(this.dispatcher);
+        this.dispatcher.on('message:photo', async ctx => {
+            const fileId = ctx.message.photo[0].file_id;
+            const buffer = this.photoInputs.get(fileId);
+            if (!buffer) throw new ApiError(400, 'invalid_photo', 'Фото недоступно. Отправь его ещё раз.');
+            await handleOwnerPhoto(ctx, buffer, ctx.message.caption ?? '', fileId);
+        });
         registerTextMessageHandler(this.dispatcher, { immediate: true });
         this.dispatcher.use(async ctx => { await ctx.reply('Команда не найдена. Посмотри /help.'); });
     }
@@ -55,7 +64,9 @@ export class BotApiBackend implements ApiBackend {
     }
 
     async capabilities() {
-        return { input: ['text', 'actions'], output: ['text', 'photo', 'document', 'voice'],
+        const vision: VisionRoute = await this.photoRoute().catch((error: unknown) => ({ available: false,
+            reason: error instanceof ApiError ? error.message : 'Не удалось определить модель для анализа фото.' }));
+        return { input: ['text', 'actions', 'photo'], photo: { mime: ['image/jpeg'], maxBytes: MAX_PHOTO_BYTES, vision, notes: PHOTO_STORAGE_NOTE }, output: ['text', 'photo', 'document', 'voice'],
             settings: ['modelMode', 'modelPreferences'], scene: { version: 1 }, deferredDialogue: { preference: 'respond-async', results: '/api/v1/dialogue-jobs', cancellation: true }, capabilities: BOT_CAPABILITIES };
     }
 
@@ -71,6 +82,21 @@ export class BotApiBackend implements ApiBackend {
     sceneActionResult(body: Record<string, unknown>) { return this.scene.actionResult(body); }
     modelSettings() { return buildApiModelSettings(this.models, this.catalog); }
     async turnReady() { await apiTurnPreset(this.models); }
+    private async photoRoute() {
+        const preset = await apiTurnPreset(this.models);
+        return runWithChannelPreset(preset, () => photoVisionRoute());
+    }
+    async photoReady(): Promise<AiPresetName | null> {
+        try {
+            const preset = await apiTurnPreset(this.models);
+            const route = await runWithChannelPreset(preset, () => photoVisionRoute());
+            if (!route.available) throw new ApiError(503, 'vision_unavailable', `Кира сейчас не может посмотреть фото: ${route.reason}`);
+            return preset;
+        } catch (error) {
+            if (error instanceof ApiError) throw new ApiError(503, 'vision_unavailable', error.message);
+            throw new ApiError(503, 'vision_unavailable', 'Не удалось проверить модель для анализа фото. Попробуй позже.');
+        }
+    }
     saveModelSettings(body: Record<string, unknown>) { return saveApiModelSelection(this.models, this.catalog, body); }
 
     async history(limit: number) {
@@ -122,10 +148,22 @@ export class BotApiBackend implements ApiBackend {
         } }, true, action.version);
     }
 
+    async photo(buffer: Buffer, caption = '', preset?: AiPresetName | null): Promise<ApiReply> {
+        const selected = preset === undefined ? await this.photoReady() : preset;
+        const fileId = `api-photo-${randomUUID()}`;
+        this.photoInputs.set(fileId, buffer);
+        try {
+            return await this.dispatch({ update_id: 0, message: {
+                message_id: nextApiMessageId(), date: Math.floor(Date.now() / 1000), from: this.owner(), chat: this.chat(),
+                ...(caption ? { caption } : {}), photo: [{ file_id: fileId, file_unique_id: fileId, width: 16, height: 16 }],
+            } }, false, undefined, false, selected);
+        } finally { this.photoInputs.delete(fileId); }
+    }
+
     private owner() { return { id: this.options.ownerId, is_bot: false, first_name: 'Владелец' }; }
     private chat() { return { id: this.options.ownerId, type: 'private' as const, first_name: 'Владелец' }; }
 
-    private async dispatch(update: Update, confirmation = false, expectedVersion?: string, deferredDialogue = false): Promise<ApiReply> {
+    private async dispatch(update: Update, confirmation = false, expectedVersion?: string, deferredDialogue = false, selectedPreset?: AiPresetName | null): Promise<ApiReply> {
         const persisted = await this.storage.read(this.sessionKey);
         if (expectedVersion !== undefined && persisted?.apiActionVersion !== expectedVersion) {
             throw new ApiError(410, 'action_expired', 'Кнопка относится к предыдущему запросу. Повтори исходный запрос.');
@@ -145,7 +183,7 @@ export class BotApiBackend implements ApiBackend {
         ctx.sessionStorageKey = this.sessionKey;
         ctx.allowDeferredDialogue = deferredDialogue;
         // The app's own text mode, read once per turn; null follows the server's global preset.
-        const preset = await apiTurnPreset(this.models);
+        const preset = selectedPreset === undefined ? await apiTurnPreset(this.models) : selectedPreset;
         await runWithChannelPreset(preset, async () => { await this.dispatcher.middleware()(ctx, async () => {}); });
         await this.storage.write(this.sessionKey, ctx.session);
         if (ctx.dialogueJobId) await activateDialogueJob(ctx, ctx.dialogueJobId);

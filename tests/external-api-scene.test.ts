@@ -191,6 +191,7 @@ test('HTTP: scene routes need the token, a JSON body within limits, an idempoten
         status: async () => ({}), capabilities: async () => ({}), history: async () => ({}), reminders: async () => ({}), tasks: async () => ({}),
         message: async () => ({ messages: [] }), action: async () => ({ messages: [] }), file: async () => ({ data: Buffer.alloc(0), filename: 'x' }),
         modelSettings: async () => ({}), saveModelSettings: async () => ({}), turnReady: async () => {},
+        photoReady: async () => null, photo: async () => ({ messages: [] }),
         sceneCapabilities: async () => ({ version: 1, vision: { available: false, reason: 'synthetic' } }),
         sceneReady: async turn => { if (turn.frame) throw new ApiError(503, 'vision_unavailable', 'нет зрения'); return null; },
         sceneTurn: async () => { turns++; return { messages: [{ id: -1, type: 'text', text: 'ok' }] }; },

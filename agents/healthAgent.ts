@@ -532,7 +532,7 @@ async function analyzeHealthPhoto(
         if (parsed?.action) return normalizePhotoAnalysis(parsed, pendingKind);
     } catch (error) {
         analysisFailure = error;
-        console.error('[health] photo analysis failed:', error);
+        console.error('[health] photo analysis failed');
     }
 
     const fallbackKind = pendingKind ?? inferPhotoKindFromCaption(caption) ?? 'note';
