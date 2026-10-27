@@ -9,11 +9,12 @@ import * as group from '../services/groupChatFeatureSettings';
 import * as self from '../utils/kiraSelfMemory';
 import * as residence from '../services/kiraResidenceService';
 import * as evolution from '../services/kiraSelfEvolutionService';
-import { saveMemoryFocus, validMemoryFocus, continueMemoryQueryPlan } from '../utils/memoryQueryPlan';
+import { saveMemoryFocus, validMemoryFocus, continueMemoryQueryPlan, parseMemoryQueryPlan } from '../utils/memoryQueryPlan';
 import { getMultiQueryMemoryContextDetailed, formatFactWithHistory } from '../utils/multiQueryMemory';
 import { readPersonEvidence } from '../utils/memoryEntityRecall';
 import { runKiraRuntime } from '../orchestration/runtime/kernel';
-import { MEMORY_ANSWER_RULES } from '../utils/memoryAnswer';
+import { MEMORY_ANSWER_RULES, buildMemoryAnswerPrompt } from '../utils/memoryAnswer';
+import { needsRuntimeTools } from '../orchestration/runtime/authorization';
 import { memoryAnswerEvalCases, checkMemoryAnswer } from '../scripts/fixtures/memory-answer.synthetic';
 
 const person = { personIds: ['synthetic-miron'], displayName: 'Мирон Примеров', contactId: '555124', evidenceIds: [] };
@@ -105,6 +106,58 @@ test('a topic-shaped follow-up keeps the owner as subject instead of dropping at
     const result = await getMultiQueryMemoryContextDetailed(context, 'Расскажи об этом подробнее', 'full', { trackAccess: false,
         queryPlan: { answerQueries: ['подробности'], contextQueries: [], requestKind: 'overview', references: [{ kind: 'topic', from: 'focus', mention: 'этом', relationPath: [] }] } });
     assert.equal(result.recall?.subjects[0].owner, true); assert.deepEqual(result.recalledMemories.map(record => record.id), ['work']);
+});
+
+test('a demonstrative mislabelled as a name retains grounded focus, while an explicit new name never does', async t => {
+    const context = ctx(); saveMemoryFocus(context, [person], 'Работа Мирона', ['old'], Date.now(), plan());
+    const follow = { answerQueries: ['подробности'], contextQueries: [], requestKind: 'overview', references: [{ kind: 'person', from: 'named', mention: 'этого человека', relationPath: [] }] };
+    assert.equal(parseMemoryQueryPlan(JSON.stringify(follow), 'Расскажи про этого человека')?.references?.[0].from, 'focus');
+    t.mock.method(vector, 'getVectorService', () => ({ getMemoriesByTags: async () => [fact('new', 'work', 'Разработал синтетический учебный симулятор.')] } as any));
+    const registry = t.mock.method(identity, 'findPersonIdentitiesForRecall', async () => { throw Error('No literal demonstrative-name lookup'); });
+    const result = await getMultiQueryMemoryContextDetailed(context, 'Что ещё про этого человека?', 'full', { queryPlan: follow as any, trackAccess: false });
+    assert.equal(registry.mock.callCount(), 0); assert.equal(result.recall?.state, 'found'); assert.equal(result.recall?.subjects[0].name, person.displayName);
+    const explicit = { ...follow, references: [{ kind: 'person', from: 'named', mention: 'Элла Тестовая', relationPath: [] }] };
+    assert.equal(parseMemoryQueryPlan(JSON.stringify(explicit), 'Что ещё про Элла Тестовая')?.references?.[0].from, 'named');
+});
+
+test('semantic memory lookup does not launch an operational task loop, but explicit commands and live lists still do', () => {
+    const classification: any = { intent: 'РАЗГОВОР', details: { memoryTask: 'lookup' } };
+    assert.equal(needsRuntimeTools({ classification, message: 'Какие рабочие проекты и задачи у Мирона Примерова ты помнишь?' }), false);
+    assert.equal(needsRuntimeTools({ classification, message: 'Напиши списком людей из моего учебного кружка' }), false);
+    assert.equal(needsRuntimeTools({ classification: { ...classification, intent: 'ОТПРАВКА_СООБЩЕНИЯ' }, message: 'Напиши Ладе Тестовой' }), true);
+    assert.equal(needsRuntimeTools({ classification, message: 'Какие задачи он обсуждал? И напомни завтра написать ему' }), true);
+    assert.equal(needsRuntimeTools({ classification: { ...classification, details: { memoryTask: 'none' } }, message: 'Покажи мои регулярные задачи' }), true);
+    assert.equal(needsRuntimeTools({ classification: { ...classification, details: { memoryTask: 'none' } }, message: 'Какие мои напоминания активны?' }), true);
+});
+
+test('an exhausted topic pool is reported separately from newly retrieved evidence', async t => {
+    const context = ctx();
+    const one = fact('already-shown', 'work', 'Разрабатывает учебный синтетический компилятор.');
+    t.mock.method(identity, 'findPersonIdentitiesForRecall', async () => [{ id: 'synthetic-miron', displayName: person.displayName, telegramContactId: person.contactId }] as any);
+    t.mock.method(vector, 'getVectorService', () => ({ getMemoriesByTags: async () => [one] } as any));
+    await getMultiQueryMemoryContextDetailed(context, 'Что знаешь про Примерова?', 'full', { queryPlan: plan(), trackAccess: false });
+    const next = await getMultiQueryMemoryContextDetailed(context, 'А что ещё?', 'full', { queryPlan: { answerQueries: ['подробности'], contextQueries: [], requestKind: 'overview' }, trackAccess: false });
+    assert.equal(next.recall?.freshEvidenceCount, 0); assert.equal(next.recall?.noNewEvidenceInPool, true);
+    assert.match(next.context, /это не вывод о полноте всего архива/);
+});
+
+test('a requested written list reaches synthesis once with the originally prepared evidence', async t => {
+    const inference = t.mock.method(ai, 'createJsonChatCompletionForTask', async () => { throw Error('No second planning loop'); });
+    const input: any = { ctx: ctx(), message: 'Напиши список моих знакомых по учебному кружку', messageHistory: [],
+        classification: { intent: 'РАЗГОВОР', details: { memoryTask: 'lookup' } }, enrichedContextFromMemory: 'SYNTHETIC_PEOPLE_EVIDENCE',
+        memoryRecall: { state: 'found', requestKind: 'people_list', subjects: [], domains: [], evidenceCount: 2 } };
+    const response = await runKiraRuntime(input, { respond: async (value, evidence) => {
+        assert.equal(evidence, 'SYNTHETIC_PEOPLE_EVIDENCE'); assert.equal(value.memoryRecall?.evidenceCount, 2);
+        return { responseText: 'Лада Тестовая и Мирон Примеров.' };
+    } });
+    assert.match(response.responseText, /Лада/); assert.equal(inference.mock.callCount(), 0);
+});
+
+test('an exhausted continuation does not re-present old facts as a fresh packet, but explicit explanations retain them', () => {
+    const input: any = { question: 'А что ещё об этом помнишь?', dateTime: '2026-01-01', context: 'SYNTHETIC_OLD_EVIDENCE', history: [],
+        summary: { state: 'found', requestKind: 'overview', subjects: [], domains: [], evidenceCount: 1, freshEvidenceCount: 0, noNewEvidenceInPool: true } };
+    assert.doesNotMatch(buildMemoryAnswerPrompt(input), /SYNTHETIC_OLD_EVIDENCE/);
+    assert.match(buildMemoryAnswerPrompt({ ...input, question: 'Объясни эту подробность' }), /SYNTHETIC_OLD_EVIDENCE/);
 });
 
 test('specific retrieval preserves subject, negation and temporal status in the final evidence text', () => {

@@ -16,6 +16,23 @@ const fact = (id: string, content: string, extra: Partial<SearchResult> = {}): S
 });
 const point = (record: SearchResult) => ({ id: record.id, score: record.score, payload: { ...record, userId: owner } });
 
+test('an existing text index works without schema-write permission and readiness is cached', async () => {
+    let reads = 0, writes = 0;
+    const service: any = new QdrantVectorService({ getCollection: async () => {
+        reads++; return { payload_schema: { content: { data_type: 'text' } } };
+    }, createPayloadIndex: async () => { writes++; throw Error('Read-only role'); } } as any);
+    assert.equal(await service.ensureMemoryTextIndex('synthetic_memories_work'), true);
+    assert.equal(await service.ensureMemoryTextIndex('synthetic_memories_work'), true);
+    assert.equal(reads, 1); assert.equal(writes, 0);
+});
+
+test('text index creation remains available when metadata cannot be read', async () => {
+    let writes = 0;
+    const service: any = new QdrantVectorService({ getCollection: async () => { throw Error('Metadata unavailable'); },
+        createPayloadIndex: async () => { writes++; return { status: 'completed' }; } } as any);
+    assert.equal(await service.ensureMemoryTextIndex('synthetic_memories_work'), true); assert.equal(writes, 1);
+});
+
 test('bounded lexical AND pool rescues a precise fact behind sixty common-word hits', async () => {
     const calls: any[] = [];
     const noise = Array.from({ length: 80 }, (_, i) => point(fact(`noise-${i}`, 'Обсуждали синий конверт.')));

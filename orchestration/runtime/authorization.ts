@@ -36,7 +36,17 @@ export function authorizedStateSkills(context: Pick<ToolContext, 'classification
 }
 
 export function needsRuntimeTools(context: Pick<ToolContext, 'classification' | 'message'>): boolean {
-    return authorizedStateSkills(context).size > 0 || /(?:список|покажи|какие|мои)[\s\S]{0,40}(?:напоминан|задач|наблюдени|настройк|черновик)|(?:забудь|удали\s+из\s+памяти)/iu.test(context.message);
+    const skills = authorizedStateSkills(context);
+    // The semantic classifier already distinguishes remembered work/tasks from
+    // operational objects. A word such as «задачи» must not launch a second
+    // planning/search loop after a personal lookup has prepared its evidence.
+    // «Напиши» can request the answer itself (a list or a summary). The semantic
+    // lookup route takes precedence over that broad communication keyword.
+    // Explicit state operations and classified secondary actions still use tools.
+    if (context.classification.intent === 'РАЗГОВОР' && context.classification.details.memoryTask === 'lookup' && !context.classification.subIntents?.length &&
+        [...skills].every(skill => skill === 'contact-communication')) return false;
+    if (skills.size > 0) return true;
+    return /(?:список|покажи|какие|мои)[\s\S]{0,40}(?:напоминан|задач|наблюдени|настройк|черновик)|(?:забудь|удали\s+из\s+памяти)/iu.test(context.message);
 }
 
 export function canExecuteRuntimeCall(definition: ToolDefinition, call: RuntimeToolCall, context: ToolContext): boolean {

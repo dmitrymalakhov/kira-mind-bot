@@ -7,6 +7,7 @@ import { isActiveRelationshipEvidence } from './personalRelationshipRecall';
 import { isUsablePersonEvidence } from './memoryEntityRecall';
 import { memoryContentExcerpt } from './memoryRanking';
 import { scoreMemoryLexicalMatch } from './memoryRetrieval';
+import { hasDirectContactConversationSource } from './contactMemory';
 
 interface PersonEvidence { person: MemoryPerson; basis: 'relationship' | 'communication'; memory: SearchResult }
 export interface MemoryPeopleEntry { person: MemoryPerson; evidence: PersonEvidence[] }
@@ -60,8 +61,7 @@ export async function recallMemoryPeople(service: IDomainVectorService, owner: s
         if (candidates.length !== 1) return;
         const person = candidates[0];
         if (!person.contactId || !/^[1-9]\d*$/.test(person.contactId) || !isUsablePersonEvidence(memory, person, now)) return;
-        const prefix = `tg:${person.contactId}:`;
-        if (!memory.sourceMessageIds?.some(id => typeof id === 'string' && id.startsWith(prefix) && /^[1-9]\d*$/.test(id.slice(prefix.length)))) return;
+        if (!hasDirectContactConversationSource(memory, person.contactId)) return;
         return { person, memory, basis: 'communication' };
     };
     const admitted = new Set<string>();

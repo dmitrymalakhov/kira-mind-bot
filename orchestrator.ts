@@ -385,7 +385,10 @@ function detectIntentAmbiguity(classification: MessageClassification): {
     if (classification.intent === "НЕОПРЕДЕЛЕНО") return null;
     if (classification.subIntents?.length) return null;
 
-    const scores = classification.intentScores ?? [];
+    // Abstention is uncertainty about the decision, not a competing user action.
+    // Comparing it with a valid lookup intent used to divert a completed search
+    // into a generic clarification despite an unambiguous factual question.
+    const scores = (classification.intentScores ?? []).filter(candidate => candidate.intent !== 'НЕОПРЕДЕЛЕНО');
     if (scores.length < 2) return null;
 
     const [top, runnerUp] = scores;

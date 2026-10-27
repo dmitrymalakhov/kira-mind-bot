@@ -22,6 +22,38 @@ function ctx() {
 }
 
 describe('new engine through the real message entry point', () => {
+    test('classifier abstention is not a second intent that diverts personal recall into clarification', async t => {
+        const mode = process.env.KIRA_ORCHESTRATION_MODE; process.env.KIRA_ORCHESTRATION_MODE = 'skills';
+        const decisions = process.env.KIRA_DECISIONS_ENABLED; delete process.env.KIRA_DECISIONS_ENABLED;
+        t.mock.method(ChatGroupRepository, 'findAll', async () => []);
+        t.mock.method(memory, 'fetchAgentMemoryContext', async () => ({ domain: 'personal', context: 'Синтетический профиль профессиональных навыков.',
+            recall: { state: 'found', requestKind: 'overview', subjects: [{ name: 'владелец', owner: true }], domains: ['work'], evidenceCount: 2 } } as any));
+        t.mock.method(completion, 'createJsonChatCompletionForTask', async () => ({ intent: 'РАЗГОВОР', confidenceLevel: 'СРЕДНИЙ',
+            intentScores: [{ intent: 'РАЗГОВОР', score: .57 }, { intent: 'НЕОПРЕДЕЛЕНО', score: .43 }], details: { memoryTask: 'lookup', memoryNeed: 'full' } }) as any);
+        const run = t.mock.method(kernel, 'runKiraRuntime', async (input: any) => {
+            assert.equal(input.classification.intent, 'РАЗГОВОР'); assert.equal(input.classification.clarificationQuestion, undefined);
+            assert.equal(input.memoryRecall.evidenceCount, 2); return { responseText: 'Ты разрабатываешь учебные симуляторы.' };
+        });
+        try { await processMessage(ctx(), 'Что ты помнишь о моей профессии?'); assert.equal(run.mock.callCount(), 1); }
+        finally { if (mode === undefined) delete process.env.KIRA_ORCHESTRATION_MODE; else process.env.KIRA_ORCHESTRATION_MODE = mode;
+            if (decisions === undefined) delete process.env.KIRA_DECISIONS_ENABLED; else process.env.KIRA_DECISIONS_ENABLED = decisions; }
+    });
+
+    test('a real competing action still requires clarification for an ambiguous request', async t => {
+        const mode = process.env.KIRA_ORCHESTRATION_MODE; process.env.KIRA_ORCHESTRATION_MODE = 'skills';
+        const decisions = process.env.KIRA_DECISIONS_ENABLED; delete process.env.KIRA_DECISIONS_ENABLED;
+        t.mock.method(ChatGroupRepository, 'findAll', async () => []);
+        t.mock.method(memory, 'fetchAgentMemoryContext', async () => ({ domain: 'personal', context: '' }));
+        t.mock.method(completion, 'createJsonChatCompletionForTask', async () => ({ intent: 'РАЗГОВОР', confidenceLevel: 'СРЕДНИЙ',
+            intentScores: [{ intent: 'РАЗГОВОР', score: .52 }, { intent: 'НАПОМИНАНИЕ', score: .48 }], details: { memoryNeed: 'none' } }) as any);
+        const run = t.mock.method(kernel, 'runKiraRuntime', async (input: any) => {
+            assert.equal(input.classification.intent, 'НЕОПРЕДЕЛЕНО'); assert.ok(input.classification.clarificationQuestion); return { responseText: 'Уточни действие.' };
+        });
+        try { await processMessage(ctx(), 'Надо бы потом вспомнить об учебном семинаре'); assert.equal(run.mock.callCount(), 1); }
+        finally { if (mode === undefined) delete process.env.KIRA_ORCHESTRATION_MODE; else process.env.KIRA_ORCHESTRATION_MODE = mode;
+            if (decisions === undefined) delete process.env.KIRA_DECISIONS_ENABLED; else process.env.KIRA_DECISIONS_ENABLED = decisions; }
+    });
+
     test('canonical personal recall is not overwritten by the legacy role-to-name resolver', async t => {
         const oldMode = process.env.KIRA_ORCHESTRATION_MODE; process.env.KIRA_ORCHESTRATION_MODE = 'skills';
         const oldDecisions = process.env.KIRA_DECISIONS_ENABLED; delete process.env.KIRA_DECISIONS_ENABLED;

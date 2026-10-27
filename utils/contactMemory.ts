@@ -46,6 +46,13 @@ export interface ContactIdentityScope {
     candidateNames?: string[];
 }
 
+/** Source provenance only; the caller must independently validate person/owner scope. */
+export function hasDirectContactConversationSource(memory: { sourceMessageIds?: string[] }, contactId?: string): boolean {
+    if (!contactId || !/^[1-9]\d*$/.test(contactId)) return false;
+    const prefix = `tg:${contactId}:`;
+    return Boolean(memory.sourceMessageIds?.some(id => typeof id === 'string' && id.startsWith(prefix) && /^[1-9]\d*$/.test(id.slice(prefix.length))));
+}
+
 const NON_CONTACT_LEADING_WORDS_SOURCE = [
     'я', 'мне', 'меня', 'мы', 'нам', 'нас', 'мой', 'моя', 'моё',
     'ты', 'тебе', 'тебя', 'он', 'она', 'они', 'оно',

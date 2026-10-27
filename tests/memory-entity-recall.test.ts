@@ -35,6 +35,38 @@ const service = (records: SearchResult[]) => ({ getMemoriesByTag: async (userId:
 const focusPlan = (mention = 'неё'): MemoryQueryPlan => ({ answerQueries: ['личные сведения'], contextQueries: [], requestKind: 'overview',
     references: [{ kind: 'person', mention, from: 'focus', relationPath: [] }] });
 
+test('interaction recall distinguishes direct chat sources from unsupported third-person context', () => {
+    const direct = record('direct-chat', 'Обсуждал учебный эксперимент.', { sourceMessageIds: ['tg:555123:123'] });
+    const mentioned = record('other-source', 'Обсуждал семейный спор.', { sourceMessageIds: ['tg:555124:123'] });
+    const records = selectRelationshipEvidence([mentioned, direct], person, 'Какие темы мы обсуждали?');
+    assert.equal(records[0].id, 'direct-chat');
+    const formatted = formatPersonOverview([{ person, records }], 6500, true);
+    assert.match(formatted.context, /direct-chat;.*conversation=owner_direct/);
+    assert.match(formatted.context, /other-source;.*conversation=not_proven/);
+});
+
+test('concrete facts precede verbose derived summaries in an overview without discarding fresh summaries', () => {
+    const direct = record('direct-preference', 'Предпочитает зелёную тестовую ткань.', { predicate: 'prefers', memoryKind: 'preference' });
+    const derived = Array.from({ length: 12 }, (_, i) => record(`summary-${i}`, 'Личные предпочтения и цели тестового профиля. '.repeat(20),
+        { predicate: `user_schema:synthetic_${i}`, memoryKind: 'trait' }));
+    const ranked = selectPersonEvidence([...derived, direct], person, 'Личные предпочтения и цели', true, 24, new Set(), true);
+    assert.equal(ranked[0].id, direct.id);
+    assert.ok(formatPersonOverview([{ person, records: ranked }], 1200).included.some(r => r.id === direct.id));
+    assert.equal(selectPersonEvidence([direct, derived[0]], person, 'предпочтения', true, 24, new Set([direct.id]), true)[0].id, derived[0].id);
+});
+
+test('a resolved identity path keeps its owner edge across a mismatched suggested domain without embeddings or reranking', async t => {
+    const saved = relation('saved-partnership', 'spouse_of', 'user', 'synthetic-lada', 'Лада Тестовая');
+    t.mock.method(identity, 'readPersonIdentities', async () => [{ id: 'synthetic-lada', displayName: person.displayName, telegramContactId: person.contactId }] as any);
+    t.mock.method(vector, 'getVectorService', () => service([saved]));
+    const model = t.mock.method(ai, 'createChatCompletionForTask', async () => { throw Error('Verified path needs no further model'); });
+    const result = await getMultiQueryMemoryContextDetailed(context(), 'Кто мой партнёр по жизни?', 'full', { trackAccess: false, explain: true,
+        queryPlan: { answerQueries: ['партнёр'], contextQueries: [], requestKind: 'identity', domains: ['personal'],
+            references: [{ kind: 'person', from: 'owner', mention: 'мой', relationPath: [{ type: 'partner_of', direction: 'either' }] }] } });
+    assert.deepEqual(result.recalledMemories.map(m => m.id), ['saved-partnership']); assert.equal(result.retrievalTrace?.reranker?.status, 'identity_path');
+    assert.match(result.context, /from=user/); assert.match(result.context, /spouse_of/); assert.equal(model.mock.callCount(), 0);
+});
+
 test('semantic plan accepts role synonyms and rejects invented spans, IDs and invalid directed paths', () => {
     const question = 'Как зовут мою вторую половинку?';
     const plan = parseMemoryQueryPlan(JSON.stringify({ answerQueries: ['супруга'], requestKind: 'identity', references: [

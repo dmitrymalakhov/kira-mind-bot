@@ -502,6 +502,15 @@ export class QdrantVectorService implements IDomainVectorService {
 
         const pending = (async () => {
             try {
+                // Existing indexes are readable even when the caller has no
+                // schema-write permission (for example a diagnostic replay).
+                // Do not make a redundant create request a prerequisite for search.
+                if (typeof this.client.getCollection === 'function') {
+                    try {
+                        const info = await this.client.getCollection(collectionName);
+                        if (info.payload_schema?.content?.data_type === 'text') return true;
+                    } catch { /* Preserve the existing creation fallback if metadata is unavailable. */ }
+                }
                 await this.client.createPayloadIndex(collectionName, {
                     wait: true,
                     field_name: 'content',

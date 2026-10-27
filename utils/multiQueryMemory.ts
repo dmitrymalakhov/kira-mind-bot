@@ -20,12 +20,12 @@ import { isTodayImportanceRequest } from './todayImportanceIntent';
 import { MemoryRetrievalScoreDetails } from './memoryRetrieval';
 import { personalRecallQueries } from './personalRecallIntent';
 import { memoryContentExcerpt, memoryRerankCacheKey, parseMemoryRerankOrder } from './memoryRanking';
-import { memoryQueryHistory, memoryQueryCacheKey, parseMemoryQueryPlan, validMemoryFocus, isMemoryContinuation, saveMemoryFocus, continueMemoryQueryPlan } from './memoryQueryPlan';
+import { memoryQueryHistory, memoryQueryCacheKey, parseMemoryQueryPlan, validMemoryFocus, isMemoryContinuation, saveMemoryFocus, continueMemoryQueryPlan, memoryFocusMatches } from './memoryQueryPlan';
 import type { MemoryQueryPlan, MemoryRecallSummary } from '../types/memoryRecallTypes';
 import { memoryRecallSummary } from './memoryAnswer';
 import { PERSON_RELATION_TYPES } from './personRelation';
 import { PREDEFINED_DOMAINS } from '../constants/domains';
-import { resolveMemoryQueryEntities, personRecallScope, readPersonEvidence, selectPersonEvidence, selectRelationshipEvidence, selectHighlightEvidence, formatPersonOverview, rememberResolvedSearch } from './memoryEntityRecall';
+import { resolveMemoryQueryEntities, personRecallScope, readPersonEvidence, selectPersonEvidence, selectRelationshipEvidence, selectHighlightEvidence, formatPersonOverview, rememberResolvedSearch, formatResolvedMemoryIdentity } from './memoryEntityRecall';
 import { recallMemoryPeople, formatMemoryPeople, formatTopicConversations } from './memoryPeopleRecall';
 import { scoreMemoryLexicalMatch } from './memoryRetrieval';
 
@@ -1380,6 +1380,17 @@ export async function getMultiQueryMemoryContextDetailed(
             'Не удалось связать запрошенного человека с однозначной сохранённой личностью. Уточни имя или связь. Это ограничение разрешения ссылки, а не доказательство отсутствия сведений в памяти.', recalledMemories: [],
             recall: memoryRecallSummary(generatedQueries, [], entities.ambiguous ? 'ambiguous' : 'unresolved', 0) };
     }
+    if (generatedQueries.requestKind === 'identity' && entities.people.length && entities.memories.some(memory => memory.tags.includes('person_relation'))) {
+        const packed = formatResolvedMemoryIdentity(entities);
+        rememberResolvedSearch(ctx, entities, packed.included, generatedQueries);
+        return { context: packed.context, recall: memoryRecallSummary(generatedQueries, entities.people, 'found', packed.included.length),
+            recalledMemories: packed.included.map(memory => ({ id: memory.id, domain: memory.domain, content: memory.content, score: 1,
+                memoryKind: memory.memoryKind, confidence: memory.confidence, status: memory.status, sourceMemoryIds: memory.sourceMemoryIds, sourceEpisodeId: memory.sourceEpisodeId })),
+            retrievalTrace: explain ? { memoryNeed: need, queries: { answer: generatedQueries.answerQueries, context: [], associative: [] },
+                candidates: entities.memories.length, afterThreshold: packed.included.length, afterTokenBudget: packed.included.length,
+                reranker: { status: 'identity_path', presented: 0, selected: packed.included.length },
+                selected: packed.included.map(memory => ({ id: memory.id, domain: memory.domain, score: 1, recallSources: ['tag'] })) } : undefined };
+    }
     const relationshipOverview = generatedQueries.requestKind === 'relationship';
     const personPools = service ? await Promise.all(entities.people.map(async person => ({ person, records: await readPersonEvidence(service, String(ctx.from?.id), person, relationshipOverview ? [] : generatedQueries.domains) }))) : [];
     const highlight = generatedQueries.requestKind === 'highlight';
@@ -1395,12 +1406,19 @@ export async function getMultiQueryMemoryContextDetailed(
             ...generatedQueries, requestKind: 'people_list', peopleQuery: { basis: 'communication', relations: [] },
             references: [{ kind: 'person', from: 'owner', mention: 'я', relationPath: [] }],
         }), generatedQueries.answerQueries.join(' '), seen) : { context: '', included: [] };
-        const packed = formatPersonOverview(selection, 6500 - (conversations.context.length ? conversations.context.length + 2 : 0), relationshipOverview);
+        const continuing = Boolean(previousFocus && isMemoryContinuation(userMessage) && memoryFocusMatches(previousFocus, entities.people, generatedQueries));
+        const noNewEvidenceInPool = continuing && !personPools.some(pool => pool.records.some(record => !seen.has(record.id))) &&
+            !conversations.included.some(record => !seen.has(record.id));
+        const exhaustionNote = noNewEvidenceInPool ? '\nВ этой ограниченной выборке новых сведений сверх уже показанных нет. Не повторяй прежний перечень под видом новых фактов; это не вывод о полноте всего архива.' : '';
+        const packed = formatPersonOverview(selection, 6500 - exhaustionNote.length - (conversations.context.length ? conversations.context.length + 2 : 0), relationshipOverview);
         if (conversations.context) { packed.context += '\n\n' + conversations.context; packed.included.push(...conversations.included); }
         if (highlight) packed.context += '\nПользователь просит один интересный факт. Выбери один конкретный подтверждённый факт из этой выборки, не сочиняй неожиданность и не требуй буквального совпадения со словом «интересный». Если подходящих фактов здесь нет, обозначь ограничение этой выборки.';
         const included = packed.included;
+        const freshEvidenceCount = continuing ? included.filter(memory => !seen.has(memory.id)).length : undefined;
+        packed.context += exhaustionNote;
         rememberResolvedSearch(ctx, entities, included, generatedQueries);
-        return { context: packed.context, recall: memoryRecallSummary(generatedQueries, entities.people, included.length ? 'found' : 'empty', included.length), recalledMemories: included.map(memory => ({ id: memory.id, domain: memory.domain, content: memory.content, score: 1,
+        return { context: packed.context, recall: { ...memoryRecallSummary(generatedQueries, entities.people, included.length ? 'found' : 'empty', included.length),
+            ...(continuing ? { freshEvidenceCount, noNewEvidenceInPool } : {}) }, recalledMemories: included.map(memory => ({ id: memory.id, domain: memory.domain, content: memory.content, score: 1,
             memoryKind: memory.memoryKind, confidence: memory.confidence, status: memory.status, sourceMemoryIds: memory.sourceMemoryIds, sourceEpisodeId: memory.sourceEpisodeId })),
             retrievalTrace: explain ? { memoryNeed: need, queries: { answer: generatedQueries.answerQueries, context: [], associative: [] },
                 candidates: personPools.reduce((sum, pool) => sum + pool.records.length, 0), afterThreshold: included.length,

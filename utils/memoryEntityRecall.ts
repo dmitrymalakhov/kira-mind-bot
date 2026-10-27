@@ -2,7 +2,7 @@ import type { BotContext, SearchResult } from '../types';
 import type { MemoryPerson, MemoryQueryPlan, MemoryRelationStep, MemoryReplyPerson } from '../types/memoryRecallTypes';
 import type { IDomainVectorService } from '../services/interfaces/IDomainVectorService';
 import { findPersonIdentitiesForRecall, findMentionedPeopleForRecall, readPersonIdentities } from '../services/PersonIdentityService';
-import { contactNamesLikelyMatch, recallPersonNameMatches, normalizeContactLookupValue, resolveContactIdentity, isMemoryEntryAllowedForContactScope, type ContactIdentityScope } from './contactMemory';
+import { contactNamesLikelyMatch, recallPersonNameMatches, normalizeContactLookupValue, resolveContactIdentity, isMemoryEntryAllowedForContactScope, hasDirectContactConversationSource, type ContactIdentityScope } from './contactMemory';
 import { recallOwnerRelationship } from './personalRelationshipRecall';
 import { validMemoryFocus, isMemoryContinuation, saveMemoryFocus, memoryQueryHistory } from './memoryQueryPlan';
 import { memoryContentExcerpt } from './memoryRanking';
@@ -201,6 +201,7 @@ export function selectRelationshipEvidence(records: SearchResult[], person: Memo
     const names = tokenizeMemoryRetrievalText([person.displayName, ...(person.aliases ?? [])].join(' '));
     const topic = tokenizeMemoryRetrievalText(queries).filter(token => !names.some(name => contactNamesLikelyMatch(token, name))).join(' ');
     const score = (record: SearchResult) => Number(isQueriedPairRelation(record, person, peers)) * 10 +
+        Number(!peers.length && hasDirectContactConversationSource(record, person.contactId)) * 5 +
         scoreMemoryLexicalMatch(record.content, topic).score * 4 + Number(record.memoryKind === 'relationship') +
         Number(!record.status || record.status === 'active') * .3 + (record.confidence ?? .6) * .2 -
         Number(seen.has(record.id)) * .75 -
@@ -232,7 +233,11 @@ export function selectPersonEvidence(records: SearchResult[], person: MemoryPers
             (overview && seen.has(record.id) ? .75 : 0) -
             (record.tags.some(tag => tag === 'weak-evidence' || tag === 'needs-caution' || tag.startsWith('quality:') || tag === 'inference:ambiguous') ? .5 : 0);
     };
-    const sorted = [...records].sort((a, b) => score(b) - score(a) || a.id.localeCompare(b.id));
+    const derived = (record: SearchResult) => ['chapter', 'episode'].includes(record.memoryKind ?? '') || /^(?:user_schema|memory_chapter):/.test(record.predicate ?? '');
+    // Broad summaries often repeat the query vocabulary. They must not consume
+    // the overview budget before concrete primary facts, even with high overlap.
+    const sorted = [...records].sort((a, b) => (overview ? Number(seen.has(a.id)) - Number(seen.has(b.id)) || Number(derived(a)) - Number(derived(b)) : 0) ||
+        score(b) - score(a) || a.id.localeCompare(b.id));
     if (!overview) return sorted.slice(0, limit);
     const selected: SearchResult[] = [];
     const counts = new Map<string, number>();
@@ -253,11 +258,30 @@ export function selectHighlightEvidence(records: SearchResult[], person: MemoryP
     return selectPersonEvidence(eligible, person, '', true, 4, seen);
 }
 
+/** A resolved relation path is identity evidence, independent of a guessed topic domain. */
+export function formatResolvedMemoryIdentity(entities: MemoryEntityResolution, budget = 6500): { context: string; included: SearchResult[] } {
+    const lines = ['Личность установлена по сохранённому типизированному пути связей. Endpoint user — автор текущего запроса (владелец), не произвольный человек с тем же именем. Имена ниже взяты из scoped реестра/связанных записей; прошлые ответы бота не являются основанием. Дай прямой ответ по установленной связи, без новых отношений или биографических подробностей.',
+        `Результат пути: ${entities.people.map(person => person.owner ? 'текущий пользователь' : person.displayName).join('; ')}.`];
+    const value = (memory: SearchResult, prefix: string) => memory.tags.find(tag => tag.startsWith(prefix))?.slice(prefix.length);
+    const edgeKeys = new Set<string>(), included: SearchResult[] = [];
+    for (const record of entities.memories) {
+        if (!record.tags.includes('person_relation')) continue;
+        const type = value(record, 'relation_type:') ?? 'unknown';
+        const subject = record.tags.includes('relation_subject:user') ? 'user' : value(record, 'relation_subject_person_id:') ?? 'unknown';
+        const object = record.tags.includes('relation_object:user') ? 'user' : value(record, 'relation_object_person_id:') ?? 'unknown';
+        const key = `${type}:${subject}:${object}`; if (edgeKeys.has(key)) continue;
+        const line = `[${record.domain}/${record.id}; type=${type}; from=${subject}; to=${object}; status=${record.status ?? 'active'}; negated=${Boolean(record.negated)}; confidence=${record.confidence ?? .6}]: ${memoryContentExcerpt(record.content, '', 280)}`;
+        if (lines.join('\n').length + line.length + 1 > budget) continue;
+        lines.push(line); included.push(record); edgeKeys.add(key);
+    }
+    return { context: lines.join('\n'), included };
+}
+
 export function formatPersonOverview(people: Array<{ person: MemoryPerson; records: SearchResult[] }>, budget = 6500, relationship = false): { context: string; included: SearchResult[] } {
     const lines = ['Подтверждённый предмет поиска — конкретные люди ниже. Их факты не относятся к владельцу автоматически. План/завершённое событие не является текущим состоянием. Это ограниченная выборка, не весь профиль. reported/inferred/ambiguous и quality требуют оговорки, не выдавай пересказ или вывод за прямые слова человека. Отсутствие записи не доказывает отсутствие сведений в архиве. Не выводи новые факты из фрагментов.'];
     if (people.some(item => item.person.owner)) lines[0] = 'Субъект «текущий пользователь (владелец диалога)» — автор текущего запроса, а не ассистент. Его «я/мои/обо мне» относятся к нему; в ответе обращайся «ты/твои/о тебе». Остальные люди — отдельные субъекты. Ниже только ограниченная выборка сохранённых сведений; планы, прошлые события, отрицания и временные границы не означают текущее состояние. Не выдумывай факты и не делай вывод об отсутствии сведений во всём архиве.';
     lines[0] += ' Сначала изложи конкретные устойчивые сведения по вопросу, затем уместные эпизоды и планы. Сомнение в актуальности одной детали не отменяет остальных известных фактов. Историческое описание не превращай в текущую должность или состав команды; неизвестную актуальность обозначай только у соответствующей детали.';
-    if (relationship) lines[0] += ' Вопрос о взаимодействии людей: ищи явно описанные совместные дела, разговоры и отношения в дословных фрагментах. pair=queried обозначает сохранённое ребро между запрошенными людьми (для одного человека — с владельцем); pair=context — только сведения о человеке, они сами по себе не доказывают общую работу или близость. Источник переписки и общие интересы не доказывают отношения. Отсутствие структурированного ребра не отменяет явно описанного в тексте взаимодействия. Отделяй подтверждённое от предположений.';
+    if (relationship) lines[0] += ' Вопрос о взаимодействии людей: ищи явно описанные совместные дела, разговоры и отношения в дословных фрагментах. pair=queried — сохранённое ребро запрошенных людей (для одного человека — с владельцем); pair=context — сведения о человеке, не доказательство близости. conversation=owner_direct — источник прямой переписки владельца с этим человеком; можно описать, какие темы в ней упоминались, но нельзя менять субъекта описанного действия или выводить общую работу. conversation=not_proven — запись не доказывает, что владелец обсуждал её содержание с человеком. Общие интересы не доказывают отношения. При двух названных людях owner_direct не является перепиской между ними. Отделяй подтверждённое от предположений.';
     const included: SearchResult[] = [];
     let remaining = budget - lines[0].length;
     // Interleave people so a comparison cannot silently omit the second person.
@@ -265,7 +289,7 @@ export function formatPersonOverview(people: Array<{ person: MemoryPerson; recor
         const record = item.records[index]; if (!record || included.some(previous => previous.id === record.id)) continue;
         const peers = people.filter(other => other !== item).map(other => other.person);
         const provenance = record.tags.filter(tag => tag.startsWith('inference:') || tag.startsWith('quality:') || tag === 'weak-evidence' || tag === 'needs-caution').join(',');
-        const text = `${item.person.displayName} [${record.domain}/${record.id}; subject=${record.subject ?? 'legacy'}; status=${record.status ?? 'active'}; confidence=${record.confidence ?? .6}; negated=${Boolean(record.negated)}${relationship ? `; pair=${isQueriedPairRelation(record, item.person, peers) ? 'queried' : 'context'}` : ''}${provenance ? `; ${provenance}` : ''}${record.validFrom ? `; from=${new Date(record.validFrom).toISOString()}` : ''}${record.validTo ? `; to=${new Date(record.validTo).toISOString()}` : ''}]: ${memoryContentExcerpt(record.content, '', 450)}`;
+        const text = `${item.person.displayName} [${record.domain}/${record.id}; subject=${record.subject ?? 'legacy'}; kind=${record.memoryKind ?? 'fact'}; status=${record.status ?? 'active'}; confidence=${record.confidence ?? .6}; negated=${Boolean(record.negated)}${relationship ? `; pair=${isQueriedPairRelation(record, item.person, peers) ? 'queried' : 'context'}; conversation=${hasDirectContactConversationSource(record, item.person.contactId) ? 'owner_direct' : 'not_proven'}` : ''}${provenance ? `; ${provenance}` : ''}${record.validFrom ? `; from=${new Date(record.validFrom).toISOString()}` : ''}${record.validTo ? `; to=${new Date(record.validTo).toISOString()}` : ''}]: ${memoryContentExcerpt(record.content, '', 450)}`;
         if (text.length + 1 > remaining) continue;
         lines.push(text); remaining -= text.length + 1; included.push(record);
     }

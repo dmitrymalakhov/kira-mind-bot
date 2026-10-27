@@ -34,6 +34,9 @@ export interface MemoryRecallSummary {
     subjects: Array<{ name: string; owner: boolean }>;
     domains: string[];
     evidenceCount: number;
+    freshEvidenceCount?: number;
+    /** Only the bounded current pool is exhausted, never a claim about the whole archive. */
+    noNewEvidenceInPool?: boolean;
 }
 
 export interface MemoryRelationStep {
