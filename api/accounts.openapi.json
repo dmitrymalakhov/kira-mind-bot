@@ -408,6 +408,9 @@
     },
     "/scene/action-results": {
       "$ref": "./openapi.json#/paths/~1scene~1action-results"
+    },
+    "/photos": {
+      "$ref": "./openapi.json#/paths/~1photos"
     }
   },
   "components": {

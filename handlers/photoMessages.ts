@@ -1,6 +1,5 @@
 import { Bot } from "grammy";
-import * as fs from 'fs';
-import * as path from 'path';
+import { randomUUID } from 'node:crypto';
 import fetch from 'node-fetch';
 import { BotContext } from "../types";
 import { processImage, processImageGroup } from "../orchestrator";
@@ -9,7 +8,6 @@ import { devLog } from "../utils";
 import { addToHistory } from "../utils/history";
 import { getBotRef } from "../reminder";
 import {
-    TEMP_DIR,
     resolveReplyTo,
     saveRemindersFromResult,
     sendResultToUser,
@@ -30,9 +28,40 @@ async function addImageResultsToHistory(ctx: BotContext, result: any): Promise<v
     await addToHistory(ctx, 'bot', result.responseText);
 }
 
+async function addOwnerPhotoToHistory(ctx: BotContext, caption: string): Promise<void> {
+    const { isReply, replyToContent, replyToSender } = resolveReplyTo(ctx);
+    let imageMessage = `[Изображение]${caption ? ` с подписью: "${caption}"` : ''}`;
+    if (isReply && replyToContent) imageMessage = `[В ответ на "${replyToContent}" от ${replyToSender}]: ${imageMessage}`;
+    await addToHistory(ctx, 'user', imageMessage);
+}
+
+/** Shared owner photo pipeline. Bytes stay in memory; fileId is metadata for the health diary only. */
+export async function handleOwnerPhoto(ctx: BotContext, buffer: Buffer, caption = '', fileId = `api-photo-${randomUUID()}`, historyRecorded = false): Promise<void> {
+    if (!historyRecorded) await addOwnerPhotoToHistory(ctx, caption);
+    try {
+        const history = ctx.session.messageHistory.slice().reverse();
+        const result = shouldRouteHealthPhoto(ctx, caption)
+            ? await healthPhotoAgent(ctx, buffer, caption, fileId, history, [], [fileId])
+            : await processImage(ctx, buffer, caption, history);
+        await saveRemindersFromResult(ctx, result);
+        await addImageResultsToHistory(ctx, result);
+        await sendResultToUser(ctx, result);
+        await checkLastFactSaveError(ctx);
+    } catch {
+        // Provider errors may include an echoed image payload: never log the error object.
+        console.error('[photo] analysis failed');
+        const response = getBotGenderedText(
+            'Я получила ваше изображение, но, к сожалению, не смогла его детально проанализировать из-за технической проблемы.',
+            'Я получил ваше изображение, но, к сожалению, не смог его детально проанализировать из-за технической проблемы.',
+        ) + ' Могу я чем-то еще помочь вам? 💫';
+        await addToHistory(ctx, 'bot', response);
+        await ctx.reply(response);
+    }
+}
+
 // ── Обработка медиагруппы ──────────────────────────────────
 
-async function processMediaGroup(ctx: BotContext, mediaGroupId: string) {
+async function processMediaGroup(ctx: BotContext, mediaGroupId: string, fetchPhoto: typeof fetch) {
     try {
         if (!ctx.session.mediaGroups) {
             console.error("Ошибка: медиагруппы не найдены в сессии");
@@ -74,7 +103,7 @@ async function processMediaGroup(ctx: BotContext, mediaGroupId: string) {
             if (fileInfo.file_path) {
                 const fileUrl = `https://api.telegram.org/file/bot${bot!.token}/${fileInfo.file_path}`;
                 try {
-                    const response = await fetch(fileUrl);
+                    const response = await fetchPhoto(fileUrl);
                     const arrayBuffer = await response.arrayBuffer();
                     buffers.push(Buffer.from(arrayBuffer));
                 } catch (error) {
@@ -108,7 +137,7 @@ async function processMediaGroup(ctx: BotContext, mediaGroupId: string) {
 
 // ── Регистрация обработчика изображений ─────────────────────
 
-export function registerPhotoMessageHandler(bot: Bot<BotContext>): void {
+export function registerPhotoMessageHandler(bot: Bot<BotContext>, fetchPhoto: typeof fetch = fetch): void {
     bot.on("message:photo", async (ctx) => {
         try {
             devLog('🖼️ Получено изображение от пользователя:', ctx.from?.id);
@@ -164,7 +193,7 @@ export function registerPhotoMessageHandler(bot: Bot<BotContext>): void {
                     if (groupInfo && !groupInfo.processed) {
                         groupInfo.processed = true;
                         ctx.session.mediaGroups.set(mediaGroupId, groupInfo);
-                        await processMediaGroup(ctx, mediaGroupId);
+                        await processMediaGroup(ctx, mediaGroupId, fetchPhoto);
                     }
                 }, 1000);
 
@@ -182,14 +211,8 @@ export function registerPhotoMessageHandler(bot: Bot<BotContext>): void {
                 return;
             }
 
-            // Одиночное фото — определяем контекст ответа (reply_to)
-            const { isReply, replyToContent, replyToSender } = resolveReplyTo(ctx);
-
-            let imageMessage = `[Изображение]${caption ? ` с подписью: "${caption}"` : ''}`;
-            if (isReply && replyToContent) {
-                imageMessage = `[В ответ на "${replyToContent}" от ${replyToSender}]: ${imageMessage}`;
-            }
-            await addToHistory(ctx, 'user', imageMessage);
+            // Preserve Telegram's history entry even when downloading the file fails.
+            await addOwnerPhotoToHistory(ctx, caption);
 
             await ctx.api.sendChatAction(ctx.chat.id, "typing");
 
@@ -199,29 +222,13 @@ export function registerPhotoMessageHandler(bot: Bot<BotContext>): void {
                 const fileUrl = `https://api.telegram.org/file/bot${bot.token}/${fileInfo.file_path}`;
 
                 try {
-                    const response = await fetch(fileUrl);
+                    const response = await fetchPhoto(fileUrl);
                     const arrayBuffer = await response.arrayBuffer();
                     const buffer = Buffer.from(arrayBuffer);
 
-                    const tempFilePath = path.join(TEMP_DIR, `${fileId}.jpg`);
-                    fs.writeFileSync(tempFilePath, buffer);
-
-                    const history = ctx.session.messageHistory.slice().reverse();
-                    const result = shouldRouteHealthPhoto(ctx, caption)
-                        ? await healthPhotoAgent(ctx, buffer, caption, fileId, history, [], [fileId])
-                        : await processImage(ctx, buffer, caption, history);
-
-                    await saveRemindersFromResult(ctx, result);
-                    await addImageResultsToHistory(ctx, result);
-
-                    // Единая отправка результата вместо дублированного if/else
-                    await sendResultToUser(ctx, result);
-
-                    await checkLastFactSaveError(ctx);
-
-                    fs.unlinkSync(tempFilePath);
-                } catch (downloadError) {
-                    console.error("Ошибка при загрузке изображения:", downloadError);
+                    await handleOwnerPhoto(ctx, buffer, caption, fileId, true);
+                } catch {
+                    console.error('[photo] download failed');
                     await ctx.reply(getBotGenderedText(
                         "Я получила ваше изображение, но, к сожалению, не смогла его детально проанализировать из-за технической проблемы.",
                         "Я получил ваше изображение, но, к сожалению, не смог его детально проанализировать из-за технической проблемы.",

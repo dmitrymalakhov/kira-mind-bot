@@ -181,6 +181,7 @@ test('two API accounts register/login, pair separate bots, and route history, fi
             const id = entry.data.account.id;
             let executions = 0;
             let sceneExecutions = 0;
+            let photoExecutions = 0;
             let modelPreset: unknown = null;
             let modelPreferences = { quality: 'high' };
             const internalToken = secrets.derive(id, 'api');
@@ -192,6 +193,11 @@ test('two API accounts register/login, pair separate bots, and route history, fi
                 message: async () => ({ messages: [{ id: 1, type: 'text', text: `${id}:${++executions}` }] }),
                 action: async () => ({ messages: [] }),
                 turnReady: async () => {},
+                photoReady: async () => null,
+                photo: async buffer => {
+                    assert.equal(buffer.length, 1_875_004);
+                    return { messages: [{ id: -2, type: 'text', text: `${id}:photo:${++photoExecutions}` }] };
+                },
                 modelSettings: async () => ({ accountId: id, preset: modelPreset }),
                 modelPreferences: async () => ({ accountId: id, preferences: modelPreferences }),
                 updateModelPreferences: async body => {
@@ -236,6 +242,17 @@ test('two API accounts register/login, pair separate bots, and route history, fi
             assert.equal((await call('/api/v1/scene/action-results', 'POST', token, { actionId: snapshot.roomId, status: 'completed' })).data.accountId, id);
         }
         assert.equal((await call('/api/v1/scene')).status, 401);
+        const photo = { text: 'Что на фото?', photo: { mime: 'image/jpeg',
+            data: Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(1_875_000)]).toString('base64'), width: 2048, height: 1536 } };
+        for (const [token, id] of [[a, first.data.account.id], [b, second.data.account.id]]) {
+            const result = await call('/api/v1/photos', 'POST', token, photo, 'same-photo-key-for-both');
+            assert.equal(result.status, 200, '2.5 MB JSON must pass both the account gateway and the runtime');
+            assert.equal(result.data.messages[0].text, `${id}:photo:1`);
+            assert.deepEqual(await call('/api/v1/photos', 'POST', token, photo, 'same-photo-key-for-both'), result);
+        }
+        assert.equal((await call('/api/v1/photos', 'POST', undefined, photo, 'unauthenticated-photo')).status, 401);
+        assert.equal((await call('/api/v1/photos/unknown', 'POST', a, {})).status, 404);
+        assert.equal((await call('/api/v1/photos', 'POST', a, { text: 'x'.repeat(3 * 1024 * 1024) }, 'oversized-photo')).status, 413);
         assert.equal((await call('/api/v1/scene/unknown', 'POST', a, {})).status, 404);
         assert.equal((await call('/api/v1/model-settings', 'PUT', a, { preset: 'gpt-balanced', expectedRevision: 'none' })).data.preset, 'gpt-balanced');
         assert.equal((await call('/api/v1/model-settings', 'GET', b)).data.preset, null, 'model selection stays within its account');

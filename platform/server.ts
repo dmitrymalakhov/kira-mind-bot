@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { ApiError } from '../api/contracts';
 import { readBody } from '../api/server';
 import { MAX_SCENE_BODY_BYTES } from '../api/scene';
+import { MAX_PHOTO_BODY_BYTES } from '../api/photos';
 import { checkPassword, digest, newToken, passwordHash, PlatformSecrets } from './crypto';
 import { Account, AccountStore } from './store';
 import { AccountRuntimes, TenantCredentials } from './runtime';
@@ -45,7 +46,7 @@ class RequestLimits {
 
 async function proxy(req: http.IncomingMessage, res: http.ServerResponse, endpoint: { port: number; token: string }, route: string) {
     const body = ['POST', 'PATCH', 'PUT'].includes(req.method || '')
-        ? JSON.stringify(await readBody(req, route === '/api/v1/scene/turns' ? MAX_SCENE_BODY_BYTES : undefined)) : undefined;
+        ? JSON.stringify(await readBody(req, route === '/api/v1/scene/turns' ? MAX_SCENE_BODY_BYTES : route === '/api/v1/photos' ? MAX_PHOTO_BODY_BYTES : undefined)) : undefined;
     req.resume();
     return new Promise<void>((resolve, reject) => {
         const upstream = http.request({ host: '127.0.0.1', port: endpoint.port, path: req.url, method: req.method,
@@ -185,7 +186,7 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
             }
             const readable = req.method === 'GET' && (/^\/api\/v1\/(status|capabilities|history|reminders|tasks|dialogue-jobs|settings|model-settings|model-preferences|scene)$/.test(route)
                 || /^\/api\/v1\/files\/[0-9a-f-]{36}$/.test(route));
-            const writable = (req.method === 'POST' && /^\/api\/v1\/(messages|actions|scene\/turns|scene\/action-results)$/.test(route))
+            const writable = (req.method === 'POST' && /^\/api\/v1\/(messages|actions|photos|scene\/turns|scene\/action-results)$/.test(route))
                 || (req.method === 'PATCH' && route === '/api/v1/settings')
                 || (req.method === 'PUT' && ['/api/v1/model-settings', '/api/v1/model-preferences'].includes(route))
                 || (req.method === 'DELETE' && /^\/api\/v1\/dialogue-jobs\/[0-9a-f-]{36}$/.test(route));
