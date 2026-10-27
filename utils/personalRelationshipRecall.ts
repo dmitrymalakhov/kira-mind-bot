@@ -19,7 +19,7 @@ export interface RelationshipRecallOptions {
     anchor?: MemoryPerson;
 }
 
-function activeEvidence(memory: SearchResult, now: number): boolean {
+export function isActiveRelationshipEvidence(memory: SearchResult, now: number): boolean {
     const tags = memory.tags ?? [];
     return !memory.negated && (!memory.status || memory.status === 'active') &&
         !['bot', 'system', 'unknown', 'third_party'].includes(memory.subject ?? '') &&
@@ -46,7 +46,7 @@ export async function recallOwnerRelationship(
     const intent = options.step ? { type: options.step.type } : ownerRelationshipIntent(message);
     if (!intent) return empty;
     const records = await service.getMemoriesByTag(userId, `relation_type:${intent.type}`);
-    const rawEdges = records.filter(memory => activeEvidence(memory, now)).flatMap(memory => {
+    const rawEdges = records.filter(memory => isActiveRelationshipEvidence(memory, now)).flatMap(memory => {
         const tags = memory.tags ?? [];
         if (!tags.includes('person_relation') || !tags.includes(`relation_type:${intent.type}`)) return [];
         const anchor = options.anchor;
@@ -88,7 +88,7 @@ export async function recallOwnerRelationship(
     if (people.length === 1 && !name) {
         const personId = selected[0].personId;
         const linked = (await service.getMemoriesByTag(userId, `person_id:${personId}`)).filter(memory =>
-            activeEvidence(memory, now) && memory.tags?.includes(`person_id:${personId}`));
+            isActiveRelationshipEvidence(memory, now) && memory.tags?.includes(`person_id:${personId}`));
         const names = [...new Set(linked.map(memory => tagValue(memory.tags ?? [], 'contact_name:')).filter(Boolean))];
         if (names.length === 1 && !isPersonRoleLabel(names[0])) {
             name = names[0];

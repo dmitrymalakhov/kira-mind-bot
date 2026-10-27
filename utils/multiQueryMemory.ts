@@ -20,11 +20,12 @@ import { isTodayImportanceRequest } from './todayImportanceIntent';
 import { MemoryRetrievalScoreDetails } from './memoryRetrieval';
 import { personalRecallQueries } from './personalRecallIntent';
 import { memoryContentExcerpt, memoryRerankCacheKey, parseMemoryRerankOrder } from './memoryRanking';
-import { memoryQueryHistory, memoryQueryCacheKey, parseMemoryQueryPlan, validMemoryFocus, isMemoryContinuation } from './memoryQueryPlan';
+import { memoryQueryHistory, memoryQueryCacheKey, parseMemoryQueryPlan, validMemoryFocus, isMemoryContinuation, saveMemoryFocus } from './memoryQueryPlan';
 import type { MemoryQueryPlan } from '../types/memoryRecallTypes';
 import { PERSON_RELATION_TYPES } from './personRelation';
 import { PREDEFINED_DOMAINS } from '../constants/domains';
-import { resolveMemoryQueryEntities, personRecallScope, readPersonEvidence, selectPersonEvidence, selectRelationshipEvidence, formatPersonOverview, rememberResolvedSearch } from './memoryEntityRecall';
+import { resolveMemoryQueryEntities, personRecallScope, readPersonEvidence, selectPersonEvidence, selectRelationshipEvidence, selectHighlightEvidence, formatPersonOverview, rememberResolvedSearch } from './memoryEntityRecall';
+import { recallMemoryPeople, formatMemoryPeople } from './memoryPeopleRecall';
 import { scoreMemoryLexicalMatch } from './memoryRetrieval';
 
 const ANSWER_RESULTS_PER_QUERY = 5;
@@ -722,8 +723,10 @@ export async function generateMemoryQueries(userMessage: string, recentHistory?:
 Тебе нужно найти факты в долговременной памяти пользователя чтобы ответить на этот запрос.
 ${recentHistory && recentHistory.length > 0 ? 'Учти контекст разговора: местоимения («он», «она», «это», «там» и т.п.) относятся к предыдущим сообщениям — раскрой их в конкретные имена/объекты.\n' : ''}
 Верни JSON плана поиска, не ответ и не новые факты:
-{"answerQueries":["2–3 прямые фразы и синонимы"],"contextQueries":["до двух фоновых фраз"],"standaloneQuery":"самостоятельный вопрос с разрешёнными ссылками","requestKind":"identity|overview|relationship|specific","domains":[],"references":[{"kind":"person|topic","mention":"точный фрагмент вопроса или истории","from":"named|owner|focus","relationPath":[{"type":"тип связи","direction":"out|in|either","alternatives":[]}]}]}.
+{"answerQueries":["2–3 прямые фразы и синонимы"],"contextQueries":["до двух фоновых фраз"],"standaloneQuery":"самостоятельный вопрос с разрешёнными ссылками","requestKind":"identity|overview|relationship|highlight|people_list|specific","domains":[],"references":[{"kind":"person|topic","mention":"точный фрагмент вопроса или истории","from":"named|owner|focus","relationPath":[{"type":"тип связи","direction":"out|in|either","alternatives":[]}]}]}.
 overview — что известно, профиль, подробнее о человеке; specific — отдельный факт/совет; identity — кто имеется в виду; relationship — что связывает людей, история взаимодействий, общие дела/темы общения. Для relationship поисковые фразы описывают эти аспекты, не предполагают заранее работу, брак или конкретную тему.
+highlight — выбери один интересный/необычный факт из уже известных сведений о человеке, без конкретного предмета вопроса. Не ищи буквальное слово «интересный» в фактах. «Расскажи интересный факт про Примерова Мирона» → highlight, named reference с исходным именем, path=[], domains=[]; порядок имени и фамилии не меняет человека.
+people_list — список нескольких людей, а не обзор профиля владельца и не поиск одного коллеги. Добавь peopleQuery={"basis":"relationships|communication|both","relations":[{"type":"works_with","direction":"either"}]}. communication — с кем есть переписки по теме; relationships — люди с явно сохранёнными связями; both — оба основания, не приравнивай их. В references укажи самого владельца (from=owner, path=[], mention с явным «я/мой/мои»), а типы/направления искомых связей — только в peopleQuery.relations. «Напиши списком всех с кем я по работе общаюсь» → people_list, domains=["work"], basis=communication, relations=[], mention="я". «Мои коллеги» → basis=relationships, relations=[{"type":"coworker_of","direction":"either"},{"type":"works_with","direction":"either"}]. Направление сохраняй: мои подчинённые manager_of/out, руководители manager_of/in. Люди и групповые чаты — разные сущности.
 domains — до трёх подходящих разделов по явно запрошенной теме: ${Object.values(PREDEFINED_DOMAINS).join(', ')}; для всего профиля оставь [].
 Синонимы и описания ролей переводи в смысл сохранённых связей, а не в придуманное имя. Типы: ${PERSON_RELATION_TYPES.join(', ')}.
 partner_of означает романтического партнёра; spouse_of — брак как его частный случай. Для деловых партнёров используй подходящую профессиональную связь works_with/client_of или именованный поиск, не partner_of/spouse_of. Пол и конкретного человека из типа не выводи.
@@ -1338,6 +1341,21 @@ export async function getMultiQueryMemoryContextDetailed(
     const generatedQueries = options?.queryPlan ?? await generateMemoryQueries(userMessage, recentHistory.length > 0 ? recentHistory : undefined);
     const previousFocus = validMemoryFocus(ctx);
     const service = getVectorService();
+    if (generatedQueries.requestKind === 'people_list') {
+        if (ctx.chat?.type !== 'private' || !service) return { context: '', recalledMemories: [] };
+        const collection = await recallMemoryPeople(service, String(ctx.from?.id), generatedQueries);
+        const packed = formatMemoryPeople(collection);
+        // A collection is a topic, not a truncated single-person action context.
+        ctx.session.memoryRecallFocus = undefined;
+        saveMemoryFocus(ctx, [], userMessage, packed.included.map(record => record.id));
+        return { context: packed.context, recalledMemories: packed.included.map(memory => ({ id: memory.id, domain: memory.domain, content: memory.content, score: 1,
+            memoryKind: memory.memoryKind, confidence: memory.confidence, status: memory.status, sourceMemoryIds: memory.sourceMemoryIds, sourceEpisodeId: memory.sourceEpisodeId })),
+            retrievalTrace: explain ? { memoryNeed: need, queries: { answer: generatedQueries.answerQueries, context: [], associative: [] },
+                candidates: collection.totalFound, afterThreshold: packed.included.length, afterTokenBudget: packed.included.length,
+                reranker: { status: 'people_collection', presented: 0, selected: packed.included.length },
+                factTokens: estimateTokens(packed.context), tokenBudget: Math.ceil(6500 / APPROX_CHARS_PER_TOKEN),
+                selected: packed.included.map(memory => ({ id: memory.id, domain: memory.domain, score: 1, recallSources: ['tag'] })) } : undefined };
+    }
     const entities = service ? await resolveMemoryQueryEntities(ctx, userMessage, generatedQueries, service, options?.replyPerson) :
         { people: [], memories: [], ambiguous: false, unresolved: false, requestedPerson: false, query: generatedQueries.standaloneQuery || userMessage };
     if (generatedQueries.references?.some(reference => reference.from !== 'focus') && !entities.people.length) ctx.session.memoryRecallFocus = undefined;
@@ -1348,20 +1366,22 @@ export async function getMultiQueryMemoryContextDetailed(
     }
     const personPools = service ? await Promise.all(entities.people.map(async person => ({ person, records: await readPersonEvidence(service, String(ctx.from?.id), person, person.owner ? generatedQueries.domains : []) }))) : [];
     const relationshipOverview = generatedQueries.requestKind === 'relationship';
-    const overview = relationshipOverview || generatedQueries.requestKind === 'overview' || generatedQueries.requestKind === undefined && /(?:что.*(?:знаешь|помнишь)|подробнее|расскажи.*(?:о|про))/iu.test(userMessage);
+    const highlight = generatedQueries.requestKind === 'highlight';
+    const overview = highlight || relationshipOverview || generatedQueries.requestKind === 'overview' || generatedQueries.requestKind === undefined && /(?:что.*(?:знаешь|помнишь)|подробнее|расскажи.*(?:о|про))/iu.test(userMessage);
     if (overview && personPools.some(pool => pool.records.length)) {
         const seen = new Set(isMemoryContinuation(userMessage) ? previousFocus?.evidenceIds ?? [] : []);
-        const selection = personPools.map(pool => ({ ...pool, records: relationshipOverview
+        const selection = personPools.map(pool => ({ ...pool, records: highlight ? selectHighlightEvidence(pool.records, pool.person, seen) : relationshipOverview
             ? selectRelationshipEvidence(pool.records, pool.person, [userMessage, ...generatedQueries.answerQueries, ...generatedQueries.contextQueries].join('\n'), 24, seen, entities.people.filter(person => person !== pool.person))
             : selectPersonEvidence(pool.records, pool.person, pool.person.owner ? generatedQueries.answerQueries.join(' ') : entities.query, true, 24, seen, pool.person.owner) }));
         const packed = formatPersonOverview(selection, 6500, relationshipOverview);
+        if (highlight) packed.context += '\nПользователь просит один интересный факт. Выбери один конкретный подтверждённый факт из этой выборки, не сочиняй неожиданность и не требуй буквального совпадения со словом «интересный». Если подходящих фактов здесь нет, обозначь ограничение этой выборки.';
         const included = packed.included;
         rememberResolvedSearch(ctx, entities, included);
         return { context: packed.context, recalledMemories: included.map(memory => ({ id: memory.id, domain: memory.domain, content: memory.content, score: 1,
             memoryKind: memory.memoryKind, confidence: memory.confidence, status: memory.status, sourceMemoryIds: memory.sourceMemoryIds, sourceEpisodeId: memory.sourceEpisodeId })),
             retrievalTrace: explain ? { memoryNeed: need, queries: { answer: generatedQueries.answerQueries, context: [], associative: [] },
                 candidates: personPools.reduce((sum, pool) => sum + pool.records.length, 0), afterThreshold: included.length,
-                reranker: { status: relationshipOverview ? 'relationship_overview' : 'entity_overview', presented: 0, selected: included.length }, afterTokenBudget: packed.included.length,
+                reranker: { status: highlight ? 'person_highlight' : relationshipOverview ? 'relationship_overview' : 'entity_overview', presented: 0, selected: included.length }, afterTokenBudget: packed.included.length,
                 factTokens: estimateTokens(packed.context), tokenBudget: Math.ceil(6500 / APPROX_CHARS_PER_TOKEN), selected: included.map(memory => ({ id: memory.id, domain: memory.domain, score: 1, recallSources: ['tag'] })) } : undefined };
     }
     const deterministicQueries = extractDeterministicQueries(userMessage);

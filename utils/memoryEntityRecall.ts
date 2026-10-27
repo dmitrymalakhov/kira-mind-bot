@@ -7,7 +7,7 @@ import { recallOwnerRelationship } from './personalRelationshipRecall';
 import { validMemoryFocus, isMemoryContinuation, saveMemoryFocus, memoryQueryHistory } from './memoryQueryPlan';
 import { memoryContentExcerpt } from './memoryRanking';
 import { tokenizeMemoryRetrievalText, scoreMemoryLexicalMatch } from './memoryRetrieval';
-import { isPersonRoleLabel, PERSON_RELATION_QUERY_SUBTYPES } from './personRelation';
+import { isPersonRoleLabel, PERSON_RELATION_QUERY_SUBTYPES, INVERSE_PERSON_RELATION_TYPES } from './personRelation';
 
 export function personRecallScope(person: MemoryPerson): ContactIdentityScope {
     return { status: 'resolved', queryName: person.displayName, displayName: person.displayName,
@@ -39,15 +39,13 @@ export async function resolveNamedMemoryPerson(owner: string, mention: string): 
         aliases: [...new Set(identities.flatMap(item => item.aliases ?? []))], evidenceIds: [] } };
 }
 
-const INVERSE_TYPES = { parent_of: 'child_of', child_of: 'parent_of', manager_of: 'reports_to', reports_to: 'manager_of' } as const;
-
 export async function followMemoryRelations(service: IDomainVectorService, owner: string, root: MemoryPerson | undefined, path: MemoryRelationStep[]): Promise<{ person?: MemoryPerson; memories: SearchResult[]; ambiguous: boolean }> {
     let person = root;
     const memories = new Map<string, SearchResult>();
     for (const step of path) {
         const types = [...new Set([step.type, ...(step.alternatives ?? []), ...(PERSON_RELATION_QUERY_SUBTYPES[step.type] ?? [])])];
         const variants = types.map(type => ({ type, direction: step.direction }));
-        const inverse = INVERSE_TYPES[step.type as keyof typeof INVERSE_TYPES];
+        const inverse = INVERSE_PERSON_RELATION_TYPES[step.type];
         if (inverse) variants.push({ type: inverse, direction: step.direction === 'in' ? 'out' : 'in' });
         const matches = await Promise.all(variants.map(variant => recallOwnerRelationship(service, owner, '', Date.now(), { step: variant, anchor: person, identities: readPersonIdentities })));
         const resolved = matches.filter(match => match.complete && match.person);
@@ -246,6 +244,13 @@ export function selectPersonEvidence(records: SearchResult[], person: MemoryPers
     }
     for (const record of sorted) { if (selected.length >= limit) break; if (!selected.includes(record)) selected.push(record); }
     return selected;
+}
+
+export function selectHighlightEvidence(records: SearchResult[], person: MemoryPerson, seen: ReadonlySet<string> = new Set()): SearchResult[] {
+    const eligible = records.filter(record => isUsablePersonEvidence(record, person) && !record.negated &&
+        (!record.status || record.status === 'active') && (record.confidence ?? .6) >= .7 &&
+        !record.tags.some(tag => tag === 'weak-evidence' || tag === 'needs-caution' || tag.startsWith('quality:') || tag === 'inference:inferred' || tag === 'inference:ambiguous'));
+    return selectPersonEvidence(eligible, person, '', true, 4, seen);
 }
 
 export function formatPersonOverview(people: Array<{ person: MemoryPerson; records: SearchResult[] }>, budget = 6500, relationship = false): { context: string; included: SearchResult[] } {

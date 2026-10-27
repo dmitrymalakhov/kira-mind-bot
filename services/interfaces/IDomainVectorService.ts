@@ -48,4 +48,6 @@ export abstract class IDomainVectorService extends IVectorService {
     abstract getMemoriesByTags?(userId: string, tags: string[], limit?: number, options?: MemoryPoolReadOptions): Promise<SearchResult[]>;
     /** Read-only, bounded owner-subject evidence in validated topic domains. */
     abstract getOwnerMemories?(userId: string, domains?: string[], limit?: number, options?: MemoryPoolReadOptions): Promise<SearchResult[]>;
+    /** Candidate people evidence; ownership of the archive does not establish a relationship. */
+    abstract getPeopleMemories?(userId: string, domains?: string[], limit?: number, options?: MemoryPoolReadOptions): Promise<SearchResult[]>;
 }

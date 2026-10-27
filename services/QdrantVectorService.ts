@@ -1423,6 +1423,14 @@ export class QdrantVectorService implements IDomainVectorService {
         ] }, limit, options?.acceptCandidate ? domains.length ? 2000 : 500 : 200, options);
     }
 
+    async getPeopleMemories(userId: string, domains: string[] = [], limit = 200, options?: MemoryPoolReadOptions): Promise<SearchResult[]> {
+        const selected = domains.length ? [...new Set(domains)].filter(domain => Object.values(PREDEFINED_DOMAINS).includes(domain as any)).slice(0, 3) : Object.values(PREDEFINED_DOMAINS);
+        return this.readRecallPools(userId, selected, { should: [
+            { key: 'subject', match: { value: 'contact' } }, { key: 'tags', match: { value: 'subject:contact' } },
+            { key: 'tags', match: { value: 'person_relation' } },
+        ] }, limit, domains.length ? 3000 : 500, options);
+    }
+
     private async readRecallPools(userId: string, domains: string[], condition: { key: string; match: { any: string[] } } | { should: Array<{ key: string; match: { value: string } }> }, limit: number, scanLimit: number, options?: MemoryPoolReadOptions): Promise<SearchResult[]> {
         const max = Math.min(400, Math.max(1, limit));
         const pools = await Promise.all(domains.map(async domain => {

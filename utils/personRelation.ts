@@ -24,6 +24,9 @@ export type PersonRelationType = typeof PERSON_RELATION_TYPES[number];
 export const PERSON_RELATION_QUERY_SUBTYPES: Partial<Record<PersonRelationType, PersonRelationType[]>> = {
     partner_of: ['spouse_of'],
 };
+export const INVERSE_PERSON_RELATION_TYPES: Partial<Record<PersonRelationType, PersonRelationType>> = {
+    parent_of: 'child_of', child_of: 'parent_of', manager_of: 'reports_to', reports_to: 'manager_of',
+};
 export type PersonRelationTargetRole = 'user' | 'contact' | 'third_party';
 
 export interface PersonRelationDescriptor {

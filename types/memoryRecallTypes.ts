@@ -40,7 +40,8 @@ export interface MemoryQueryPlan {
     answerQueries: string[];
     contextQueries: string[];
     standaloneQuery?: string;
-    requestKind?: 'identity' | 'overview' | 'relationship' | 'specific';
+    requestKind?: 'identity' | 'overview' | 'relationship' | 'highlight' | 'people_list' | 'specific';
+    peopleQuery?: { basis: 'relationships' | 'communication' | 'both'; relations: MemoryRelationStep[] };
     /** Validated memory domains for the explicitly requested topic, never identities. */
     domains?: string[];
     references?: MemoryQueryReference[];

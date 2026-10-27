@@ -16,7 +16,7 @@ export function memoryQueryHistory(ctx: BotContext, message: string): Array<{ ro
 }
 
 export function memoryQueryCacheKey(message: string, history: Array<{ role: string; content: string }>): string {
-    return 'queries_v5:' + createHash('sha256').update(JSON.stringify({ message, history })).digest('hex');
+    return 'queries_v6:' + createHash('sha256').update(JSON.stringify({ message, history })).digest('hex');
 }
 
 export function parseMemoryQueryPlan(text: string, question: string, history: Array<{ role: string; content: string }> = []): MemoryQueryPlan | undefined {
@@ -47,7 +47,12 @@ export function parseMemoryQueryPlan(text: string, question: string, history: Ar
         domains: Array.isArray(value.domains) ? [...new Set(value.domains.filter((domain: unknown) =>
             typeof domain === 'string' && Object.values(PREDEFINED_DOMAINS).includes(domain as any)))].slice(0, 3) as string[] : [],
         standaloneQuery: typeof value.standaloneQuery === 'string' && value.standaloneQuery.length <= 600 ? value.standaloneQuery.trim() : undefined,
-        requestKind: ['identity', 'overview', 'relationship', 'specific'].includes(value.requestKind) ? value.requestKind : 'specific' };
+        peopleQuery: value.requestKind === 'people_list' && value.peopleQuery && ['relationships', 'communication', 'both'].includes(value.peopleQuery.basis)
+            ? { basis: value.peopleQuery.basis, relations: Array.isArray(value.peopleQuery.relations)
+                ? value.peopleQuery.relations.filter((step: any) => step && PERSON_RELATION_TYPES.includes(step.type) &&
+                    ['out', 'in', 'either'].includes(step.direction) && (step.direction !== 'either' || SYMMETRIC_PERSON_RELATION_TYPES.has(step.type)))
+                    .slice(0, 6).map((step: any) => ({ type: step.type, direction: step.direction })) : [] } : undefined,
+        requestKind: ['identity', 'overview', 'relationship', 'highlight', 'people_list', 'specific'].includes(value.requestKind) ? value.requestKind : 'specific' };
 }
 
 export function validMemoryFocus(ctx: BotContext, now = Date.now()): MemoryRecallFocus | undefined {

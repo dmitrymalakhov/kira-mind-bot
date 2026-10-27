@@ -13,6 +13,14 @@ export async function readPersonIdentities(ownerUserId: string, ids: string[]): 
     } });
 }
 
+/** Scoped directory for read-only collections; the extra row signals a bounded result. */
+export async function listPersonIdentitiesForRecall(ownerUserId: string): Promise<PersonIdentityEntity[]> {
+    if (!AppDataSource.isInitialized) return [];
+    return AppDataSource.getRepository(PersonIdentityEntity).createQueryBuilder('person')
+        .where('person.profile = :profile AND person.ownerUserId = :ownerUserId', { profile: config.botUsername.toLowerCase(), ownerUserId })
+        .orderBy('person.displayName', 'ASC').take(201).getMany();
+}
+
 /** Candidate lookup only; no aliases, mention times or identities are written. */
 export async function findPersonIdentitiesForRecall(ownerUserId: string, name: string, contactId?: string): Promise<PersonIdentityEntity[]> {
     if (!AppDataSource.isInitialized || name.length > 120) return [];
