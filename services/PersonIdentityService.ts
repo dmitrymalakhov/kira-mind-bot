@@ -24,13 +24,15 @@ export async function findPersonIdentitiesForRecall(ownerUserId: string, name: s
     ))`, { name }).take(12).getMany();
     if (exact.length) return exact;
     const words = name.replace(/^@/, '').split(/\s+/).filter(Boolean);
-    if (words.length < 2) return [];
-    // Fuzzy full-name candidates remain candidates; the caller checks all parts
-    // with the shared contact matcher and rejects ambiguity.
+    if (!words.length) return [];
+    // A surname or a name component is only a read-only candidate. Recall validates
+    // it against aliases and rejects different identities; persistence never uses this.
     for (const [index, word] of words.slice(0, 3).entries()) {
         const prefix = word.toLocaleLowerCase('ru-RU').replace(/[^\p{L}]/gu, '').slice(0, Math.max(3, word.length - 3));
         if (prefix.length < 3) return [];
-        query.andWhere(`lower(person.displayName) LIKE :part${index}`, { [`part${index}`]: `%${prefix}%` });
+        query.andWhere(`(lower(person.displayName) LIKE :part${index} OR EXISTS (
+            SELECT 1 FROM jsonb_array_elements_text(person.aliases) alias(value) WHERE lower(alias.value) LIKE :part${index}
+        ))`, { [`part${index}`]: `%${prefix}%` });
     }
     return query.take(12).getMany();
 }

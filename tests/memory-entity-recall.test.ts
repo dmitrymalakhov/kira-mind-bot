@@ -13,7 +13,7 @@ import * as ai from '../ai/chatCompletion';
 import * as today from '../utils/todayImportance';
 import { QdrantVectorService } from '../services/QdrantVectorService';
 import { AppDataSource } from '../data-source';
-import { isOwnerRecallEvidence } from '../utils/contactMemory';
+import { isOwnerRecallEvidence, recallPersonNameMatches } from '../utils/contactMemory';
 import { maybeStartContactMemoryLookup, handlePendingContactLookupText } from '../utils/contactMemoryLookup';
 
 const owner = '740893';
@@ -133,6 +133,75 @@ test('owner overview keeps topical relevance even when the planner does not narr
     const goal = record('z-plan', 'Планирует пройти тестовый курс.', { domain: 'education', memoryKind: 'goal' });
     const selected = selectPersonEvidence([...noise, goal], self, 'планирует курс', true, 8, new Set(), true);
     assert.equal(selected[0].id, goal.id);
+});
+
+test('a unique inflected surname resolves for recall while homonyms remain ambiguous', async t => {
+    const first = { id: 'synthetic-miron', displayName: 'Мирон Примеров', aliases: [], telegramContactId: '555126' };
+    let candidates = [first];
+    t.mock.method(identity, 'findPersonIdentitiesForRecall', async (userId: string) => { assert.equal(userId, owner); return candidates as any; });
+    assert.equal(recallPersonNameMatches(first.displayName, 'примерова'), true);
+    assert.equal(recallPersonNameMatches(first.displayName, 'другая'), false);
+    assert.equal((await resolveNamedMemoryPerson(owner, 'примерова')).person?.displayName, first.displayName);
+    candidates = [first, { ...first, id: 'synthetic-other', displayName: 'Лев Примеров', telegramContactId: '555127' }];
+    const ambiguous = await resolveNamedMemoryPerson(owner, 'примерова');
+    assert.equal(ambiguous.ambiguous, true); assert.equal(ambiguous.person, undefined);
+});
+
+test('partial-name registry lookup checks stored aliases within profile and owner scope', async t => {
+    const descriptor = Object.getOwnPropertyDescriptor(AppDataSource, 'isInitialized');
+    Object.defineProperty(AppDataSource, 'isInitialized', { configurable: true, value: true });
+    t.after(() => { if (descriptor) Object.defineProperty(AppDataSource, 'isInitialized', descriptor); });
+    const conditions: string[] = []; let scoped = false, queries = 0;
+    const builder = { where(sql: string, params: any) { scoped = sql.includes('person.profile') && sql.includes('person.ownerUserId') && params.ownerUserId === owner; return this; },
+        clone() { return this; }, andWhere(sql: string) { conditions.push(sql); return this; }, take(limit: number) { assert.equal(limit, 12); return this; },
+        async getMany() { return ++queries === 1 ? [] : [{ id: 'synthetic-miron' }]; } };
+    t.mock.method(AppDataSource, 'getRepository', () => ({ createQueryBuilder: () => builder } as any));
+    assert.equal((await identity.findPersonIdentitiesForRecall(owner, 'Примерова')).length, 1);
+    assert.equal(scoped, true); assert.ok(conditions.some(sql => sql.startsWith('(') && sql.includes('person.aliases') && sql.includes('LIKE')));
+});
+
+test('a saturated partial-name candidate page cannot establish a unique identity from its first plausible result', async t => {
+    t.mock.method(identity, 'findPersonIdentitiesForRecall', async () => Array.from({ length: 12 }, (_, i) => ({
+        id: `synthetic-${i}`, displayName: i ? `Несвязанный Вариант${i}` : 'Мирон Примеров', aliases: [],
+    })) as any);
+    assert.equal((await resolveNamedMemoryPerson(owner, 'Примерова')).ambiguous, true);
+});
+
+test('owner topic reads continue beyond rejected raw pages before applying the eligible-record limit', async () => {
+    const self: MemoryPerson = { personIds: ['user'], displayName: 'текущий пользователь', owner: true, evidenceIds: [] };
+    const calls: any[] = [];
+    const svc = new QdrantVectorService({ scroll: async (collection: string, args: any) => {
+        calls.push(args); assert.ok(collection.endsWith('_work'));
+        const start = Number(args.offset ?? 0), end = Math.min(310, start + args.limit);
+        return { points: Array.from({ length: end - start }, (_, i) => {
+            const index = start + i; return { id: `evidence-${index}`, payload: record(`evidence-${index}`, 'Синтетическая рабочая запись.', {
+                subject: 'user', domain: 'work', tags: index < 300 ? ['subject:user', 'source_contact:Синтетический источник'] : ['subject:user'],
+            }) };
+        }), next_page_offset: end < 310 ? end : null };
+    } } as any);
+    const result = await readPersonEvidence(svc, owner, self, ['work']);
+    assert.equal(result.length, 10); assert.ok(calls.some(args => args.offset >= 300));
+    assert.ok(result.every(isOwnerRecallEvidence));
+});
+
+test('filtered recall has a finite scan budget even if every page contains rejected evidence', async () => {
+    let calls = 0;
+    const svc = new QdrantVectorService({ scroll: async (_collection: string, args: any) => {
+        calls++; const start = Number(args.offset ?? 0);
+        return { points: Array.from({ length: args.limit }, (_, i) => ({ id: `bad-${start + i}`, payload: record(`bad-${start + i}`, 'Неподходящая запись.') })), next_page_offset: start + args.limit };
+    } } as any);
+    assert.equal((await svc.getOwnerMemories(owner, ['work'], 1, { acceptCandidate: () => false })).length, 0);
+    assert.equal(calls, 40);
+});
+
+test('owner topic overview preserves different fact predicates instead of treating a whole domain as one facet', () => {
+    const self: MemoryPerson = { personIds: ['user'], displayName: 'текущий пользователь', owner: true, evidenceIds: [] };
+    const records = ['profession', 'employer', 'skill'].flatMap(predicate => Array.from({ length: 3 }, (_, i) =>
+        record(`${predicate}-${i}`, 'Синтетическое рабочее сведение.', { domain: 'work', predicate })));
+    const tasks = Array.from({ length: 20 }, (_, i) => record(`task-${i}`, 'Планирует тестовую задачу.', { domain: 'work', memoryKind: 'open_loop' }));
+    const result = selectPersonEvidence([...records, ...tasks], self, 'работа', true, 12, new Set(), true);
+    assert.equal(result.filter(r => r.memoryKind === 'fact').length, 9);
+    assert.equal(new Set(result.filter(r => r.memoryKind === 'fact').map(r => r.predicate)).size, 3);
 });
 
 test('foreground and deferred history both retain the preceding answer; cache uses full context', () => {

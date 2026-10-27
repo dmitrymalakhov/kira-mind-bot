@@ -7,6 +7,11 @@ export interface MemoryCandidateOptions {
     relevanceOnly?: boolean;
 }
 
+export interface MemoryPoolReadOptions {
+    /** Apply evidence eligibility while paging, before the accepted-record limit. */
+    acceptCandidate?: (candidate: SearchResult) => boolean;
+}
+
 export abstract class IDomainVectorService extends IVectorService {
     abstract createDomain(config: DomainConfig): Promise<void>;
     abstract getDomainConfig(domain: string): Promise<DomainConfig | null>;
@@ -40,7 +45,7 @@ export abstract class IDomainVectorService extends IVectorService {
      */
     abstract getMemoriesByTag(userId: string, tag: string): Promise<SearchResult[]>;
     /** Bounded, paginated identity pool; no embedding or model call. */
-    abstract getMemoriesByTags?(userId: string, tags: string[], limit?: number): Promise<SearchResult[]>;
+    abstract getMemoriesByTags?(userId: string, tags: string[], limit?: number, options?: MemoryPoolReadOptions): Promise<SearchResult[]>;
     /** Read-only, bounded owner-subject evidence in validated topic domains. */
-    abstract getOwnerMemories?(userId: string, domains?: string[], limit?: number): Promise<SearchResult[]>;
+    abstract getOwnerMemories?(userId: string, domains?: string[], limit?: number, options?: MemoryPoolReadOptions): Promise<SearchResult[]>;
 }

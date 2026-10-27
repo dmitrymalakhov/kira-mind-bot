@@ -1,6 +1,6 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { v4 as uuidv4 } from 'uuid';
-import { IDomainVectorService, MemoryCandidateOptions } from './interfaces/IDomainVectorService';
+import { IDomainVectorService, MemoryCandidateOptions, MemoryPoolReadOptions } from './interfaces/IDomainVectorService';
 import { MemoryEntry, SearchOptions, SearchResult, MemoryStats, DomainConfig, SearchStrategy, DomainStats, DomainTrend, MemoryRelation, MemoryRelationType } from '../types';
 import { PREDEFINED_DOMAINS, DOMAIN_SEARCH_THRESHOLDS } from '../constants/domains';
 import { config } from '../config';
@@ -1410,35 +1410,40 @@ export class QdrantVectorService implements IDomainVectorService {
      * Возвращает все записи пользователя во всех доменах, содержащие указанный тег.
      * Используется для поиска психологических портретов по тегу `portrait:<Name>`.
      */
-    async getMemoriesByTags(userId: string, tags: string[], limit = 300): Promise<SearchResult[]> {
+    async getMemoriesByTags(userId: string, tags: string[], limit = 300, options?: MemoryPoolReadOptions): Promise<SearchResult[]> {
         const keys = [...new Set(tags)].slice(0, 16);
         if (!keys.length) return [];
-        return this.readRecallPools(userId, Object.values(PREDEFINED_DOMAINS), { key: 'tags', match: { any: keys } }, limit);
+        return this.readRecallPools(userId, Object.values(PREDEFINED_DOMAINS), { key: 'tags', match: { any: keys } }, limit, options?.acceptCandidate ? 1000 : 200, options);
     }
 
-    async getOwnerMemories(userId: string, domains: string[] = [], limit = 300): Promise<SearchResult[]> {
+    async getOwnerMemories(userId: string, domains: string[] = [], limit = 300, options?: MemoryPoolReadOptions): Promise<SearchResult[]> {
         const selected = domains.length ? [...new Set(domains)].filter(domain => Object.values(PREDEFINED_DOMAINS).includes(domain as any)).slice(0, 3) : Object.values(PREDEFINED_DOMAINS);
         return this.readRecallPools(userId, selected, { should: [
             { key: 'subject', match: { value: 'user' } }, { key: 'tags', match: { value: 'subject:user' } },
-        ] }, limit);
+        ] }, limit, options?.acceptCandidate ? domains.length ? 2000 : 500 : 200, options);
     }
 
-    private async readRecallPools(userId: string, domains: string[], condition: { key: string; match: { any: string[] } } | { should: Array<{ key: string; match: { value: string } }> }, limit: number): Promise<SearchResult[]> {
+    private async readRecallPools(userId: string, domains: string[], condition: { key: string; match: { any: string[] } } | { should: Array<{ key: string; match: { value: string } }> }, limit: number, scanLimit: number, options?: MemoryPoolReadOptions): Promise<SearchResult[]> {
         const max = Math.min(400, Math.max(1, limit));
         const pools = await Promise.all(domains.map(async domain => {
             const pool: SearchResult[] = [];
+            let scanned = 0;
             let offset: string | number | undefined;
             const offsets = new Set<string>();
             try {
-                while (pool.length < Math.min(200, max)) {
+                while (pool.length < Math.min(200, max) && scanned < scanLimit) {
                     const page = await this.client.scroll(this.collectionFor(domain), {
                         filter: { must: [
                             { key: 'botId', match: { value: this.botId } }, { key: 'userId', match: { value: userId } },
                             condition,
                         ], must_not: this.activeMustNotFilter() },
-                        limit: Math.min(50, Math.min(200, max) - pool.length), offset, with_payload: true, with_vector: false,
+                        limit: Math.min(50, options?.acceptCandidate ? 50 : Math.min(200, max) - pool.length, scanLimit - scanned), offset, with_payload: true, with_vector: false,
                     });
-                    for (const point of page.points) pool.push({ ...this.mapSearchPoint(point, 1), domain });
+                    scanned += page.points.length;
+                    for (const point of page.points) {
+                        const candidate = { ...this.mapSearchPoint(point, 1), domain };
+                        if (pool.length < Math.min(200, max) && (!options?.acceptCandidate || options.acceptCandidate(candidate))) pool.push(candidate);
+                    }
                     const next = page.next_page_offset;
                     if ((typeof next !== 'string' && typeof next !== 'number') || !page.points.length || offsets.has(String(next))) break;
                     offsets.add(String(next)); offset = next;

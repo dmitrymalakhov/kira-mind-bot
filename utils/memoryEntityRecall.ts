@@ -2,7 +2,7 @@ import type { BotContext, SearchResult } from '../types';
 import type { MemoryPerson, MemoryQueryPlan, MemoryRelationStep, MemoryReplyPerson } from '../types/memoryRecallTypes';
 import type { IDomainVectorService } from '../services/interfaces/IDomainVectorService';
 import { findPersonIdentitiesForRecall, findMentionedPeopleForRecall, readPersonIdentities } from '../services/PersonIdentityService';
-import { contactNamesLikelyMatch, normalizeContactLookupValue, resolveContactIdentity, isMemoryEntryAllowedForContactScope, type ContactIdentityScope } from './contactMemory';
+import { contactNamesLikelyMatch, recallPersonNameMatches, normalizeContactLookupValue, resolveContactIdentity, isMemoryEntryAllowedForContactScope, type ContactIdentityScope } from './contactMemory';
 import { recallOwnerRelationship } from './personalRelationshipRecall';
 import { validMemoryFocus, isMemoryContinuation, saveMemoryFocus, memoryQueryHistory } from './memoryQueryPlan';
 import { memoryContentExcerpt } from './memoryRanking';
@@ -21,14 +21,15 @@ export async function resolveNamedMemoryPerson(owner: string, mention: string): 
     const contact = resolveContactIdentity(mention);
     if (contact.status === 'ambiguous') return { ambiguous: true };
     const contactId = contact.status === 'resolved' && contact.contact ? String(contact.contact.id) : undefined;
-    const candidates = (await findPersonIdentitiesForRecall(owner, mention, contactId)).filter(candidate => contactId ||
-        [candidate.displayName, ...(candidate.aliases ?? [])].some(alias => contactNamesLikelyMatch(alias, mention)));
+    const rawCandidates = await findPersonIdentitiesForRecall(owner, mention, contactId);
+    const candidates = rawCandidates.filter(candidate => contactId ||
+        [candidate.displayName, ...(candidate.aliases ?? [])].some(alias => recallPersonNameMatches(alias, mention)));
     const groups = new Map<string, typeof candidates>();
     for (const candidate of candidates) {
         const key = candidate.telegramContactId ? `contact:${candidate.telegramContactId}` : `person:${candidate.id}`;
         groups.set(key, [...(groups.get(key) ?? []), candidate]);
     }
-    if (groups.size > 1 || candidates.length >= 12) return { ambiguous: true };
+    if (groups.size > 1 || rawCandidates.length >= 12) return { ambiguous: true };
     const identities = [...groups.values()][0] ?? [];
     if (!identities.length && !contactId) return { ambiguous: false };
     const identity = identities[0];
@@ -151,9 +152,10 @@ export function isUsablePersonEvidence(memory: SearchResult, person: MemoryPerso
 }
 
 export async function readPersonEvidence(service: IDomainVectorService, owner: string, person: MemoryPerson, domains: string[] = []): Promise<SearchResult[]> {
+    const eligibility = { acceptCandidate: (record: SearchResult) => isUsablePersonEvidence(record, person) };
     if (person.owner) {
-        const records = service.getOwnerMemories ? await service.getOwnerMemories(owner, domains, 300) :
-            service.getMemoriesByTags ? await service.getMemoriesByTags(owner, ['subject:user', 'person_id:user'], 300) :
+        const records = service.getOwnerMemories ? await service.getOwnerMemories(owner, domains, 300, eligibility) :
+            service.getMemoriesByTags ? await service.getMemoriesByTags(owner, ['subject:user', 'person_id:user'], 300, eligibility) :
                 await service.getMemoriesByTag(owner, 'subject:user');
         return [...new Map(records.filter(record => isUsablePersonEvidence(record, person) && (!domains.length || domains.includes(record.domain)))
             .map(record => [record.id, record])).values()];
@@ -163,7 +165,7 @@ export async function readPersonEvidence(service: IDomainVectorService, owner: s
         `contact_name:${person.displayName}`, `contact:${person.displayName}`,
         ...(person.username ? [`contact_username:@${person.username.replace(/^@/, '')}`, `contact_username:${person.username.replace(/^@/, '')}`] : []),
     ];
-    const records = service.getMemoriesByTags ? await service.getMemoriesByTags(owner, tags, 300) :
+    const records = service.getMemoriesByTags ? await service.getMemoriesByTags(owner, tags, 300, eligibility) :
         (await Promise.all(tags.map(tag => service.getMemoriesByTag(owner, tag)))).flat();
     // An edge may be stored on its other endpoint and have no person_id/contact_id
     // tag for this person. Read endpoint tags explicitly instead of scanning all edges.
@@ -172,7 +174,9 @@ export async function readPersonEvidence(service: IDomainVectorService, owner: s
     const relations: SearchResult[] = [];
     for (let start = 0; start < endpointTags.length; start += 16) {
         const batch = endpointTags.slice(start, start + 16);
-        relations.push(...(service.getMemoriesByTags ? await service.getMemoriesByTags(owner, batch, 100).catch(() => []) :
+        relations.push(...(service.getMemoriesByTags ? await service.getMemoriesByTags(owner, batch, 100, {
+            acceptCandidate: record => record.tags.includes('person_relation') && eligibility.acceptCandidate(record),
+        }).catch(() => []) :
             (await Promise.all(batch.map(tag => service.getMemoriesByTag(owner, tag).catch(() => [])))).flat())
             .filter(record => record.tags.includes('person_relation')));
     }
@@ -235,7 +239,7 @@ export function selectPersonEvidence(records: SearchResult[], person: MemoryPers
     const selected: SearchResult[] = [];
     const counts = new Map<string, number>();
     for (const record of sorted) {
-        const bucket = `${record.memoryKind ?? 'fact'}:${record.domain}`;
+        const bucket = `${record.memoryKind ?? 'fact'}:${record.domain}${preferTopic && record.predicate ? `:${record.predicate}` : ''}`;
         if ((counts.get(bucket) ?? 0) >= 3) continue;
         selected.push(record); counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
         if (selected.length >= limit) break;
@@ -247,6 +251,7 @@ export function selectPersonEvidence(records: SearchResult[], person: MemoryPers
 export function formatPersonOverview(people: Array<{ person: MemoryPerson; records: SearchResult[] }>, budget = 6500, relationship = false): { context: string; included: SearchResult[] } {
     const lines = ['Подтверждённый предмет поиска — конкретные люди ниже. Их факты не относятся к владельцу автоматически. План/завершённое событие не является текущим состоянием. Это ограниченная выборка, не весь профиль. reported/inferred/ambiguous и quality требуют оговорки, не выдавай пересказ или вывод за прямые слова человека. Отсутствие записи не доказывает отсутствие сведений в архиве. Не выводи новые факты из фрагментов.'];
     if (people.some(item => item.person.owner)) lines[0] = 'Субъект «текущий пользователь (владелец диалога)» — автор текущего запроса, а не ассистент. Его «я/мои/обо мне» относятся к нему; в ответе обращайся «ты/твои/о тебе». Остальные люди — отдельные субъекты. Ниже только ограниченная выборка сохранённых сведений; планы, прошлые события, отрицания и временные границы не означают текущее состояние. Не выдумывай факты и не делай вывод об отсутствии сведений во всём архиве.';
+    lines[0] += ' Сначала изложи конкретные устойчивые сведения по вопросу, затем уместные эпизоды и планы. Сомнение в актуальности одной детали не отменяет остальных известных фактов. Историческое описание не превращай в текущую должность или состав команды; неизвестную актуальность обозначай только у соответствующей детали.';
     if (relationship) lines[0] += ' Вопрос о взаимодействии людей: ищи явно описанные совместные дела, разговоры и отношения в дословных фрагментах. pair=queried обозначает сохранённое ребро между запрошенными людьми (для одного человека — с владельцем); pair=context — только сведения о человеке, они сами по себе не доказывают общую работу или близость. Источник переписки и общие интересы не доказывают отношения. Отсутствие структурированного ребра не отменяет явно описанного в тексте взаимодействия. Отделяй подтверждённое от предположений.';
     const included: SearchResult[] = [];
     let remaining = budget - lines[0].length;

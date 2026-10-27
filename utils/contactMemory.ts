@@ -399,6 +399,14 @@ export function contactNamesLikelyMatch(left: string, right: string): boolean {
     return matchedTokens >= 2;
 }
 
+/** Candidate matching for read-only recall. The caller must still reject multiple identities. */
+export function recallPersonNameMatches(storedName: string, mention: string): boolean {
+    if (contactNamesLikelyMatch(storedName, mention)) return true;
+    const query = normalizeContactLookupValue(mention);
+    if (!query || query.includes(' ') || query.length < 3) return false;
+    return normalizeContactLookupValue(storedName).split(/\s+/).some(part => isCloseToken(query, part));
+}
+
 function plausibleContactMatches(query: string, contacts: Contact[]): Contact[] {
     const q = normalizeContactLookupValue(query);
     const tokens = q.split(/\s+/).filter(Boolean);
