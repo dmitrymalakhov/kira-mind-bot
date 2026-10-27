@@ -116,3 +116,23 @@ test('catalog schemas keep the newest evidence within the planner observation bu
     assert.equal(inspected, true);
     assert.equal(observations.length, 50);
 });
+
+test('MCP failures retain diagnostic evidence for reasoning and never append raw JSON to the user reply', async () => {
+    const mcp = new McpService(() => parseMcpConfig({ servers: { demo: { description: 'Synthetic market data', transport: 'jsonrpc', url: 'https://example.com/mcp', tools: { candles: 'read' } } } }),
+        async () => ({ close: async () => {}, client: { listTools: async () => ({ tools: [{ name: 'candles', inputSchema: { type: 'object' } }] }),
+            callTool: async () => ({ isError: true, structuredContent: { ok: false, resolution: 'missing', mcp: { toolCallId: 'synthetic-internal-call-id' },
+                callResults: [{ capabilityId: 'candles', result: { error: 'candles_input_missing', data: { candles: [] } } }] },
+                content: [{ type: 'text', text: '{"diagnostic":"synthetic provider details"}' }] }) } as any }));
+    const value = input(true); value.classification.details.mcpAccess = 'read';
+    const result = await runKiraRuntime(value, { registry: new ToolRegistry(mcpTools(mcp), () => true), persist: async () => {},
+        decide: scripted([{ calls: [{ id: 'candles', tool: 'mcp.callReadTool', args: { server: 'demo', tool: 'candles', argumentsJson: '{}' } }] }, { finish: true }]),
+        respond: async (_input, evidence) => {
+            assert.match(evidence, /candles_input_missing/);
+            return { responseText: 'Источник не предоставил свечи; определить текущий тренд не удалось.' };
+        } });
+    assert.equal(result.operationStatus, 'failed');
+    assert.match(result.responseText, /не предоставил свечи/);
+    assert.doesNotMatch(result.responseText, /structuredContent|toolCallId|synthetic-internal|callResults|diagnostic|\{"/);
+    assert.ok(result.responseText.length < 500);
+    assert.doesNotMatch(value.ctx.session.agentRuntime!.observations![0].summary, /\{/);
+});

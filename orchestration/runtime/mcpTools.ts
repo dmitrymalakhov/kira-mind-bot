@@ -35,7 +35,8 @@ export function mcpTools(service: McpService = mcpService): ToolDefinition[] {
             }
             const result = await service.callTool(String(args.server), String(args.tool), parsed, effect, context.signal);
             const evidence = mcpResultEvidence(result);
-            return { status: result.isError ? 'failed' : 'ok', summary: evidence, context: evidence };
+            return { status: result.isError ? 'failed' : 'ok',
+                summary: result.isError ? 'MCP-сервис не смог получить запрошенные данные.' : evidence, context: evidence };
         } catch (error) {
             if (error instanceof McpInputError) return { status: 'failed', summary: error.message };
             // Never expose provider errors, URLs, headers or tokens to model/session/logs.

@@ -63,7 +63,7 @@ function connectionFromDraft(snapshot, draft) {
   const token = draft.token || (typeof oldHeader === 'string' ? oldHeader.replace(/^Bearer\s+/i, '') : '');
   if (!token) throw new McpSettingsError('Вставь токен, выпущенный в Money Maker.');
   if (!draft.token && previous?.url !== url.toString()) throw new McpSettingsError('При смене адреса вставь токен заново, чтобы не передать прежний токен другому серверу.');
-  return { description: 'Money Maker: аналитика рынка и акций, новости с доступными текстами, отчётность, индикаторы и календарь событий. Для цены и индикаторов нужны реальные входные candles.',
+  return { description: 'Money Maker: аналитика рынка и акций, новости с доступными текстами, отчётность, индикаторы и календарь событий. Доступные инструменты и параметры определяются актуальным каталогом MCP.',
     transport: 'jsonrpc', url: url.toString(), headers: { Authorization: `Bearer ${token}` },
     fixedArguments: { responseMode: 'full' }, timeoutMs: 60000,
     tools: Object.fromEntries(MONEY_MAKER_TOOLS.map(name => [name, 'read'])) };
