@@ -21,7 +21,7 @@ const {
   parseMemoryEmbeddingProfileName,
 } = require('./memoryEmbeddingProfileRegistry');
 const { createMonitoringService } = require('./monitoring');
-const { buildAiUsageSummary } = require('./aiUsageAnalytics');
+const { buildAiUsageSummary, buildAiUsageTracePage } = require('./aiUsageAnalytics');
 const { getPresetAvailabilityForMemoryProfile, getProviderDescriptor } = require('./presetAvailability');
 const { hasLegacyDigitalBiography } = require('../utils/legacyPersonalitySanitizer');
 const { createMemoryEmbeddingHttp } = require('../ai/memoryEmbeddingHttp');
@@ -2347,6 +2347,17 @@ app.get('/api/ai-usage/summary', requireAuth, async (req, res) => {
     res.json(summary);
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : `Ошибка AI usage analytics: ${err.message}` });
+  } finally {
+    await pool.end().catch(() => {});
+  }
+});
+
+app.get('/api/ai-usage/traces', requireAuth, async (req, res) => {
+  const pool = createDbPool();
+  try {
+    res.json(await buildAiUsageTracePage({ pool, query: req.query, now: new Date() }));
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : `Ошибка загрузки цепочек: ${err.message}` });
   } finally {
     await pool.end().catch(() => {});
   }

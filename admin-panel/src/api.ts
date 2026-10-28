@@ -2,6 +2,7 @@ import type {
   ConfigResponse,
   AiUsageQuery,
   AiUsageSummaryResponse,
+  AiUsageTraceChain,
   HealthExportFormat,
   HealthLogQuery,
   HealthLogsResponse,
@@ -166,6 +167,16 @@ export async function fetchAiUsageSummary(query: AiUsageQuery = {}): Promise<AiU
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
     throw new Error(body.error || 'Failed to load AI usage summary');
+  }
+  return r.json();
+}
+
+export async function fetchAiUsageTraces(query: AiUsageQuery, quickFilter: string, limit: number, offset: number): Promise<{ total: number; chains: AiUsageTraceChain[] }> {
+  const params = toSearchParams({ ...query, quickFilter, limit, offset });
+  const r = await apiFetch(`/api/ai-usage/traces?${params}`);
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body.error || 'Не удалось загрузить цепочки');
   }
   return r.json();
 }

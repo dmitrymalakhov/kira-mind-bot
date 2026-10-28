@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { buildAiUsageSummary } = require('../admin-panel/aiUsageAnalytics');
+const { buildAiUsageSummary, buildAiUsageTracePage } = require('../admin-panel/aiUsageAnalytics');
 
 function createPoolStub(handler) {
   return {
@@ -333,9 +333,29 @@ async function testDailyBucketsAndEmptyResults() {
   assert.deepStrictEqual(summary.recentFailures, []);
 }
 
+async function testTracePagination() {
+  const attempts = [
+    { id: 'one', createdAt: '2026-06-27T09:00:00Z', traceId: 'trace', taskKey: 'task', provider: 'gemini', model: 'model', attempt: 1, stage: 'primary', success: false, errorStatus: 503 },
+    { id: 'two', createdAt: '2026-06-27T09:00:01Z', traceId: 'trace', taskKey: 'task', provider: 'openai', model: 'model', attempt: 2, stage: 'fallback', success: true, fallbackUsed: true },
+  ];
+  const pool = createPoolStub((sql, values) => {
+    assert(sql.includes('WHERE gemini_503'));
+    assert(sql.includes('GROUP BY trace_id, legacy_id'));
+    assert.deepStrictEqual(values, [10, 100]);
+    return { rows: [{ total: 121, chains: [{ attempts }] }] };
+  });
+  const result = await buildAiUsageTracePage({ pool, query: { days: 'all', quickFilter: 'gemini503', limit: 10, offset: 100 } });
+  assert.strictEqual(result.total, 121);
+  assert.strictEqual(result.chains[0].outcome, 'recovered_fallback');
+  assert.strictEqual(result.chains[0].attempts.length, 2);
+  await assert.rejects(() => buildAiUsageTracePage({ pool, query: { quickFilter: 'invalid' } }), { statusCode: 400 });
+  await assert.rejects(() => buildAiUsageTracePage({ pool, query: { offset: -1 } }), { statusCode: 400 });
+}
+
 async function main() {
   await testSummaryAndFilters();
   await testDailyBucketsAndEmptyResults();
+  await testTracePagination();
   console.log('testAdminAiUsageAnalytics: ok');
 }
 
