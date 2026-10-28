@@ -77,7 +77,12 @@
                       "type": "array",
                       "items": {
                         "type": "string"
-                      }
+                      },
+                      "example": [
+                        "text",
+                        "actions",
+                        "photo"
+                      ]
                     },
                     "output": {
                       "type": "array",
@@ -132,6 +137,9 @@
                           }
                         }
                       }
+                    },
+                    "photo": {
+                      "$ref": "#/components/schemas/PhotoInput"
                     }
                   }
                 }
@@ -374,9 +382,6 @@
           "200": {
             "$ref": "#/components/responses/Reply"
           },
-          "default": {
-            "$ref": "#/components/responses/Error"
-          },
           "503": {
             "description": "model_mode_unavailable: the app's selected mode cannot run; refused before any receipt, so the request did not execute",
             "content": {
@@ -410,6 +415,9 @@
                 }
               }
             }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
           }
         }
       }
@@ -448,9 +456,6 @@
           "200": {
             "$ref": "#/components/responses/Reply"
           },
-          "default": {
-            "$ref": "#/components/responses/Error"
-          },
           "503": {
             "description": "model_mode_unavailable: the app's selected mode cannot run; refused before any receipt, so the request did not execute",
             "content": {
@@ -484,6 +489,9 @@
                 }
               }
             }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
           }
         }
       }
@@ -1572,6 +1580,142 @@
           }
         }
       }
+    },
+    "/photos": {
+      "post": {
+        "operationId": "sendPhoto",
+        "summary": "Отправить одно фото владельца с необязательной подписью",
+        "description": "Синхронно выполняет общий с Telegram конвейер фото в сессии api:<ownerId> и режиме приложения. Prefer: respond-async не применяется. Байты фото не сохраняются в истории, журналах или квитанциях; квитанция содержит только отпечаток тела и ответ. При обрыве повторить то же тело с тем же Idempotency-Key: завершённый ответ воспроизводится без повторного анализа. Ошибка анализа после начала хода возвращается текстом в messages[].",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PhotoTurn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Reply"
+          },
+          "400": {
+            "description": "invalid_photo / idempotency_key_required / invalid_json: запрос отклонён",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhotoError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized: нужен токен владельца или аккаунта",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhotoError"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "method_not_allowed: только POST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhotoError"
+                }
+              }
+            },
+            "headers": {
+              "Allow": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "POST"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "conversation_busy: предыдущий ход выполняется; idempotency_conflict: ключ уже использован с другим телом; operation_uncertain: исход прежней попытки не подтверждён, повторять только прежний запрос",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhotoError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "example": 2
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "photo_too_large: JPEG больше 2000000 байт; body_too_large: JSON больше 3 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhotoError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "unsupported_photo: требуется JPEG; unsupported_media_type: требуется application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhotoError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited: повторить позже",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhotoError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "example": 60
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "vision_unavailable: модель не поддерживает фото или недоступна; отказ до создания квитанции",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhotoError"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2309,6 +2453,147 @@
               "medium",
               "high"
             ]
+          }
+        }
+      },
+      "PhotoTurn": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "photo"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8000,
+            "description": "Необязательная подпись: после trim от 1 до 8000 символов."
+          },
+          "photo": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mime",
+              "data",
+              "width",
+              "height"
+            ],
+            "properties": {
+              "mime": {
+                "type": "string",
+                "enum": [
+                  "image/jpeg"
+                ]
+              },
+              "data": {
+                "type": "string",
+                "format": "byte",
+                "pattern": "^[A-Za-z0-9+/]+=*$",
+                "description": "Base64 JPEG: после декодирования не больше 2000000 байт, начало FF D8 FF. JSON-запрос ограничен 3 MiB."
+              },
+              "width": {
+                "type": "integer",
+                "minimum": 16,
+                "maximum": 4096
+              },
+              "height": {
+                "type": "integer",
+                "minimum": 16,
+                "maximum": 4096
+              }
+            }
+          }
+        }
+      },
+      "PhotoVisionRoute": {
+        "type": "object",
+        "required": [
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "providerLabel": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string",
+            "enum": [
+              "cloud",
+              "server-local"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "description": "Причина недоступности по-русски."
+          }
+        }
+      },
+      "PhotoInput": {
+        "type": "object",
+        "required": [
+          "mime",
+          "maxBytes",
+          "vision",
+          "notes"
+        ],
+        "properties": {
+          "mime": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "image/jpeg"
+              ]
+            }
+          },
+          "maxBytes": {
+            "type": "integer",
+            "enum": [
+              2000000
+            ]
+          },
+          "vision": {
+            "$ref": "#/components/schemas/PhotoVisionRoute"
+          },
+          "notes": {
+            "type": "string",
+            "example": "Фото анализируется один раз и не сохраняется; в историю попадает только текст."
+          }
+        }
+      },
+      "PhotoError": {
+        "type": "object",
+        "required": [
+          "error",
+          "requestId"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          },
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       }

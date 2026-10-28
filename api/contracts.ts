@@ -41,6 +41,8 @@ export interface ApiBackend {
     updateModelPreferences?(body: unknown): Promise<unknown>;
     updateSettings?(patch: ApiSettingsPatch): Promise<ApiSettings>;
     message(text: string, options?: { deferredDialogue?: boolean }): Promise<ApiReply>;
+    photoReady(): Promise<import('../ai/modelPresets').AiPresetName | null>;
+    photo(buffer: Buffer, caption?: string, preset?: import('../ai/modelPresets').AiPresetName | null): Promise<ApiReply>;
     action(token: string): Promise<ApiReply>;
     file(id: string): Promise<{ data: Buffer; filename: string }>;
     /** The app's text mode (API_AI_MODEL_PRESET): catalog, its selection and the server's global mode. */

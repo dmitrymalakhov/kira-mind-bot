@@ -62,6 +62,7 @@ async function server(t: TestContext, changes: Partial<ApiBackend> = {}) {
         action: async () => ({ messages: [] }),
         modelSettings: async () => ({ scope: 'app' }), saveModelSettings: async body => ({ saved: body }),
         turnReady: async () => {},
+        photoReady: async () => null, photo: async () => ({ messages: [] }),
         sceneCapabilities: async () => ({ version: 1 }), sceneReady: async () => null,
         sceneTurn: async () => ({ messages: [] }), sceneActionResult: async () => ({ ok: true }),
         ...changes,

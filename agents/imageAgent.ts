@@ -220,7 +220,7 @@ export async function imageAgent(
         };
 
     } catch (error) {
-        console.error(`Error in image${additionalImages && additionalImages.length > 0 ? " group" : ""} agent:`, error);
+        console.error('[image] analysis failed');
         // В случае ошибки возвращаем запасной ответ
         const errorMessage = additionalImages && additionalImages.length > 0
             ? getBotGenderedText(
