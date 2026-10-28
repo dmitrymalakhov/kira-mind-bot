@@ -136,3 +136,51 @@ test('MCP failures retain diagnostic evidence for reasoning and never append raw
     assert.ok(result.responseText.length < 500);
     assert.doesNotMatch(value.ctx.session.agentRuntime!.observations![0].summary, /\{/);
 });
+
+test('two MCP issuers reach final synthesis without duplicate catalogs evicting the first result', async () => {
+    const registry = new ToolRegistry([
+        { name: 'mcp.listTools', description: '', skill: 'mcp', effect: 'read', ownerOnly: true, inputSchema: { type: 'object' },
+            execute: async () => ({ status: 'ok', summary: 'Catalog', data: { schema: 's'.repeat(9000) } }) },
+        { name: 'mcp.callReadTool', description: '', skill: 'mcp', effect: 'read', ownerOnly: true, inputSchema: { type: 'object', properties: { ticker: { type: 'string' } } },
+            execute: async (args: Record<string, unknown>) => { const evidence = JSON.stringify({ ticker: args.ticker, asOf: '2026-01-01T12:00:00Z', text: 'e'.repeat(8500) });
+                return { status: 'ok', summary: evidence, context: evidence }; } },
+    ], () => true);
+    const result = await runKiraRuntime(input(), { registry, persist: async () => {}, decide: scripted([
+        { calls: [{ id: 'catalog1', tool: 'mcp.listTools', args: {} }, { id: 'catalog2', tool: 'mcp.listTools', args: {} }] },
+        { calls: [{ id: 'issuer1', tool: 'mcp.callReadTool', args: { ticker: 'SYNTH_A' } }, { id: 'issuer2', tool: 'mcp.callReadTool', args: { ticker: 'SYNTH_B' } }] }, { finish: true },
+    ]), respond: async (_input, evidence) => {
+        assert.match(evidence, /SYNTH_A/); assert.match(evidence, /SYNTH_B/); assert.match(evidence, /2026-01-01T12:00:00Z/);
+        assert.ok(evidence.length <= 40_000);
+        assert.doesNotMatch(evidence, /s{1000}/);
+        return { responseText: 'Оба источника учтены' };
+    } });
+    assert.equal(result.operationStatus, 'ok');
+});
+
+test('web evidence alone never satisfies a request that also requires MCP data', async () => {
+    const value = input(); value.classification.details.mcpAllowWeb = true;
+    const registry = new ToolRegistry([{ name: 'web.search', skill: 'web-research', effect: 'read', ownerOnly: false, description: '', inputSchema: { type: 'object' },
+        execute: async () => ({ status: 'ok', summary: 'Public web data' }) }], () => true);
+    const result = await runKiraRuntime(value, { registry, persist: async () => {}, decide: scripted([
+        { calls: [{ id: 'web', tool: 'web.search', args: {} }] }, { finish: true },
+    ]), respond: async () => { throw new Error('Cannot synthesize successful MCP evidence from the web'); } });
+    assert.equal(result.operationStatus, 'failed');
+    assert.match(result.responseText, /MCP/);
+});
+
+test('MCP discovery remains answer evidence when the user asks about connected tools', async () => {
+    const value = input(true); value.classification.details.mcpAccess = 'read';
+    const result = await runKiraRuntime(value, { registry: new ToolRegistry(mcpTools(service(() => {})), () => true), persist: async () => {},
+        decide: scripted([{ calls: [{ id: 'servers', tool: 'mcp.listServers', args: {} }, { id: 'catalog', tool: 'mcp.listTools', args: { server: 'demo' } }] }, { finish: true }]),
+        respond: async (_input, evidence) => { assert.match(evidence, /Synthetic/); assert.match(evidence, /lookup/); assert.match(evidence, /inputSchema/); return { responseText: 'Каталог подключённых инструментов' }; } });
+    assert.equal(result.operationStatus, 'ok');
+});
+
+test('a successful MCP resource read also supplies current-source evidence', async () => {
+    const registry = new ToolRegistry([{ name: 'mcp.readResource', skill: 'mcp', effect: 'read', ownerOnly: true, description: '', inputSchema: { type: 'object' },
+        execute: async () => ({ status: 'ok', summary: 'Synthetic current resource', context: 'Synthetic current resource' }) }], () => true);
+    const result = await runKiraRuntime(input(), { registry, persist: async () => {},
+        decide: scripted([{ calls: [{ id: 'resource', tool: 'mcp.readResource', args: {} }] }, { finish: true }]),
+        respond: async (_input, evidence) => { assert.match(evidence, /Synthetic current resource/); return { responseText: 'Проверенный ресурс MCP' }; } });
+    assert.equal(result.operationStatus, 'ok');
+});

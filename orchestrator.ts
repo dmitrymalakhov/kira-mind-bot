@@ -90,6 +90,7 @@ export interface MessageClassification {
         relationshipRole?: string | null;
         memoryTask?: 'none' | 'lookup' | 'analysis';
         mcpAccess?: 'read' | 'write';
+        mcpAllowWeb?: boolean;
         urgency?: "ВЫСОКАЯ" | "СРЕДНЯЯ" | "НИЗКАЯ";
         timeReferences?: string[];
         imageDescription?: string; // Описание изображения, которое нужно сгенерировать

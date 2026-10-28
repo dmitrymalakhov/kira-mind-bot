@@ -90,6 +90,7 @@ describe('optional Decisions routing adapter', () => {
         await enabled(async () => {
             const result = await classifyWithDecisions('Получи синтетические данные из MCP');
             assert.equal(result?.details.mcpAccess, 'read'); assert.equal(call.mock.callCount(), 1);
+            assert.equal(result?.details.mcpAllowWeb, false);
             assert.equal((result?.details as any).mcpArguments, undefined);
         });
     });

@@ -1,6 +1,14 @@
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { JSONRPCMessageSchema, type JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 
+/** Safe transport diagnostics: no response payloads, URLs or credential headers. */
+export class McpHttpError extends Error {
+    constructor(readonly status: number, readonly retryAfterSeconds?: number) {
+        super(`MCP HTTP ${status}`);
+        this.name = 'McpHttpError';
+    }
+}
+
 /** POST-only MCP gateways such as Money Maker: no SSE, session headers or replay. */
 export class JsonRpcHttpTransport implements Transport {
     onclose?: () => void;
@@ -15,7 +23,11 @@ export class JsonRpcHttpTransport implements Transport {
         const signal = AbortSignal.any([this.controller.signal, ...(this.signal ? [this.signal] : [])]);
         const response = await this.request(this.url, { method: 'POST', redirect: 'error', signal,
             headers: { ...this.headers, 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(message) });
-        if (!response.ok) throw new Error(`MCP HTTP ${response.status}`);
+        if (!response.ok) {
+            const retry = response.headers.get('retry-after') ?? '';
+            await response.body?.cancel();
+            throw new McpHttpError(response.status, /^\d{1,4}$/.test(retry) ? Math.min(3600, Number(retry)) : undefined);
+        }
         if (!('id' in message)) {
             await response.body?.cancel();
             if (response.status !== 204 && response.status !== 202 && response.status !== 200) throw new Error('MCP: неверный ответ на уведомление');

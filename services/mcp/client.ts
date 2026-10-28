@@ -5,8 +5,9 @@ import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { assertSafeMcpValue, McpConfig, McpEffect, McpServerConfig, readMcpConfig } from './config';
-import { JsonRpcHttpTransport } from './jsonRpcTransport';
+import { JsonRpcHttpTransport, McpHttpError } from './jsonRpcTransport';
 import { mcpRequestHeaders } from './auth';
+export { mcpResultEvidence } from './evidence';
 
 export class McpInputError extends Error {}
 export interface McpConnection {
@@ -29,7 +30,7 @@ const connect: McpConnector = async (config, signal) => {
         : config.transport === 'jsonrpc' ? new JsonRpcHttpTransport(config.url!, headers, signal)
         : new StdioClientTransport({ command: config.command!, args: config.args, env: config.env, stderr: 'ignore', maxBufferSize: 2_000_000 });
     try { await client.connect(transport, { signal, timeout: config.timeoutMs }); }
-    catch { await transport.close().catch(() => undefined); throw new Error('MCP: соединение не установлено'); }
+    catch (error) { await transport.close().catch(() => undefined); if (error instanceof McpHttpError) throw error; throw new Error('MCP: соединение не установлено'); }
     return { client, close: () => client.close(), secrets: secretHeaderValues(headers) };
 };
 
@@ -75,7 +76,8 @@ export class McpService {
     async listTools(id: string, cursor?: string, signal?: AbortSignal, offset = 0, query = '') {
         return this.withServer(id, signal, async ({ client }, config, bounded) => {
             const page = await client.listTools(cursor ? { cursor } : {}, { signal: bounded, timeout: config.timeoutMs });
-            const tools = page.tools.filter(tool => Object.prototype.hasOwnProperty.call(config.tools, tool.name) && `${tool.name} ${tool.description ?? ''}`.toLowerCase().includes(query.toLowerCase()));
+            const tools = page.tools.filter(tool => Object.prototype.hasOwnProperty.call(config.tools, tool.name) &&
+                (!query || `${tool.name} ${tool.description ?? ''} ${JSON.stringify(tool.inputSchema)}`.toLowerCase().includes(query.toLowerCase())));
             const selected: Array<{ name: string; description?: string; inputSchema: Tool['inputSchema']; effect: McpEffect }> = [];
             let size = 0;
             for (const tool of tools.slice(offset, offset + 3)) {
@@ -129,10 +131,3 @@ export class McpService {
 }
 
 export const mcpService = new McpService();
-
-/** Preserve structuredContent (e.g. full news text) rather than only a server's prose summary. */
-export function mcpResultEvidence(result: CallToolResult, maxChars = 10_000): string {
-    const text = JSON.stringify({ isError: result.isError === true, structuredContent: result.structuredContent,
-        content: result.content.filter(item => item.type === 'text' || item.type === 'resource_link') });
-    return text.length <= maxChars ? text : `${text.slice(0, maxChars)}\n[MCP: результат сокращён; полнота данных не гарантирована]`;
-}

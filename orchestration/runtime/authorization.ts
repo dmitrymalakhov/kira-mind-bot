@@ -58,6 +58,8 @@ export function needsRuntimeTools(context: Pick<ToolContext, 'classification' | 
 }
 
 export function canExecuteRuntimeCall(definition: ToolDefinition, call: RuntimeToolCall, context: ToolContext): boolean {
+    if (isMcpRequest(context) && context.classification.details.mcpAllowWeb !== true &&
+        (call.tool === 'web.search' || call.tool === 'agents.start' && ['research', 'browser'].includes(String(call.args.kind)))) return false;
     if (context.readOnly) return isDialogueReadTool(definition, call.args);
     if (definition.effect === 'read') return true;
     const skills = authorizedStateSkills(context);
@@ -79,7 +81,14 @@ export function canExecuteRuntimeCall(definition: ToolDefinition, call: RuntimeT
 
 export function availableRuntimeTools(tools: ToolDefinition[], context: ToolContext): ToolDefinition[] {
     const skills = authorizedStateSkills(context);
-    return tools.filter(tool => context.readOnly ? isDialogueReadTool(tool) : tool.effect === 'read' || tool.name === 'agents.start' || skills.has(tool.skill))
+    const mcpOnly = isMcpRequest(context) && context.classification.details.mcpAllowWeb !== true;
+    return tools.filter(tool => !(mcpOnly && tool.name === 'web.search'))
+        .filter(tool => context.readOnly ? isDialogueReadTool(tool) && !(mcpOnly && tool.name === 'agents.start') : tool.effect === 'read' || tool.name === 'agents.start' || skills.has(tool.skill))
+        .map(tool => mcpOnly && tool.name === 'agents.start' ? { ...tool,
+            description: 'Явно порученное интерактивное действие. Веб и браузер не заменяют запрошенный MCP-источник.',
+            inputSchema: { ...tool.inputSchema, properties: { ...tool.inputSchema.properties,
+                kind: { type: 'string' as const, enum: ['negotiation', 'study-chat'] } } },
+        } : tool)
         .map(tool => context.readOnly && tool.name === 'agents.start' ? { ...tool,
             description: 'Делегировать одно ограниченное исследование веб-источников research-агенту.',
             inputSchema: { ...tool.inputSchema, properties: { ...tool.inputSchema.properties, kind: { type: 'string' as const, enum: ['research'] } } },

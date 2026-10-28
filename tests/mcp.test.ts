@@ -3,12 +3,13 @@ import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { parseMcpConfig, readMcpConfig } from '../services/mcp/config';
 import { McpService, McpInputError, mcpResultEvidence } from '../services/mcp/client';
-import { JsonRpcHttpTransport } from '../services/mcp/jsonRpcTransport';
+import { JsonRpcHttpTransport, McpHttpError } from '../services/mcp/jsonRpcTransport';
 import { mcpTools, confirmedMcpCallKey } from '../orchestration/runtime/mcpTools';
 import { ToolRegistry } from '../orchestration/runtime/registry';
 import { availableRuntimeTools, canExecuteRuntimeCall, isDialogueReadTool, needsRuntimeTools } from '../orchestration/runtime/authorization';
 import type { ToolContext } from '../orchestration/runtime/types';
 import { mcpRequestHeaders } from '../services/mcp/auth';
+import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 
 const config = () => parseMcpConfig({ servers: { demo: { description: 'Синтетический сервис', transport: 'jsonrpc', url: 'https://example.com/mcp', headers: { Authorization: 'Bearer synthetic-secret' }, tools: { lookup: 'read', change: 'external' }, fixedArguments: { requesterAgentId: 'kira-test' }, timeoutMs: 1000 } } });
 const context = (): ToolContext => ({ ctx: { from: { id: 101 }, chat: { id: 101, type: 'private' }, session: {} } as any, message: 'Проверь MCP', classification: { intent: 'РАЗГОВОР', confidenceLevel: 'ВЫСОКИЙ', details: { mcpAccess: 'read' } }, isForwarded: false, forwardFrom: '', messageHistory: [], runId: 'synthetic', signal: new AbortController().signal, memoryContext: '', observations: [] });
@@ -47,6 +48,37 @@ test('POST transport rejects bad correlation IDs and HTTP errors without server 
     await assert.rejects(() => denied.send({ jsonrpc: '2.0', id: 1, method: 'ping' }), error => error instanceof Error && error.message === 'MCP HTTP 401');
 });
 
+test('HTTP throttling survives initialization with a safe retry delay and no automatic replay', async t => {
+    let requests = 0; let cancelled = false;
+    t.mock.method(globalThis, 'fetch', async () => {
+        requests++;
+        return new Response(new ReadableStream({ cancel: () => { cancelled = true; } }), {
+            status: 429, headers: { 'Retry-After': '37', 'X-Private-Value': 'synthetic-secret' },
+        });
+    });
+    const service = new McpService(config);
+    await assert.rejects(() => service.listTools('demo'), error => error instanceof McpHttpError && error.status === 429 && error.retryAfterSeconds === 37);
+    assert.equal(requests, 1); assert.equal(cancelled, true);
+    const tools = mcpTools(service);
+    const catalog = await tools.find(tool => tool.name === 'mcp.listTools')!.execute({ server: 'demo' }, context());
+    const read = await tools.find(tool => tool.name === 'mcp.callReadTool')!.execute({ server: 'demo', tool: 'lookup', argumentsJson: '{}' }, context());
+    for (const result of [catalog, read]) {
+        assert.equal(result.status, 'failed'); assert.match(result.summary, /лимит[\s\S]*37 сек/);
+        assert.doesNotMatch(JSON.stringify(result), /synthetic-secret|Authorization|example.com/);
+    }
+    assert.equal(requests, 3);
+});
+
+test('server parameter rejection is reported as input failure without provider diagnostics', async () => {
+    const service = new McpService(config, async () => ({ close: async () => {}, client: {
+        listTools: async () => ({ tools: [{ name: 'lookup', inputSchema: { type: 'object' } }] }),
+        callTool: async () => { throw new McpError(ErrorCode.InvalidParams, 'synthetic private provider diagnostics'); },
+    } as any }));
+    const result = await mcpTools(service).find(tool => tool.name === 'mcp.callReadTool')!.execute({ server: 'demo', tool: 'lookup', argumentsJson: '{}' }, context());
+    assert.equal(result.status, 'failed'); assert.match(result.summary, /отклонил параметры/);
+    assert.doesNotMatch(result.summary, /private provider|авторизац/);
+});
+
 test('discovery pages schemas, validates arguments, binds identity and closes connections', async () => {
     let calls = 0; let closed = 0; let connects = 0;
     const service = new McpService(config, async () => {
@@ -63,6 +95,14 @@ test('discovery pages schemas, validates arguments, binds identity and closes co
     assert.equal(calls, 0);
     await service.callTool('demo', 'lookup', { query: 'demo', requesterAgentId: 'forged' }, 'read');
     assert.equal(calls, 1); assert.equal(connects, closed);
+});
+
+test('tool discovery searches schema terms and does not mistake an empty filter for a complete catalog', async () => {
+    const service = new McpService(config, async () => ({ close: async () => {}, client: { listTools: async () => ({ tools: [{ name: 'lookup',
+        inputSchema: { type: 'object', properties: { indicator: { type: 'string', description: 'RSI and other synthetic indicators' } } } }] }) } as any }));
+    assert.equal((await service.listTools('demo', undefined, undefined, 0, 'RSI')).tools[0].name, 'lookup');
+    const output = await mcpTools(service).find(tool => tool.name === 'mcp.listTools')!.execute({ server: 'demo', query: 'missing-term' }, context());
+    assert.equal(output.status, 'ok'); assert.match(output.summary, /не доказывает отсутствия/);
 });
 
 test('private owner access is checked at invocation and background work cannot invoke mutations', async () => {
@@ -101,6 +141,96 @@ test('full structured news content survives the evidence adapter and explicit er
     const result = { content: [{ type: 'text' as const, text: 'summary' }], structuredContent: { ok: true, callResults: [{ capabilityId: 'search_news', result: { data: { links: [{ text: 'Synthetic article body', url: 'https://example.com/story' }] } } }] } };
     assert.match(mcpResultEvidence(result), /Synthetic article body/);
     assert.match(mcpResultEvidence(result, 50), /результат сокращён/);
+});
+
+test('large Money Maker presentation wrappers do not displace source text, report coverage or freshness', () => {
+    const article = 'Synthetic source article. '.repeat(90);
+    const result = { content: [{ type: 'text' as const, text: 'Duplicated summary. '.repeat(2000) }], structuredContent: {
+        mcp: { version: 'money_maker_mcp_tool_result_v1' }, ok: true, resolution: 'partial',
+        rolePayload: { facts: ['Duplicated fact. '.repeat(2000)], answer: 'Partial report', dataQuality: { status: 'partial' } },
+        callResults: [{ capabilityId: 'report', result: { resolution: 'partial', data: {
+            links: [{ text: article, url: 'https://example.com/report', publishedAt: '2026-01-01T12:00:00Z' }],
+            coverage: { complete: false }, sources: [{ status: 'error' }],
+            marketData: { asOf: '2026-01-01T11:00:00Z', freshness: 'stale', calendarVerified: false },
+        } } }],
+    } };
+    const text = mcpResultEvidence(result);
+    assert.ok(text.length <= 10_000);
+    const body = JSON.parse(text).structuredContent;
+    assert.equal(body.callResults[0].result.data.links[0].text, article);
+    assert.equal(body.callResults[0].result.data.marketData.asOf, '2026-01-01T11:00:00Z');
+    assert.equal(body.callResults[0].result.data.sources[0].status, 'error');
+    assert.equal(body.rolePayload.dataQuality.status, 'partial');
+    assert.equal(result.structuredContent.rolePayload.facts.length, 1);
+});
+
+test('oversized evidence remains valid JSON and explicitly marks shortening while retaining source metadata', () => {
+    const links = Array.from({ length: 8 }, (_, index) => ({ text: 'Synthetic article content. '.repeat(500),
+        url: `https://example.com/news/${index}`, publishedAt: '2026-01-01T12:00:00Z' }));
+    const result = { content: [], structuredContent: { mcp: { version: 'money_maker_mcp_tool_result_v1' }, ok: true, resolution: 'partial',
+        callResults: [{ capabilityId: 'search_news', result: { data: { links, sourceStatus: 'partial', asOf: '2026-01-01T12:00:00Z' } } }] } };
+    const text = mcpResultEvidence(result);
+    assert.ok(text.length <= 10_000);
+    const evidence = JSON.parse(text);
+    assert.equal(evidence.truncated, true);
+    assert.match(evidence.notice, /полнота данных не гарантирована/);
+    const data = evidence.structuredContent.callResults[0].result.data;
+    assert.equal(data.links.length, 8);
+    assert.equal(data.links[7].url, links[7].url);
+    assert.equal(data.links[7].publishedAt, links[7].publishedAt);
+    assert.equal(data.sourceStatus, 'partial');
+    assert.equal(data.asOf, '2026-01-01T12:00:00Z');
+    assert.equal(links[0].text.length, 13_500);
+});
+
+test('generic MCP results retain unique text alongside structured content when bounded', () => {
+    const result = { content: [{ type: 'text' as const, text: 'Unique source evidence. '.repeat(1000) }],
+        structuredContent: { resolution: 'partial', source: 'https://example.com/source' } };
+    const evidence = JSON.parse(mcpResultEvidence(result));
+    assert.match(evidence.content[0].text, /Unique source evidence/);
+    assert.equal(evidence.structuredContent.source, 'https://example.com/source');
+});
+
+test('market evidence supplies UTC labels without confusing candle and fetch times or changing offsets', () => {
+    const result = { content: [], structuredContent: { mcp: { version: 'money_maker_mcp_tool_result_v1' }, callResults: [
+        { capabilityId: 'price', result: { data: { marketData: { ticker: 'SYNTH', interval: '1h',
+            lastCandleAt: '2026-01-01T06:00:00Z', fetchedAt: '2026-01-01T07:20:59.888Z', asOf: '2026-02-30T07:00:00Z' } } } },
+    ] } };
+    const evidence = JSON.parse(mcpResultEvidence(result));
+    assert.equal(evidence.marketTimesUTC[0].lastCandleAtUTC, '2026-01-01 06:00:00 UTC');
+    assert.equal(evidence.marketTimesUTC[0].fetchedAtUTC, '2026-01-01 07:20:59.888 UTC');
+    assert.equal(evidence.marketTimesUTC[0].asOfUTC, undefined);
+    assert.equal(evidence.structuredContent.callResults[0].result.data.marketData.fetchedAt, '2026-01-01T07:20:59.888Z');
+});
+
+test('long indicator series retain the newest value alongside explicit omitted-middle metadata', () => {
+    const values = Array.from({ length: 850 }, (_, index) => ({ time: `synthetic-${index}`, value: index / 10 }));
+    const result = { content: [], structuredContent: { mcp: { version: 'money_maker_mcp_tool_result_v1' }, callResults: [
+        { capabilityId: 'get_indicator', result: { data: { full: { values }, marketData: { freshness: 'recent_for_requested_window' } } } },
+    ] } };
+    const text = mcpResultEvidence(result);
+    assert.ok(text.length <= 10_000);
+    const evidence = JSON.parse(text);
+    const kept = evidence.structuredContent.callResults[0].result.data.full.values;
+    assert.deepEqual(kept[0], values[0]); assert.deepEqual(kept[kept.length - 1], values[values.length - 1]);
+    assert.ok(kept.some((item: any) => item.mcpOmittedItems > 0 && item.location === 'middle'));
+    assert.equal(evidence.truncated, true);
+});
+
+test('MCP source selection blocks automatic web substitution while preserving explicitly requested cross-checks', () => {
+    const value = context();
+    const web = { name: 'web.search', skill: 'web-research', effect: 'read', inputSchema: { type: 'object' }, description: '' } as any;
+    const research = { ...web, name: 'agents.start', effect: 'external' } as any;
+    const definitions = [web, research];
+    assert.equal(availableRuntimeTools(definitions, value).some(tool => tool.name === 'web.search'), false);
+    assert.equal(canExecuteRuntimeCall(web, { id: 'web', tool: web.name, args: {} }, value), false);
+    assert.equal(canExecuteRuntimeCall(research, { id: 'agent', tool: research.name, args: { kind: 'research' } }, value), false);
+    assert.equal(canExecuteRuntimeCall(research, { id: 'browser', tool: research.name, args: { kind: 'browser' } }, value), false);
+    value.readOnly = true;
+    assert.equal(canExecuteRuntimeCall(web, { id: 'web', tool: web.name, args: {} }, value), false);
+    value.classification.details.mcpAllowWeb = true;
+    assert.equal(availableRuntimeTools(definitions, value).some(tool => tool.name === 'web.search'), true);
+    assert.equal(canExecuteRuntimeCall(web, { id: 'web', tool: web.name, args: {} }, value), true);
 });
 
 test('stdio connects to a real child, does not inherit provider secrets and closes after the operation', async () => {

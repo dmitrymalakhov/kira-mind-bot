@@ -281,7 +281,10 @@ export async function runKiraRuntime(input: KiraRuntimeInput, dependencies: Runt
     let callCount = 0;
     let stopped = false;
     let webText = observations.find(observation => observation.tool === 'web.search' && observation.status === 'ok')?.summary ?? '';
-    const hasCurrentEvidence = () => observations.some(observation => observation.status === 'ok' && (observation.tool === 'web.search' || observation.tool === 'mcp.callReadTool' || (observation.tool === 'agents.start' && ['research', 'browser'].includes(String((observation.data as { run?: { kind?: string } } | undefined)?.run?.kind)))));
+    const hasCurrentEvidence = () => observations.some(observation => observation.status === 'ok' &&
+        (mcpRequested ? ['mcp.callReadTool', 'mcp.readResource'].includes(observation.tool)
+            : ['web.search', 'mcp.callReadTool', 'mcp.readResource'].includes(observation.tool) ||
+                observation.tool === 'agents.start' && ['research', 'browser'].includes(String((observation.data as { run?: { kind?: string } } | undefined)?.run?.kind))));
     let exhausted = true;
     try {
         await skills.forIntents([classification.intent, ...(classification.subIntents?.map(intent => intent.intent) ?? [])]);
@@ -401,7 +404,20 @@ export async function runKiraRuntime(input: KiraRuntimeInput, dependencies: Runt
         if (exhausted && !context.signal.aborted) observations.push({ id: 'round_limit', tool: 'kernel', status: 'failed', summary: 'Достигнут лимит шагов. Оставшаяся часть задачи не выполнена.' });
         if (context.signal.aborted) { state.status = 'failed'; results.push({ responseText: 'Задача остановлена. Уже выполненные действия сохранены.' }); }
         const failures = observations.filter(observation => observation.status === 'failed' || observation.status === 'unknown');
-        context.memoryContext += `\n\nКвитанции выполнения (источник правды о действиях):\n${JSON.stringify(observations)}`;
+        // MCP evidence is already in memoryContext. Repeating raw results and
+        // discovery schemas here can evict the first issuer's facts at synthesis.
+        const hasMcpRead = observations.some(observation => ['mcp.callReadTool', 'mcp.readResource'].includes(observation.tool));
+        const receiptsForAnswer = observations.map(observation => {
+            if (hasMcpRead && observation.tool === 'mcp.listTools') {
+                const page = observation.data as { tools?: Array<{ name: string; effect?: string; description?: string }>; total?: number; nextOffset?: number; nextCursor?: string } | undefined;
+                return { ...observation, data: page?.tools ? { ...page, tools: page.tools.map(({ name, effect, description }) => ({ name, effect, description: description?.slice(0, 300) })) } : undefined };
+            }
+            if (['mcp.callReadTool', 'mcp.readResource'].includes(observation.tool) && observation.status === 'ok') {
+                return { ...observation, summary: 'Данные MCP получены; свидетельства приведены выше.' };
+            }
+            return observation;
+        });
+        context.memoryContext += `\n\nКвитанции выполнения (источник правды о действиях):\n${JSON.stringify(receiptsForAnswer)}`;
         const missingRequiredWeb = requiresWeb && !hasCurrentEvidence();
         if (missingRequiredWeb) results.push({ responseText: mcpRequested
             ? 'Не удалось получить запрошенные актуальные данные из MCP-сервиса. Зависящие от них действия не подтверждены.'

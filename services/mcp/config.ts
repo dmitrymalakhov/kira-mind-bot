@@ -88,7 +88,7 @@ export function readMcpConfig(file = MCP_CONFIG_FILE): McpConfig {
 export function mcpClassifierContext(): string {
     try {
         const servers = Object.entries(readMcpConfig()).map(([id, { description }]) => ({ id, description }));
-        return servers.length ? `Подключённые MCP-сервисы: ${JSON.stringify(servers)}. Если новая просьба требует их данных или действий, добавь details.mcpAccess="read" либо "write" (только явное изменение). Выбери fastReply.mode="route". MCP не является личной памятью или публичным веб-поиском.` : '';
+        return servers.length ? `Подключённые MCP-сервисы: ${JSON.stringify(servers)}. Если новая просьба требует их данных или действий, добавь details.mcpAccess="read" либо "write" (только явное изменение). Выбери fastReply.mode="route". MCP не является личной памятью или публичным веб-поиском. details.mcpAllowWeb=true допустимо только если сама новая просьба явно требует ДОПОЛНИТЕЛЬНО проверить публичный веб наряду с MCP; иначе false. Актуальность вопроса или ошибка MCP не разрешают подменить источник вебом.` : '';
     } catch { return ''; }
 }
 
