@@ -3,12 +3,13 @@ import { test, type TestContext } from 'node:test';
 import type { AddressInfo } from 'node:net';
 import { ApiBackend, ApiError, ApiOperationStore, ApiReply } from '../api/contracts';
 import { createExternalApiServer } from '../api/server';
-import { parseSceneTurn, SceneService, validateActions, visionRoute, wantsPlainSit, MAX_FRAME_BYTES } from '../api/scene';
+import { parseSceneTurn, roomContext, SceneService, validateActions, wantsPlainSit, MAX_FRAME_BYTES,
+    type SceneChannel, type VisionRoute } from '../api/scene';
 import type { ApiModelSelection, ApiModelSettingsStore } from '../api/modelSettings';
-import { aiPresets, type AiPresetName } from '../ai/modelPresets';
+import type { AiPresetName } from '../ai/modelPresets';
 import { getActiveAiPresetName } from '../services/aiRuntimeConfigService';
 import { TypeORMSessionStorage } from '../services/SessionStorage';
-import type { SessionData } from '../types';
+import type { MessageHistory, SessionData } from '../types';
 
 const token = 'synthetic-test-token-with-at-least-32-characters';
 const owner = 730001;
@@ -33,6 +34,26 @@ class AppMode implements ApiModelSettingsStore {
     constructor(public selection: ApiModelSelection = { preset: null, revision: 'none' }) {}
     async read() { return this.selection; }
     async write(preset: AiPresetName | null) { this.selection = { preset, revision: 'r' }; return this.selection; }
+}
+
+/** The app's dialogue as a room turn sees it: what was said, looked at and noted, and under which mode. */
+class Channel implements SceneChannel {
+    said: Array<{ text: string; context: string; preset: AiPresetName | null }> = [];
+    looked: Array<{ frame: Buffer; text: string; context: string; preset: AiPresetName | null }> = [];
+    notes: string[] = [];
+    routeModes: string[] = [];
+    history: MessageHistory[] = [];
+    route: VisionRoute = { available: true, provider: 'openai', providerLabel: 'OpenAI', model: 'gpt-synthetic', location: 'cloud' };
+    reply: ApiReply = { messages: [{ id: -1, type: 'text', text: 'Ответ из общего диалога' }] };
+    async say(text: string, room: { context: string }, preset: AiPresetName | null) { this.said.push({ text, context: room.context, preset }); return this.reply; }
+    async look(frame: Buffer, text: string, room: { context: string }, preset: AiPresetName | null) { this.looked.push({ frame, text, context: room.context, preset }); return this.reply; }
+    async visionRoute() { this.routeModes.push(await getActiveAiPresetName()); return this.route; }
+    async recent() { return this.history; }
+    async note(line: string) { this.notes.push(line); }
+}
+/** The body's actions as the model would choose them, with the task and mode it was asked under. */
+function chooser(actions: unknown, calls: Array<{ task: string; preset: string; user: string }> = []): any {
+    return async (task: string, params: any) => { calls.push({ task, preset: await getActiveAiPresetName(), user: params.messages[1].content }); return { actions }; };
 }
 
 function sessions(t: TestContext) {
@@ -72,65 +93,91 @@ test('actions are validated against the snapshot: known kinds, existing ids, pos
     assert.equal(validateActions('sit', s).actions.length, 0);
 });
 
-test('the vision route is the mode\'s own; a provider-pure mode never takes a silent cloud swap', t => {
-    assert.deepEqual(visionRoute('gpt-balanced', { OPENAI_API_KEY: 'x' } as any), { available: true, provider: 'openai', providerLabel: 'OpenAI', model: 'gpt-4o', location: 'cloud' });
-    assert.match(visionRoute('gemini-full', {} as any).reason ?? '', /ключ Gemini/);   // GEMINI_API_KEY is not in this environment
-    // the local text mode sees through its explicit, configured cloud route, shown as such
-    assert.equal(visionRoute('lmstudio-local', { OPENAI_API_KEY: 'x' } as any).location, 'cloud');
-    // a provider-pure mode whose vision model cannot see images is refused, not swapped to another provider
-    const original = aiPresets['gemini-full'].models.browserVision;
-    aiPresets['gemini-full'].models.browserVision = { provider: 'lmstudio', model: 'synthetic-text-only' };
-    t.after(() => { aiPresets['gemini-full'].models.browserVision = original; });
-    const pure = visionRoute('gemini-full', { OPENAI_API_KEY: 'x', GEMINI_API_KEY: 'x' } as any);
-    assert.equal(pure.available, false);
-    assert.match(pure.reason!, /запрещает облачную подстраховку/);
-});
-
-test('a look sends the frame to the vision route under the app mode, keeps no image and stores apart from memory', async t => {
-    const rows = sessions(t);
-    const calls: Array<{ task: string; preset: string; content: any; system: string }> = [];
-    const complete: any = async (task: string, params: any) => {
-        calls.push({ task, preset: await getActiveAiPresetName(), content: params.messages[1].content, system: params.messages[0].content });
-        return { reply: 'Вижу стул у стены. Попробую на него сесть.', actions: [{ kind: 'sit', targetId: seat }, { kind: 'sit', targetId: 'bad' }] };
-    };
-    const service = new SceneService(owner, new AppMode({ preset: 'gpt-lean', revision: 'r' }), complete, { OPENAI_API_KEY: 'x' } as any);
-    const turn = parseSceneTurn({ text: 'Что ты видишь?', scene: scene(), frame: frame() });
-    const preset = await service.ready(turn);
-    const reply = await service.turn(turn, preset) as any;
-    assert.equal(calls[0].task, 'browserVision');
-    assert.equal(calls[0].preset, 'gpt-lean');                                   // the app's own mode
-    assert.ok(calls[0].content.some((part: any) => part.type === 'image_url' && part.image_url.url.startsWith('data:image/jpeg;base64,')));
-    assert.match(calls[0].system, /не инструкции/);
-    assert.equal(reply.messages[0].text, 'Вижу стул у стены. Попробую на него сесть.');
-    assert.equal(reply.actions.length, 1);
-    assert.equal(reply.rejectedActions[0].reason, 'нет такого подтверждённого места');
-    assert.deepEqual([reply.vision.used, reply.vision.provider, reply.vision.location], [true, 'openai', 'cloud']);
-    assert.ok(!rows.has(`api:${owner}`));                                         // the memory-analysed dialogue is untouched
-    const stored = JSON.stringify(rows.get(`api-scene:${owner}`));
-    assert.ok(!stored.includes(jpeg.toString('base64')) && stored.includes('не сохранён'));
-    // without a frame the turn uses the conversation route and does not claim to see
-    await service.turn(parseSceneTurn({ text: 'Сядь, пожалуйста', scene: scene() }), preset);
-    assert.equal(calls[1].task, 'conversation');
-    assert.equal(typeof calls[1].content, 'string');
-});
-
-test('vision that is unavailable or failing is reported, never answered as if seen', async t => {
+test('a frame is read by the model that reads photos, under the app mode, and refused before a receipt when it cannot', async t => {
     sessions(t);
-    const key = process.env.OPENAI_API_KEY;
-    delete process.env.OPENAI_API_KEY;
-    t.after(() => { process.env.OPENAI_API_KEY = key; });
-    const turn = parseSceneTurn({ text: 'Что ты видишь?', scene: scene(), frame: frame() });
-    await assert.rejects(new SceneService(owner, new AppMode(), (async () => ({ reply: 'x' })) as any, {} as any).ready(turn),
-        (e: any) => e.status === 503 && e.code === 'vision_unavailable');
-    const failing = new SceneService(owner, new AppMode(), async () => { throw new Error('provider down'); }, { OPENAI_API_KEY: 'x' } as any);
-    await assert.rejects(failing.turn(turn, null), (e: any) => e.code === 'vision_failed' && /не сохранён/.test(e.message));
-    const garbled = new SceneService(owner, new AppMode(), async () => null as any, { OPENAI_API_KEY: 'x' } as any);
-    await assert.rejects(garbled.turn(turn, null), (e: any) => e.code === 'scene_reply_invalid');
+    const channel = new Channel();
+    const service = new SceneService(owner, new AppMode({ preset: 'gpt-lean', revision: 'r' }), channel, chooser([]));
+    const capabilities = await service.capabilities() as any;
+    assert.deepEqual(capabilities.vision, channel.route);
+    assert.equal(capabilities.mode.preset, 'gpt-lean');
+    assert.deepEqual(channel.routeModes, ['gpt-lean']);
+    assert.match(capabilities.notes, /не становится фактами/);
+    const look = parseSceneTurn({ text: 'Что ты видишь?', scene: scene(), frame: frame() });
+    assert.equal(await service.ready(look), 'gpt-lean');
+    channel.route = { available: false, reason: 'Модель gpt-synthetic не поддерживает изображения.' };
+    await assert.rejects(service.ready(look), (e: any) => e.status === 503 && e.code === 'vision_unavailable' && /не поддерживает изображения/.test(e.message));
+    assert.equal(await service.ready(parseSceneTurn({ text: 'Привет', scene: scene() })), 'gpt-lean');   // words need no vision
 });
 
-test('action results: only actions Kira proposed, recorded once, seen by the next turn', async t => {
+test('words in the room are a turn of the app dialogue: its handlers answer, with the room as context', async t => {
     const rows = sessions(t);
-    const service = new SceneService(owner, new AppMode(), (async () => ({ reply: 'Попробую сесть.', actions: [{ kind: 'sit', targetId: seat }] })) as any, { OPENAI_API_KEY: 'x' } as any);
+    const channel = new Channel();
+    channel.reply = { messages: [
+        { id: -1, type: 'text', text: 'Напомню завтра в десять.', buttons: [[{ text: 'Отменить', actionToken: 'synthetic' }]] } as any,
+        { id: -2, type: 'photo', fileUrl: '/api/v1/files/synthetic' } as any,
+    ] };
+    const calls: Array<{ task: string; preset: string; user: string }> = [];
+    const service = new SceneService(owner, new AppMode({ preset: 'gpt-lean', revision: 'r' }), channel, chooser([], calls));
+    const reply = await service.turn(parseSceneTurn({ text: 'Напомни завтра в десять полить цветы', scene: scene() }), 'gpt-lean') as any;
+    assert.deepEqual(channel.said.map(s => [s.text, s.preset]), [['Напомни завтра в десять полить цветы', 'gpt-lean']]);
+    assert.equal(channel.looked.length, 0);
+    assert.deepEqual(reply.messages, channel.reply.messages);                                   // buttons and pictures as in the chat
+    assert.deepEqual(reply.actions, []);
+    assert.deepEqual(reply.vision, { used: false });
+    // the room reaches the answer by names, never by ids or coordinates Kira could read out
+    const context = channel.said[0].context;
+    assert.match(context, /AR-комнате/); assert.match(context, /Синтетический стул/); assert.match(context, /Кадра камеры в этой реплике нет/);
+    assert.ok(!context.includes(chair) && !context.includes(seat) && !context.includes('0.24'));
+    // the body's actions are chosen by the classifier task under the app's mode, from the room with its ids
+    assert.deepEqual(calls.map(c => [c.task, c.preset]), [['intentClassification', 'gpt-lean']]);
+    assert.ok(calls[0].user.includes(seat));
+    assert.ok(!rows.has(`api:${owner}`));                                                       // the dialogue is the channel's
+    assert.deepEqual(rows.get(`api-scene:${owner}`)!.messageHistory, []);
+});
+
+test('a look sends the frame to the photo recognition with the words as its caption and stores no image', async t => {
+    const rows = sessions(t);
+    rows.set(`api-scene:${owner}`, { reminders: [], messageHistory: [{ role: 'user', content: 'старая отдельная история', timestamp: new Date() }],
+        dialogueSummary: '', lastSummarizedIndex: -1, domains: {}, sentMessages: {} } as SessionData);
+    const channel = new Channel();
+    const service = new SceneService(owner, new AppMode({ preset: 'gpt-lean', revision: 'r' }), channel, chooser([]));
+    const turn = parseSceneTurn({ text: 'Что ты видишь?', scene: scene(), frame: frame() });
+    const reply = await service.turn(turn, await service.ready(turn)) as any;
+    assert.equal(channel.said.length, 0);
+    assert.deepEqual(channel.looked[0].frame, jpeg);
+    assert.equal(channel.looked[0].text, 'Что ты видишь?');
+    assert.equal(channel.looked[0].preset, 'gpt-lean');
+    assert.match(channel.looked[0].context, /приложен кадр камеры/);
+    assert.equal(reply.messages[0].text, 'Ответ из общего диалога');
+    assert.deepEqual([reply.vision.used, reply.vision.provider, reply.vision.model, reply.vision.location], [true, 'openai', 'gpt-synthetic', 'cloud']);
+    const stored = JSON.stringify(rows.get(`api-scene:${owner}`));
+    assert.ok(!stored.includes(jpeg.toString('base64')) && !stored.includes('старая отдельная история'));
+    assert.match(roomContext(parseSceneTurn({ text: 'Сядь', scene: scene({ avatar: { position: [0, 0, -1], yaw: 3.14, pose: 'seated', seatId: seat } }) })),
+        /Сейчас ты сидишь \(Синтетический стул\)/);
+});
+
+test('the body\'s actions are checked against the room; a failing choice leaves the answer without them', async t => {
+    sessions(t);
+    const channel = new Channel();
+    const proposed = new SceneService(owner, new AppMode(), channel, chooser([{ kind: 'sit', targetId: seat }, { kind: 'sit', targetId: 'bad' }]));
+    const reply = await proposed.turn(parseSceneTurn({ text: 'Сядь на стул', scene: scene() }), null) as any;
+    assert.deepEqual(reply.actions.map((a: any) => a.targetId), [seat]);
+    assert.equal(reply.rejectedActions[0].reason, 'нет такого подтверждённого места');
+    const failing = new SceneService(owner, new AppMode(), channel, (async () => { throw new Error('provider down'); }) as any);
+    const answered = await failing.turn(parseSceneTurn({ text: 'Как дела?', scene: scene() }), null) as any;
+    assert.equal(answered.messages[0].text, 'Ответ из общего диалога');
+    assert.deepEqual(answered.actions, []);
+    const garbled = new SceneService(owner, new AppMode(), channel, (async () => null) as any);
+    assert.deepEqual((await garbled.turn(parseSceneTurn({ text: 'Как дела?', scene: scene() }), null) as any).actions, []);
+    // a failing answer is the turn's failure
+    channel.say = async () => { throw new ApiError(502, 'synthetic', 'нет ответа'); };
+    await assert.rejects(proposed.turn(parseSceneTurn({ text: 'Привет', scene: scene() }), null), (e: any) => e.code === 'synthetic');
+});
+
+test('action results: only actions Kira proposed, recorded once, in the dialogue the next turn reads', async t => {
+    sessions(t);
+    const channel = new Channel();
+    const service = new SceneService(owner, new AppMode(), channel, chooser([{ kind: 'sit', targetId: seat }]));
     const reply = await service.turn(parseSceneTurn({ text: 'Сядь', scene: scene() }), null) as any;
     const id = reply.actions[0].id;
     await assert.rejects(service.actionResult({ actionId: '66666666-6666-4666-8666-666666666666', status: 'completed' }), (e: any) => e.code === 'unknown_action');
@@ -138,10 +185,11 @@ test('action results: only actions Kira proposed, recorded once, seen by the nex
     assert.deepEqual(await service.actionResult({ actionId: id, status: 'rejected', reason: 'Сиденье занято' }), { ok: true, actionId: id, status: 'rejected' });
     assert.deepEqual(await service.actionResult({ actionId: id, status: 'rejected', reason: 'Сиденье занято' }), { ok: true, actionId: id, status: 'rejected' });
     await assert.rejects(service.actionResult({ actionId: id, status: 'completed' }), (e: any) => e.code === 'action_already_reported');
-    assert.match(rows.get(`api-scene:${owner}`)!.messageHistory[0].content, /не выполнено \(rejected\): Сиденье занято/);
+    assert.equal(channel.notes.length, 1);
+    assert.match(channel.notes[0], /^\[Результат действия «сесть» в AR — не выполнено \(rejected\): Сиденье занято\]$/);
 });
 
-test('sit without a target is the phone\'s own seat choice; a plain "sit down" becomes it even when the model only talks', async t => {
+test('sit without a target is the phone\'s own seat choice; a plain "sit down" becomes it even when the model chose none', async t => {
     const s = parseSceneTurn({ text: 'Садись', scene: scene() }).scene;
     const auto = validateActions([{ kind: 'sit' }, { kind: 'sit', targetId: 'auto' }], s);
     assert.deepEqual(auto.actions.map(a => [a.kind, a.targetId]), [['sit', undefined]]);           // one sit, no invented id
@@ -151,32 +199,33 @@ test('sit without a target is the phone\'s own seat choice; a plain "sit down" b
     assert.ok(wantsPlainSit('Кира, садись') && wantsPlainSit('присядь, пожалуйста') && wantsPlainSit('Сядь куда-нибудь'));
     assert.ok(!wantsPlainSit('не садись') && !wantsPlainSit('Кира, не садись пока') && !wantsPlainSit('сядьмо') && !wantsPlainSit('как дела?'));
     sessions(t);
-    const words = new SceneService(owner, new AppMode(), (async () => ({ reply: 'Хорошо, сейчас найду, куда сесть.' })) as any, { OPENAI_API_KEY: 'x' } as any);
-    const reply = await words.turn(parseSceneTurn({ text: 'Кира, садись', scene: scene() }), null) as any;
+    const none = new SceneService(owner, new AppMode(), new Channel(), chooser([]));
+    const reply = await none.turn(parseSceneTurn({ text: 'Кира, садись', scene: scene() }), null) as any;
     assert.deepEqual(reply.actions.map((a: any) => [a.kind, a.targetId, a.roomVersion]), [['sit', undefined, 3]]);
-    assert.equal((await words.turn(parseSceneTurn({ text: 'Не садись, постой', scene: scene() }), null) as any).actions.length, 0);
+    assert.equal((await none.turn(parseSceneTurn({ text: 'Не садись, постой', scene: scene() }), null) as any).actions.length, 0);
     const seated = scene({ avatar: { position: [0, 0, -1], yaw: 3.14, pose: 'seated', seatId: seat } });
-    assert.equal((await words.turn(parseSceneTurn({ text: 'Садись', scene: seated }), null) as any).actions.length, 0);   // already sitting: nothing
+    assert.equal((await none.turn(parseSceneTurn({ text: 'Садись', scene: seated }), null) as any).actions.length, 0);   // already sitting: nothing
     // the model's own targeted sit is kept, not doubled
-    const named = new SceneService(owner, new AppMode(), (async () => ({ reply: 'Сяду на стул.', actions: [{ kind: 'sit', targetId: seat }] })) as any, { OPENAI_API_KEY: 'x' } as any);
+    const named = new SceneService(owner, new AppMode(), new Channel(), chooser([{ kind: 'sit', targetId: seat }]));
     assert.deepEqual((await named.turn(parseSceneTurn({ text: 'Садись на стул', scene: scene() }), null) as any).actions.map((a: any) => a.targetId), [seat]);
-    assert.equal((await words.capabilities() as any).autoSeat, true);
+    assert.equal((await none.capabilities() as any).autoSeat, true);
 });
 
-test('the phone reports which seat it chose and what it did; the next turn sees it', async t => {
-    const rows = sessions(t);
-    const service = new SceneService(owner, new AppMode(), (async () => ({ reply: 'Сейчас сяду.', actions: [{ kind: 'sit' }] })) as any, { OPENAI_API_KEY: 'x' } as any);
+test('the phone reports which seat it chose and what it did; the dialogue gets its words, not ids', async t => {
+    sessions(t);
+    const channel = new Channel();
+    const service = new SceneService(owner, new AppMode(), channel, chooser([{ kind: 'sit' }]));
     const id = (await service.turn(parseSceneTurn({ text: 'Садись', scene: scene() }), null) as any).actions[0].id;
     await assert.rejects(service.actionResult({ actionId: id, status: 'completed', targetId: 'chair-1' }), (e: any) => e.code === 'invalid_scene');
     await assert.rejects(service.actionResult({ actionId: id, status: 'completed', where: 'x' }), (e: any) => e.code === 'invalid_scene');
     assert.deepEqual(await service.actionResult({ actionId: id, status: 'completed', targetId: chair,
         detail: 'выбрано место: Стул, сиденье 45 см; прошла 2.1 м по проверенному пути; развернулась спиной к сиденью; села' }), { ok: true, actionId: id, status: 'completed' });
-    const last = rows.get(`api-scene:${owner}`)!.messageHistory[0].content;
-    assert.match(last, /выполнено: ты смогла сесть \(место 33333333-3333-4333-8333-333333333333; выбрано место: Стул/);
+    assert.match(channel.notes[0], /выполнено: ты смогла сесть \(выбрано место: Стул/);
+    assert.ok(!channel.notes[0].includes(chair));
     // a refusal is a refusal, with the phone's reason
     const id2 = (await service.turn(parseSceneTurn({ text: 'Садись', scene: scene() }), null) as any).actions[0].id;
     await service.actionResult({ actionId: id2, status: 'rejected', reason: 'Не нашла, куда сесть: Стул у двери: на сиденье что-то есть' });
-    assert.match(rows.get(`api-scene:${owner}`)!.messageHistory[0].content, /не выполнено \(rejected\): Не нашла, куда сесть/);
+    assert.match(channel.notes[1], /не выполнено \(rejected\): Не нашла, куда сесть/);
 });
 
 class Receipts implements ApiOperationStore {

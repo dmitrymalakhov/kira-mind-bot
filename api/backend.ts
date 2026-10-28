@@ -22,7 +22,8 @@ import type { ApiSettingsPatch } from './settings';
 import { ApiModelCatalog, ApiModelSettingsStore, BotSettingsApiModelStore, apiTurnPreset, buildApiModelSettings,
     saveApiModelSelection } from './modelSettings';
 import { runWithChannelPreset } from '../services/aiRuntimeConfigService';
-import { SceneService, type SceneTurn, type VisionRoute } from './scene';
+import { SceneService, type SceneChannel, type SceneTurn, type VisionRoute } from './scene';
+import { addToHistory } from '../utils/history';
 import type { AiPresetName } from '../ai/modelPresets';
 import { registerDialogueLifecycle, publicDialogueJob, activateDialogueJob } from '../services/dialogueJobs';
 import { DialogueJobRepository } from '../services/DialogueJobRepository';
@@ -75,7 +76,7 @@ export class BotApiBackend implements ApiBackend {
     updateModelPreferences(body: unknown) { return saveModelPreferences(body); }
     updateSettings(patch: ApiSettingsPatch) { return updateUserSettings(patch); }
     private sceneService?: SceneService;
-    private get scene() { return this.sceneService ??= new SceneService(this.options.ownerId, this.models); }
+    private get scene() { return this.sceneService ??= new SceneService(this.options.ownerId, this.models, this.sceneChannel()); }
     sceneCapabilities() { return this.scene.capabilities(); }
     sceneReady(turn: SceneTurn) { return this.scene.ready(turn); }
     sceneTurn(turn: SceneTurn, preset: AiPresetName | null) { return this.scene.turn(turn, preset); }
@@ -127,13 +128,13 @@ export class BotApiBackend implements ApiBackend {
 
     file(id: string) { return this.files.read(id); }
 
-    async message(text: string, options: { deferredDialogue?: boolean } = {}): Promise<ApiReply> {
+    async message(text: string, options: { deferredDialogue?: boolean; preset?: AiPresetName | null; arRoom?: BotContext['arRoom'] } = {}): Promise<ApiReply> {
         const command = text.match(/^\/[a-zA-Z0-9_]+(?:@[a-zA-Z0-9_]+)?/);
         return this.dispatch({ update_id: 0, message: {
             message_id: nextApiMessageId(), date: Math.floor(Date.now() / 1000),
             from: this.owner(), chat: this.chat(), text,
             ...(command ? { entities: [{ type: 'bot_command', offset: 0, length: command[0].length }] } : {}),
-        } }, false, undefined, options.deferredDialogue === true);
+        } }, false, undefined, options.deferredDialogue === true, options.preset, options.arRoom);
     }
 
     async action(token: string): Promise<ApiReply> {
@@ -148,7 +149,7 @@ export class BotApiBackend implements ApiBackend {
         } }, true, action.version);
     }
 
-    async photo(buffer: Buffer, caption = '', preset?: AiPresetName | null): Promise<ApiReply> {
+    async photo(buffer: Buffer, caption = '', preset?: AiPresetName | null, arRoom?: BotContext['arRoom']): Promise<ApiReply> {
         const selected = preset === undefined ? await this.photoReady() : preset;
         const fileId = `api-photo-${randomUUID()}`;
         this.photoInputs.set(fileId, buffer);
@@ -156,14 +157,32 @@ export class BotApiBackend implements ApiBackend {
             return await this.dispatch({ update_id: 0, message: {
                 message_id: nextApiMessageId(), date: Math.floor(Date.now() / 1000), from: this.owner(), chat: this.chat(),
                 ...(caption ? { caption } : {}), photo: [{ file_id: fileId, file_unique_id: fileId, width: 16, height: 16 }],
-            } }, false, undefined, false, selected);
+            } }, false, undefined, false, selected, arRoom);
         } finally { this.photoInputs.delete(fileId); }
+    }
+
+    /** Room turns as turns of this same dialogue: words as /messages, a frame as /photos, the room as their context. */
+    private sceneChannel(): SceneChannel {
+        return {
+            say: (text, room, preset) => this.message(text, { preset, arRoom: room }),
+            look: (frame, text, room, preset) => this.photo(frame, text, preset, room),
+            visionRoute: () => photoVisionRoute(),   // under the mode the scene service sets
+            recent: async () => (await this.storage.read(this.sessionKey))?.messageHistory ?? [],
+            note: async line => {
+                const persisted = await this.storage.read(this.sessionKey);
+                const ctx = { session: Object.assign({ reminders: [], messageHistory: [], dialogueSummary: '', lastSummarizedIndex: -1,
+                    domains: {}, sentMessages: {} }, persisted), sessionStorageKey: this.sessionKey } as unknown as BotContext;
+                await addToHistory(ctx, 'bot', line);
+                await this.storage.write(this.sessionKey, ctx.session);
+            },
+        };
     }
 
     private owner() { return { id: this.options.ownerId, is_bot: false, first_name: 'Владелец' }; }
     private chat() { return { id: this.options.ownerId, type: 'private' as const, first_name: 'Владелец' }; }
 
-    private async dispatch(update: Update, confirmation = false, expectedVersion?: string, deferredDialogue = false, selectedPreset?: AiPresetName | null): Promise<ApiReply> {
+    private async dispatch(update: Update, confirmation = false, expectedVersion?: string, deferredDialogue = false, selectedPreset?: AiPresetName | null,
+                           arRoom?: BotContext['arRoom']): Promise<ApiReply> {
         const persisted = await this.storage.read(this.sessionKey);
         if (expectedVersion !== undefined && persisted?.apiActionVersion !== expectedVersion) {
             throw new ApiError(410, 'action_expired', 'Кнопка относится к предыдущему запросу. Повтори исходный запрос.');
@@ -182,6 +201,7 @@ export class BotApiBackend implements ApiBackend {
         });
         ctx.sessionStorageKey = this.sessionKey;
         ctx.allowDeferredDialogue = deferredDialogue;
+        ctx.arRoom = arRoom;
         // The app's own text mode, read once per turn; null follows the server's global preset.
         const preset = selectedPreset === undefined ? await apiTurnPreset(this.models) : selectedPreset;
         await runWithChannelPreset(preset, async () => { await this.dispatcher.middleware()(ctx, async () => {}); });

@@ -838,7 +838,7 @@ export async function processMessage(
             !internalBrowserContinuation && !isBrowserTaskLike && !hasActivePendingBrowserTask(ctx) && isSimpleSocialMessage(originalMessage, config.characterName);
         const fastTurn = options.turn ?? { userText: originalMessage };
         const fastEligible = options.fastDialogue === true && !options.recurringTaskRun && !options.voiceReplyRequested &&
-            !isForwarded && !isBrowserTaskLike && !explicitRemember && canUseFastDialogue(ctx, fastTurn);
+            !isForwarded && !isBrowserTaskLike && !explicitRemember && !ctx?.arRoom && canUseFastDialogue(ctx, fastTurn);
         const presenceReply = fastEligible && simplePresenceReply(originalMessage, config.characterName);
         if (presenceReply) return { responseText: presenceReply, operationStatus: 'ok', skipOptionalFollowups: true, fastResponse: true };
         const socialClassification: MessageClassification | null = simpleSocial && !fastEligible ? {
@@ -1140,6 +1140,8 @@ export async function processMessage(
                 .join('; ');
             enrichedContextFromMemory += `Сохранённые группы чатов пользователя: ${groupsLine}.\n\n`;
         }
+        // A turn said in the AR room: the room and Kira's body are this turn's context, never stored.
+        if (ctx?.arRoom) enrichedContextFromMemory += `${ctx.arRoom.context}\n\n`;
 
         if (orchestrationMode() === 'skills') {
             const pendingBrowserId = ctx.session.pendingBrowserTask?.sessionId;
@@ -1222,7 +1224,7 @@ async function processRuntimeImages(ctx: any, images: Buffer[], caption: string,
         if (source.requiresWeb) classification = applyKnowledgeSourceDecision(classification, source).classification;
         const memory = await fetchAgentMemoryContext(ctx, caption || 'изображение', { memoryNeed: classification.details.memoryNeed });
         const result = await runKiraRuntime({ ctx, images, message: caption || 'Опиши присланное изображение', isForwarded: false, forwardFrom: '', messageHistory,
-            classification, enrichedContextFromMemory: [buildMemoryContextBlock(memory), buildKnowledgeSourcePrompt(source)].filter(Boolean).join('\n\n') });
+            classification, enrichedContextFromMemory: [buildMemoryContextBlock(memory), buildKnowledgeSourcePrompt(source), ctx?.arRoom?.context].filter(Boolean).join('\n\n') });
         result.recalledMemories = memory.recalledMemories ?? [];
         return result;
     } catch {
@@ -1247,7 +1249,8 @@ export async function processImage(
     try {
         const memoryQuery = caption || 'изображение';
         const sharedMemoryContext = await fetchAgentMemoryContext(ctx, memoryQuery);
-        const memoryContextBlock = buildMemoryContextBlock(sharedMemoryContext);
+        // a camera frame from the AR room comes with the room it was taken in
+        const memoryContextBlock = [buildMemoryContextBlock(sharedMemoryContext), ctx?.arRoom?.context].filter(Boolean).join('\n\n');
 
         // Если есть комментарий, проверяем, содержит ли он явную просьбу о напоминании
         let reaction: string | undefined = undefined;

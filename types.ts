@@ -380,6 +380,9 @@ export type BotContext = Context & SessionFlavor<SessionData> & {
     dialogueJobId?: string;
     /** API clients must opt into deferred responses; Telegram supports them natively. */
     allowDeferredDialogue?: boolean;
+    /** A turn said in the app's AR room: the room and Kira's 3D body as this turn's context (never stored), and
+     *  whether the turn's photo is the phone's camera frame, whose reading stays visual context, not facts. */
+    arRoom?: { context: string; frame: boolean };
 };
 
 // Интерфейс для хранения истории сообщений
