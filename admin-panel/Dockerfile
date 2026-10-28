@@ -9,9 +9,10 @@ RUN npm run build
 
 # Stage 2: Production server
 FROM node:23-alpine
-WORKDIR /app/admin-panel
+WORKDIR /app
 COPY admin-panel/package.json admin-panel/package-lock.json* ./
 RUN npm install --omit=dev
+WORKDIR /app/admin-panel
 COPY --from=builder /workspace/admin-panel/dist ./dist
 COPY admin-panel/*.js ./
 COPY admin-panel/runtime-health-metadata.json ./runtime-health-metadata.json
@@ -28,5 +29,6 @@ COPY assets/characters/kira /app/assets/characters/kira
 COPY ai/memoryEmbeddingProviderSupport.js /app/ai/memoryEmbeddingProviderSupport.js
 COPY utils/legacyPersonalitySanitizer.js /app/utils/legacyPersonalitySanitizer.js
 COPY utils/telegramAccess.js /app/utils/telegramAccess.js
+COPY utils/mcpConfig.js utils/mcpConnection.js /app/utils/
 EXPOSE 3000
 CMD ["node", "server.js"]
