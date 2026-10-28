@@ -183,7 +183,7 @@ function directCases() {
         { id: 'candles-day', tool: 'get_candles', args: { ticker: 'GAZP', interval: '1d', limit: 20 }, candles: 20 },
         { id: 'price-summary', tool: 'get_price_summary', args: { ticker: 'SBER', interval: '1h', lookback: 80 } },
         { id: 'indicators-list', tool: 'list_available_indicators', args: {} },
-        { id: 'indicator-rsi-direct', tool: 'get_indicator', args: { ticker: 'SBER', interval: '1h', indicator: 'RSI', tail: 5 } },
+        { id: 'indicator-rsi-direct', tool: 'get_indicator', args: { ticker: 'SBER', interval: '1h', indicator: 'RSI', tail: 1 }, indicatorContract: true },
         { id: 'indicator-gazp-contract', tool: 'get_indicator', args: { ticker: 'GAZP', interval: '1h', indicator: 'RSI', tail: 5 }, indicatorContract: true },
         { id: 'indicator-macd-contract', tool: 'get_indicator', args: { ticker: 'SBER', interval: '1h', indicator: 'MACD', tail: 3 }, indicatorContract: true },
         { id: 'indicator-bollinger-contract', tool: 'get_indicator', args: { ticker: 'SBER', interval: '1h', indicator: 'BollingerBands', tail: 3 }, indicatorContract: true },
@@ -236,6 +236,11 @@ async function runCase(test, kind, runtime) {
                             expect(data && Array.isArray(data.tail) && data.tail.length > 0, 'Indicator tail must contain actual points');
                             expect(data.requestedTail === test.args.tail && data.count === data.tail.length && data.count <= test.args.tail, 'Indicator tail bounds/metadata disagree');
                             expect(data.latest && data.latest.time === data.tail[data.tail.length - 1].time, 'Latest indicator point is missing or misaligned');
+                            expect(data.full && typeof data.full === 'object', 'Full indicator series was lost in full mode');
+                            if (Array.isArray(data.full.values)) {
+                                const last = [...data.full.values].reverse().find(item => typeof item?.value === 'number');
+                                expect(last && last.value === data.latest.value && last.time === data.latest.time, 'Latest indicator point differs from the full series');
+                            }
                         }
                     }
                 } else {
@@ -357,4 +362,5 @@ async function main() {
 }
 main().catch(error => { output({ type: 'fatal', errorType: error.name, message: error.message }); process.exitCode = 1; })
     .finally(() => { if (runRoot) fs.rmSync(runRoot, { recursive: true, force: true }); })
+    .then(() => new Promise(resolve => process.stdout.write('', resolve)))
     .then(() => process.exit(process.exitCode || 0));
