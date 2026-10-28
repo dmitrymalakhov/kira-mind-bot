@@ -131,7 +131,7 @@ def main():
         print('Pausing the old poller briefly; original storage remains in place...', flush=True)
         run([args.docker, 'stop', instance])
         stopped = True
-        allowed = {'allowed-user-chat.json', 'dm-report-state.json', 'browser-credentials.json',
+        allowed = {'allowed-user-chat.json', 'dm-report-state.json', 'browser-credentials.json', 'mcp.json',
                    'browser-sessions', 'browser-profiles', 'browser-trajectories', 'browser-site-patterns.json',
                    'api-files', 'image-generation'}
         for source in (ROOT / 'runtime-data').iterdir():

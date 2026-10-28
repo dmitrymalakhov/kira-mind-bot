@@ -2,6 +2,7 @@ import type {
   ConfigResponse,
   AiUsageQuery,
   AiUsageSummaryResponse,
+  AiUsageTraceChain,
   HealthExportFormat,
   HealthLogQuery,
   HealthLogsResponse,
@@ -24,6 +25,20 @@ import type { BudgetMode } from '../../ai/budgetMode';
 import type { BackgroundFeature, BackgroundFeatureState } from '../../ai/backgroundFeatures';
 
 export const AUTH_REQUIRED_EVENT = 'kira:auth-required';
+
+export interface McpConnectionSettings { revision: string; configured: boolean; url: string; tokenConfigured: boolean; toolCount: number }
+export interface McpConnectionDraft { revision: string; url: string; token?: string }
+async function mcpApi(method = 'GET', data?: McpConnectionDraft | { revision: string }, suffix = '') {
+  const response = await apiFetch(`/api/mcp/money-maker${suffix}`, { method,
+    ...(data ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) } : {}) });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || 'Не удалось настроить MCP');
+  return body;
+}
+export function fetchMcpConnection(): Promise<McpConnectionSettings> { return mcpApi(); }
+export function saveMcpConnection(data: McpConnectionDraft): Promise<McpConnectionSettings> { return mcpApi('PUT', data); }
+export function deleteMcpConnection(revision: string): Promise<McpConnectionSettings> { return mcpApi('DELETE', { revision }); }
+export function checkMcpConnection(data: McpConnectionDraft): Promise<{ success: boolean; toolCount: number }> { return mcpApi('POST', data, '/check'); }
 
 export interface ImageGenerationConfig {
   settings: { enabled: boolean; model: string; size: string; quality: string };
@@ -152,6 +167,16 @@ export async function fetchAiUsageSummary(query: AiUsageQuery = {}): Promise<AiU
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
     throw new Error(body.error || 'Failed to load AI usage summary');
+  }
+  return r.json();
+}
+
+export async function fetchAiUsageTraces(query: AiUsageQuery, quickFilter: string, limit: number, offset: number): Promise<{ total: number; chains: AiUsageTraceChain[] }> {
+  const params = toSearchParams({ ...query, quickFilter, limit, offset });
+  const r = await apiFetch(`/api/ai-usage/traces?${params}`);
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body.error || 'Не удалось загрузить цепочки');
   }
   return r.json();
 }

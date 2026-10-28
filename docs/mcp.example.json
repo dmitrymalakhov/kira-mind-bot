@@ -1,0 +1,26 @@
+{
+  "servers": {
+    "money-maker": {
+      "description": "Money Maker: аналитика рынка и акций, новости с доступными текстами, отчётность, индикаторы и календарь событий. Доступные инструменты и параметры определяются актуальным каталогом MCP.",
+      "transport": "jsonrpc",
+      "url": "https://example.com/api/stocks/money-maker/mcp",
+      "headers": { "Authorization": "Bearer REPLACE_WITH_ACCESS_TOKEN" },
+      "fixedArguments": { "responseMode": "full" },
+      "timeoutMs": 60000,
+      "tools": {
+        "get_candles": "read",
+        "get_price_summary": "read",
+        "get_indicator": "read",
+        "list_available_indicators": "read",
+        "get_technical_decision_brief": "read",
+        "get_market_trap_context": "read",
+        "get_market_regime": "read",
+        "search_news": "read",
+        "get_news_decision_brief": "read",
+        "get_news_impulse_signal": "read",
+        "get_company_report": "read",
+        "get_investment_events_calendar": "read"
+      }
+    }
+  }
+}

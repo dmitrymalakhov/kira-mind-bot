@@ -4,7 +4,7 @@ import { config } from '../config';
 import { getBotPersona, getCommunicationStyle } from '../persona';
 import { extractExplicitRememberFact } from '../utils/enhancedFactExtraction';
 import { looksLikeKiraRelocationRequest } from '../utils/kiraResidence';
-import { needsRuntimeTools } from './runtime/authorization';
+import { needsRuntimeTools, isMcpRequest } from './runtime/authorization';
 import { DialogueJobRepository } from '../services/DialogueJobRepository';
 import { getActiveAiPresetName } from '../services/aiRuntimeConfigService';
 import { getModelPolicy } from '../services/modelPreferenceService';
@@ -49,6 +49,7 @@ export function deepWorkNotice(classification: MessageClassification, optional =
 
 export async function tryFastDialogueResult(ctx: BotContext, turn: ConversationTurn, classification: MessageClassification,
     knowledge: KnowledgeSourceDecision, history: MessageHistory[]): Promise<ProcessingResult | undefined> {
+    if (isMcpRequest({ classification, message: turn.userText })) return;
     // A short factual lookup uses synchronous evidence retrieval, not a deferred research job.
     if (isFocusedPersonalRecall(turn.userText) || classification.details.memoryTask === 'lookup' || validMemoryFocus(ctx) && isMemoryContinuation(turn.userText)) return;
     const decision = classification.fastReply;

@@ -33,6 +33,7 @@ import { HealthSection } from './HealthSection';
 import { MemorySection } from './MemorySection';
 import { MonitoringSection } from './MonitoringSection';
 import { RecurringTasksSection } from './RecurringTasksSection';
+import { McpSettingsSection, type McpSettingsHandle } from './McpSettingsSection';
 import { saveConfig, fetchConfig, logout, restartService } from '../api';
 import type { ConfigResponse, Toast } from '../types';
 
@@ -92,6 +93,7 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
   const [dirtySections, setDirtySections] = useState<Record<string, boolean>>({});
   const [toast, setToast] = useState<Toast | null>(null);
   const sectionRefs = useRef<Record<string, ConfigSectionHandle | null>>({});
+  const mcpRef = useRef<McpSettingsHandle>(null);
   const pendingCount = Object.values(dirtySections).filter(Boolean).length;
   const currentPage = NAVIGATION.find(item => item.id === page)!;
   const currentSettings = SETTINGS_TABS.find(item => item.id === settingsTab)!;
@@ -139,7 +141,8 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
       const saved = await fetchConfig();
       Object.values(sectionRefs.current).forEach(section => section?.acceptSaved(saved, updates));
       onConfigUpdate(saved);
-      showToast(result.message || 'Изменения сохранены', 'success');
+      await mcpRef.current?.save();
+      showToast(dirtySections.mcp ? 'Изменения сохранены' : result.message || 'Изменения сохранены', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Ошибка соединения', 'error');
     } finally { setSavingAll(false); }
@@ -239,7 +242,8 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
                 </>}
                 {item.id === 'background' && <BudgetSettingsSection onToast={showToast} />}
                 {item.id === 'connections' && <Stack spacing={2}>
-                  <Typography variant="body2" color="text.secondary">Ключи хранятся на сервере. Изменения подключений применяются после пересоздания контейнеров.</Typography>
+                  <Typography variant="body2" color="text.secondary">Ключи хранятся на сервере. Для ключей AI и Telegram требуется пересоздание контейнеров; настройки MCP применяются сразу.</Typography>
+                  <McpSettingsSection ref={mcpRef} disabled={savingAll} onToast={showToast} onDirtyChange={markDirty} />
                   {KEY_SECTIONS.map(section => <ConfigSection key={section.id} inline
                     ref={element => { sectionRefs.current[section.id] = element; }} section={section} config={config} onUpdate={onConfigUpdate} onToast={showToast} onDirtyChange={markDirty} />)}
                 </Stack>}

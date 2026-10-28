@@ -43,6 +43,7 @@ import { looksLikeKiraRelocationRequest } from "./utils/kiraResidence";
 import { config } from "./config";
 import type { RichBlock } from './utils/richMessage';
 import { canUseFastDialogue, fastDialogueInstructions, tryFastDialogueResult } from './orchestration/fastDialogue';
+import { mcpClassifierContext } from './services/mcp/config';
 import type { FastReplyDecision } from './types/dialogueJobTypes';
 
 // Загрузка переменных окружения
@@ -88,6 +89,8 @@ export interface MessageClassification {
         memoryNeed?: 'none' | 'light' | 'full';
         relationshipRole?: string | null;
         memoryTask?: 'none' | 'lookup' | 'analysis';
+        mcpAccess?: 'read' | 'write';
+        mcpAllowWeb?: boolean;
         urgency?: "ВЫСОКАЯ" | "СРЕДНЯЯ" | "НИЗКАЯ";
         timeReferences?: string[];
         imageDescription?: string; // Описание изображения, которое нужно сгенерировать
@@ -558,14 +561,16 @@ ${knownChatGroups.map(g => `- «${g.name}» (чаты: ${g.chatNames.join(', ')}
 Если пользователь упоминает название любой из этих групп (или часть названия) в контексте анализа/проверки — это ПРОВЕРКА_СООБЩЕНИЙ с groupChatQuery = точное название группы и messagesCheckType: ANALYZE_CONVERSATION.\n`
             : '';
 
+        const mcpContext = mcpClassifierContext();
         const prompt = `Текущая дата и время: ${formattedDateTime}
+${mcpContext}
 ${chatGroupsContext}
 ${historyContext}
 Новая реплика${isForwarded ? ` (переслана от ${forwardFrom})` : ''}: ${message}`;
 
         // Короткие реплики зависят от предыдущих ходов, поэтому история входит
         // в ключ кэша и не может переиспользовать чужую контекстную классификацию.
-        const cacheKey = `${buildClassificationCacheKey(message, messageHistory, knownChatGroups ?? [])}${decisionsEnabled() && orchestrationMode() === 'skills' ? ':decisions' : ''}`;
+        const cacheKey = `${buildClassificationCacheKey(message, messageHistory, knownChatGroups ?? [])}${decisionsEnabled() && orchestrationMode() === 'skills' ? ':decisions' : ''}:${mcpContext}`;
         const cached = fastDialogue ? undefined : llmCache.get<MessageClassification>(cacheKey);
         if (cached) {
             devLog('classifyMessage: cache hit');

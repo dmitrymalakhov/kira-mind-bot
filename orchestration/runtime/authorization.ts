@@ -1,12 +1,18 @@
 import { KIRA_SKILLS } from './skills';
 import { looksLikeKiraRelocationRequest } from '../../utils/kiraResidence';
 import type { ToolContext, ToolDefinition, RuntimeToolCall } from './types';
+import { isExplicitMcpRequest } from '../../services/mcp/config';
+
+export function isMcpRequest(context: Pick<ToolContext, 'classification' | 'message'>): boolean {
+    return ['read', 'write'].includes(String(context.classification.details.mcpAccess)) || isExplicitMcpRequest(context.message);
+}
 
 const DIALOGUE_READ_TOOLS = new Set([
     'web.search', 'maps.geocode', 'maps.findNearby', 'maps.getDirections', 'maps.request',
     'memory.search', 'memory.recent', 'contacts.search', 'contacts.list', 'people.resolve', 'portraits.get',
     'reminders.list', 'tasks.list', 'health.listEntries', 'health.analyzePeriod',
     'self.getState', 'self.searchEvents', 'self.getResidence', 'self.getStudyReports', 'settings.get', 'capabilities.list',
+    'mcp.listServers', 'mcp.listTools', 'mcp.callReadTool', 'mcp.listResources', 'mcp.readResource',
 ]);
 
 export function isDialogueReadTool(definition: ToolDefinition, args?: Record<string, unknown>): boolean {
@@ -18,6 +24,7 @@ export function isDialogueReadTool(definition: ToolDefinition, args?: Record<str
 export function authorizedStateSkills(context: Pick<ToolContext, 'classification' | 'message'>): Set<string> {
     const intents = [context.classification.intent, ...(context.classification.subIntents?.map(item => item.intent) ?? [])];
     const skills = new Set(KIRA_SKILLS.filter(skill => skill.intents.some(intent => intents.includes(intent as typeof intents[number]))).map(skill => skill.id));
+    if (context.classification.details.mcpAccess === 'write') skills.add('mcp');
     const text = context.message;
     if (looksLikeKiraRelocationRequest(text)) skills.add('self-study');
     const explicit: Array<[string, RegExp]> = [
@@ -36,6 +43,7 @@ export function authorizedStateSkills(context: Pick<ToolContext, 'classification
 }
 
 export function needsRuntimeTools(context: Pick<ToolContext, 'classification' | 'message'>): boolean {
+    if (isMcpRequest(context)) return true;
     const skills = authorizedStateSkills(context);
     // The semantic classifier already distinguishes remembered work/tasks from
     // operational objects. A word such as «задачи» must not launch a second
@@ -50,6 +58,8 @@ export function needsRuntimeTools(context: Pick<ToolContext, 'classification' | 
 }
 
 export function canExecuteRuntimeCall(definition: ToolDefinition, call: RuntimeToolCall, context: ToolContext): boolean {
+    if (isMcpRequest(context) && context.classification.details.mcpAllowWeb !== true &&
+        (call.tool === 'web.search' || call.tool === 'agents.start' && ['research', 'browser'].includes(String(call.args.kind)))) return false;
     if (context.readOnly) return isDialogueReadTool(definition, call.args);
     if (definition.effect === 'read') return true;
     const skills = authorizedStateSkills(context);
@@ -71,7 +81,14 @@ export function canExecuteRuntimeCall(definition: ToolDefinition, call: RuntimeT
 
 export function availableRuntimeTools(tools: ToolDefinition[], context: ToolContext): ToolDefinition[] {
     const skills = authorizedStateSkills(context);
-    return tools.filter(tool => context.readOnly ? isDialogueReadTool(tool) : tool.effect === 'read' || tool.name === 'agents.start' || skills.has(tool.skill))
+    const mcpOnly = isMcpRequest(context) && context.classification.details.mcpAllowWeb !== true;
+    return tools.filter(tool => !(mcpOnly && tool.name === 'web.search'))
+        .filter(tool => context.readOnly ? isDialogueReadTool(tool) && !(mcpOnly && tool.name === 'agents.start') : tool.effect === 'read' || tool.name === 'agents.start' || skills.has(tool.skill))
+        .map(tool => mcpOnly && tool.name === 'agents.start' ? { ...tool,
+            description: 'Явно порученное интерактивное действие. Веб и браузер не заменяют запрошенный MCP-источник.',
+            inputSchema: { ...tool.inputSchema, properties: { ...tool.inputSchema.properties,
+                kind: { type: 'string' as const, enum: ['negotiation', 'study-chat'] } } },
+        } : tool)
         .map(tool => context.readOnly && tool.name === 'agents.start' ? { ...tool,
             description: 'Делегировать одно ограниченное исследование веб-источников research-агенту.',
             inputSchema: { ...tool.inputSchema, properties: { ...tool.inputSchema.properties, kind: { type: 'string' as const, enum: ['research'] } } },

@@ -21,7 +21,7 @@ async function checkRuntimeSkills() {
     const { SkillLoader, KIRA_SKILLS } = require('../dist/orchestration/runtime/skills.js');
     const loader = new SkillLoader();
     for (const skill of KIRA_SKILLS) assert.match(await loader.load(skill.id), /name:/, `Packaged skill ${skill.id} must load`);
-    assert.equal(loader.ids().length, 14);
+    assert.equal(loader.ids().length, KIRA_SKILLS.length);
     assert.equal(require('../dist/orchestration/runtime/kernel.js').orchestrationMode(), 'skills');
     console.log("built server runtime checks passed");
 }

@@ -36,6 +36,8 @@ export interface KiraRuntimeInput {
     continuationAnswer?: string;
     /** Deferred dialogue analysis may retrieve evidence but cannot mutate domain state. */
     readOnly?: boolean;
+    /** Server-bound confirmation of one exact MCP call; never a model argument. */
+    confirmedMcpCall?: string;
 }
 
 export interface ToolObservation {

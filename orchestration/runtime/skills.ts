@@ -8,6 +8,7 @@ export interface KiraSkill {
 }
 
 export const KIRA_SKILLS: readonly KiraSkill[] = [
+    { id: 'mcp', description: 'Подключённые MCP-сервисы: аналитика, внешние данные и разрешённые инструменты.', intents: [] },
     { id: 'web-research', description: 'Актуальные сведения, источники, новости и сравнение вариантов.', intents: ['ВЕБ_ПОИСК'] },
     { id: 'places-and-routes', description: 'Адреса, координаты, места рядом и маршруты.', intents: ['КАРТЫ_ЛОКАЦИИ'] },
     { id: 'reminders', description: 'Создание, изменение и отмена напоминаний и повторений.', intents: ['НАПОМИНАНИЕ'] },

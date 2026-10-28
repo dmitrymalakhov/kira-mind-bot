@@ -14,13 +14,14 @@ const { registerBudgetModeRoutes } = require('./budgetMode');
 const { registerBackgroundFeatureRoutes } = require('./backgroundFeatures');
 const { registerLocalModelRoutes, readLocalRoutes, resolveLocalPreset } = require('./localModels');
 const { registerImageGenerationRoutes } = require('./imageGeneration');
+const { registerMcpRoutes } = require('./mcp');
 const {
   DEFAULT_MEMORY_EMBEDDING_PROFILE,
   getMemoryEmbeddingProfile,
   parseMemoryEmbeddingProfileName,
 } = require('./memoryEmbeddingProfileRegistry');
 const { createMonitoringService } = require('./monitoring');
-const { buildAiUsageSummary } = require('./aiUsageAnalytics');
+const { buildAiUsageSummary, buildAiUsageTracePage } = require('./aiUsageAnalytics');
 const { getPresetAvailabilityForMemoryProfile, getProviderDescriptor } = require('./presetAvailability');
 const { hasLegacyDigitalBiography } = require('../utils/legacyPersonalitySanitizer');
 const { createMemoryEmbeddingHttp } = require('../ai/memoryEmbeddingHttp');
@@ -404,6 +405,8 @@ registerBudgetModeRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTabl
 registerBackgroundFeatureRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
 registerLocalModelRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
 registerImageGenerationRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
+registerMcpRoutes(app, { requireAuth, runtimeDir: process.env.KIRA_RUNTIME_DATA_DIR || path.join(__dirname, '..', 'data'),
+  accountMode: process.env.KIRA_MCP_ACCOUNT_MODE === 'true' });
 
 app.get('/api/ai-preset', requireAuth, async (_req, res) => {
   const vars = readEnvFile();
@@ -2344,6 +2347,17 @@ app.get('/api/ai-usage/summary', requireAuth, async (req, res) => {
     res.json(summary);
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : `Ошибка AI usage analytics: ${err.message}` });
+  } finally {
+    await pool.end().catch(() => {});
+  }
+});
+
+app.get('/api/ai-usage/traces', requireAuth, async (req, res) => {
+  const pool = createDbPool();
+  try {
+    res.json(await buildAiUsageTracePage({ pool, query: req.query, now: new Date() }));
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : `Ошибка загрузки цепочек: ${err.message}` });
   } finally {
     await pool.end().catch(() => {});
   }

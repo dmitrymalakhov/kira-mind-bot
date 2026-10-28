@@ -307,7 +307,7 @@ function normalizeTraceAttempt(row) {
   };
 }
 
-function buildTraceChains(rows) {
+function buildTraceChains(rows, limit = TRACE_CHAIN_LIMIT) {
   const grouped = new Map();
 
   for (const row of rows) {
@@ -373,7 +373,54 @@ function buildTraceChains(rows) {
       };
     })
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
-    .slice(0, TRACE_CHAIN_LIMIT);
+    .slice(0, limit);
+}
+
+async function buildAiUsageTracePage({ pool, query = {}, now = new Date() }) {
+  const { whereSql, values } = buildAiUsageFilters(query, now);
+  const quickFilter = firstQueryValue(query.quickFilter) || 'all';
+  const conditions = {
+    all: 'TRUE',
+    gemini503: 'gemini_503',
+    'provider-errors': 'provider_errors',
+    'recovered-fallback': 'has_fallback AND final_success',
+    'user-visible-failures': 'NOT final_success',
+  };
+  if (!Object.hasOwn(conditions, quickFilter)) throw httpInputError('Недопустимый quickFilter');
+  const limit = normalizeIntegerQuery(query.limit, 10, 100);
+  const rawOffset = firstQueryValue(query.offset);
+  const offset = rawOffset === undefined ? 0 : Number(rawOffset);
+  if (!Number.isSafeInteger(offset) || offset < 0) throw httpInputError('Недопустимый offset');
+  const result = await pool.query(
+    `WITH filtered AS (
+      SELECT *, NULLIF("traceId", '') AS trace_id,
+        CASE WHEN NULLIF("traceId", '') IS NULL THEN id::text ELSE NULL END AS legacy_id
+      FROM ai_usage_logs WHERE ${whereSql}
+    ), chains AS (
+      SELECT trace_id, legacy_id,
+        (array_agg("createdAt" ORDER BY CASE WHEN stage = 'primary' THEN 0 ELSE 1 END, attempt ASC NULLS LAST, "createdAt" ASC, id ASC))[1] AS chain_time,
+        (array_agg(success ORDER BY attempt DESC NULLS FIRST, "createdAt" DESC, id DESC))[1] AS final_success,
+        bool_or(COALESCE(stage = 'fallback', false) OR COALESCE("fallbackUsed", false)) AS has_fallback,
+        bool_or(provider = 'gemini' AND "errorStatus" = 503) AS gemini_503,
+        bool_or("errorCategory" IS NOT NULL AND "errorCategory" <> '' AND "errorCategory" <> 'unknown') AS provider_errors
+      FROM filtered GROUP BY trace_id, legacy_id
+    ), matching AS (
+      SELECT * FROM chains WHERE ${conditions[quickFilter]}
+    ), page AS (
+      SELECT * FROM matching ORDER BY chain_time DESC, trace_id ASC NULLS LAST, legacy_id ASC NULLS LAST
+      LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+    )
+    SELECT (SELECT COUNT(*)::int FROM matching) AS total,
+      COALESCE((SELECT json_agg(json_build_object('attempts', (
+        SELECT json_agg(filtered ORDER BY attempt ASC NULLS LAST, "createdAt" ASC, id ASC)
+        FROM filtered WHERE filtered.trace_id IS NOT DISTINCT FROM page.trace_id
+          AND filtered.legacy_id IS NOT DISTINCT FROM page.legacy_id
+      )) ORDER BY page.chain_time DESC, page.trace_id ASC NULLS LAST, page.legacy_id ASC NULLS LAST) FROM page), '[]'::json) AS chains`,
+    [...values, limit, offset],
+  );
+  const row = result.rows[0] || {};
+  const chains = (row.chains || []).flatMap((chain) => buildTraceChains(chain.attempts, Infinity));
+  return { total: toNumber(row.total), chains };
 }
 
 async function buildAiUsageSummary({ pool, query = {}, now = new Date() }) {
@@ -569,4 +616,5 @@ async function buildAiUsageSummary({ pool, query = {}, now = new Date() }) {
 module.exports = {
   AI_USAGE_OPERATIONS,
   buildAiUsageSummary,
+  buildAiUsageTracePage,
 };
