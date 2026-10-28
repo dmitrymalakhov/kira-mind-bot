@@ -26,19 +26,30 @@ import type { BackgroundFeature, BackgroundFeatureState } from '../../ai/backgro
 
 export const AUTH_REQUIRED_EVENT = 'kira:auth-required';
 
-export interface McpConnectionSettings { revision: string; configured: boolean; url: string; tokenConfigured: boolean; toolCount: number }
-export interface McpConnectionDraft { revision: string; url: string; token?: string }
+export type McpEffect = 'read' | 'external';
+export interface McpServerSettings {
+  description: string; transport: 'http' | 'jsonrpc' | 'stdio'; url?: string;
+  headers?: Record<string, string | null>; command?: string; args?: string[]; env?: Record<string, string | null>;
+  oauth?: { tokenUrl: string; clientId: string; clientSecret: string | null; scope?: string; audience?: string };
+  tools: Record<string, McpEffect>; fixedArguments?: Record<string, unknown>; timeoutMs: number;
+}
+export interface McpConnection { id: string; config: McpServerSettings }
+export interface McpConnectionSettings {
+  revision: string; servers: McpConnection[]; templates: Array<McpConnection & { name: string }>;
+}
+export interface McpConnectionDraft { revision: string; config: McpServerSettings }
+export interface McpProbeResult { success: boolean; toolCount: number; tools: Array<{ name: string; description: string }>; truncated: boolean; resources: boolean }
 async function mcpApi(method = 'GET', data?: McpConnectionDraft | { revision: string }, suffix = '') {
-  const response = await apiFetch(`/api/mcp/money-maker${suffix}`, { method,
+  const response = await apiFetch(`/api/mcp/servers${suffix}`, { method,
     ...(data ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) } : {}) });
   const body = await response.json();
   if (!response.ok) throw new Error(body.error || 'Не удалось настроить MCP');
   return body;
 }
-export function fetchMcpConnection(): Promise<McpConnectionSettings> { return mcpApi(); }
-export function saveMcpConnection(data: McpConnectionDraft): Promise<McpConnectionSettings> { return mcpApi('PUT', data); }
-export function deleteMcpConnection(revision: string): Promise<McpConnectionSettings> { return mcpApi('DELETE', { revision }); }
-export function checkMcpConnection(data: McpConnectionDraft): Promise<{ success: boolean; toolCount: number }> { return mcpApi('POST', data, '/check'); }
+export function fetchMcpConnections(): Promise<McpConnectionSettings> { return mcpApi(); }
+export function saveMcpConnection(id: string, data: McpConnectionDraft, create = false): Promise<McpConnectionSettings> { return mcpApi(create ? 'POST' : 'PUT', data, `/${encodeURIComponent(id)}`); }
+export function deleteMcpConnection(id: string, revision: string): Promise<McpConnectionSettings> { return mcpApi('DELETE', { revision }, `/${encodeURIComponent(id)}`); }
+export function checkMcpConnection(id: string, data: McpConnectionDraft): Promise<McpProbeResult> { return mcpApi('POST', data, `/${encodeURIComponent(id)}/check`); }
 
 export interface ImageGenerationConfig {
   settings: { enabled: boolean; model: string; size: string; quality: string };
