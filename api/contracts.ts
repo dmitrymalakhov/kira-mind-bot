@@ -61,7 +61,7 @@ export interface ApiBackend {
     sceneReady(turn: import('./scene').SceneTurn): Promise<import('../ai/modelPresets').AiPresetName | null>;
     sceneTurn(turn: import('./scene').SceneTurn, preset: import('../ai/modelPresets').AiPresetName | null): Promise<ApiReply>;
     /** Stage "prepare" of a scene turn: what the words ask for, before any frame; nothing answered, stored or done. */
-    scenePrepare?(turn: import('./scene').SceneTurn): Promise<unknown>;
+    scenePrepare?(turn: import('./scene').ScenePreparation): Promise<unknown>;
     /** Stage "cancel": a prepared turn the owner stopped can no longer be executed. */
     sceneCancel?(target: { plan: string } | { roomId: string; coordinateSpaceId: string }): Promise<unknown>;
     sceneActionResult(body: Record<string, unknown>): Promise<unknown>;
@@ -69,5 +69,5 @@ export interface ApiBackend {
 }
 
 export interface ApiOperationStore {
-    run(key: string, fingerprint: string, work: () => Promise<ApiReply>): Promise<ApiReply>;
+    run(key: string, fingerprint: string, work: () => Promise<ApiReply>, options?: { releaseRefusals?: boolean }): Promise<ApiReply>;
 }

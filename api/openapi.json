@@ -851,7 +851,7 @@
         "summary": "AR scene capabilities: the photo model that reads a frame in the app's mode, frame limits, allowed actions",
         "responses": {
           "200": {
-            "description": "Capabilities: version, frame limits, actions, autoSeat (true: sit without targetId lets the phone choose the seat; results may name it), pointing (true: point actions and scene.things are accepted), mode, vision route; intentPlanning {version, intents, planTtlSeconds}: stage \"prepare\" decides by meaning whether a turn needs a frame"
+            "description": "Capabilities: version, frame limits, actions, autoSeat (true: sit without targetId lets the phone choose the seat; results may name it), pointing (true: point actions and scene.things are accepted), mode, vision route; intentPlanning {version, intents, planTtlSeconds}: stage \"prepare\" decides by meaning whether a turn needs a frame; intentPlanning.controlOnly:true advertises nonexecuting control-only preparation."
           },
           "401": {
             "description": "Error",
@@ -995,7 +995,7 @@
                       "x",
                       "y"
                     ],
-                    "description": "With a frame only: where the thing Kira just showed is on this frame (0–1), for \"no, the other one\"",
+                    "description": "With a frame only: the previously shown thing's position on this frame (0–1). Context for the current request, not an unconditional exclusion: repeat keeps that thing, replacement excludes it, a new referent ignores the old exclusion.",
                     "properties": {
                       "x": {
                         "type": "number",
@@ -1015,7 +1015,7 @@
                       "prepare",
                       "cancel"
                     ],
-                    "description": "prepare: {stage, text, scene, followUp?} — no frame, plan or avoid, no Idempotency-Key, no receipt; returns {plan: {id, expiresAt, intent: chat|look|find|clarify|cancel, frame, referent?, vision}}. cancel: {stage, plan} — that plan can no longer be executed; or {stage, room: {roomId, coordinateSpaceId}} — every plan prepared or still preparing in that room is off. An older preparation finishing after a newer one (or after a room cancel) is refused with 409 plan_superseded."
+                    "description": "prepare: {stage, text, scene, followUp?} — no frame, plan or avoid, no Idempotency-Key, no receipt; returns {plan: {id, expiresAt, intent: chat|look|find|clarify|cancel, frame, referent?, vision}}. cancel: {stage, plan} — that plan can no longer be executed; or {stage, room: {roomId, coordinateSpaceId}} — every plan prepared or still preparing in that room is off. An older preparation finishing after a newer one (or after a room cancel) is refused with 409 plan_superseded. prepare accepts optional controlOnly:true when intentPlanning.controlOnly is advertised: a control decision with frame:false and executable:false, no generation/plan changes. Normal preparation returns executable:true. A frame for a nonvisual/cancel plan is refused with 400 unexpected_frame before any handler."
                   },
                   "room": {
                     "type": "object",
@@ -1035,6 +1035,11 @@
                         "format": "uuid"
                       }
                     }
+                  },
+                  "controlOnly": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "stage prepare only. Semantic control probe for an interjection: classifies with the same context but does not supersede or register an executable plan. Its plan has frame:false and executable:false; only a later explicit cancel request cancels the original. Its id cannot execute a turn."
                   }
                 }
               }
@@ -1046,7 +1051,7 @@
             "description": "messages, actions [{id, kind: sit|stand|approach|lookAtUser|point, targetId?, label?, at?, roomId, roomVersion}] (sit without targetId: the phone chooses the seat from its own LiDAR scan; point: at {x, y, box?} is the thing on the turn's frame, 0–1 from the picture's top left, found by the photo model of the app's mode and put into the room by the phone's own depth; without at, targetId is a remembered thing or a room object; several such things, a poor view or no such thing give no point), rejectedActions [{kind, reason, code?, label?}] (point codes: not_found, ambiguous, unsure, no_frame, no_label, unknown_target, one_at_a_time), seen? [{label, at}] (other small things on the frame, for the phone to remember), vision {used, provider, model, location}. With a frame, the body's choice and the search run before the answer, so the words say what the arm does or ask which one / for a better view."
           },
           "400": {
-            "description": "invalid_scene / idempotency_key_required",
+            "description": "invalid_scene / idempotency_key_required / unexpected_frame",
             "content": {
               "application/json": {
                 "schema": {

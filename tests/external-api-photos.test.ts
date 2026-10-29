@@ -57,7 +57,7 @@ test('photo vision follows the actual conversation route, app override and custo
 
 class Receipts implements ApiOperationStore {
     rows = new Map<string, { fingerprint: string; result: ApiReply }>();
-    async run(key: string, fingerprint: string, work: () => Promise<ApiReply>) {
+    async run(key: string, fingerprint: string, work: () => Promise<ApiReply>, _options?: { releaseRefusals?: boolean }) {
         const old = this.rows.get(key);
         if (old) {
             if (old.fingerprint !== fingerprint) throw new ApiError(409, 'idempotency_conflict', 'Этот ключ уже использован с другим запросом.');

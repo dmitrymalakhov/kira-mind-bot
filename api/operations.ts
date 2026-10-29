@@ -4,7 +4,7 @@ import { ApiError, ApiOperationStore, ApiReply } from './contracts';
 import { scopedBotKey } from '../utils/botIdentity';
 
 export class PersistentApiOperations implements ApiOperationStore {
-    async run(key: string, fingerprint: string, work: () => Promise<ApiReply>): Promise<ApiReply> {
+    async run(key: string, fingerprint: string, work: () => Promise<ApiReply>, options: { releaseRefusals?: boolean } = {}): Promise<ApiReply> {
         key = scopedBotKey(key);
         const repo = AppDataSource.getRepository(ApiOperationEntity);
         const inserted = await repo.createQueryBuilder().insert().values({
@@ -26,7 +26,7 @@ export class PersistentApiOperations implements ApiOperationStore {
         } catch (error) {
             // refused before anything ran: no receipt is kept, a corrected retry may run; otherwise the outcome is
             // unknown and never replayed blindly
-            if (error instanceof ApiError && error.released) await repo.delete({ key }).catch(() => {});
+            if (options.releaseRefusals && error instanceof ApiError && error.released) await repo.delete({ key }).catch(() => {});
             else await repo.update({ key }, { status: 'failed' }).catch(() => {});
             throw error;
         }

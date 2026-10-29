@@ -191,7 +191,7 @@ export function createExternalApiServer(
                         } catch (error) { throw released(error); }
                         busy = true;
                         try { return await backend.sceneTurn(turn, preset); } finally { busy = false; }
-                    }));
+                    }, { releaseRefusals: true }));
                 }
                 const turn = isTurn ? parseSceneTurn(body) : undefined;
                 const preset = turn ? await backend.sceneReady(turn) : null; // vision refused before any receipt

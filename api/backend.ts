@@ -22,7 +22,7 @@ import type { ApiSettingsPatch } from './settings';
 import { ApiModelCatalog, ApiModelSettingsStore, BotSettingsApiModelStore, apiTurnPreset, buildApiModelSettings,
     saveApiModelSelection } from './modelSettings';
 import { runWithChannelPreset } from '../services/aiRuntimeConfigService';
-import { SceneService, type SceneChannel, type SceneTurn, type VisionRoute } from './scene';
+import { SceneService, type SceneChannel, type ScenePreparation, type SceneTurn, type VisionRoute } from './scene';
 import { addToHistory } from '../utils/history';
 import type { AiPresetName } from '../ai/modelPresets';
 import { registerDialogueLifecycle, publicDialogueJob, activateDialogueJob } from '../services/dialogueJobs';
@@ -82,7 +82,7 @@ export class BotApiBackend implements ApiBackend {
     sceneCapabilities() { return this.scene.capabilities(); }
     sceneReady(turn: SceneTurn) { return this.scene.ready(turn); }
     sceneTurn(turn: SceneTurn, preset: AiPresetName | null) { return this.scene.turn(turn, preset); }
-    scenePrepare(turn: SceneTurn) { return this.scene.prepare(turn); }
+    scenePrepare(turn: ScenePreparation) { return this.scene.prepare(turn); }
     async sceneCancel(target: { plan: string } | { roomId: string; coordinateSpaceId: string }) { return this.scene.cancel(target); }
     sceneActionResult(body: Record<string, unknown>) { return this.scene.actionResult(body); }
     modelSettings() { return buildApiModelSettings(this.models, this.catalog); }
