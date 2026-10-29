@@ -148,6 +148,8 @@ test('a look sends the frame to the photo recognition with the words as its capt
     assert.equal(channel.looked[0].text, 'Что ты видишь?');
     assert.equal(channel.looked[0].preset, 'gpt-lean');
     assert.match(channel.looked[0].context, /приложен кадр камеры/);
+    // the frame never replaces the question: the rest of what was said is answered as in the chat
+    assert.match(channel.looked[0].context, /Ответь на саму реплику/); assert.doesNotMatch(channel.looked[0].context, /Говори только о видимом/);
     assert.equal(reply.messages[0].text, 'Ответ из общего диалога');
     assert.deepEqual([reply.vision.used, reply.vision.provider, reply.vision.model, reply.vision.location], [true, 'openai', 'gpt-synthetic', 'cloud']);
     const stored = JSON.stringify(rows.get(`api-scene:${owner}`));
