@@ -13,7 +13,7 @@ import { fetchAgentMemoryContext, buildMemoryContextBlock } from '../utils/agent
 import { buildKnowledgeSourcePrompt, decideKnowledgeSource } from '../utils/knowledgeSource';
 import { runKiraRuntime } from '../orchestration/runtime/kernel';
 import { appendPersistedHistory } from './SessionStorage';
-import { recordDeferredOutcome, feedbackKeyboard } from './productAnalytics';
+import { recordDeferredOutcome } from './productAnalytics';
 
 const active = new Map<string, AbortController>();
 const MAX_CONCURRENT = 2;
@@ -124,7 +124,6 @@ async function deliver(bot: Bot<BotContext>, job: DialogueJob, text: string, not
     const message = text.length > 4000 ? `${text.slice(0, 3900)}\n\n…Ответ сокращён.` : text;
     await bot.api.sendMessage(job.chatId, message, {
         ...(job.messageId ? { reply_parameters: { message_id: job.messageId, allow_sending_without_reply: true } } : {}),
-        ...(!notice && job.input.analyticsTaskId ? { reply_markup: feedbackKeyboard(job.input.analyticsTaskId) } : {}),
     });
     if (!notice) await appendPersistedHistory(job.channel, 'bot', message);
 }
