@@ -848,7 +848,7 @@
     "/scene": {
       "get": {
         "operationId": "getScene",
-        "summary": "AR scene capabilities: the vision route of the app's mode (browserVision), frame limits, allowed actions",
+        "summary": "AR scene capabilities: the photo model that reads a frame in the app's mode, frame limits, allowed actions",
         "responses": {
           "200": {
             "description": "Capabilities: version, frame limits, actions, autoSeat (true: sit without targetId lets the phone choose the seat; results may name it), mode, vision route"
@@ -893,7 +893,7 @@
     "/scene/turns": {
       "post": {
         "operationId": "postSceneTurn",
-        "summary": "One AR turn: a question with the scene and optionally one current JPEG frame (not stored). Kira may propose actions on ids of the scene; the phone checks and performs them and reports the outcome.",
+        "summary": "One AR turn of the app dialogue: the words go through the same handlers as /messages, an optional current JPEG frame (not stored) through the same recognition as /photos, with the scene as context. The reply is messages[] as for /messages; Kira may also propose actions on ids of the scene, which the phone checks, performs and reports.",
         "parameters": [
           {
             "name": "Idempotency-Key",

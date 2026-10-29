@@ -19,18 +19,20 @@ import { getForwardedMessageInfo } from "../utils/forwardedMessage";
 // ── Добавление результатов обработки изображений в историю ─
 
 async function addImageResultsToHistory(ctx: BotContext, result: any): Promise<void> {
+    // What Kira read from an AR camera frame stays in the talk but never becomes facts about the owner.
+    const options = ctx.arRoom?.frame ? { kind: 'image' as const } : {};
     if (result.detectedText) {
-        await addToHistory(ctx, 'bot', result.detectedText);
+        await addToHistory(ctx, 'bot', result.detectedText, options);
     }
     if (result.description) {
-        await addToHistory(ctx, 'bot', result.description);
+        await addToHistory(ctx, 'bot', result.description, options);
     }
-    await addToHistory(ctx, 'bot', result.responseText);
+    await addToHistory(ctx, 'bot', result.responseText, options);
 }
 
 async function addOwnerPhotoToHistory(ctx: BotContext, caption: string): Promise<void> {
     const { isReply, replyToContent, replyToSender } = resolveReplyTo(ctx);
-    let imageMessage = `[Изображение]${caption ? ` с подписью: "${caption}"` : ''}`;
+    let imageMessage = `[${ctx.arRoom?.frame ? 'Кадр камеры в AR-комнате' : 'Изображение'}]${caption ? ` с подписью: "${caption}"` : ''}`;
     if (isReply && replyToContent) imageMessage = `[В ответ на "${replyToContent}" от ${replyToSender}]: ${imageMessage}`;
     await addToHistory(ctx, 'user', imageMessage);
 }
