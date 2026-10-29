@@ -63,7 +63,7 @@ export interface ApiBackend {
     /** Stage "prepare" of a scene turn: what the words ask for, before any frame; nothing answered, stored or done. */
     scenePrepare?(turn: import('./scene').SceneTurn): Promise<unknown>;
     /** Stage "cancel": a prepared turn the owner stopped can no longer be executed. */
-    sceneCancel?(planId: string): Promise<unknown>;
+    sceneCancel?(target: { plan: string } | { roomId: string; coordinateSpaceId: string }): Promise<unknown>;
     sceneActionResult(body: Record<string, unknown>): Promise<unknown>;
     saveModelSettings(body: Record<string, unknown>): Promise<unknown>;
 }

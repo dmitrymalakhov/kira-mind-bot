@@ -34,11 +34,14 @@ class AppMode implements ApiModelSettingsStore {
     async write(preset: AiPresetName | null) { this.selection = { preset, revision: 'r2' }; return this.selection; }
 }
 class Channel implements SceneChannel {
-    said: string[] = []; looked: string[] = []; notes: string[] = [];
+    said: string[] = []; looked: string[] = []; notes: string[] = []; contexts: string[] = [];
     history: MessageHistory[] = [];
     route: VisionRoute = { available: true, provider: 'openai', providerLabel: 'OpenAI', model: 'gpt-synthetic', location: 'cloud' };
     async say(text: string) { this.said.push(text); return { messages: [{ id: -1, type: 'text', text: 'ответ' }] } as ApiReply; }
-    async look(_frame: Buffer, text: string) { this.looked.push(text); return { messages: [{ id: -1, type: 'text', text: 'вот он' }] } as ApiReply; }
+    async look(_frame: Buffer, text: string, room?: { context: string }) {
+        this.looked.push(text); this.contexts.push(room?.context ?? '');
+        return { messages: [{ id: -1, type: 'text', text: 'вот он' }] } as ApiReply;
+    }
     async visionRoute() { return this.route; }
     async recent() { return this.history; }
     async note(line: string) { this.notes.push(line); }
@@ -206,7 +209,7 @@ function fakeBackend(service: SceneService, hooks: { turn?: () => Promise<void>;
         sceneTurn: async (turn, preset) => { executions++; await hooks.turn?.(); return service.turn(turn, preset); },
         sceneActionResult: async body => ({ ok: true, body }),
         scenePrepare: turn => service.prepare(turn),
-        sceneCancel: async id => service.cancel(id),
+        sceneCancel: async target => service.cancel(target),
     };
     return { backend, executions: () => executions };
 }
@@ -353,7 +356,7 @@ test('HTTP: a preparation cancelled or replaced by newer words in the same room 
     assert.equal((await (await execute(first, 'покажи книгу', 'late-key-001')).json()).error.code, 'plan_superseded');
     assert.equal((await (await execute(first, 'покажи книгу', 'late-key-002')).json()).error.code, 'plan_superseded');   // still, under any key
     assert.equal((await execute(second, 'нет, лучше покажи кружку', 'key-second-1')).status, 200);
-    assert.equal((await service.cancel(otherRoom)).status, 'cancelled');                            // it was still live in its own room
+    assert.equal((await service.cancel({ plan: otherRoom })).status, 'cancelled');                            // it was still live in its own room
     // cancelled: Отмена while she was thinking; the execute sent before it arrives late, also after a lost response
     const third = await prepare('покажи книгу');
     const cancelled = await post({ stage: 'cancel', plan: third });
@@ -385,4 +388,92 @@ test('HTTP: only a refusal before any effect is released; a handler error after 
     const legacy = { text: 'Сядь', scene: scene() };
     assert.equal((await post(legacy, 'legacy-key-01')).status, 400);
     assert.equal((await (await post(legacy, 'legacy-key-01')).json()).error.code, 'operation_uncertain');
+});
+
+/** A model whose answers per utterance can be held until released. */
+function heldModel(decisions: Record<string, unknown>) {
+    const gates = new Map<string, { promise: Promise<void>; release: () => void }>();
+    const hold = (text: string) => { let release!: () => void; const promise = new Promise<void>(r => { release = r; }); gates.set(text, { promise, release }); return release; };
+    const calls: string[] = [];
+    const complete: any = async (task: string, params: any) => {
+        if (task !== 'intentClassification') return { target: { found: true, count: 1, confidence: 'high', point: [500, 500], box: [450, 450, 550, 550] } };
+        const words = String(params.messages[1].content).split('Пользователь: ').pop()!;
+        calls.push(words);
+        await gates.get(words)?.promise;
+        return decisions[words] ?? { intent: 'chat', actions: [] };
+    };
+    return { complete, hold, calls };
+}
+
+test('an older preparation finishing after a newer one, or after a cancel of its room, is refused and replaces nothing', async t => {
+    sessions(t);
+    const m = heldModel({ 'покажи книгу': { intent: 'find', actions: [{ kind: 'point', label: 'книга' }] }, 'нет, кружку': { intent: 'find', actions: [{ kind: 'point', label: 'кружка' }] } });
+    const service = new SceneService(owner, new AppMode(), new Channel(), m.complete);
+    const prep = (text: string, changes: Record<string, unknown> = {}) => service.prepare(parseScenePreparation({ stage: 'prepare', text, scene: scene(changes) }));
+    const releaseA = m.hold('покажи книгу');
+    const a = prep('покажи книгу');                                                                   // slow, first
+    const b = await prep('нет, кружку') as any;                                                     // fast, newer
+    releaseA();
+    await assert.rejects(a, (e: any) => e.code === 'plan_superseded');
+    // the newer one is untouched and runs
+    const reply = await service.turn(parseSceneTurn({ text: 'нет, кружку', scene: scene(), frame: frame(), plan: b.plan.id }), 'gpt-lean') as any;
+    assert.equal(reply.actions[0].label, 'кружка');
+    // Отмена while still understanding: the room's preparation in flight is refused when it finishes; another room's is not
+    const releaseC = m.hold('покажи книгу');
+    const c = prep('покажи книгу');
+    const other = prep('покажи книгу', { roomId: '77777777-7777-4777-8777-777777777777' });
+    assert.deepEqual(service.cancel({ roomId: room, coordinateSpaceId: space }), { ok: true, room, cancelled: 0 });
+    releaseC();
+    await assert.rejects(c, (e: any) => e.code === 'plan_superseded');
+    assert.equal(((await other) as any).plan.intent, 'find');
+    assert.throws(() => parseScenePreparation({ stage: 'cancel', plan: chair } as any), (e: any) => e.code === 'invalid_scene');
+});
+
+test('a cancel or newer words arriving while an execution waits for the frame recipient stop it before anything runs', async t => {
+    sessions(t);
+    for (const interrupt of ['cancel', 'newer'] as const) {
+        const channel = new Channel();
+        const service = new SceneService(owner, new AppMode(), channel, model({ intent: 'find', actions: [{ kind: 'point', label: 'книга' }] }).complete);
+        const { plan } = await service.prepare(parseScenePreparation({ stage: 'prepare', text: 'покажи книгу', scene: scene() })) as any;
+        let release!: () => void;
+        const held = new Promise<void>(r => { release = r; });
+        const route = channel.route;
+        channel.visionRoute = async () => { await held; return route; };                            // the recipient check is slow
+        const running = service.turn(parseSceneTurn({ text: 'покажи книгу', scene: scene(), frame: frame(), plan: plan.id }), 'gpt-lean');
+        await new Promise(r => setTimeout(r, 5));
+        if (interrupt === 'cancel') service.cancel({ plan: plan.id });
+        else { channel.visionRoute = async () => route; await service.prepare(parseScenePreparation({ stage: 'prepare', text: 'а нет, забей', scene: scene() })); }
+        release();
+        await assert.rejects(running, (e: any) => e.code === (interrupt === 'cancel' ? 'plan_cancelled' : 'plan_superseded') && e.released === true);
+        assert.deepEqual(channel.looked, [], interrupt);                                              // nothing was answered or searched
+    }
+});
+
+test('a prepared decision is authoritative: no sit from quoted or negated wording, no point at an old referent on a new topic', async t => {
+    sessions(t);
+    const run = async (text: string, decision: unknown, extra: Record<string, unknown> = {}, framed = false) => {
+        const channel = new Channel();
+        const m = model(decision);
+        const service = new SceneService(owner, new AppMode(), channel, m.complete);
+        const { plan } = await service.prepare(parseScenePreparation({ stage: 'prepare', text, scene: scene(), ...extra })) as any;
+        const reply = await service.turn(parseSceneTurn({ text, scene: scene(), plan: plan.id, ...(framed ? { frame: frame() } : {}), ...extra }), 'gpt-lean') as any;
+        return { reply, tasks: m.calls.map(c => c.task) };
+    };
+    const quoted = await run('а он мне такой: садись, мол, а я стою', { intent: 'chat', actions: [] });
+    assert.deepEqual(quoted.reply.actions, []);                                                         // the legacy phrase rule would have sat her down
+    const negated = await run('не садись, забей', { intent: 'cancel', actions: [{ kind: 'sit' }] });
+    assert.deepEqual(negated.reply.actions, []);
+    // a look while she had asked about the phone: no point at the phone, no "this answers your question"
+    const pending = { followUp: { label: 'телефон', reason: 'ambiguous' } };
+    const channel = new Channel();
+    const m = model({ intent: 'look', actions: [] });
+    const service = new SceneService(owner, new AppMode(), channel, m.complete);
+    const { plan } = await service.prepare(parseScenePreparation({ stage: 'prepare', text: 'кстати, как тебе эта картина?', scene: scene(), ...pending })) as any;
+    const looked = await service.turn(parseSceneTurn({ text: 'кстати, как тебе эта картина?', scene: scene(), frame: frame(), plan: plan.id, ...pending }), 'gpt-lean') as any;
+    assert.deepEqual(looked.actions, []);
+    assert.deepEqual(m.calls.map(c => c.task), ['intentClassification']);                            // nothing searched for the old referent
+    assert.equal(channel.contexts.length, 1);
+    assert.doesNotMatch(channel.contexts[0], /ответ на твой вопрос о вещи/);
+    // an answer the model left without an action still shows the thing it is about
+    assert.deepEqual(normalizeDecision({ intent: 'clarify', actions: [] }, { label: 'телефон', reason: 'ambiguous' }).actions, [{ kind: 'point', label: 'телефон' }]);
 });

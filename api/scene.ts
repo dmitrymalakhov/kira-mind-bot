@@ -186,10 +186,13 @@ export function parseSceneTurn(body: Record<string, unknown>, now = Date.now()):
 }
 
 /** Stage "cancel": only the plan's id. */
-export function parseScenePlanCancel(body: Record<string, unknown>): string {
-    const root = only(body, ['stage', 'plan'], [], 'отмена');
-    if (root.stage !== 'cancel') throw bad('stage');
-    return uuid(root.plan, 'plan');
+/** Stage "cancel": a plan by its id, or everything prepared or preparing in a room (Отмена while still understanding). */
+export function parseScenePlanCancel(body: Record<string, unknown>): { plan: string } | { roomId: string; coordinateSpaceId: string } {
+    const root = only(body, ['stage'], ['plan', 'room'], 'отмена');
+    if (root.stage !== 'cancel' || (root.plan === undefined) === (root.room === undefined)) throw bad('stage');
+    if (root.plan !== undefined) return { plan: uuid(root.plan, 'plan') };
+    const r = only(root.room, ['roomId', 'coordinateSpaceId'], [], 'room');
+    return { roomId: uuid(r.roomId, 'room.roomId'), coordinateSpaceId: uuid(r.coordinateSpaceId, 'room.coordinateSpaceId') };
 }
 
 /** Stage "prepare" of a scene turn: the words and the room, never a frame, plan or avoid. Nothing is answered, stored
@@ -209,7 +212,7 @@ interface SceneSession extends SessionData { sceneActions?: Record<string, { kin
 export interface SceneDecision { intent: SceneIntent; actions: unknown[] }
 interface StoredPlan extends SceneDecision {
     id: string; ownerId: number; textHash: string; roomId: string; roomVersion: number; coordinateSpaceId: string;
-    followUp: string; expiresAt: number;
+    followUp: string; expiresAt: number; generation: number;
     /** The app's model mode and the frame's recipient when it was prepared: a change makes the plan stale. */
     preset: AiPresetName | null; vision: string;
 }
@@ -224,6 +227,8 @@ export function normalizeDecision(raw: { intent?: unknown; actions?: unknown } |
     if (intent === 'cancel') return { intent, actions: [], frame: false };
     if (intent === 'clarify' && !followUp) intent = pointing ? 'find' : 'chat';
     if (pointing && (intent === 'chat' || intent === 'look')) intent = 'find';
+    // an answer about the thing she asked about shows that thing, even when the model named no action
+    if (intent === 'clarify' && !pointing) actions.push({ kind: 'point', label: followUp!.label });
     return { intent, actions, frame: intent === 'look' || intent === 'find' || intent === 'clarify' };
 }
 
@@ -254,7 +259,7 @@ function describe(scene: SceneSnapshot): string {
 }
 
 /** The room as a turn's context in the dialogue: names, not ids or coordinates, so Kira never reads them out. */
-export function roomContext(turn: SceneTurn, search?: PointSearch): string {
+export function roomContext(turn: SceneTurn, search?: PointSearch, intent?: SceneIntent): string {
     const { scene } = turn;
     const present = scene.objects.filter(o => o.present);
     const seat = scene.seats.find(s => s.id === scene.avatar.seatId);
@@ -269,7 +274,7 @@ export function roomContext(turn: SceneTurn, search?: PointSearch): string {
         scene.avatar.pose === 'seated' ? `Сейчас ты сидишь${seatObject ? ` (${seatObject.name})` : ''}.` : 'Сейчас ты стоишь.',
         present.length ? `В комнате отмечены: ${present.map(o => o.name).join(', ')}.` : 'Предметы комнаты пока не отмечены.',
         scene.things?.length ? `Ты помнишь, где видела вещи здесь: ${scene.things.map(t => `${t.label} — ${lay(t)}, ${ago(t.seenAt)}`).join('; ')}. Это прошлое наблюдение: вещь могли переложить.` : '',
-        turn.followUp ? `Реплика пользователя — ответ на твой вопрос о вещи «${turn.followUp.label}».` : '',
+        turn.followUp && (intent === undefined || intent === 'clarify') ? `Реплика пользователя — ответ на твой вопрос о вещи «${turn.followUp.label}».` : '',
         search ? searchLine(search) : '',
     ].filter(Boolean).join('\n');
 }
@@ -374,6 +379,10 @@ export class SceneService {
     /** Plans the owner cancelled, or a newer preparation in the same room replaced: an execution arriving late is
      *  refused with the reason while it could still arrive. */
     private readonly retired = new Map<string, { why: 'cancelled' | 'superseded'; until: number }>();
+    /** The order of preparations, counted when each arrives (before any wait), and the newest per room: a slower,
+     *  older preparation finishing late never replaces a newer one or survives a cancel of its room. */
+    private generation = 0;
+    private readonly newest = new Map<string, number>();
     constructor(private readonly ownerId: number, private readonly models: ApiModelSettingsStore, private readonly channel: SceneChannel,
                 private readonly complete: typeof createJsonChatCompletionForTask = createJsonChatCompletionForTask,
                 private readonly now: () => number = Date.now) {
@@ -384,15 +393,22 @@ export class SceneService {
      *  mode, with the room and the recent dialogue. No answer, dialogue line, memory or action; the decision is kept
      *  for the execution, which uses it instead of deciding again. */
     async prepare(turn: SceneTurn) {
+        const scope = `${turn.scene.roomId}|${turn.scene.coordinateSpaceId}`;
+        const generation = ++this.generation;
+        this.newest.set(scope, generation);
         const appPreset = await apiTurnPreset(this.models);
         const [decision, route] = await Promise.all([this.classify(turn, appPreset, true),
             runWithChannelPreset(appPreset, () => this.channel.visionRoute()).catch((): VisionRoute => ({ available: false }))]);
+        // newer words (or a cancel) came for this room while these were being understood: these are out of date
+        if (this.newest.get(scope) !== generation) {
+            throw new ApiError(409, 'plan_superseded', 'Эту реплику сменила более новая.');
+        }
         const now = this.now();
         for (const [id, plan] of this.plans) if (plan.expiresAt <= now) this.plans.delete(id);
         for (const [id, gone] of this.retired) if (gone.until <= now) this.retired.delete(id);
         // newer words in the same room replace what was prepared before and not executed yet
         for (const [id, plan] of this.plans) {
-            if (plan.roomId === turn.scene.roomId && plan.coordinateSpaceId === turn.scene.coordinateSpaceId) {
+            if (plan.roomId === turn.scene.roomId && plan.coordinateSpaceId === turn.scene.coordinateSpaceId && plan.generation < generation) {
                 this.plans.delete(id); this.retired.set(id, { why: 'superseded', until: plan.expiresAt + PLAN_TTL_MS });
             }
         }
@@ -400,7 +416,7 @@ export class SceneService {
         const id = randomUUID();
         this.plans.set(id, { id, ownerId: this.ownerId, textHash: sha(turn.text), roomId: turn.scene.roomId, roomVersion: turn.scene.roomVersion,
             coordinateSpaceId: turn.scene.coordinateSpaceId, followUp: JSON.stringify(turn.followUp ?? null), intent: decision.intent,
-            actions: decision.actions, expiresAt: now + PLAN_TTL_MS, preset: appPreset, vision: recipient(route) });
+            actions: decision.actions, expiresAt: now + PLAN_TTL_MS, generation, preset: appPreset, vision: recipient(route) });
         const point = decision.actions.find((a: any) => a?.kind === 'point') as any;
         // the frame's recipient now: the phone asks again before sending a frame when it is not the one it was allowed to
         return { plan: { id, expiresAt: new Date(now + PLAN_TTL_MS).toISOString(), intent: decision.intent, frame: decision.frame,
@@ -410,32 +426,51 @@ export class SceneService {
 
     /** The owner stopped before the execution (Отмена while thinking or waiting for consent): the plan can no longer
      *  run, whenever its execution arrives. Repeating it is harmless; an unknown plan has nothing to cancel. */
-    cancel(planId: string) {
-        const plan = this.plans.get(planId);
-        if (plan) { this.plans.delete(planId); this.retired.set(planId, { why: 'cancelled', until: plan.expiresAt + PLAN_TTL_MS }); }
-        return { ok: true, plan: planId, status: plan || this.retired.get(planId)?.why === 'cancelled' ? 'cancelled' : this.retired.has(planId) ? 'superseded' : 'unknown' };
+    cancel(target: { plan: string } | { roomId: string; coordinateSpaceId: string }) {
+        if ('plan' in target) {
+            const planId = target.plan, plan = this.plans.get(planId);
+            if (plan) { this.plans.delete(planId); this.retired.set(planId, { why: 'cancelled', until: plan.expiresAt + PLAN_TTL_MS }); }
+            return { ok: true, plan: planId, status: plan || this.retired.get(planId)?.why === 'cancelled' ? 'cancelled' : this.retired.has(planId) ? 'superseded' : 'unknown' };
+        }
+        // Отмена while the words were still being understood: everything prepared or preparing in this room is off
+        this.newest.set(`${target.roomId}|${target.coordinateSpaceId}`, ++this.generation);
+        let cancelled = 0;
+        for (const [id, plan] of this.plans) {
+            if (plan.roomId === target.roomId && plan.coordinateSpaceId === target.coordinateSpaceId) {
+                this.plans.delete(id); this.retired.set(id, { why: 'cancelled', until: plan.expiresAt + PLAN_TTL_MS }); cancelled++;
+            }
+        }
+        return { ok: true, room: target.roomId, cancelled };
     }
 
     /** The prepared decision for an execution: the same owner, words, room, follow-up, model mode and frame recipient,
      *  in time. Run once: the execution's durable receipt (owner + plan) replays a completed one and holds an uncertain
      *  one, so this only guards what reaches it. Refusals ran nothing (released). */
     private async take(turn: SceneTurn, appPreset: AiPresetName | null): Promise<SceneDecision> {
-        const plan = this.plans.get(turn.plan!);
         const stale = (why: string) => new ApiError(409, 'plan_stale', `Подготовка реплики устарела: ${why}. Повтори реплику.`, true);
-        const gone = this.retired.get(turn.plan!);
-        if (gone && gone.until > this.now()) {
-            throw new ApiError(409, `plan_${gone.why}`, gone.why === 'cancelled' ? 'Эта реплика отменена.' : 'Эту реплику сменила более новая.', true);
-        }
-        if (!plan || plan.expiresAt <= this.now() || plan.ownerId !== this.ownerId) throw stale('прошло слишком много времени');
-        if (plan.textHash !== sha(turn.text) || plan.followUp !== JSON.stringify(turn.followUp ?? null)) throw stale('слова изменились');
-        if (plan.roomId !== turn.scene.roomId || plan.roomVersion !== turn.scene.roomVersion || plan.coordinateSpaceId !== turn.scene.coordinateSpaceId) {
-            throw stale('комната изменилась');
-        }
-        if (plan.preset !== appPreset) throw stale('режим модели изменился');
+        /** Every check that a cancel, a newer preparation or the clock can change; run again after any wait. */
+        const current = (): StoredPlan => {
+            const gone = this.retired.get(turn.plan!);
+            if (gone && gone.until > this.now()) {
+                throw new ApiError(409, `plan_${gone.why}`, gone.why === 'cancelled' ? 'Эта реплика отменена.' : 'Эту реплику сменила более новая.', true);
+            }
+            const plan = this.plans.get(turn.plan!);
+            if (!plan || plan.expiresAt <= this.now() || plan.ownerId !== this.ownerId) throw stale('прошло слишком много времени');
+            if (plan.textHash !== sha(turn.text) || plan.followUp !== JSON.stringify(turn.followUp ?? null)) throw stale('слова изменились');
+            if (plan.roomId !== turn.scene.roomId || plan.roomVersion !== turn.scene.roomVersion || plan.coordinateSpaceId !== turn.scene.coordinateSpaceId) {
+                throw stale('комната изменилась');
+            }
+            if (plan.preset !== appPreset) throw stale('режим модели изменился');
+            return plan;
+        };
+        const seen = current();
         if (turn.frame) {
             const route = await runWithChannelPreset(appPreset, () => this.channel.visionRoute()).catch((): VisionRoute => ({ available: false }));
-            if (recipient(route) !== plan.vision) throw stale('модель, читающая кадр, изменилась');
+            if (recipient(route) !== seen.vision) throw stale('модель, читающая кадр, изменилась');
         }
+        // right before anything runs: the very same plan, still live (a cancel or newer words may have come meanwhile)
+        const plan = current();
+        if (plan !== seen) throw stale('реплика изменилась');
         this.plans.delete(plan.id);
         return { intent: plan.intent, actions: plan.actions };
     }
@@ -473,11 +508,11 @@ export class SceneService {
             planned = await this.plan(turn, appPreset, decided);
             const frame = turn.frame;
             [reply, route] = await Promise.all([
-                this.channel.look(frame.data, turn.text, { context: roomContext(turn, planned.search), frame: true }, appPreset),
+                this.channel.look(frame.data, turn.text, { context: roomContext(turn, planned.search, decided?.intent), frame: true }, appPreset),
                 runWithChannelPreset(appPreset, () => this.channel.visionRoute()),
             ]);
         } else {
-            [reply, planned] = await Promise.all([this.channel.say(turn.text, { context: roomContext(turn), frame: false }, appPreset), this.plan(turn, appPreset, decided)]);
+            [reply, planned] = await Promise.all([this.channel.say(turn.text, { context: roomContext(turn, undefined, decided?.intent), frame: false }, appPreset), this.plan(turn, appPreset, decided)]);
         }
         const { actions, rejected, seen } = planned;
         const scene = await this.storage.read(this.sceneKey);
@@ -501,16 +536,18 @@ export class SceneService {
     private async plan(turn: SceneTurn, appPreset: AiPresetName | null, decided?: SceneDecision): Promise<ReturnType<typeof validateActions> & { seen: Array<{ label: string; at: FramePoint }>; search?: PointSearch }> {
         const parsed = decided ?? await this.classify(turn, appPreset, false);
         const planned = validateActions(parsed.actions, turn.scene, Boolean(turn.frame));
-        // an answer to her question with a fresh frame looks for the same thing, the answer's words as the distinction,
-        // unless the choice made it another action; the frame then decides (one match shown, else asked again)
-        if (turn.followUp && turn.frame && planned.actions.length === 0) {
+        // an older phone's turn (no prepared decision): an answer to her question with a fresh frame looks for the
+        // same thing, unless the choice made it another action. A prepared decision is authoritative: it already said
+        // what these words are (a new topic, a look, a cancel) and nothing is added to it by wording
+        if (!decided && turn.followUp && turn.frame && planned.actions.length === 0) {
             planned.actions.push({ id: randomUUID(), kind: 'point', label: turn.followUp.label, roomId: turn.scene.roomId, roomVersion: turn.scene.roomVersion });
         }
         const rawPoint = (parsed.actions as any[]).find(a => a?.kind === 'point');
+        const answering = decided ? decided.intent === 'clarify' : Boolean(turn.followUp);
         const detail = typeof rawPoint?.detail === 'string' && rawPoint.detail.trim() ? rawPoint.detail.trim().slice(0, 120)
-            : turn.followUp ? turn.text.trim().slice(0, 120) : undefined;
-        // a plain "sit down" is an action even when the model chose none: the phone chooses the seat
-        if (wantsPlainSit(turn.text) && turn.scene.avatar.pose === 'standing' && !planned.actions.some(a => a.kind === 'sit')) {
+            : answering ? turn.text.trim().slice(0, 120) : undefined;
+        // an older phone's plain "sit down" is an action even when the model chose none: the phone chooses the seat
+        if (!decided && wantsPlainSit(turn.text) && turn.scene.avatar.pose === 'standing' && !planned.actions.some(a => a.kind === 'sit')) {
             planned.actions.push({ id: randomUUID(), kind: 'sit', roomId: turn.scene.roomId, roomVersion: turn.scene.roomVersion });
         }
         let seen: Array<{ label: string; at: FramePoint }> = [];

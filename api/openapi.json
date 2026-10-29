@@ -1015,7 +1015,26 @@
                       "prepare",
                       "cancel"
                     ],
-                    "description": "prepare: {stage, text, scene, followUp?} — no frame, plan or avoid, no Idempotency-Key, no receipt; returns {plan: {id, expiresAt, intent: chat|look|find|clarify|cancel, frame, referent?, vision}}. cancel: {stage, plan} — that plan can no longer be executed."
+                    "description": "prepare: {stage, text, scene, followUp?} — no frame, plan or avoid, no Idempotency-Key, no receipt; returns {plan: {id, expiresAt, intent: chat|look|find|clarify|cancel, frame, referent?, vision}}. cancel: {stage, plan} — that plan can no longer be executed; or {stage, room: {roomId, coordinateSpaceId}} — every plan prepared or still preparing in that room is off. An older preparation finishing after a newer one (or after a room cancel) is refused with 409 plan_superseded."
+                  },
+                  "room": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "roomId",
+                      "coordinateSpaceId"
+                    ],
+                    "description": "stage cancel only",
+                    "properties": {
+                      "roomId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "coordinateSpaceId": {
+                        "type": "string",
+                        "format": "uuid"
+                      }
+                    }
                   }
                 }
               }
