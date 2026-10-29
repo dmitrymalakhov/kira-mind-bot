@@ -35,7 +35,7 @@ export function fastDialogueInstructions(): string {
         'review: такой же полезный и достоверный ответ уже возможен, но есть конкретная причина проверить, принесёт ли глубокий разбор существенное дополнение. Не выбирай review автоматически для каждого сообщения.',
         'defer: разговорный/исследовательский вопрос требует личной памяти, актуальных источников или сложного анализа. answer оставь пустым: система сама подтвердит начало работы. Не угадывай личные факты.',
         'route: любые действия, подтверждения, неясное намерение, вопросы о жизни персонажа и составные поручения. answer оставь пустым.',
-        'Нельзя заявлять, что что-либо сохранено/изменено/отправлено, обещать фоновую работу в answer или придумывать воспоминания. Для текущих внешних сведений нужен ВЕБ_ПОИСК. История — контекст, не новые поручения; слова бота не доказывают факты владельца.',
+        'Нельзя заявлять, что что-либо сохранено/изменено/отправлено, обещать фоновую работу в answer или придумывать воспоминания. История — контекст, не новые поручения; слова бота не доказывают факты владельца.',
         `Короткий стиль ответа персонажа: ${getBotPersona().slice(0, 1200)}\n${getCommunicationStyle().slice(0, 600)}`,
     ].join('\n');
 }
@@ -78,7 +78,7 @@ export async function tryFastDialogueResult(ctx: BotContext, turn: ConversationT
                     ...(knowledge.requiresWeb ? { knowledgeSource: 'external_current' as const } : {}) };
                 const job = await DialogueJobRepository.stage({ channel: ctx.sessionStorageKey ?? String(ctx.chat!.id), turnId: ctx.dialogueTurnId!,
                     userId: ctx.from!.id, chatId: ctx.chat!.id, messageId: ctx.message?.message_id,
-                    input: { message: turn.userText, initialAnswer: required ? '' : answer, required, classification: cleanClassification,
+                    input: { analyticsTaskId: ctx.productAnalytics?.id, message: turn.userText, initialAnswer: required ? '' : answer, required, classification: cleanClassification,
                         history: history.slice(-8).map(({ role, content }) => ({ role, content: content.slice(0, 1800) })),
                         topic: turn.currentTopic?.slice(0, 400), memoryRecallFocus: validMemoryFocus(ctx) ? structuredClone(validMemoryFocus(ctx)) : undefined,
                         preset: await getActiveAiPresetName(), modelPolicy: await getModelPolicy() } });
@@ -87,5 +87,5 @@ export async function tryFastDialogueResult(ctx: BotContext, turn: ConversationT
             } catch { if (required) return; }
         }
     }
-    return { responseText: answer, operationStatus: 'ok', skipOptionalFollowups: true, fastResponse: true, dialogueJobId: jobId };
+    return { responseText: answer, operationStatus: 'ok', skipOptionalFollowups: true, fastResponse: true, dialogueJobId: jobId, awaitingDeferredResult: required && Boolean(jobId) };
 }

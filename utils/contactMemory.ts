@@ -2,6 +2,7 @@ import { InlineKeyboard } from 'grammy';
 import { randomBytes } from 'crypto';
 import { get as levenshtein } from 'fast-levenshtein';
 import { transliterate as toLatin } from 'transliteration';
+import { PorterStemmerRu } from 'natural/lib/natural/stemmers';
 import { BotContext, SessionData } from '../types';
 import { Contact, ContactsStore } from '../stores/ContactsStore';
 import { MemorySaveMetadata, saveMemory } from './enhancedDomainMemory';
@@ -346,12 +347,12 @@ function exactContactMatches(query: string, contacts: Contact[]): Contact[] {
         const username = normalizeContactLookupValue(contact.username || '');
         const display = normalizeContactLookupValue(contactDisplayName(contact));
 
-        if (tokens.length >= 2) {
-            return display === q ||
-                (first === tokens[0] && last === tokens[1]) ||
+        if (display === q) return true;
+        if (tokens.length === 2) {
+            return (first === tokens[0] && last === tokens[1]) ||
                 (last === tokens[0] && first === tokens[1]);
         }
-
+        if (tokens.length > 2) return false;
         return first === q || last === q || username === q;
     });
 }
@@ -436,9 +437,7 @@ function plausibleContactMatches(query: string, contacts: Contact[]): Contact[] 
     });
 }
 
-export function resolveContactIdentity(contactName: string): { status: 'resolved'; contact?: Contact; displayName: string } | { status: 'ambiguous'; candidates: Contact[] } | { status: 'needs_name' } {
-    const store = ContactsStore.getInstance();
-    const allContacts = store.getAllContacts();
+export function resolveContactIdentity(contactName: string, allContacts = ContactsStore.getInstance().getAllContacts()): { status: 'resolved'; contact?: Contact; displayName: string } | { status: 'ambiguous'; candidates: Contact[] } | { status: 'needs_name' } {
     const name = contactName.trim();
     const hasFullName = name.split(/\s+/).filter(Boolean).length >= 2;
 
@@ -466,6 +465,38 @@ export function resolveContactIdentity(contactName: string): { status: 'resolved
     return hasFullName
         ? { status: 'resolved', displayName: name }
         : { status: 'needs_name' };
+}
+
+/** Cosmetic Telegram display-name symbols are ignored only for read-only lookup. */
+export function resolveContactIdentityForRead(contactName: string, contacts = ContactsStore.getInstance().getAllContacts()): ReturnType<typeof resolveContactIdentity> {
+    const clean = (value: string) => value.normalize('NFKC')
+        .replace(/ё/giu, 'е')
+        .replace(/[\p{Cf}\uFE0E\uFE0F]/gu, '')
+        .replace(/[\p{So}\p{Sk}]/gu, ' ')
+        .replace(/\s+/gu, ' ').trim();
+    if (!clean(contactName)) return { status: 'needs_name' };
+    // Normalize the whole candidate set before choosing: a decorated namesake
+    // must remain ambiguous with an otherwise identical undecorated contact.
+    const normalizedContacts = contacts.map(contact => ({ ...contact,
+        firstName: clean(contact.firstName), lastName: contact.lastName ? clean(contact.lastName) : undefined,
+    }));
+    const resolution = resolveContactIdentity(clean(contactName), normalizedContacts);
+    const original = (contact: Contact) => contacts.find(item => item.id === contact.id)!;
+    if (resolution.status === 'resolved' && resolution.contact) {
+        const contact = original(resolution.contact);
+        return { ...resolution, contact, displayName: contactDisplayName(contact) };
+    }
+    // Inflected Russian names may survive semantic normalization. Stemming only
+    // proposes candidates; it never proves identity or authorizes a profile read.
+    const stems = (value: string) => value.toLocaleLowerCase('ru').split(/\s+/u).filter(Boolean).map(token => PorterStemmerRu.stem(token));
+    const query = stems(clean(contactName));
+    const inflected = normalizedContacts.filter(contact => {
+        const name = stems(contactDisplayName(contact));
+        return query.length === name.length && query.every(token => token.length >= 3) &&
+            (query.every((token, index) => token === name[index]) || query.every((token, index) => token === name[name.length - 1 - index]));
+    });
+    const candidates = [...new Map([...(resolution.status === 'ambiguous' ? resolution.candidates : []), ...inflected].map(contact => [contact.id, original(contact)])).values()].slice(0, 6);
+    return candidates.length ? { status: 'ambiguous', candidates } : resolution;
 }
 
 async function persistContactFact(

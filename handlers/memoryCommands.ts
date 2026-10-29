@@ -576,14 +576,14 @@ export function registerMemoryCommands(bot: Bot<BotContext>) {
         }
 
         await ctx.reply(`Сжимаю факты домена "${domain}" старше 60 дней...`);
-        const { compressed, deleted } = await compressOldMemories(ctx, domain, 60);
+        const { compressed, sourceCount } = await compressOldMemories(ctx, domain, 60);
 
-        if (deleted === 0) {
-            await ctx.reply(`В домене "${domain}" нет фактов старше 60 дней (или их меньше 5).`);
+        if (compressed === 0) {
+            await ctx.reply(`Для домена "${domain}" обобщение не создано: недостаточно подходящих фактов или не удалось подготовить сводку.`);
         } else {
             await ctx.reply(
                 `✅ Готово!\n` +
-                `Сжато фактов: ${deleted} → ${compressed} эпизодных воспоминаний\n` +
+                `По ${sourceCount} фактам создано сводок: ${compressed}. Исходные факты сохранены.\n` +
                 `Домен: ${domain}`
             );
         }

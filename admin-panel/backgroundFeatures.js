@@ -40,7 +40,15 @@ function registerBackgroundFeatureRoutes(app, { requireAuth, createDbPool, ensur
     const pool = createDbPool();
     try {
       await ensureBotSettingsTable(pool);
+      const previousRows = await pool.query('SELECT key,value FROM bot_settings WHERE key=$1', [settingKey(feature)]);
+      const previous = resolvePreferences(previousRows.rows, { ...process.env, ...readEnvFile() })[feature];
       await pool.query('INSERT INTO bot_settings (key, value, "updatedAt") VALUES ($1, $2, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = now()', [settingKey(feature), String(enabled)]);
+      if (previous !== enabled) {
+        try {
+          const actors = await pool.query('SELECT DISTINCT actor FROM product_analytics_tasks LIMIT 2');
+          if (actors.rows.length === 1) await require('./productAnalyticsStore').recordPreference(pool, actors.rows[0].actor, feature, enabled);
+        } catch { /* Optional telemetry never changes the result of a saved preference. */ }
+      }
       res.json({ success: true, feature, enabled, message: 'Настройка сохранена. Применится в течение 5 секунд без перезапуска.' });
     } catch {
       res.status(500).json({ error: 'Не удалось сохранить функцию. Повторите попытку.' });

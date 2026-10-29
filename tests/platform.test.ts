@@ -17,6 +17,7 @@ import { createBrowserProxy, publicAddress } from '../platform/browserProxy';
 import { createExternalApiServer } from '../api/server';
 import type { ApiSettings } from '../api/settings';
 import { parsePreferences } from '../ai/modelPreferences';
+import { DataSource } from 'typeorm';
 
 class MemoryApiOperations implements ApiOperationStore {
     private results = new Map<string, { fingerprint: string; result: ApiReply }>();
@@ -89,7 +90,8 @@ test('each worker has independent storage/identity and never inherits operator p
         TELEGRAM_SESSION_STRING: 'operator-private-session', TELEGRAM_API_HASH: 'operator-private-hash',
         KIRA_SELF_MEMORY_PATH: '/operator/private.json', PERSONALITY_FILE: '/operator/personality.json',
         BROWSER_PROFILE_DIR: '/operator/browser', KIRA_PLATFORM_MASTER_KEY: 'operator-secret',
-        DB_PASSWORD: 'operator-db-password', OPENAI_API_KEY: 'shared-provider-key', KIRA_BROWSER_PROXY_URL: 'http://127.0.0.1:1234' };
+        DB_PASSWORD: 'operator-db-password', OPENAI_API_KEY: 'shared-provider-key', KIRA_BROWSER_PROXY_URL: 'http://127.0.0.1:1234',
+        KIRA_REFLECTION_TRIAGE_DECISIONS_ENABLED: 'false' };
     first.owner_id = second.owner_id = '10001'; // Same human may own independent bots/accounts.
     first.bot_username = 'synthetic_first_bot'; second.bot_username = 'synthetic_second_bot';
     const a = tenantEnvironment(operator, first, { botToken: 'first-bot' }, '/synthetic/one', secrets);
@@ -97,6 +99,7 @@ test('each worker has independent storage/identity and never inherits operator p
     for (const key of ['DB_NAME', 'DB_USER', 'DB_PASSWORD', 'KIRA_API_TOKEN', 'KIRA_RUNTIME_DATA_DIR', 'PERSONALITY_FILE', 'KIRA_MEMORY_NAMESPACE', 'TMPDIR']) assert.notEqual(a[key], b[key], key);
     assert.equal(a.KIRA_ALLOWED_USER_ID, '10001');
     assert.equal(a.OPENAI_API_KEY, 'shared-provider-key');
+    assert.equal(a.KIRA_REFLECTION_TRIAGE_DECISIONS_ENABLED, 'false');
     assert.equal(a.TELEGRAM_SESSION_STRING, undefined);
     assert.equal(b.TELEGRAM_SESSION_STRING, undefined);
     const own = tenantEnvironment(operator, first, { botToken: 'first-bot', telegram: {
@@ -301,12 +304,22 @@ test('browser proxy rejects internal and transition networks, even with public-l
 });
 
 test('manager restores paired accounts, waits for readiness, restarts workers and stops them when its database lease is lost', async t => {
+    const provisions: string[] = [];
+    t.mock.method(require('../platform/analytics'), 'provisionTenantAnalytics', async (_db: unknown, id: string) => { provisions.push(id); });
     const store = new MemoryAccounts();
     const account = await store.create('synthetic_restored', 'unused');
     account.owner_id = '10001'; account.bot_id = '11001'; account.bot_username = 'synthetic_restored_bot';
     account.secrets = secrets.seal({ botToken: 'synthetic-worker-token' }, account.id);
     const name = tenantName(account.id);
-    const db = { query: async (sql: string) => sql.includes('pg_roles') ? [{ exists: true }] : sql.includes('pg_database') ? [{ owner: name }] : [] } as any;
+    const db = { options: { type: 'postgres' }, query: async (sql: string) => sql.includes('pg_roles') ? [{ exists: true }] : sql.includes('pg_database') ? [{ owner: name }] : [] } as any;
+    // The manager provisions metadata in a separate connection before starting a worker.
+    // Keep this lifecycle test isolated from a real database while checking its tenant scope.
+    t.mock.method(DataSource.prototype, 'initialize', async function(this: DataSource) {
+        assert.equal(this.options.database, name);
+        return this;
+    });
+    t.mock.method(DataSource.prototype, 'query', async () => []);
+    t.mock.method(DataSource.prototype, 'destroy', async () => {});
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kira-worker-test-'));
     const children: EventEmitter[] = [];
     t.mock.method(require('node:child_process'), 'fork', (_file: string, _args: unknown, options: any) => {
@@ -321,6 +334,7 @@ test('manager restores paired accounts, waits for readiness, restarts workers an
     try {
         await manager.tick();
         assert.equal(children.length, 1);
+        assert.deepEqual(provisions, [account.id], 'metadata schema is provisioned before the account worker starts');
         assert.equal(manager.status(account.id), 'starting');
         assert.throws(() => manager.endpoint(account), /ещё запускается/);
         children[0].emit('message', { type: 'kira-ready', port: 12345 });

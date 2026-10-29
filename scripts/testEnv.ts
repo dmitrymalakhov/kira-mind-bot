@@ -10,6 +10,7 @@ export function buildSyntheticTestEnv(base: NodeJS.ProcessEnv = process.env): No
         GEMINI_API_KEY: 'synthetic-test-gemini-key',
         TELEGRAM_API_ID: '100000',
         TELEGRAM_API_HASH: 'synthetic-test-hash',
+        TELEGRAM_SESSION_STRING: '',
         ALLOWED_USER_ID: '100001',
         ADMIN_USER_ID: '100002',
         OWNER_NAME: 'Тестовый пользователь',

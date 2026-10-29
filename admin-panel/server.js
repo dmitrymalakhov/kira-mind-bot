@@ -22,6 +22,7 @@ const {
 } = require('./memoryEmbeddingProfileRegistry');
 const { createMonitoringService } = require('./monitoring');
 const { buildAiUsageSummary, buildAiUsageTracePage } = require('./aiUsageAnalytics');
+const { registerProductAnalyticsRoutes } = require('./productAnalytics');
 const { getPresetAvailabilityForMemoryProfile, getProviderDescriptor } = require('./presetAvailability');
 const { hasLegacyDigitalBiography } = require('../utils/legacyPersonalitySanitizer');
 const { createMemoryEmbeddingHttp } = require('../ai/memoryEmbeddingHttp');
@@ -540,17 +541,39 @@ app.post('/api/restart/:service', requireAuth, async (req, res) => {
 
 // ── Chats ─────────────────────────────────────────────────────────────────────
 
-function createDbPool() {
+function createDbPool(database) {
   const vars = readEnvFile();
   return new Pool({
     host: vars.DB_HOST || 'postgres',
     port: Number(vars.DB_PORT || 5432),
     user: vars.DB_USER || 'postgres',
     password: vars.DB_PASSWORD,
-    database: vars.DB_NAME || 'KiraMind',
+    database: database || vars.DB_NAME || 'KiraMind',
     connectionTimeoutMillis: 5000,
+    statement_timeout: 15000,
   });
 }
+
+async function analyticsSources() {
+  const vars = readEnvFile();
+  const platform = createDbPool(vars.KIRA_PLATFORM_DB_NAME || 'KiraPlatform');
+  try {
+    const exists = await platform.query("SELECT to_regclass('kira_analytics_sources') AS name");
+    if (exists.rows[0]?.name) {
+      const { rows } = await platform.query(`SELECT a.id,a.created_at,s.database_name,s.imported,m.started_at
+        FROM kira_accounts a LEFT JOIN kira_analytics_sources s ON s.account_id=a.id CROSS JOIN kira_analytics_meta m WHERE m.id=1`);
+      if (rows.some(row => row.database_name && !/^[A-Za-z0-9_-]{1,63}$/.test(row.database_name))) throw new Error('Invalid analytics source');
+      return rows.map(row => ({ id: row.id, registeredAt: row.imported ? null : row.created_at,
+        cohortStartedAt: row.started_at, pool: row.database_name ? createDbPool(row.database_name) : null }));
+    }
+  } catch (error) {
+    if (error.code !== '3D000') throw error;
+    if (vars.KIRA_ACCOUNTS_MODE === 'true') throw error;
+  } finally { await platform.end(); }
+  return [{ id: 'instance', registeredAt: null, pool: createDbPool() }];
+}
+
+registerProductAnalyticsRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, analyticsSources });
 
 app.get('/api/chats', requireAuth, async (_req, res) => {
   const pool = createDbPool();

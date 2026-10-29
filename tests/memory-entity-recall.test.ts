@@ -36,6 +36,43 @@ const service = (records: SearchResult[]) => ({ getMemoriesByTag: async (userId:
 const focusPlan = (mention = 'неё'): MemoryQueryPlan => ({ answerQueries: ['личные сведения'], contextQueries: [], requestKind: 'overview',
     references: [{ kind: 'person', mention, from: 'focus', relationPath: [] }] });
 
+for (const [question, query, relationType, content] of [
+    ['Как зовут мою дочку?', 'дочь имя', 'parent_of', 'У пользователя есть дочь Вера Учебная.'],
+    ['Как зовут моего начальника?', 'начальник имя', 'reports_to', 'Начальник пользователя — Мирон Учебный.'],
+]) test(`missing graph edges retain literal owner evidence: ${question}`, async t => {
+    const domain = relationType === 'parent_of' ? 'family' : 'work';
+    const saved = record('legacy-owner-role', content, { subject: 'user', tags: ['subject:user'], domain, status: 'active' });
+    const backing = service([]);
+    backing.getOwnerMemories = async () => [saved,
+        record('unrelated-contact', 'У контакта есть дочь Чужая Учебная.', { subject: 'contact', tags: ['subject:contact'], domain: 'family' }),
+        record('expired-role', 'Дочь пользователя — Устаревшая Учебная.', { subject: 'user', tags: ['subject:user'], status: 'active', expiresAt: new Date('2020-01-01') })];
+    t.mock.method(vector, 'getVectorService', () => backing);
+    const model = t.mock.method(ai, 'createChatCompletionForTask', async () => { throw Error('Owner evidence fallback needs no extra model'); });
+    const result = await getMultiQueryMemoryContextDetailed(context(), question, 'full', { trackAccess: false,
+        queryPlan: { answerQueries: [query], contextQueries: [], requestKind: 'identity', domains: [domain],
+            references: [{ kind: 'person', from: 'owner', mention: question.includes('дочку') ? 'мою дочку' : 'моего начальника', relationPath: [{ type: relationType as any, direction: 'out' }] }] } });
+    assert.deepEqual(result.recalledMemories.map(item => item.id), ['legacy-owner-role']);
+    assert.match(result.context, /Каноническая личность по связи не установлена/);
+    assert.ok(result.context.includes(content));
+    assert.equal(result.recall?.state, 'found'); assert.notEqual(result.recall?.identityVerified, true);
+    assert.equal(model.mock.callCount(), 0);
+});
+
+for (const [mention, type, direction, wanted, other] of [
+    ['мою дочку', 'parent_of', 'out', 'Дочь', 'Сын'],
+    ['моего сына', 'parent_of', 'out', 'Сын', 'Дочь'],
+    ['мою маму', 'parent_of', 'in', 'Мать', 'Отец'],
+    ['мою жену', 'spouse_of', 'either', 'Жена', 'Муж'],
+] as const) test(`canonical relation identity respects explicit family roles: ${mention}`, async () => {
+    const make = (id: string, role: string, name: string) => ({ ...relation(id, type, direction === 'in' ? id : 'user', direction === 'in' ? 'user' : id, name), content: `${role} пользователя — ${name}.` });
+    const right = make('synthetic-right-role', wanted, 'Вера Учебная');
+    const wrong = make('synthetic-wrong-role', other, 'Мирон Учебный');
+    const both = await followMemoryRelations(service([right, wrong]), owner, undefined, [{ type, direction }], mention);
+    assert.equal(both.person?.displayName, 'Вера Учебная'); assert.equal(both.ambiguous, false);
+    const onlyWrong = await followMemoryRelations(service([wrong]), owner, undefined, [{ type, direction }], mention);
+    assert.equal(onlyWrong.person, undefined);
+});
+
 test('interaction recall distinguishes direct chat sources from unsupported third-person context', () => {
     const direct = record('direct-chat', 'Обсуждал учебный эксперимент.', { sourceMessageIds: ['tg:555123:123'] });
     const mentioned = record('other-source', 'Обсуждал семейный спор.', { sourceMessageIds: ['tg:555124:123'] });
@@ -281,6 +318,21 @@ test('semantic synonyms traverse saved edges; unknown relations cannot invent a 
     const subtype = await followMemoryRelations(service([saved]), owner, undefined, [{ type: 'partner_of', direction: 'either' }]);
     assert.equal(subtype.person?.displayName, 'Лада Тестовая');
     assert.equal((await followMemoryRelations(service([]), owner, undefined, [{ type: 'spouse_of', direction: 'either' }])).person, undefined);
+});
+
+test('symmetric relation recall does not lose a reverse stored edge because the model chose out', async t => {
+    t.mock.method(identity, 'readPersonIdentities', async () => []);
+    const reverse = relation('reverse-owner-spouse', 'spouse_of', 'synthetic-spouse', 'user', 'Лада Тестовая');
+    const nested = relation('reverse-named-spouse', 'spouse_of', 'synthetic-partner', 'synthetic-miron', 'Элла Учебная');
+    // The named endpoint is the subject of this reverse record.
+    nested.tags = nested.tags.filter(tag => !tag.startsWith('relation_object_name:')).concat('relation_subject_name:Элла Учебная');
+    for (const direction of ['out', 'in', 'either'] as const) {
+        const own = await followMemoryRelations(service([reverse]), owner, undefined, [{ type: 'spouse_of', direction }]);
+        assert.equal(own.person?.displayName, 'Лада Тестовая');
+        const other = await followMemoryRelations(service([reverse, nested]), owner, { ...person, personIds: ['synthetic-miron'], contactId: undefined }, [{ type: 'spouse_of', direction }]);
+        assert.equal(other.person?.displayName, 'Элла Учебная');
+        assert.deepEqual(other.memories.map(memory => memory.id), ['reverse-named-spouse']);
+    }
 });
 
 test('nested relations follow the named intermediate person rather than the owner spouse', async t => {

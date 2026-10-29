@@ -5,6 +5,7 @@ import {
     resolveContactIdentity,
 } from './contactMemory';
 import { devLog } from '../utils';
+import { memoryAssertionVersion } from './memoryProvenance';
 
 export interface ContactIdentityRepairResult {
     scanned: number;
@@ -98,7 +99,7 @@ export async function repairLegacyContactIdentities(
             ...entry,
             tags: [...new Set(tags)],
             userId,
-        });
+        }, { expectedAssertion: memoryAssertionVersion(memory) });
         result.repaired++;
     }
 

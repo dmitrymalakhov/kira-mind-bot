@@ -286,6 +286,8 @@ async function sendReminder(bot: Bot<BotContext>, reminder: Reminder): Promise<v
 
         // Сохраняем ID сообщения для последующих обновлений
         reminder.messageId = (sentMessage as { message_id?: number })?.message_id;
+        await (await import('./services/productAnalytics')).recordBackgroundDelivery('reminder_delivery', 'reminder', config.allowedUserId,
+            `${reminder.id}:${new Date(reminder.dueDate).toISOString()}`, Date.now());
         reminder.status = ReminderStatus.Sent;
 
         // Сохраняем обновлённый статус в БД

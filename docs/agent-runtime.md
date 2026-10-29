@@ -41,7 +41,7 @@ flowchart TD
 | `recurring-tasks` | `tasks.list/create/update/pause/resume/remove/runNow` |
 | `telegram-reading` | `telegram.listChats`, `telegram.readMessages` |
 | `contact-communication` | `messages.prepareDraft`, `messages.updateDraft`; отправляет подтверждённая кнопка канала |
-| `people-and-memory` | `contacts.search/list`, `people.resolve`, `portraits.get`, `memory.search/recent/rememberContact/forget` |
+| `people-and-memory` | `contacts.search/list/getProfile`, `people.resolve`, `portraits.get`, `memory.search/recent/rememberContact/forget` |
 | `study-chat` | `agents.start(kind=study-chat)` с выбранным контактом и периодом |
 | `chat-monitoring` | `watchers.list/create/pause/resume/remove`, `chatGroups.list/save/remove/setTracking` |
 | `health-diary` | `health.request/listEntries/analyzePeriod/export` |
@@ -88,6 +88,10 @@ KIRA_DECISIONS_ENABLED=false
 Опциональный `KIRA_DECISIONS_ENABLED=true` заменяет вызов intent-классификатора категориальным Decisions API, когда выбранный маршрут классификации использует OpenAI. При недоступности endpoint или некорректном ответе вызывается обычный настроенный классификатор. Gemini/local пресеты не получают скрытый вызов OpenAI. Decisions не генерирует произвольные аргументы инструментов и не заменяет ведущее ядро. Используется существующий OpenAI-клиент и gateway, таймаут 5 секунд без скрытых повторов. По умолчанию функция выключена; доступность endpoint у конкретного gateway проверяется отдельно.
 
 Схема адаптера сверена с [официальным руководством Decisions](https://developers.openai.com/api/docs/guides/decisions) и [справочником метода create](https://developers.openai.com/api/reference/typescript/resources/decisions/methods/create).
+
+Отдельный фильтр приоритетной рефлексии использует один predicate с полными критериями жизненных событий, сроков, конфликтов и отношений. Он заменяет прежний булевый JSON-вызов только когда `lightweightText` уже настроен на OpenAI `gpt-6-luna` с reasoning `none` или без явного reasoning. Провайдер, модель, закрепление маршрута и gateway сохраняются; для остальных моделей и явных уровней reasoning используется JSON. Ошибка endpoint, отказ или некорректный predicate также возвращают обработку к настроенному JSON-маршруту. Таймаут Decisions — 5 секунд без повторов; основной анализ буфера по таймеру сохраняется и при сбое обоих вариантов.
+
+Порог predicate — `0.90`, выбран по calibration полного контракта рефлексии. Это не порог автоматической отправки уведомлений: predicate лишь повышает приоритет анализа буфера. Исходящие, пересланные и старше 30 минут сообщения остаются контекстом и не запускают этот фильтр. Переключатель `KIRA_REFLECTION_TRIAGE_DECISIONS_ENABLED=false` возвращает только этот фильтр на JSON, независимо от экспериментального `KIRA_DECISIONS_ENABLED` общего классификатора. Проверки и результаты: [исследование](decisions-research.md).
 
 ## Проверка ветки
 

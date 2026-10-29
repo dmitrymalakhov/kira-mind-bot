@@ -7,6 +7,7 @@ import { saveMemory } from './enhancedDomainMemory';
 import { rememberFact } from './domainMemory';
 import { normalizeContactLookupValue, saveContactMemoryFactOrAsk } from './contactMemory';
 import { containsMultipleAssertions } from './atomicAssertion';
+import { currentUserMemorySourceId, memoryMessageSourceId } from './memoryProvenance';
 
 const MAX_HISTORY_LENGTH = 10;
 /** Время жизни факта в short-term буфере (мс) */
@@ -48,10 +49,12 @@ export async function addToHistory(
         return;
     }
 
+    const timestamp = new Date();
     ctx.session.messageHistory.unshift({
         role,
         content,
-        timestamp: new Date(),
+        timestamp,
+        ...(role === 'user' ? { sourceMessageId: currentUserMemorySourceId(ctx, content, { role, content, timestamp }) } : {}),
         ...(options.kind ? { kind: options.kind } : {}),
     });
     devLog('Added message to history:', { role, content });
@@ -67,7 +70,7 @@ export async function addToHistory(
     if (role === 'user') {
         const currentHistoryItem = ctx.session.messageHistory[0];
         const sourceMessageIds = currentHistoryItem
-            ? [`${currentHistoryItem.role}:${currentHistoryItem.timestamp.getTime()}:0`]
+            ? [memoryMessageSourceId(currentHistoryItem)]
             : undefined;
         if (ctx.session.pendingContactMemory || ctx.session.pendingContactLookup) {
             devLog('Skip fact extraction: message is pending contact-memory clarification/lookup');

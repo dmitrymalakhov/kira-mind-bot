@@ -2,6 +2,7 @@ import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { llmCache, LLM_CACHE_TTL } from './llmCache';
 import { parseLLMJson } from '../utils';
 import { EmotionalTag } from '../types';
+import { createHash } from 'node:crypto';
 
 /**
  * Определяет эмоциональную окраску факта о пользователе.
@@ -15,7 +16,7 @@ import { EmotionalTag } from '../types';
  * чтобы не тратить LLM на обыденные факты типа "любит кофе".
  */
 export async function detectEmotionalTag(content: string): Promise<EmotionalTag | null> {
-    const cacheKey = `emotional_v1:${content.slice(0, 120)}`;
+    const cacheKey = 'emotional_v2:' + createHash('sha256').update(content).digest('hex');
     const cached = llmCache.get<EmotionalTag>(cacheKey);
     if (cached) return cached;
 

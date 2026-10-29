@@ -8,6 +8,7 @@ import {
     resolveTargetChat,
 } from "../reminder";
 import { type ProcessingResult } from "../orchestrator";
+import { recordResultDelivery } from '../services/productAnalytics';
 import { devLog, sendMessage } from "../utils";
 import { addToHistory } from "../utils/history";
 import { config } from "../config";
@@ -333,6 +334,7 @@ export async function sendDocumentFromResult(ctx: BotContext, result: Processing
         fs.unlinkSync(result.documentFilePath);
     } catch (fileError) {
         console.error("Ошибка при отправке документа:", fileError);
+        result.operationStatus = 'failed';
         await ctx.reply("Не удалось отправить документ. Попробуй запросить экспорт ещё раз.");
     }
 }
@@ -410,6 +412,10 @@ export async function sendResultToUser(
     result: ProcessingResult,
     voiceRequested = false,
 ): Promise<{ message_id: number }> {
+    return recordResultDelivery(ctx, result, () => sendResultPayload(ctx, result, voiceRequested), { feedback: !voiceRequested });
+}
+
+async function sendResultPayload(ctx: BotContext, result: ProcessingResult, voiceRequested: boolean): Promise<{ message_id: number }> {
     if (result.artifacts?.length) {
         const sent = await replyProcessingResult(ctx, result, voiceRequested);
         for (const artifact of result.artifacts) {
@@ -464,6 +470,7 @@ export async function sendResultToUser(
             await sendGeneratedImageAndStore(ctx, result);
         } catch (imageError) {
             console.error("Ошибка при отправке сгенерированного изображения:", imageError);
+            result.operationStatus = 'failed';
             await ctx.reply("К сожалению, не удалось отправить сгенерированное изображение. Возможно, проблема с URL или сервисом генерации изображений.");
         }
         return sent;

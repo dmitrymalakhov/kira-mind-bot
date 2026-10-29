@@ -14,6 +14,7 @@ import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
 import FavoriteBorderIcon from '@mui/icons-material/FavoriteBorder';
 import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined';
 import MonitorHeartOutlinedIcon from '@mui/icons-material/MonitorHeartOutlined';
+import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import MenuIcon from '@mui/icons-material/Menu';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import EventRepeatIcon from '@mui/icons-material/EventRepeat';
@@ -32,6 +33,7 @@ import { ChatsSection } from './ChatsSection';
 import { HealthSection } from './HealthSection';
 import { MemorySection } from './MemorySection';
 import { MonitoringSection } from './MonitoringSection';
+import { ProductAnalyticsSection } from './ProductAnalyticsSection';
 import { RecurringTasksSection } from './RecurringTasksSection';
 import { McpSettingsSection, type McpSettingsHandle } from './McpSettingsSection';
 import { saveConfig, fetchConfig, logout, restartService } from '../api';
@@ -48,6 +50,7 @@ const NAVIGATION = [
   { id: 'tasks', label: 'Задачи', icon: <EventRepeatIcon />, caption: 'Регулярные запросы и расписание запусков.' },
   { id: 'health', label: 'Здоровье', icon: <FavoriteBorderIcon />, caption: 'Дневник наблюдений и экспорт записей.' },
   { id: 'monitoring', label: 'Мониторинг', icon: <MonitorHeartOutlinedIcon />, caption: 'Состояние сервисов, использование AI и ошибки.' },
+  { id: 'analytics', label: 'Аналитика', icon: <InsightsOutlinedIcon />, caption: 'Польза, удержание, качество результатов и цели продукта.' },
 ] as const;
 type Page = typeof NAVIGATION[number]['id'];
 
@@ -285,6 +288,7 @@ export function Dashboard({ config, onLogout, onConfigUpdate }: Props) {
           <MonitoringSection />
         </>}
         {page === 'tasks' && <RecurringTasksSection />}
+        {page === 'analytics' && <ProductAnalyticsSection />}
       </Box>
       <Menu id="service-menu" anchorEl={serviceMenu} open={Boolean(serviceMenu)} onClose={() => setServiceMenu(null)}>
         <MenuItem disabled={restarting} onClick={() => { setServiceMenu(null); setRestartOpen(true); }}><ListItemIcon><RestartAltIcon fontSize="small" /></ListItemIcon>Перезапустить бота</MenuItem>

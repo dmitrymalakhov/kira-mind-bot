@@ -1,4 +1,4 @@
-import { IVectorService, MemoryEntry, SearchOptions, SearchResult, MemoryStats } from './IVectorService';
+import { IVectorService, MemoryEntry, SearchOptions, SearchResult, MemoryStats, MemoryMutationOptions } from './IVectorService';
 import { DomainConfig, SearchStrategy, DomainStats, DomainTrend } from '../../types';
 
 export interface MemoryCandidateOptions {
@@ -32,7 +32,7 @@ export abstract class IDomainVectorService extends IVectorService {
     /** Якорные факты (явные «Запомни») для подмешивания в контекст */
     abstract getAnchorMemories(userId: string, limit?: number): Promise<SearchResult[]>;
     /** Обновить существующую точку (при дедупликации) */
-    abstract updateMemory(memoryId: string, domain: string, memory: Omit<MemoryEntry, 'id'>): Promise<void>;
+    abstract updateMemory(memoryId: string, domain: string, memory: Omit<MemoryEntry, 'id'>, options?: MemoryMutationOptions): Promise<void>;
     abstract suggestDomains(query: string, userId: string): Promise<string[]>;
 
     abstract getDomainStats(userId: string): Promise<DomainStats[]>;

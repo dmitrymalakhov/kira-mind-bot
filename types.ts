@@ -366,6 +366,7 @@ export interface ForwardedMessageGroup {
 }
 
 export type BotContext = Context & SessionFlavor<SessionData> & {
+    productAnalytics?: import('./services/productAnalytics').ProductAnalyticsTask;
     /** Internal orchestration collects intermediate progress into one final response. */
     suppressAgentProgress?: boolean;
     /** Server-assigned channel key; never accepted from an external request. */
@@ -384,6 +385,7 @@ export type BotContext = Context & SessionFlavor<SessionData> & {
 
 // Интерфейс для хранения истории сообщений
 export interface MessageHistory {
+    sourceMessageId?: string;
     role: string;
     content: string;
     timestamp: Date;
@@ -605,6 +607,8 @@ export interface MemoryEntry {
     userId: string;
     /** Якорный факт (явное «Запомни») — всегда подмешивается в контекст */
     isAnchor?: boolean;
+    /** Evidence-backed knowledge protected from automatic expiry and deletion. */
+    retentionPolicy?: 'durable' | 'standard';
     expiresAt?: Date;
     /** Эмоциональная маркировка — влияет на ранжирование и flashbulb → anchor */
     emotionalTag?: EmotionalTag;
@@ -706,6 +710,7 @@ export interface SearchResult {
         confidence: number;
     }>;
     isAnchor?: boolean;
+    retentionPolicy?: 'durable' | 'standard';
     expiresAt?: Date;
     relatedIds?: MemoryRelation[];
     memoryKind?: MemoryKind;

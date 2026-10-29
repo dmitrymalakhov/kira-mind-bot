@@ -1,5 +1,27 @@
 import { createHash } from 'node:crypto';
 import { tokenizeMemoryRetrievalText } from './memoryRetrieval';
+import type { SearchResult } from '../services/interfaces/IVectorService';
+
+/** Meaning-bearing metadata must survive the bounded reranker representation. */
+export function formatMemoryRerankCandidate(memory: Partial<Pick<SearchResult, 'tags' | 'negated' | 'validFrom' | 'validTo' | 'predicate'>> & {
+    content: string; subject?: string; memoryKind?: string; status?: string;
+}, index: number, query: string): string {
+    const date = (value: Date | undefined) => {
+        const time = value ? new Date(value).getTime() : NaN;
+        return Number.isFinite(time) ? new Date(time).toISOString().slice(0, 10) : undefined;
+    };
+    const meta = JSON.stringify({
+        subject: String(memory.subject ?? memory.tags?.find(tag => tag.startsWith('subject:'))?.slice(8) ?? 'unknown').slice(0, 20),
+        identity: memory.tags?.filter(tag => /^(?:person_id|contact_id|contact_name):/.test(tag)).slice(0, 2).map(tag => tag.slice(0, 70)),
+        kind: memory.memoryKind,
+        status: memory.status,
+        negated: memory.negated === true,
+        validFrom: date(memory.validFrom), validTo: date(memory.validTo),
+        predicate: memory.predicate?.slice(0, 70),
+    });
+    const prefix = `${index + 1}. ${meta}\n`;
+    return prefix + memoryContentExcerpt(memory.content, query, Math.max(100, 900 - prefix.length));
+}
 
 /** Pure, bounded verbatim excerpt. Omitted parts are explicitly marked. */
 export function memoryContentExcerpt(content: string, query: string, maxChars: number): string {
@@ -31,5 +53,5 @@ export function parseMemoryRerankOrder(text: string, count: number): number[] | 
 
 /** Content changes, long-query suffixes and owner scope must invalidate cached order. */
 export function memoryRerankCacheKey(scope: string, query: string, candidates: Array<{ id: string; content: string }>, maxReturn: number): string {
-    return 'rerank_v2:' + createHash('sha256').update(JSON.stringify({ scope, query, candidates, maxReturn })).digest('hex');
+    return 'rerank_v3:' + createHash('sha256').update(JSON.stringify({ scope, query, candidates, maxReturn })).digest('hex');
 }

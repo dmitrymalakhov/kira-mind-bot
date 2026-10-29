@@ -16,6 +16,7 @@ import { GroupChatMessageRepository } from "./services/GroupChatMessageRepositor
 import { isGroupChatContextEnabled, isGroupReplyToBotEnabled } from "./services/groupChatFeatureSettings";
 import { getForwardedMessageInfo } from "./utils/forwardedMessage";
 import { resolveRuntimeIdentity } from './utils/runtimeIdentity';
+import { registerProductAnalytics } from './services/productAnalytics';
 
 const DISMISSAL_VARIANTS = [
   "занята важными делами",
@@ -307,5 +308,6 @@ function setupBot(bot: Bot<BotContext>, config: any) {
     }
   });
 
+  registerProductAnalytics(bot);
   registerCallback(bot);
 }

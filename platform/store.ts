@@ -64,6 +64,12 @@ export class PostgresAccountStore implements AccountStore {
             token_hash text PRIMARY KEY, account_id uuid NOT NULL REFERENCES kira_accounts(id) ON DELETE CASCADE,
             expires_at timestamptz NOT NULL DEFAULT now() + interval '30 days'
         )`);
+        await this.db.query(`CREATE TABLE IF NOT EXISTS kira_analytics_sources (
+            account_id uuid PRIMARY KEY REFERENCES kira_accounts(id) ON DELETE CASCADE,
+            database_name text NOT NULL, imported boolean NOT NULL DEFAULT false
+        )`);
+        await this.db.query(`CREATE TABLE IF NOT EXISTS kira_analytics_meta (id int PRIMARY KEY CHECK(id=1), started_at timestamptz NOT NULL DEFAULT now())`);
+        await this.db.query('INSERT INTO kira_analytics_meta(id) VALUES(1) ON CONFLICT DO NOTHING');
     }
     async create(username: string, hash: string): Promise<Account> {
         try {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { parseMcpConfig, readMcpConfig } from '../services/mcp/config';
+import { parseMcpConfig, readMcpConfig, mcpServerCatalog, mcpClassifierContext, MCP_SERVER_CATALOG_CHARS } from '../services/mcp/config';
 import { McpService, McpInputError, mcpResultEvidence } from '../services/mcp/client';
 import { JsonRpcHttpTransport, McpHttpError } from '../services/mcp/jsonRpcTransport';
 import { mcpTools, confirmedMcpCallKey } from '../orchestration/runtime/mcpTools';
@@ -21,6 +21,36 @@ test('MCP config validates transports, URLs and operator policy without revealin
     assert.throws(() => parseMcpConfig({ servers: { demo: { ...config().demo, tools: { lookup: 'readOnlyHint' } } } }));
     assert.throws(() => parseMcpConfig(JSON.parse('{"servers":{"__proto__":{}}}')));
     assert.deepEqual(readMcpConfig('/tmp/kira-mcp-nonexistent-synthetic.json'), {});
+});
+
+test('local routing catalog exposes only permitted capabilities without connecting to providers', () => {
+    const service = new McpService(config, async () => { throw new Error('Discovery must remain local'); });
+    const catalog = service.servers();
+    assert.deepEqual(catalog, [{ id: 'demo', description: 'Синтетический сервис', tools: 2,
+        readTools: ['lookup'], actionTools: ['change'], omittedTools: 0 }]);
+    const prompt = mcpClassifierContext(config);
+    assert.ok(prompt.includes(JSON.stringify(catalog)));
+    assert.doesNotMatch(prompt, /synthetic-secret|Authorization|https:|requesterAgentId/);
+    const changed = config(); changed.demo.tools.lookup = 'external';
+    assert.notEqual(mcpClassifierContext(() => changed), prompt, 'permission changes must invalidate the routing context/cache');
+    assert.equal(mcpClassifierContext(() => ({})), '');
+    assert.equal(mcpClassifierContext(() => { throw new Error('synthetic private config error'); }), '');
+});
+
+test('routing catalog keeps every server within a shared JSON budget and marks omitted tool names', () => {
+    const servers = Object.fromEntries(Array.from({ length: 16 }, (_, index) => [`synthetic-${index}`, {
+        ...config().demo, description: '\n"\\'.repeat(500), tools: Object.fromEntries(Array.from({ length: 200 }, (_unused, tool) =>
+            [`tool_${tool}_${'x'.repeat(112)}`, tool % 2 ? 'external' : 'read'])),
+    }]));
+    const catalog = mcpServerCatalog(parseMcpConfig({ servers }));
+    assert.equal(catalog.length, 16);
+    assert.ok(JSON.stringify(catalog).length <= MCP_SERVER_CATALOG_CHARS);
+    for (const server of catalog) {
+        assert.ok(server.readTools.length > 0); assert.ok(server.actionTools.length > 0);
+        assert.equal(server.tools, 200);
+        assert.equal(server.omittedTools, 200 - server.readTools.length - server.actionTools.length);
+        assert.ok(server.omittedTools > 0);
+    }
 });
 
 test('POST-only transport negotiates the actual Money Maker protocol and accepts 204 notifications', async () => {

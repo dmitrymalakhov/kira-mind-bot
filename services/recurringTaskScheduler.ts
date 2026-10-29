@@ -23,6 +23,7 @@ import {
 } from "../utils/recurringTaskPrompt";
 import { esc, footer, heading, paragraph, sendStructured } from "../utils/richMessage";
 import { isBackgroundFeatureEnabled } from "./backgroundFeatureService";
+import { config } from '../config';
 
 const POLL_INTERVAL_MS = 30_000;
 const MAX_RESULT_LENGTH = 20_000;
@@ -162,6 +163,8 @@ async function sendRecurringResult(
     }
 
     await sendRecurringArtifacts(bot, task, result);
+    await (await import('./productAnalytics')).recordBackgroundDelivery('recurring', 'action', config.allowedUserId,
+        `${task.id}:${messageId}`, Date.now());
 }
 
 async function sendRecurringArtifacts(bot: Bot<BotContext>, task: RecurringTask, result: Awaited<ReturnType<typeof processMessage>>): Promise<void> {

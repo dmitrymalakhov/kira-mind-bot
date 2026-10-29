@@ -27,6 +27,10 @@ export function memoryAnswerEvalCases(): MemoryAnswerEvalCase[] {
     const conversations = formatTopicConversations({ totalFound: 1, truncated: false, entries: [{ person, evidence: [{ person, basis: 'communication',
         memory: fact('source-context', 'Мирон создаёт учебный спектрометр для тестовой лаборатории.') }] }] }, 'профессиональные проекты');
     return [
+        packet('owner-role-without-edge', 'Как зовут мою дочку?', [
+            fact('owner-daughter', 'Дочь пользователя — Вера Учебная.', { subject: 'user', domain: 'family', tags: ['subject:user'], memoryKind: 'relationship' }),
+        ], owner, [/Вера/iu], { previousAnswer: 'В доступных сведениях имя дочери не найдено.',
+            recall: { state: 'found', requestKind: 'identity', subjects: [], domains: ['family'], evidenceCount: 1 } }),
         packet('owner-work-breadth', 'Что ты знаешь про мою работу?', [
             fact('work-role', 'Пользователь разрабатывает учебные компиляторы.', { subject: 'user', tags: ['subject:user'], predicate: 'work_field' }),
             fact('work-project', 'Пользователь ведёт проект «Контур Листа» для проверки учебных заданий.', { subject: 'user', tags: ['subject:user'], predicate: 'project' }),

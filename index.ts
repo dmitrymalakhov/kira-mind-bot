@@ -102,6 +102,7 @@ async function startBot() {
 
         console.log("🗄️  Инициализация базы данных...");
         await AppDataSource.initialize();
+        await (await import('./services/productAnalytics')).initializeProductAnalytics();
         console.log("✅ База данных подключена");
 
         console.log("🤖 Загрузка runtime AI preset...");

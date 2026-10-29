@@ -50,7 +50,7 @@ LMROUTER_SSH_USER=root
 
 Туннель читает отдельный `runtime-data/lmrouter-ssh/id_ed25519` и pinned `known_hosts`. При переносе был создан отдельный ключ с доступом только к forwarding на `127.0.0.1:8080`; оболочка по этому ключу недоступна. Ключ не входит в Git или Docker-образ. API-порт туннеля доступен только внутри Docker-сети. Открывать gateway в интернет по HTTP не требуется.
 
-В allowlist lmrouter нужны `/v1/models`, `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, а для голосовых сообщений — `/v1/audio/transcriptions`.
+В allowlist lmrouter нужны `/v1/models`, `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, а для голосовых сообщений — `/v1/audio/transcriptions`. Для Decisions API дополнительно разрешается точный путь `/v1/decisions`; прежняя авторизация и остальные ограничения сохраняются. Доступность endpoint не переключает AI-политику Киры и не отменяет закреплённые маршруты моделей.
 
 Можно задать HTTPS-адрес gateway напрямую в `OPENAI_BASE_URL`. Для прямого OpenAI укажите `https://api.openai.com/v1`; это требует доступности OpenAI из вашей сети. После изменения адресов, ключей или модели пересоздайте процессы:
 

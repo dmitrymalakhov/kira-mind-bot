@@ -468,7 +468,7 @@ async function runProactiveCycle(bot: Bot<BotContext>): Promise<void> {
     const proactive = await buildProactiveMessage(generatedEvent);
 
     const chatId = await getProactiveChatId();
-    const sent = await bot.api.sendMessage(chatId, proactive.message);
+    const sent = await (await import('./productAnalytics')).sendProactiveWithFeedback(bot, chatId, proactive.message, 'conversation');
 
     lastSentAt = Date.now();
     await saveLastSentAt(lastSentAt);

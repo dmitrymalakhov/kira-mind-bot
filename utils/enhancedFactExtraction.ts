@@ -6,6 +6,8 @@ import { rememberFact } from './domainMemory';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { normalizeContactLookupValue, saveContactMemoryFactOrAsk } from './contactMemory';
 import { createMemoryEpisode, updateWorkingMemoryFromMessages } from '../services/MemoryEpisodeService';
+import { normalizeMemoryTemporalScope, type MemoryTemporalScope } from './memoryRetention';
+import { memoryMessageSourceId } from './memoryProvenance';
 
 export interface QuickFact {
     content: string;
@@ -17,20 +19,10 @@ export interface QuickFact {
     predicate: string;
     object: string;
     negated?: boolean;
+    temporalScope?: MemoryTemporalScope;
 }
 
 const factService = new FactExtractionService();
-
-function sourceMessageIds(messages: any[]): string[] {
-    return messages
-        .map((m, index) => {
-            const ts = m.timestamp instanceof Date
-                ? m.timestamp.getTime()
-                : new Date(m.timestamp ?? Date.now()).getTime();
-            return `${m.role || 'message'}:${ts}:${index}`;
-        })
-        .slice(-12);
-}
 
 /** Паттерны явной просьбы запомнить — при совпадении факт сразу сохраняется в векторную БД (долговременная память). */
 const EXPLICIT_REMEMBER_PATTERNS: RegExp[] = [
@@ -228,9 +220,6 @@ export async function extractAndSaveFactsFromConversation(
         }
 
         let savedCount = 0;
-        const messageIds = sourceMessageIds(conversation);
-        // Список фактов, уже сохранённых quickFactCheck — пропускаем похожие
-        const alreadySaved = ctx.session.quickFactContents ?? [];
         const seenFactKeys = new Set<string>();
         for (const fact of facts) {
             if (fact.confidence > 0.5 && fact.importance > 0.3) {
@@ -250,18 +239,11 @@ export async function extractAndSaveFactsFromConversation(
                 }
                 seenFactKeys.add(factKey);
 
-                // Пропускаем факты, уже сохранённые quickFactCheck (нечёткое сравнение)
-                const isDuplicate = alreadySaved.some(saved => {
-                    const a = saved.toLowerCase();
-                    const b = factContent.toLowerCase();
-                    // Один содержит другой или совпадают по ключевым словам
-                    return a.includes(b) || b.includes(a) ||
-                        (a.length > 10 && b.length > 10 && a.slice(0, 30) === b.slice(0, 30));
-                });
-                if (isDuplicate) {
-                    devLog(`⏩ Факт пропущен (уже сохранён quickFactCheck): ${factContent.slice(0, 60)}`);
-                    continue;
-                }
+                // The shared storage layer deduplicates complete assertions with their
+                // provenance. A shared text prefix proves neither identity nor equality.
+                const messageIds = conversation.filter(message => message.role === 'user' && fact.sourceContext && message.content.includes(fact.sourceContext))
+                    .map(memoryMessageSourceId);
+                if (!messageIds.length) continue;
 
                 if (fact.subject === 'contact' && fact.contactName) {
                     const activePerson = ctx.session.activePersonContext;
@@ -280,9 +262,11 @@ export async function extractAndSaveFactsFromConversation(
                             sourceContext: fact.sourceContext,
                             sourceMessageIds: messageIds,
                             extractionMethod: 'delayed',
+                            confidence: fact.confidence,
                             subject: 'contact',
-                            predicate: fact.factType,
-                            object: fact.content,
+                            predicate: fact.predicate ?? fact.factType,
+                            object: fact.object ?? fact.content,
+                            negated: fact.negated,
                         },
                     }, {
                         askOnAmbiguous: false,
@@ -303,9 +287,11 @@ export async function extractAndSaveFactsFromConversation(
                         sourceContext: fact.sourceContext,
                         sourceMessageIds: messageIds,
                         extractionMethod: 'delayed',
+                        confidence: fact.confidence,
                         subject: 'user',
-                        predicate: fact.factType,
-                        object: fact.content,
+                        predicate: fact.predicate ?? fact.factType,
+                        object: fact.object ?? fact.content,
+                        negated: fact.negated,
                     });
                     if (!saved) continue;
                     rememberFact(ctx, fact.domain, fact.content);
@@ -353,8 +339,14 @@ ${contextContactName ? `Контекст отдельного предыдуще
 КРИТИЧЕСКИ ВАЖНО:
 - Если в сообщении есть реплай или цитата чужого сообщения (например "[В ответ на ...]") — не извлекай факты из цитируемого текста, только из слов самого пользователя.
 - Каждая запись содержит ровно один subject/predicate/object. «Друг, коллега, познакомились через общего знакомого» — три записи, не одна.
+- temporalScope: stable — личность/биография и устойчивые сведения; relationship — связь людей; preference/routine — предпочтение/привычка; current_state — изменяемое состояние; future_plan — план/ожидание; past_event — установленное прошлое событие; unknown — неясно. Возраст факта не меняет его класс. Отделяй постоянные сведения от сроков планов. Наличие сына не опровергает наличие дочери, несколько людей или планов могут сосуществовать.
 - Не добавляй хронологию, причинность, мотивы или эмоции, которых нет в сообщении.
 - Для именованного человека ставь subject=contact и точное contactName. Для родственника контакта ставь third_party; не делай контакт субъектом автоматически.
+- Сначала определи, ЧЬЮ связь/свойство утверждает пользователь. Наличие, тип связи и имя собственного родственника/питомца — утверждение о владельце связи, subject=user, даже когда имя второго участника явно названо. Не превращай «моего брата зовут ...» в изолированный contact-факт с потерей родства. Собственные занятия, здоровье и планы этого родственника — отдельные утверждения о нём, subject=contact/third_party, без переноса их владельцу.
+- Самостоятельно сказанное имя или связь сохраняй независимо от наличия планов в соседнем предложении. Несколько утверждений в сообщении требуют нескольких элементов facts; не выбирай только последний или только временный факт.
+- Устойчивая связь/обладание и явное отрицание такой связи относятся к relationship/stable; их наличие не является краткосрочным состоянием по одному лишь настоящему времени. Для временной ситуации с ограниченным периодом используй current_state. Полярность сама по себе не меняет временной класс.
+- Сохраняй отрицание в content и согласованном negated: true означает, что утверждение явно отрицается. Не превращай отсутствие связи/свойства в его наличие.
+- predicate обозначает положительную связь/свойство, а отрицание кодируется negated=true. Не прячь отрицание в предикате при negated=false: «больше не работает» — works_at с negated=true. Утвердительное событие сохраняет собственный смысл и предикат.
 - Если субъект неясен, subject=unknown; такая запись не должна сохраняться долговременно.
 
 ВАЖНО: Если пользователь сообщает о своём ТЕКУЩЕМ местонахождении или состоянии события (поездка, путешествие, конференция и т.д.) — это факт, включай его с датой.
@@ -374,6 +366,7 @@ ${contextContactName ? `Контекст отдельного предыдуще
       "predicate": "один атомарный предикат",
       "object": "объект предиката",
       "negated": false,
+      "temporalScope": "stable|relationship|preference|routine|current_state|future_plan|past_event|unknown",
       "domain": "work|health|family|finance|education|hobbies|travel|social|home|personal|entertainment|general",
       "importance": 0.0-1.0,
       "tags": ["tag1", "tag2"]
@@ -405,7 +398,8 @@ ${contextContactName ? `Контекст отдельного предыдуще
                 content: String(fact.content).trim(),
                 domain: String(fact.domain).trim() || 'general',
                 importance: typeof fact.importance === 'number' ? Math.min(1, Math.max(0, fact.importance)) : 0.75,
-                tags: Array.isArray(fact.tags) ? fact.tags.map((tag: unknown) => String(tag)) : [],
+                tags: [...(Array.isArray(fact.tags) ? fact.tags.map((tag: unknown) => String(tag)).filter((tag: string) => !tag.startsWith('temporal_scope:')) : []),
+                    `temporal_scope:${normalizeMemoryTemporalScope(fact.temporalScope)}`],
                 subject: ['user', 'contact', 'third_party', 'unknown'].includes(fact.subject)
                     ? fact.subject
                     : 'unknown',
@@ -413,6 +407,7 @@ ${contextContactName ? `Контекст отдельного предыдуще
                 predicate: String(fact.predicate || fact.domain).trim(),
                 object: String(fact.object || fact.content).trim(),
                 negated: fact.negated === true,
+                temporalScope: normalizeMemoryTemporalScope(fact.temporalScope),
             }))
             .filter((fact: QuickFact) => fact.content.length > 0);
 

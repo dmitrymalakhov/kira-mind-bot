@@ -1,5 +1,6 @@
 import type { MemoryEntry, MemorySubject } from '../types';
 import { containsMultipleAssertions } from './atomicAssertion';
+import { inferMemoryRetention } from './memoryRetention';
 
 export type MemoryAuditCode =
     | 'composite_assertion'
@@ -124,4 +125,50 @@ export function buildProductionRepairDryRun(entries: MemoryEntry[]): MemoryRepai
     }
     const affectedIds = new Set(proposed.map(item => item.memoryId));
     return { backup: entries.filter(entry => affectedIds.has(entry.id)), proposed };
+}
+
+export interface MemoryAuditMessageSource {
+    ref: string;
+    text: string;
+    senderId?: string;
+    forwarded?: boolean;
+}
+
+/** Archive review is evidence accounting, never automatic resurrection or semantic repair. */
+export function auditMemoryRetentionLifecycle(entries: MemoryEntry[], sources: MemoryAuditMessageSource[] = [], now = Date.now()) {
+    const archived = (entry: MemoryEntry) => entry.status === 'superseded' || entry.status === 'expired' ||
+        Boolean(entry.expiresAt && new Date(entry.expiresAt).getTime() <= now);
+    const messages = new Map(sources.map(source => [source.ref, source]));
+    const planningMarkers = new Set(['planning-superseded', 'planning-invalidated', 'superseded-by-atomic-update']);
+    const suspects = entries.filter(entry => archived(entry) && containsMultipleAssertions(entry.content) && entry.tags?.some(tag => planningMarkers.has(tag)));
+    const active = entries.filter(entry => !archived(entry));
+    const derived = (entry: MemoryEntry) => ['episode', 'chapter', 'portrait'].includes(entry.memoryKind || '') ||
+        ['episode', 'consolidation', 'compression', 'portrait'].includes(entry.extractionMethod || '') ||
+        entry.tags?.some(tag => /^(memory-(?:episode|chapter|schema)|user-schema|schema_key:|chapter_key:)/u.test(tag));
+    const review = suspects.map(entry => {
+        const refs = [...new Set(entry.sourceMessageIds ?? [])];
+        const available = refs.map(ref => messages.get(ref)).filter((source): source is MemoryAuditMessageSource => Boolean(source));
+        // A derived chapter, a repeated model claim or a similar vector proves no repair.
+        const replacements = active.filter(candidate => candidate.userId === entry.userId && candidate.botId === entry.botId &&
+            candidate.extractionMethod === 'manual' && candidate.sourceMemoryIds?.includes(entry.id) && inferMemoryRetention(candidate) === 'durable');
+        const state = derived(entry) ? 'derived_index' : replacements.length ? 'confirmed_replacement' : available.length ? 'source_review_required' : 'missing_sources';
+        return {
+            memoryId: entry.id, domain: entry.domain, state,
+            replacementIds: replacements.map(candidate => candidate.id),
+            sourceRefs: refs.length, availableMessages: available.length,
+            ownerMessages: available.filter(source => source.senderId === entry.userId && !source.forwarded).length,
+            forwardedMessages: available.filter(source => source.forwarded).length,
+            missingSourceRefs: refs.filter(ref => !messages.has(ref)),
+            hasStoredContext: Boolean(entry.sourceContext?.trim()),
+            storedSourceMemoryIds: entry.sourceMemoryIds ?? [],
+            action: derived(entry) ? 'keep_derived_archive' : replacements.length ? 'keep_original_and_confirmed_atomic_replacement' : 'review_without_reactivation',
+        };
+    });
+    return {
+        scanned: entries.length, archived: entries.filter(archived).length,
+        archivedComposite: entries.filter(entry => archived(entry) && containsMultipleAssertions(entry.content)).length,
+        durableActive: active.filter(entry => inferMemoryRetention(entry) === 'durable' || entry.retentionPolicy === 'durable').length,
+        planningSuspects: review.length, reviewed: review,
+        byState: review.reduce<Record<string, number>>((counts, entry) => { counts[entry.state] = (counts[entry.state] || 0) + 1; return counts; }, {}),
+    };
 }

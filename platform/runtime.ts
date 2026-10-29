@@ -2,6 +2,7 @@ import { ChildProcess, fork } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { DataSource } from 'typeorm';
+import { provisionTenantAnalytics } from './analytics';
 import { ApiError } from '../api/contracts';
 import { PlatformSecrets } from './crypto';
 import { Account, AccountStore, provisionTenantDatabase, tenantName } from './store';
@@ -26,7 +27,7 @@ export function tenantEnvironment(env: NodeJS.ProcessEnv, account: Account, cred
     directory: string, secrets: PlatformSecrets): NodeJS.ProcessEnv {
     const child: NodeJS.ProcessEnv = {};
     for (const [key, value] of Object.entries(env)) {
-        if (/^(?:PATH|LANG|TZ|NODE_EXTRA_CA_CERTS|PLAYWRIGHT_[A-Z_]+|CHROMIUM_[A-Z_]+|OPENAI_[A-Z_]+|GEMINI_[A-Z_]+|GOOGLE_API_KEY|GOOGLE_MAPS_API_KEY|ELEVENLABS_[A-Z_]+|OPENROUTER_[A-Z_]+|ZAI_[A-Z_]+|LM_STUDIO_[A-Z_]+|AI_MODEL_PRESET|KIRA_ORCHESTRATION_MODE|KIRA_DECISIONS_ENABLED|KIRA_FAST_DIALOGUE_ENABLED|DIALOGUE_DEEP_REVIEW_ENABLED|MEMORY_EMBEDDING_[A-Z_]+|DB_HOST|DB_PORT|QDRANT_URL|QDRANT_API_KEY)$/.test(key)) child[key] = value;
+        if (/^(?:PATH|LANG|TZ|NODE_EXTRA_CA_CERTS|PLAYWRIGHT_[A-Z_]+|CHROMIUM_[A-Z_]+|OPENAI_[A-Z_]+|GEMINI_[A-Z_]+|GOOGLE_API_KEY|GOOGLE_MAPS_API_KEY|ELEVENLABS_[A-Z_]+|OPENROUTER_[A-Z_]+|ZAI_[A-Z_]+|LM_STUDIO_[A-Z_]+|AI_MODEL_PRESET|KIRA_ORCHESTRATION_MODE|KIRA_DECISIONS_ENABLED|KIRA_REFLECTION_TRIAGE_DECISIONS_ENABLED|KIRA_FAST_DIALOGUE_ENABLED|DIALOGUE_DEEP_REVIEW_ENABLED|MEMORY_EMBEDDING_[A-Z_]+|DB_HOST|DB_PORT|QDRANT_URL|QDRANT_API_KEY)$/.test(key)) child[key] = value;
     }
     const name = tenantName(account.id);
     const existing = credentials.existingStorage;
@@ -125,6 +126,9 @@ export class TenantRuntimeManager implements AccountRuntimes {
             try { await fs.writeFile(personality, '{}', { mode: 0o600, flag: 'wx' }); }
             catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
             if (!credentials.existingStorage) await provisionTenantDatabase(this.admin, account.id, this.secrets.derive(account.id, 'database'));
+            // Imported runtimes cannot migrate their schema. The operator provisions only metadata tables.
+            const analyticsDatabase = credentials.existingStorage?.database || tenantName(account.id);
+            await provisionTenantAnalytics(this.admin, account.id, analyticsDatabase, Boolean(credentials.existingStorage));
             if (this.stopped || revision !== this.revisions.get(account.id)) return;
             const workerEnv = tenantEnvironment(this.env, account, credentials, directory, this.secrets);
             const child = fork(path.resolve(__dirname, '..', 'index.js'), [], {

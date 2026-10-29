@@ -1,12 +1,14 @@
 import { config } from '../config';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { getVectorService } from '../services/VectorServiceFactory';
-import { auditMemoryEntries, buildProductionRepairDryRun } from '../utils/memoryAudit';
+import { auditMemoryEntries, buildProductionRepairDryRun, auditMemoryRetentionLifecycle } from '../utils/memoryAudit';
 
 async function main(): Promise<void> {
     const svc = getVectorService();
     if (!svc) throw new Error('Vector service недоступен');
-    const entries = await svc.getAllMemories(String(config.allowedUserId));
+    const entries = await svc.getAllMemories(String(config.allowedUserId), { includeArchived: true });
+    const sourcesIndex = process.argv.indexOf('--source-messages');
+    const sources = sourcesIndex >= 0 ? JSON.parse(readFileSync(process.argv[sourcesIndex + 1], 'utf8')).messages : [];
     const scannedDomains = entries.reduce<Record<string, number>>((counts, entry) => {
         counts[entry.domain] = (counts[entry.domain] ?? 0) + 1;
         return counts;
@@ -18,6 +20,7 @@ async function main(): Promise<void> {
         scannedDomains,
         issues: auditMemoryEntries(entries),
         repair: buildProductionRepairDryRun(entries),
+        lifecycle: auditMemoryRetentionLifecycle(entries, sources),
     };
     const serialized = `${JSON.stringify(report, null, 2)}\n`;
     const outputIndex = process.argv.indexOf('--out');

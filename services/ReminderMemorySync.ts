@@ -4,6 +4,7 @@ import type { BotContext, MemoryEntry, SearchResult, MemoryStatus } from '../typ
 import type { Reminder } from '../reminder';
 import { buildReminderSourceTag } from '../utils/enhancedDomainMemory';
 import { getActiveMemoryBotId } from '../utils/botIdentity';
+import { memoryAssertionVersion } from '../utils/memoryProvenance';
 
 const REMINDER_MEMORY_TAG = 'reminder-memory';
 const REMINDER_MEMORY_SOURCE_TAG = 'source:reminder';
@@ -281,7 +282,7 @@ export async function createOrRefreshReminderMemoryForUserId(userId: string, rem
         await svc.updateMemory(canonical.id, canonical.domain, {
             ...patchReminderMemory(canonical, reminder, 'update'),
             userId,
-        }).catch(() => {});
+        }, { expectedAssertion: memoryAssertionVersion(canonical) }).catch(() => {});
         return;
     }
 
@@ -311,12 +312,12 @@ export async function syncReminderMemoryMutation(
         await svc.updateMemory(canonical.id, canonical.domain, {
             ...patchReminderMemory(canonical, next, action),
             userId,
-        }).catch(() => {});
+        }, { expectedAssertion: memoryAssertionVersion(canonical) }).catch(() => {});
         for (const duplicate of duplicates) {
             await svc.updateMemory(duplicate.id, duplicate.domain, {
                 ...patchLegacyMemory(duplicate, next, action),
                 userId,
-            }).catch(() => {});
+            }, { expectedAssertion: memoryAssertionVersion(duplicate) }).catch(() => {});
         }
     } else if (action === 'update' || action === 'postpone' || action === 'create') {
         await createOrRefreshReminderMemory(ctx, next);
@@ -326,7 +327,7 @@ export async function syncReminderMemoryMutation(
         await svc.updateMemory(legacy.id, legacy.domain, {
             ...patchLegacyMemory(legacy, next, action),
             userId,
-        }).catch(() => {});
+        }, { expectedAssertion: memoryAssertionVersion(legacy) }).catch(() => {});
     }
 }
 

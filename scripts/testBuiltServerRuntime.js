@@ -1,12 +1,18 @@
 const assert = require("node:assert/strict");
 
-process.env.KIRA_BOT_TOKEN = process.env.KIRA_BOT_TOKEN || "test-token";
-process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test";
+// Imports exercise the built application, but must never start a real account
+// session or inherit provider credentials from an operator's environment/.env.
+Object.assign(process.env, {
+    NODE_ENV: 'test', KIRA_BOT_TOKEN: 'synthetic-test-token', OPENAI_API_KEY: 'synthetic-test-openai-key',
+    GEMINI_API_KEY: 'synthetic-test-gemini-key', TELEGRAM_API_ID: '', TELEGRAM_API_HASH: '', TELEGRAM_SESSION_STRING: '',
+    PERSONALITY_FILE: require('node:path').join(process.cwd(), 'fixtures/nonexistent-test-personality.json'),
+});
 
 const configModule = require("../dist/config.js");
 const sanitizerModule = require("../dist/utils/legacyPersonalitySanitizer.js");
 const localModels = require('../dist/ai/localModelRouting.js');
 assert.equal(require('../dist/utils/telegramAccess.js').readTelegramUserCredentials({ KIRA_BOT_TOKEN: 'synthetic-bot-token' }), null);
+assert.equal(require('../dist/utils/telegramAccess.js').readTelegramUserCredentials(process.env), null, 'Smoke tests cannot use an operator Telegram session');
 assert.equal(require('../dist/ai/backgroundFeatureState.js').requiresTelegramSession('reflection'), true);
 assert.equal(localModels.defaultLocalRoutes('synthetic/model').fast.reasoningEffort, 'none');
 assert.equal(require('../dist/ai/imageGeneration.js').defaultImageSettings({}).model, 'gpt-image-2.5-sunburst');

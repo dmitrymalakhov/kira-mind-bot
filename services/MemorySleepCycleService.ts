@@ -2,9 +2,11 @@ import { config } from '../config';
 import { PREDEFINED_DOMAINS } from '../constants/domains';
 import { MemoryEntry } from '../types';
 import { getVectorService } from './VectorServiceFactory';
+import { replaceDerivedMemories } from './derivedMemoryReplacement';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { devLog, parseLLMJson } from '../utils';
 import { isEligibleForUserSynthesis } from '../utils/userSynthesisFilter';
+import { memoryAssertionVersion } from '../utils/memoryProvenance';
 
 const OPEN_LOOP_INDEX_TAG = 'sleep_open_loop_index';
 const UNCERTAINTY_INDEX_TAG = 'sleep_uncertainty_index';
@@ -284,20 +286,6 @@ JSON:
     return parseLLMJson<UncertaintyIndexResponse>(resp.choices[0]?.message?.content ?? '');
 }
 
-async function replaceExistingIndex(userId: string): Promise<void> {
-    const svc = getVectorService();
-    if (!svc) return;
-    const existing = await svc.getMemoriesByTag(userId, OPEN_LOOP_INDEX_TAG).catch(() => []);
-    await Promise.allSettled(existing.map(memory => svc.deleteMemory(memory.id, memory.domain)));
-}
-
-async function replaceExistingUncertaintyIndex(userId: string): Promise<void> {
-    const svc = getVectorService();
-    if (!svc) return;
-    const existing = await svc.getMemoriesByTag(userId, UNCERTAINTY_INDEX_TAG).catch(() => []);
-    await Promise.allSettled(existing.map(memory => svc.deleteMemory(memory.id, memory.domain)));
-}
-
 export async function runMemorySleepCycleForUser(userId: string): Promise<SleepCycleResult> {
     const svc = getVectorService();
     if (!svc) {
@@ -336,7 +324,7 @@ export async function runMemorySleepCycleForUser(userId: string): Promise<SleepC
             .sort((a, b) => rankUncertainty(b) - rankUncertainty(a))
             .slice(0, 25);
         const results = await Promise.allSettled(
-            staleTemporal.map((memory) => svc.updateMemory(memory.id, memory.domain, softenTemporalMemory(memory, userId)))
+            staleTemporal.map((memory) => svc.updateMemory(memory.id, memory.domain, softenTemporalMemory(memory, userId), { expectedAssertion: memoryAssertionVersion(memory) }))
         );
         staleFactsSoftened = results.filter((result) => result.status === 'fulfilled').length;
         if (staleFactsSoftened > 0) {
@@ -354,7 +342,7 @@ export async function runMemorySleepCycleForUser(userId: string): Promise<SleepC
             if (!summary) {
                 skipped.push('empty-open-loop-index');
             } else {
-                await replaceExistingIndex(userId);
+                const previous = await svc.getMemoriesByTag(userId, OPEN_LOOP_INDEX_TAG);
                 const now = new Date();
                 const priorities = Array.isArray(index?.priorities) ? index!.priorities.filter(Boolean).slice(0, 12) : [];
                 const stale = Array.isArray(index?.staleOrUnclear) ? index!.staleOrUnclear.filter(Boolean).slice(0, 8) : [];
@@ -365,7 +353,7 @@ export async function runMemorySleepCycleForUser(userId: string): Promise<SleepC
                     stale.length ? `Стоит уточнить: ${stale.join('; ')}` : '',
                 ].filter(Boolean).join('\n');
 
-                await svc.saveMemory({
+                await replaceDerivedMemories(svc, previous, [{
                     content,
                     domain: PREDEFINED_DOMAINS.GENERAL,
                     timestamp: now,
@@ -389,7 +377,7 @@ export async function runMemorySleepCycleForUser(userId: string): Promise<SleepC
                     specificity: 0.70,
                     confirmationCount: openLoops.length,
                     lastConfirmedAt: now,
-                });
+                }]);
 
                 openLoopIndexCreated = true;
                 devLog('[memory-sleep-cycle] open loop index saved', { sourceCount: openLoops.length });
@@ -409,7 +397,7 @@ export async function runMemorySleepCycleForUser(userId: string): Promise<SleepC
             if (!summary) {
                 skipped.push('empty-uncertainty-index');
             } else {
-                await replaceExistingUncertaintyIndex(userId);
+                const previous = await svc.getMemoriesByTag(userId, UNCERTAINTY_INDEX_TAG);
                 const now = new Date();
                 const cues = Array.isArray(index?.clarificationCues) ? index!.clarificationCues.filter(Boolean).slice(0, 12) : [];
                 const stale = Array.isArray(index?.likelyStale) ? index!.likelyStale.filter(Boolean).slice(0, 8) : [];
@@ -422,7 +410,7 @@ export async function runMemorySleepCycleForUser(userId: string): Promise<SleepC
                     weak.length ? `Слабое/противоречивое: ${weak.join('; ')}` : '',
                 ].filter(Boolean).join('\n');
 
-                await svc.saveMemory({
+                await replaceDerivedMemories(svc, previous, [{
                     content,
                     domain: PREDEFINED_DOMAINS.GENERAL,
                     timestamp: now,
@@ -445,7 +433,7 @@ export async function runMemorySleepCycleForUser(userId: string): Promise<SleepC
                     specificity: 0.66,
                     confirmationCount: uncertaintyCandidates.length,
                     lastConfirmedAt: now,
-                });
+                }]);
 
                 uncertaintyIndexCreated = true;
                 devLog('[memory-sleep-cycle] uncertainty index saved', { sourceCount: uncertaintyCandidates.length });

@@ -53,6 +53,30 @@ test('reverse symmetric edges resolve the other endpoint, never the owner name',
     assert.equal(result.name, 'Лада Тестовая');
 });
 
+for (const [label, content, reverse] of [
+    ['forward instrumental role of the owner', 'Владелец Учебный является мужем Лады Тестовой.', false],
+    ['reverse naming of the owner role', 'Лада Тестовая называет владельца своим мужем.', true],
+    ['explicit target role after its name', 'Лада Тестовая — жена владельца.', false],
+    ['unrelated role in another clause', 'Лада Тестовая — жена владельца; её брат — Мирон Учебный.', false],
+] as const) test(`family role filtering binds the role to its named endpoint: ${label}`, async () => {
+    const record = edge({ content, ...(reverse ? { subject: 'contact', tags: ['person_relation', 'relation_type:spouse_of',
+        'relation_subject_person_id:synthetic-lada', 'relation_object:user', 'relation_subject_name:Лада Тестовая'] } : {}) });
+    const wrong = edge({ id: 'synthetic-wrong-husband', content: 'Муж пользователя — Мирон Учебный.',
+        tags: ['person_relation', 'relation_type:spouse_of', 'relation_subject:user',
+            'relation_object_person_id:synthetic-miron', 'relation_object_name:Мирон Учебный'] });
+    const result = await recallOwnerRelationship(store([record, wrong]), OWNER, 'Как зовут мою жену?');
+    assert.equal(result.complete, true); assert.equal(result.name, 'Лада Тестовая');
+    assert.deepEqual(result.memories.map(memory => memory.id), ['synthetic-edge']);
+});
+
+test('an explicit contrary target role remains excluded, including role-after-name forms', async () => {
+    for (const content of ['Мирон Учебный — муж владельца.', 'Мирон Учебный является мужем владельца.', 'У владельца есть муж Мирон Учебный.']) {
+        const wrong = edge({ content, tags: edge().tags.map(tag => tag.replace('synthetic-lada', 'synthetic-miron').replace('Лада Тестовая', 'Мирон Учебный')) });
+        const result = await recallOwnerRelationship(store([wrong]), OWNER, 'Кто моя жена?');
+        assert.equal(result.complete, false, content); assert.equal(result.name, undefined, content);
+    }
+});
+
 test('identity hydration follows only the saved stable endpoint and needs one consistent name', async () => {
     const relation = edge({tags:edge().tags.filter(tag=>!tag.startsWith('relation_object_name:'))});
     const person = edge({id:'synthetic-person-record', subject:'contact',content:'[Лада Тестовая] Любит рисовать.',tags:['person_id:synthetic-lada','contact_name:Лада Тестовая']});

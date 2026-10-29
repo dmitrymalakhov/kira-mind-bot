@@ -16,7 +16,7 @@ export function memoryQueryHistory(ctx: BotContext, message: string): Array<{ ro
 }
 
 export function memoryQueryCacheKey(message: string, history: Array<{ role: string; content: string }>): string {
-    return 'queries_v9:' + createHash('sha256').update(JSON.stringify({ message, history })).digest('hex');
+    return 'queries_v13:' + createHash('sha256').update(JSON.stringify({ message, history })).digest('hex');
 }
 
 /** A demonstrative reference cannot become a literal name even if the planner labels it named. */

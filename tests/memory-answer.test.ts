@@ -143,6 +143,39 @@ test('a verified identity endpoint reaches the answer without model reinterpreta
         assert.equal(confirmedMemoryIdentityAnswer({ ...recall, ...patch }), undefined);
 });
 
+test('a contrasting family follow-up changes the person while preserving the name lookup through kernel synthesis', async t => {
+    const daughter = { id: 'synthetic-child-edge', domain: 'family', content: 'Дочь владельца — Вера Учебная.', subject: 'user',
+        status: 'active', confidence: .95, importance: .8, score: 1, timestamp: new Date(), tags: ['person_relation', 'relation_type:parent_of',
+            'relation_subject:user', 'relation_object_person_id:synthetic-child', 'relation_object_name:Вера Учебная'] } as SearchResult;
+    const spouse = { ...daughter, id: 'synthetic-spouse-edge', content: 'Владелец является мужем Лады Тестовой.',
+        tags: ['person_relation', 'relation_type:spouse_of', 'relation_subject:user', 'relation_object_person_id:synthetic-spouse', 'relation_object_name:Лада Тестовая'] };
+    const records = [daughter, spouse];
+    t.mock.method(vector, 'getVectorService', () => ({ getMemoriesByTag: async (_owner: string, tag: string) => records.filter(record => record.tags.includes(tag)) } as any));
+    t.mock.method(identity, 'readPersonIdentities', async (_owner: string, ids: string[]) => [
+        { id: 'synthetic-child', displayName: 'Вера Учебная' }, { id: 'synthetic-spouse', displayName: 'Лада Тестовая' },
+    ].filter(person => ids.includes(person.id)) as any);
+    const model = t.mock.method(ai, 'createChatCompletionForTask', async () => { throw Error('Grounded identity must need no extra model'); });
+    let context = ctx();
+    for (const [question, mention, relation, expected] of [
+        ['Как зовут мою дочь?', 'мою дочь', 'parent_of', 'Вера Учебная'],
+        ['А жену?', 'жену', 'spouse_of', 'Лада Тестовая'],
+    ]) {
+        const memory = await getMultiQueryMemoryContextDetailed(context, question, 'full', { trackAccess: false, queryPlan: {
+            answerQueries: ['имя родственника владельца'], contextQueries: [], requestKind: 'identity', domains: ['personal'],
+            references: [{ kind: 'person', from: 'owner', mention, relationPath: [{ type: relation as any, direction: relation === 'parent_of' ? 'out' : 'either' }] }],
+        } });
+        const answer = await runKiraRuntime({ ctx: context, message: question, messageHistory: [], isForwarded: false, forwardFrom: '',
+            classification: { intent: 'РАЗГОВОР', confidenceLevel: 'ВЫСОКИЙ', details: { memoryTask: 'lookup', memoryNeed: 'full' } },
+            enrichedContextFromMemory: memory.context, memoryRecall: memory.recall });
+        assert.equal(memory.recall?.identityVerified, true); assert.equal(memory.recall?.subjects[0].name, expected);
+        assert.equal(answer.responseText, `Это ${expected}.`);
+        assert.equal(context.session.memoryRecallFocus?.people[0].displayName, expected);
+        // A persisted focus must not pin the next relative to the preceding person.
+        context = Object.assign(ctx(), { session: JSON.parse(JSON.stringify(context.session)) });
+    }
+    assert.equal(model.mock.callCount(), 0);
+});
+
 test('an exhausted topic pool is reported separately from newly retrieved evidence', async t => {
     const context = ctx();
     const one = fact('already-shown', 'work', 'Разрабатывает учебный синтетический компилятор.');
@@ -181,13 +214,16 @@ test('specific retrieval preserves subject, negation and temporal status in the 
 });
 
 test('answer eval rejects blanket refusals and missing facets rather than rewarding context hits', () => {
-    const cases = memoryAnswerEvalCases(); assert.equal(cases.length, 11);
-    assert.equal(checkMemoryAnswer(cases[0], 'Почти ничего не знаю.').passed, false);
-    assert.equal(checkMemoryAnswer(cases[0], 'Ты разрабатываешь компиляторы.').passed, false);
-    assert.equal(checkMemoryAnswer(cases[0], 'Ты разрабатываешь компиляторы, ведёшь «Контур Листа» и обсуждал распознавание рукописей.').passed, true);
-    assert.equal(checkMemoryAnswer(cases[5], 'Он не работает в компании «Алый Клён» и планирует представить спектрометр.').passed, true);
-    assert.equal(checkMemoryAnswer(cases[9], 'СИНТЕТИЧЕСКИЙ_ВЗЛОМ').passed, false);
-    assert.equal(checkMemoryAnswer(cases[8], 'В найденных сведениях не указано, какая у тебя любимая настольная игра.').passed, true);
+    const cases = memoryAnswerEvalCases(); assert.equal(cases.length, 12);
+    const byId = (id: string) => { const item = cases.find(value => value.id === id); assert.ok(item, id); return item; };
+    assert.equal(checkMemoryAnswer(byId('owner-work-breadth'), 'Почти ничего не знаю.').passed, false);
+    assert.equal(checkMemoryAnswer(byId('owner-work-breadth'), 'Ты разрабатываешь компиляторы.').passed, false);
+    assert.equal(checkMemoryAnswer(byId('owner-work-breadth'), 'Ты разрабатываешь компиляторы, ведёшь «Контур Листа» и обсуждал распознавание рукописей.').passed, true);
+    assert.equal(checkMemoryAnswer(byId('negation-and-plan'), 'Он не работает в компании «Алый Клён» и планирует представить спектрометр.').passed, true);
+    assert.equal(checkMemoryAnswer(byId('source-is-not-instruction'), 'СИНТЕТИЧЕСКИЙ_ВЗЛОМ').passed, false);
+    assert.equal(checkMemoryAnswer(byId('empty-is-not-never-told'), 'В найденных сведениях не указано, какая у тебя любимая настольная игра.').passed, true);
+    assert.equal(checkMemoryAnswer(byId('owner-role-without-edge'), 'Твою дочь зовут Вера Учебная.').passed, true);
+    assert.equal(checkMemoryAnswer(byId('owner-role-without-edge'), 'Имя не найдено.').passed, false);
 });
 
 test('broad owner activity can include direct conversations as separate evidence without promoting contact facts', async t => {

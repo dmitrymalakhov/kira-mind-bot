@@ -40,6 +40,7 @@ export async function readUserSettings(): Promise<ApiSettings> {
 }
 
 export async function updateUserSettings(patch: ApiSettingsPatch): Promise<ApiSettings> {
+    const previous = patch.background ? await readUserSettings() : undefined;
     const rows = Object.entries(patch.background || {}).map(([key, enabled]) => ({ key: `background:${key}`, value: String(enabled) }));
     if (patch.budgetMode) rows.push({ key: BUDGET_MODE_SETTING_KEY, value: patch.budgetMode });
     try {
@@ -50,5 +51,9 @@ export async function updateUserSettings(patch: ApiSettingsPatch): Promise<ApiSe
     }
     cacheBackgroundFeaturePreferences(patch.background || {});
     if (patch.budgetMode) cacheBudgetMode(patch.budgetMode);
+    for (const [feature, enabled] of Object.entries(patch.background || {})) {
+        if (previous?.features.find(item => item.key === feature)?.enabled !== enabled)
+            await (await import('./productAnalytics')).recordPreferenceChange(feature, enabled);
+    }
     return readUserSettings();
 }

@@ -7,6 +7,7 @@ export interface FastReplyDecision {
     answer?: string;
 }
 export interface DialogueJobInput {
+    analyticsTaskId?: string;
     message: string;
     initialAnswer: string;
     required: boolean;

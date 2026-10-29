@@ -7,7 +7,7 @@ import { recallOwnerRelationship } from './personalRelationshipRecall';
 import { validMemoryFocus, isMemoryContinuation, saveMemoryFocus, memoryQueryHistory } from './memoryQueryPlan';
 import { memoryContentExcerpt } from './memoryRanking';
 import { tokenizeMemoryRetrievalText, scoreMemoryLexicalMatch } from './memoryRetrieval';
-import { isPersonRoleLabel, PERSON_RELATION_QUERY_SUBTYPES, INVERSE_PERSON_RELATION_TYPES } from './personRelation';
+import { isPersonRoleLabel, PERSON_RELATION_QUERY_SUBTYPES, INVERSE_PERSON_RELATION_TYPES, SYMMETRIC_PERSON_RELATION_TYPES } from './personRelation';
 
 export function personRecallScope(person: MemoryPerson): ContactIdentityScope {
     return { status: 'resolved', queryName: person.displayName, displayName: person.displayName,
@@ -39,15 +39,17 @@ export async function resolveNamedMemoryPerson(owner: string, mention: string): 
         aliases: [...new Set(identities.flatMap(item => item.aliases ?? []))], evidenceIds: [] } };
 }
 
-export async function followMemoryRelations(service: IDomainVectorService, owner: string, root: MemoryPerson | undefined, path: MemoryRelationStep[]): Promise<{ person?: MemoryPerson; memories: SearchResult[]; ambiguous: boolean }> {
+export async function followMemoryRelations(service: IDomainVectorService, owner: string, root: MemoryPerson | undefined, path: MemoryRelationStep[], referenceText?: string): Promise<{ person?: MemoryPerson; memories: SearchResult[]; ambiguous: boolean }> {
     let person = root;
     const memories = new Map<string, SearchResult>();
-    for (const step of path) {
+    for (const [index, step] of path.entries()) {
         const types = [...new Set([step.type, ...(step.alternatives ?? []), ...(PERSON_RELATION_QUERY_SUBTYPES[step.type] ?? [])])];
-        const variants = types.map(type => ({ type, direction: step.direction }));
+        // Storage orientation cannot change the meaning of a symmetric relation.
+        const direction = SYMMETRIC_PERSON_RELATION_TYPES.has(step.type) ? 'either' : step.direction;
+        const variants = types.map(type => ({ type, direction }));
         const inverse = INVERSE_PERSON_RELATION_TYPES[step.type];
-        if (inverse) variants.push({ type: inverse, direction: step.direction === 'in' ? 'out' : 'in' });
-        const matches = await Promise.all(variants.map(variant => recallOwnerRelationship(service, owner, '', Date.now(), { step: variant, anchor: person, identities: readPersonIdentities })));
+        if (inverse) variants.push({ type: inverse, direction: direction === 'in' ? 'out' : 'in' });
+        const matches = await Promise.all(variants.map(variant => recallOwnerRelationship(service, owner, '', Date.now(), { step: variant, anchor: person, identities: readPersonIdentities, referenceText: index === path.length - 1 ? referenceText : undefined })));
         const resolved = matches.filter(match => match.complete && match.person);
         if (matches.some(match => match.context && !match.complete)) return { memories: [...memories.values()], ambiguous: true };
         const keys = new Set(resolved.map(match => personKey(match.person!)));
@@ -116,7 +118,7 @@ export async function resolveMemoryQueryEntities(ctx: BotContext, question: stri
             root = previous[0];
         }
         if (ref.relationPath.length) {
-            const relation = await followMemoryRelations(service, String(ctx.from?.id), root, ref.relationPath);
+            const relation = await followMemoryRelations(service, String(ctx.from?.id), root, ref.relationPath, ref.mention);
             ambiguous ||= relation.ambiguous; root = relation.person;
             for (const memory of relation.memories) memories.set(memory.id, memory);
         }
@@ -179,6 +181,23 @@ export async function readPersonEvidence(service: IDomainVectorService, owner: s
             .filter(record => record.tags.includes('person_relation')));
     }
     return [...new Map([...relations, ...records].filter(eligibility.acceptCandidate).map(record => [record.id, record])).values()].slice(0, 400);
+}
+
+/** Missing canonical edges must not hide literal facts about the owner.
+ * This evidence cannot establish a person ID, focus or permission to act. */
+export async function readUnresolvedOwnerRelationEvidence(service: IDomainVectorService, owner: string, plan: MemoryQueryPlan, question: string): Promise<{ context: string; included: SearchResult[] } | undefined> {
+    const refs = plan.references ?? [];
+    if (refs.length !== 1 || refs[0].kind !== 'person' || refs[0].from !== 'owner' || refs[0].relationPath.length !== 1) return undefined;
+    const person: MemoryPerson = { owner: true, personIds: ['user'], displayName: 'владелец диалога', evidenceIds: [] };
+    const query = [...plan.answerQueries, question].join(' ');
+    const records = (await readPersonEvidence(service, owner, person, plan.domains ?? [])).filter(record =>
+        !['chapter', 'episode'].includes(record.memoryKind ?? '') && !/^(?:user_schema|memory_chapter):/.test(record.predicate ?? '') &&
+        scoreMemoryLexicalMatch(record.content, query).score > 0);
+    const selected = selectPersonEvidence(records, person, query, false, 8);
+    if (!selected.length) return undefined;
+    const packed = formatPersonOverview([{ person, records: selected }], 4500);
+    return { context: 'Каноническая личность по связи не установлена. Ниже — сохранённые факты о владельце, которые могут прямо отвечать на вопрос. Используй буквальное содержание, субъекта, отрицание и время. Отсутствие ребра графа не означает отсутствие имени в этих фактах. Не выдумывай личность или связь; неоднозначность и противоречия обозначай явно.\n' + packed.context,
+        included: packed.included };
 }
 
 /** A direct owner↔person edge is different from a person's relationship with someone else. */

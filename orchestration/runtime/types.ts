@@ -47,6 +47,8 @@ export interface ToolObservation {
     summary: string;
     data?: unknown;
     confirmationKey?: string;
+    /** Connection ID from the dispatched call, never inferred from provider text. */
+    mcpServer?: string;
 }
 
 export interface ToolOutput {
@@ -62,6 +64,10 @@ export interface ToolOutput {
 }
 
 export interface ToolContext extends KiraRuntimeInput {
+    /** The exact server-bound call whose missing parameter the owner answered. */
+    clarificationCall?: RuntimeToolCall;
+    /** Structured result of that call, preserved before removing its old observation. */
+    clarificationObservation?: ToolObservation;
     runId: string;
     signal: AbortSignal;
     memoryContext: string;
@@ -112,6 +118,7 @@ export interface RuntimeReceipt {
 }
 
 export interface RuntimeSessionState {
+    analyticsTaskId?: string;
     version: 1;
     runId: string;
     requestKey?: string;

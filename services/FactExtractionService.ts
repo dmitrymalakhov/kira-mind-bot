@@ -5,6 +5,7 @@ import { FACT_EXTRACTION_PROMPT } from '../utils/factExtraction';
 import { devLog, parseLLMJson } from '../utils';
 import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { PREDEFINED_DOMAINS } from '../constants/domains';
+import { normalizeMemoryTemporalScope } from '../utils/memoryRetention';
 
 function normalizeDomain(domain: unknown): string {
   const normalized = String(domain || '').trim().toLowerCase();
@@ -106,6 +107,11 @@ export class FactExtractionService {
 3. Если пользователь ИСПРАВЛЯЕТ ошибку бота — это важный факт, сохрани с датой
 4. Информация в цитатах «[В ответ на "..." от Имя]» — это слова другого человека, не пользователя
 5. Вопросы «какая задача?», «о чём ты?», «что за ...?» и ответы с отрицанием/сомнением НЕ подтверждают утверждение бота
+6. Один факт — одно утверждение. Отделяй постоянные сведения от временных планов и не считай разные связи/детей/события взаимоисключающими без прямой поправки.
+7. temporalScope: stable — устойчивые сведения о личности/биографии; relationship — связь людей; preference/routine — предпочтение/привычка; current_state — изменяемое состояние; future_plan — план/ожидание; past_event — установленное прошлое событие; unknown — неясно. Дата упоминания не ограничивает истинность биографического факта.
+8. Имя, наличие и тип собственного родственника/питомца описывают связь пользователя: subject=user. Собственное событие родственника — отдельный факт о нём, без присвоения пользователю. Не теряй постоянную связь из-за плана в соседнем предложении; сохраняй каждое независимое утверждение отдельно. Явное отрицание устойчивой связи не делает её временной.
+9. Для каждого факта верни predicate/object/negated и evidence — дословный непрерывный фрагмент слов пользователя, который поддерживает этот факт. Слова бота не являются evidence. Сохраняй отрицание в тексте и negated; поле factType является категорией, а не заменой атомарного предиката. Если прямой опоры нет, не возвращай факт.
+10. predicate обозначает положительную связь/свойство без отрицания (например works_at, has_pet); отрицание этой связи кодируется negated=true, а не отдельным отрицательным предикатом. Текст content при этом сохраняет отрицание. «Не работает» и «больше не работает» означают works_at с negated=true; «нет питомца» — has_pet с negated=true. Не прячь отрицание в predicate при negated=false. Для утвердительного события используй его собственный предикат, не меняя смысл на отрицание другого события.
 
 ПРАВИЛА для фактов о КОНТАКТАХ (subject: "contact"):
 1. Извлекай факты о конкретных упомянутых людях (имя обязательно)
@@ -136,6 +142,10 @@ ${dialogueText}
       "content": "Факт о пользователе",
       "domain": "work|health|family|finance|education|hobbies|travel|social|home|personal|entertainment|general",
       "factType": "preference|skill|location|personal_info|goal|habit|relationship",
+      "predicate": "один атомарный предикат",
+      "object": "объект того же утверждения",
+      "negated": false,
+      "temporalScope": "stable|relationship|preference|routine|current_state|future_plan|past_event|unknown",
       "confidence": 0.0-1.0,
       "importance": 0.0-1.0,
       "tags": ["тег1"],
@@ -147,6 +157,10 @@ ${dialogueText}
       "content": "Факт об этом человеке, от третьего лица",
       "domain": "work|health|family|finance|education|hobbies|travel|social|home|personal|entertainment|general",
       "factType": "preference|skill|location|personal_info|goal|habit|relationship",
+      "predicate": "один атомарный предикат",
+      "object": "объект того же утверждения",
+      "negated": false,
+      "temporalScope": "stable|relationship|preference|routine|current_state|future_plan|past_event|unknown",
       "confidence": 0.0-1.0,
       "importance": 0.0-1.0,
       "tags": ["тег1"],
@@ -157,6 +171,10 @@ ${dialogueText}
       "content": "Факт о третьем лице или событие с неизвестным субъектом",
       "domain": "work|health|family|finance|education|hobbies|travel|social|home|personal|entertainment|general",
       "factType": "personal_info|relationship|event",
+      "predicate": "один атомарный предикат",
+      "object": "объект того же утверждения",
+      "negated": false,
+      "temporalScope": "stable|relationship|preference|routine|current_state|future_plan|past_event|unknown",
       "confidence": 0.0-1.0,
       "importance": 0.0-1.0,
       "tags": ["evidence-only"],
@@ -196,18 +214,25 @@ ${dialogueText}
 
       return parsedData.facts
         .filter((f: any) => f?.content && String(f.content).trim().length > 0)
-        .filter((f: any) => (f.confidence ?? 0.5) >= 0.4)
+        .filter((f: any) => typeof f.confidence === 'number' && Number.isFinite(f.confidence) && f.confidence >= 0.4 && f.confidence <= 1)
         .filter((f: any) => f.subject !== 'contact' || (f.contactName && String(f.contactName).trim().length > 0 && String(f.contactName).trim().length < 100))
+        .filter((f: any) => typeof f.evidence === 'string' && f.evidence.trim().length > 0 &&
+          dialoguePairs.some(pair => [pair.userMessage, pair.userReply].some(text => text?.includes(f.evidence.trim()))))
+        .filter((f: any) => typeof f.predicate === 'string' && f.predicate.trim() && typeof f.object === 'string' && f.object.trim() && typeof f.negated === 'boolean')
         .map((f: any) => ({
           id: uuidv4(),
           content: String(f.content).trim(),
           domain: normalizeDomain(f.domain),
           factType: normalizeFactType(f.factType),
+          predicate: f.predicate.trim(),
+          object: f.object.trim(),
+          negated: f.negated,
           confidence: f.confidence ?? 0.5,
-          sourceContext: f.evidence || dialogueText.slice(0, 200),
+          sourceContext: f.evidence.trim(),
           extractedAt: new Date(),
           importance: f.importance ?? 0.5,
-          tags: Array.isArray(f.tags) ? f.tags : [],
+          tags: [...(Array.isArray(f.tags) ? f.tags.filter((tag: unknown) => typeof tag === 'string' && !tag.startsWith('temporal_scope:')) : []),
+            `temporal_scope:${normalizeMemoryTemporalScope(f.temporalScope)}`],
           subject: ['user', 'contact', 'third_party', 'unknown'].includes(f.subject)
             ? f.subject
             : 'unknown',

@@ -2,6 +2,7 @@ import { KIRA_SKILLS } from './skills';
 import { looksLikeKiraRelocationRequest } from '../../utils/kiraResidence';
 import type { ToolContext, ToolDefinition, RuntimeToolCall } from './types';
 import { isExplicitMcpRequest } from '../../services/mcp/config';
+import { requiresTelegramProfile } from '../../utils/telegramProfileRequest';
 
 export function isMcpRequest(context: Pick<ToolContext, 'classification' | 'message'>): boolean {
     return ['read', 'write'].includes(String(context.classification.details.mcpAccess)) || isExplicitMcpRequest(context.message);
@@ -9,7 +10,7 @@ export function isMcpRequest(context: Pick<ToolContext, 'classification' | 'mess
 
 const DIALOGUE_READ_TOOLS = new Set([
     'web.search', 'maps.geocode', 'maps.findNearby', 'maps.getDirections', 'maps.request',
-    'memory.search', 'memory.recent', 'contacts.search', 'contacts.list', 'people.resolve', 'portraits.get',
+    'memory.search', 'memory.recent', 'contacts.search', 'contacts.list', 'contacts.getProfile', 'people.resolve', 'portraits.get',
     'reminders.list', 'tasks.list', 'health.listEntries', 'health.analyzePeriod',
     'self.getState', 'self.searchEvents', 'self.getResidence', 'self.getStudyReports', 'settings.get', 'capabilities.list',
     'mcp.listServers', 'mcp.listTools', 'mcp.callReadTool', 'mcp.listResources', 'mcp.readResource',
@@ -43,6 +44,7 @@ export function authorizedStateSkills(context: Pick<ToolContext, 'classification
 }
 
 export function needsRuntimeTools(context: Pick<ToolContext, 'classification' | 'message'>): boolean {
+    if (requiresTelegramProfile(context.classification)) return true;
     if (isMcpRequest(context)) return true;
     const skills = authorizedStateSkills(context);
     // The semantic classifier already distinguishes remembered work/tasks from

@@ -1,7 +1,7 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv-provider.js';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { assertSafeMcpValue, McpConfig, McpEffect, McpServerConfig, readMcpConfig } from './config';
+import { assertSafeMcpValue, McpConfig, McpEffect, McpServerConfig, readMcpConfig, mcpServerCatalog } from './config';
 import { connectMcp, secretHeaderValues } from '../../utils/mcpConnection';
 export { mcpResultEvidence } from './evidence';
 
@@ -31,7 +31,7 @@ function redactCredentials<T>(value: T, config: McpServerConfig, connection: Mcp
 export class McpService {
     constructor(private readonly configuration: () => McpConfig = readMcpConfig, private readonly connector: McpConnector = connectMcp) {}
 
-    servers() { return Object.entries(this.configuration()).map(([id, config]) => ({ id, description: config.description, tools: Object.keys(config.tools).length })); }
+    servers() { return mcpServerCatalog(this.configuration()); }
     toolEffect(id: string, name: string): McpEffect | undefined {
         const config = this.configuration()[id];
         return config && Object.prototype.hasOwnProperty.call(config.tools, name) ? config.tools[name] : undefined;

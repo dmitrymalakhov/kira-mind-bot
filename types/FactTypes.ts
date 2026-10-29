@@ -12,4 +12,7 @@ export interface ExtractedFact {
   subject?: 'user' | 'contact' | 'third_party' | 'unknown';
   /** Имя контакта (только при subject === 'contact') */
   contactName?: string;
+  predicate?: string;
+  object?: string;
+  negated?: boolean;
 }

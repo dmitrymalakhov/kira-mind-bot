@@ -102,4 +102,17 @@ describe('optional Decisions routing adapter', () => {
         const options = request.mock.calls[0].arguments[1] as any;
         assert.equal(options.timeout, 5000); assert.equal(options.maxRetries, 0);
     });
+
+    test('carries live Telegram profile lookup in the same decision request', async t => {
+        t.mock.method(resolver, 'resolveModelForTaskAsync', async () => ({ presetName: 'gpt-balanced', modelRef: { provider: 'openai', model: 'synthetic-classifier' } }) as any);
+        const call = t.mock.method(decisionAdapter, 'createDecision', async (request: any) => {
+            assert.ok(request.questions.some((question: any) => question.name === 'telegram_profile'));
+            return { model: 'gpt-6-luna', answers: [
+                { type: 'choice', name: 'intent', choice: 'РАЗГОВОР', confidence: 0.95 },
+                { type: 'choice', name: 'memory', choice: 'full' }, { type: 'choice', name: 'complexity', choice: 'routine' }, { type: 'choice', name: 'role', choice: 'none' },
+                { type: 'predicate', name: 'telegram_profile', probability: 0.99 },
+            ] } as any;
+        });
+        await enabled(async () => { assert.equal((await classifyWithDecisions('Подскажи его номер'))?.details.telegramProfile, true); assert.equal(call.mock.callCount(), 1); });
+    });
 });

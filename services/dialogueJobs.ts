@@ -13,6 +13,7 @@ import { fetchAgentMemoryContext, buildMemoryContextBlock } from '../utils/agent
 import { buildKnowledgeSourcePrompt, decideKnowledgeSource } from '../utils/knowledgeSource';
 import { runKiraRuntime } from '../orchestration/runtime/kernel';
 import { appendPersistedHistory } from './SessionStorage';
+import { recordDeferredOutcome, feedbackKeyboard } from './productAnalytics';
 
 const active = new Map<string, AbortController>();
 const MAX_CONCURRENT = 2;
@@ -121,7 +122,10 @@ async function deliver(bot: Bot<BotContext>, job: DialogueJob, text: string, not
     if (job.channel.startsWith('api:')) return; // The API polls its own result; never leak it into Telegram.
     // Keep delivery one request: uncertainty cannot cause automatic duplicate messages.
     const message = text.length > 4000 ? `${text.slice(0, 3900)}\n\n…Ответ сокращён.` : text;
-    await bot.api.sendMessage(job.chatId, message, job.messageId ? { reply_parameters: { message_id: job.messageId, allow_sending_without_reply: true } } : undefined);
+    await bot.api.sendMessage(job.chatId, message, {
+        ...(job.messageId ? { reply_parameters: { message_id: job.messageId, allow_sending_without_reply: true } } : {}),
+        ...(!notice && job.input.analyticsTaskId ? { reply_markup: feedbackKeyboard(job.input.analyticsTaskId) } : {}),
+    });
     if (!notice) await appendPersistedHistory(job.channel, 'bot', message);
 }
 
@@ -148,6 +152,7 @@ export async function executeDialogueJob(bot: Bot<BotContext>, job: DialogueJob,
         if (!await valid()) { await repository.update(job, { status: 'cancelled' }); return; }
         if (job.status === 'delivering') {
             await send(job, job.resultText || 'Не удалось завершить разбор. Повтори вопрос, если он ещё актуален.', false);
+            if (!job.channel.startsWith('api:')) await recordDeferredOutcome(job.input.analyticsTaskId, job.userId, job.error ? 'failed' : 'delivered', true);
             if (job.channel.startsWith('api:') && job.resultText) await appendPersistedHistory(job.channel, 'bot', job.resultText);
             await repository.update(job, { status: 'completed' });
             return;
@@ -180,6 +185,7 @@ export async function executeDialogueJob(bot: Bot<BotContext>, job: DialogueJob,
     } catch {
         // Do not log prompts, memory or provider errors. A delivery with no acknowledgement remains unknown.
         const status = job.status === 'delivering' ? 'unknown' : job.input.required ? 'ready' : 'failed';
+        if (job.input.required) await recordDeferredOutcome(job.input.analyticsTaskId, job.userId, status === 'unknown' ? 'unknown' : 'failed');
         await repository.update(job, { status, error: job.status === 'delivering' ? 'delivery_unknown' : 'analysis_failed',
             ...(status === 'ready' ? { resultText: 'Не удалось завершить разбор. Повтори вопрос, если он ещё актуален.' } : {}) }).catch(() => {});
         console.warn('[dialogue-job]', { id: job.id, status });

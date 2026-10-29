@@ -5,6 +5,7 @@ import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { devLog, parseLLMJson } from '../utils';
 import { getVectorService } from './VectorServiceFactory';
 import { isEligibleForUserSynthesis } from '../utils/userSynthesisFilter';
+import { replaceDerivedMemories } from './derivedMemoryReplacement';
 
 const SCHEMA_TAG = 'memory-schema';
 const SCHEMA_SET_TAG = 'schema_set:user-model-v1';
@@ -259,6 +260,7 @@ function normalizeSchema(schema: UserSchemaLLMResult, fallbackSources: MemoryEnt
     const sourceIdSet = new Set(fallbackSources.map((memory) => memory.id));
     const sourceIds = normalizeStringList(schema.sourceIds, MAX_SOURCE_IDS_PER_SCHEMA)
         .filter((id) => sourceIdSet.has(id));
+    if (!sourceIds.length) return null;
     const dimension = normalizeDimension(schema.dimension);
     const domains = normalizeStringList(schema.domains, 5)
         .map(normalizeDomain);
@@ -272,9 +274,7 @@ function normalizeSchema(schema: UserSchemaLLMResult, fallbackSources: MemoryEnt
         domains: domains.length > 0 ? [...new Set(domains)] : [PREDEFINED_DOMAINS.PERSONAL],
         entities: normalizeStringList(schema.entities, 14),
         caution: String(schema.caution || '').trim().slice(0, 500) || undefined,
-        sourceIds: sourceIds.length > 0
-            ? sourceIds
-            : fallbackSources.slice(0, 24).map((memory) => memory.id),
+        sourceIds,
         confidence: clamp01(schema.confidence, 0.72),
         salience: clamp01(schema.salience, 0.78),
     };
@@ -354,19 +354,17 @@ JSON:
     }
 }
 
-async function replaceExistingSchemas(userId: string, domain?: string): Promise<number> {
+async function readExistingSchemas(userId: string, domain?: string) {
     const svc = getVectorService();
-    if (!svc) return 0;
+    if (!svc) return [];
     const normalizedDomain = domain ? normalizeDomain(domain) : undefined;
-    const existing = await svc.getMemoriesByTag(userId, SCHEMA_SET_TAG).catch(() => []);
-    const toDelete = normalizedDomain
+    const existing = await svc.getMemoriesByTag(userId, SCHEMA_SET_TAG);
+    return normalizedDomain
         ? existing.filter((memory) =>
             normalizeDomain(memory.domain) === normalizedDomain ||
             (memory.tags ?? []).includes(`schema_domain:${safeTagValue(normalizedDomain)}`)
         )
         : existing;
-    await Promise.allSettled(toDelete.map((memory) => svc.deleteMemory(memory.id, memory.domain)));
-    return toDelete.length;
 }
 
 export async function runMemorySchemaConsolidationForUser(
@@ -421,10 +419,10 @@ export async function runMemorySchemaConsolidationForUser(
         };
     }
 
-    const replaced = await replaceExistingSchemas(userId, requestedDomain);
+    const previous = await readExistingSchemas(userId, requestedDomain);
     const now = new Date();
     const schemaTitles: string[] = [];
-    let created = 0;
+    const replacements: Array<Omit<MemoryEntry, 'id'>> = [];
 
     for (const schema of schemas) {
         const sourceIds = schema.sourceIds.slice(0, MAX_SOURCE_IDS_PER_SCHEMA);
@@ -433,7 +431,7 @@ export async function runMemorySchemaConsolidationForUser(
         const salience = clamp01(schema.salience, 0.78);
         const confidence = clamp01(schema.confidence, 0.72);
 
-        await svc.saveMemory({
+        replacements.push({
             content: formatSchemaContent(schema),
             domain: primaryDomain,
             timestamp: now,
@@ -468,8 +466,9 @@ export async function runMemorySchemaConsolidationForUser(
             lastConfirmedAt: now,
         });
         schemaTitles.push(schema.title);
-        created++;
     }
+
+    const { created, replaced } = await replaceDerivedMemories(svc, previous, replacements);
 
     return {
         created,

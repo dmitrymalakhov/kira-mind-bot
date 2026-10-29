@@ -258,7 +258,7 @@ async function runCycle(bot: Bot<BotContext>): Promise<void> {
         }
 
         const chatId = await getProactiveChatId();
-        const sent = await bot.api.sendMessage(chatId, decision.message);
+        const sent = await (await import('./productAnalytics')).sendProactiveWithFeedback(bot, chatId, decision.message, 'memory');
         lastSentAt = Date.now();
         const sourceMemories = (decision.sourceIndexes ?? [])
             .map((index) => memories.plans[index - 1])

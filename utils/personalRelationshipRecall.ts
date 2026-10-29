@@ -17,6 +17,52 @@ export interface RelationshipRecallOptions {
     identities?: (ownerUserId: string, ids: string[]) => Promise<RecallPersonIdentity[]>;
     step?: MemoryRelationStep;
     anchor?: MemoryPerson;
+    /** Original role reference; only explicit contrary role evidence can exclude an edge. */
+    referenceText?: string;
+}
+
+function contradictsRequestedFamilyRole(reference: string, evidence: string, type: string, direction?: string, targetName?: string): boolean {
+    const child = type === 'parent_of' && direction === 'out' || type === 'child_of' && direction === 'in';
+    const parent = type === 'parent_of' && direction === 'in' || type === 'child_of' && direction === 'out';
+    const pairs = child ? [/доч(?:ь|ер[а-яё]*|к[а-яё]*|еньк[а-яё]*)/iu, /сын[а-яё]*/iu] :
+        parent ? [/мам[а-яё]*|мать|матер[а-яё]*/iu, /пап[а-яё]*|отец|отц[а-яё]*/iu] :
+        type === 'spouse_of' ? [/жен(?:а|ы|е|у|ой)|супруга|супруги/iu, /муж[а-яё]*|супруг/iu] :
+        type === 'sibling_of' ? [/сестр[а-яё]*/iu, /брат[а-яё]*/iu] : undefined;
+    if (!pairs) return false;
+    const words = (text: string) => text.match(/[\p{L}]+/gu) ?? [];
+    const has = (text: string, pattern: RegExp) => words(text).some(word => new RegExp(`^(?:${pattern.source})$`, 'iu').test(word));
+    // «Супруга» can be feminine nominative or masculine genitive. Do not
+    // determine the requested role from that ambiguous word alone.
+    const requestPairs = type === 'spouse_of' ? [/жен(?:а|ы|е|у|ой)/iu, /муж[а-яё]*/iu] : pairs;
+    const requested = requestPairs.map(pattern => has(reference, pattern));
+    if (requested[0] === requested[1]) return false;
+    const index = requested[0] ? 0 : 1;
+    // A relation mentions two endpoints. "The owner is Target's husband" says
+    // nothing contrary about Target's requested role. Only an explicit role
+    // definition attached to that named endpoint may exclude it.
+    if (!targetName || isPersonRoleLabel(targetName)) return false;
+    const normalize = (value: string) => value.normalize('NFKC').toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').replace(/\s+/gu, ' ').trim();
+    const name = normalize(targetName);
+    const roleAttachedToTarget = (pattern: RegExp) => {
+        const role = `(?:${pattern.source})`;
+        for (const clause of normalize(evidence).split(/[.!?;\n]/u)) {
+            let start = clause.indexOf(name);
+            while (start >= 0) {
+                const before = clause.slice(0, start).trim();
+                const after = clause.slice(start + name.length).trim();
+                const boundary = !/[\p{L}\p{N}]/u.test(clause[start - 1] ?? '') && !/[\p{L}\p{N}]/u.test(clause[start + name.length] ?? '');
+                if (boundary && (
+                    new RegExp(`^(?:[—–:=-]+\\s*(?:это\\s+)?|(?:является|приходится|считается|был|была)\\s+)${role}(?![\\p{L}])`, 'iu').test(after) ||
+                    new RegExp(`^${role}(?![\\p{L}])[^.!?;]{0,120}[—–:=-]+$`, 'iu').test(before) ||
+                    new RegExp(`(?:^|[^\\p{L}])есть\\s+${role}$`, 'iu').test(before) ||
+                    new RegExp(`^${role}$`, 'iu').test(before)
+                )) return true;
+                start = clause.indexOf(name, start + name.length);
+            }
+        }
+        return false;
+    };
+    return roleAttachedToTarget(pairs[1 - index]) && !roleAttachedToTarget(pairs[index]);
 }
 
 export function isActiveRelationshipEvidence(memory: SearchResult, now: number): boolean {
@@ -76,6 +122,7 @@ export async function recallOwnerRelationship(
         const contactId = identity?.telegramContactId || edge.contactId;
         if (contactId === userId && edge.personId !== 'user') return [];
         const name = identity?.displayName || edge.name;
+        if (contradictsRequestedFamilyRole(options.referenceText ?? message, edge.memory.content, intent.type, options.step?.direction, name)) return [];
         // A placeholder named 'wife' says that a relation exists; it is not another named person.
         if (isPersonRoleLabel(name) && !contactId) return [];
         return [{ ...edge, name: isPersonRoleLabel(name) ? undefined : name, key: contactId ? `telegram:${contactId}` : `person:${edge.personId}` }];

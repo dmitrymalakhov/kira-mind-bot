@@ -15,7 +15,7 @@ export const KIRA_SKILLS: readonly KiraSkill[] = [
     { id: 'recurring-tasks', description: 'Повторное выполнение сохранённого запроса по расписанию.', intents: [] },
     { id: 'telegram-reading', description: 'Непрочитанные, история чатов, анализ сообщений.', intents: ['ПРОВЕРКА_СООБЩЕНИЙ'] },
     { id: 'contact-communication', description: 'Черновики сообщений, стиль адресата и подтверждение отправки.', intents: ['ОТПРАВКА_СООБЩЕНИЯ', 'ДЕЛЕГИРОВАНИЕ_ЗАДАЧИ'] },
-    { id: 'people-and-memory', description: 'Личности, факты, доказательства, исправления и память.', intents: [] },
+    { id: 'people-and-memory', description: 'Личности и память; телефон, username и bio из доступного профиля Telegram.', intents: [] },
     { id: 'study-chat', description: 'Изучение большой переписки и сохранение подтверждённых фактов.', intents: [] },
     { id: 'chat-monitoring', description: 'Наблюдения по условиям и группы отслеживаемых чатов.', intents: [] },
     { id: 'health-diary', description: 'Дневник наблюдений, фотографии, анализ периода и экспорт.', intents: ['ЗДОРОВЬЕ'] },
