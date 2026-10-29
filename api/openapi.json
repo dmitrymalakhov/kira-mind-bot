@@ -851,7 +851,7 @@
         "summary": "AR scene capabilities: the photo model that reads a frame in the app's mode, frame limits, allowed actions",
         "responses": {
           "200": {
-            "description": "Capabilities: version, frame limits, actions, autoSeat (true: sit without targetId lets the phone choose the seat; results may name it), mode, vision route"
+            "description": "Capabilities: version, frame limits, actions, autoSeat (true: sit without targetId lets the phone choose the seat; results may name it), pointing (true: point actions and scene.things are accepted), mode, vision route"
           },
           "401": {
             "description": "Error",
@@ -966,7 +966,7 @@
         },
         "responses": {
           "200": {
-            "description": "messages, actions [{id, kind: sit|stand|approach|lookAtUser, targetId?, roomId, roomVersion}] (sit without targetId: the phone chooses the seat from its own LiDAR scan), rejectedActions, vision {used, provider, model, location}"
+            "description": "messages, actions [{id, kind: sit|stand|approach|lookAtUser|point, targetId?, label?, at?, roomId, roomVersion}] (sit without targetId: the phone chooses the seat from its own LiDAR scan; point: at {x, y, box?} is the thing on the turn's frame, 0–1 from the picture's top left, found by the photo model of the app's mode and put into the room by the phone's own depth; without at, targetId is a remembered thing or a room object; several such things, a poor view or no such thing give no point), rejectedActions [{kind, reason, code?, label?}] (point codes: not_found, ambiguous, unsure, no_frame, no_label, unknown_target, one_at_a_time), seen? [{label, at}] (other small things on the frame, for the phone to remember), vision {used, provider, model, location}. With a frame, the body's choice and the search run before the answer, so the words say what the arm does or ask which one / for a better view."
           },
           "400": {
             "description": "invalid_scene / idempotency_key_required",
@@ -1244,12 +1244,12 @@
                   "targetId": {
                     "type": "string",
                     "format": "uuid",
-                    "description": "For a sit without targetId: the object the phone chose (servers with autoSeat)"
+                    "description": "For a sit without targetId: the object the phone chose (servers with autoSeat); for a point: the remembered thing shown (servers with pointing)"
                   },
                   "detail": {
                     "type": "string",
                     "maxLength": 500,
-                    "description": "The steps the phone actually did (servers with autoSeat)"
+                    "description": "The steps the phone actually did (servers with autoSeat or pointing)"
                   }
                 }
               }
@@ -2358,6 +2358,42 @@
                 },
                 "confirmed": {
                   "type": "boolean"
+                }
+              }
+            }
+          },
+          "things": {
+            "type": "array",
+            "maxItems": 24,
+            "description": "Things Kira saw lying in this room before (servers with pointing): names, when, and the furniture they lay on or near; no coordinates",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "label",
+                "seenAt"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "label": {
+                  "type": "string",
+                  "maxLength": 60
+                },
+                "seenAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "on": {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                "near": {
+                  "type": "string",
+                  "maxLength": 80
                 }
               }
             }

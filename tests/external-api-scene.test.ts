@@ -3,7 +3,7 @@ import { test, type TestContext } from 'node:test';
 import type { AddressInfo } from 'node:net';
 import { ApiBackend, ApiError, ApiOperationStore, ApiReply } from '../api/contracts';
 import { createExternalApiServer } from '../api/server';
-import { parseSceneTurn, roomContext, SceneService, validateActions, wantsPlainSit, MAX_FRAME_BYTES,
+import { parseSceneTurn, roomContext, SceneService, validateActions, wantsPlainSit, framePoint, MAX_FRAME_BYTES,
     type SceneChannel, type VisionRoute } from '../api/scene';
 import type { ApiModelSelection, ApiModelSettingsStore } from '../api/modelSettings';
 import type { AiPresetName } from '../ai/modelPresets';
@@ -228,6 +228,158 @@ test('the phone reports which seat it chose and what it did; the dialogue gets i
     const id2 = (await service.turn(parseSceneTurn({ text: 'Садись', scene: scene() }), null) as any).actions[0].id;
     await service.actionResult({ actionId: id2, status: 'rejected', reason: 'Не нашла, куда сесть: Стул у двери: на сиденье что-то есть' });
     assert.match(channel.notes[1], /не выполнено \(rejected\): Не нашла, куда сесть/);
+});
+
+const keys = '77777777-7777-4777-8777-777777777777', table = '88888888-8888-4888-8888-888888888888';
+const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+function roomWithThings() {
+    return scene({
+        objects: [...scene().objects, { id: table, name: 'Синтетический стол', category: 'table', center: [1, 0.37, -1], size: [1.2, 0.75, 0.7], yaw: 0, source: 'scan', present: true }],
+        things: [{ id: keys, label: 'ключи', seenAt: minutesAgo(12), on: 'Синтетический стол' }],
+    });
+}
+/** The body's choice and the photo model's search, each answered as given, with the task, mode and request seen. */
+function planner(actions: unknown, located: unknown, calls: Array<{ task: string; preset: string; params: any }> = []): any {
+    return async (task: string, params: any) => {
+        calls.push({ task, preset: await getActiveAiPresetName(), params });
+        return task === 'intentClassification' ? { actions } : located;
+    };
+}
+
+test('remembered things come in the scene strictly, reach the choice of actions by id and the answer by name only', () => {
+    const turn = parseSceneTurn({ text: 'Где мои ключи?', scene: roomWithThings() });
+    assert.deepEqual(turn.scene.things!.map(t => [t.id, t.label, t.on]), [[keys, 'ключи', 'Синтетический стол']]);
+    const code = (body: Record<string, unknown>) => { try { parseSceneTurn(body); return 'ok'; } catch (e: any) { return e.code; } };
+    assert.equal(code({ text: 'Где ключи?', scene: scene({ things: [{ id: keys, label: 'ключи', seenAt: minutesAgo(1), x: 1 }] }) }), 'invalid_scene');
+    assert.equal(code({ text: 'Где ключи?', scene: scene({ things: [{ id: 'keys-1', label: 'ключи', seenAt: minutesAgo(1) }] }) }), 'invalid_scene');
+    assert.equal(code({ text: 'Где ключи?', scene: scene({ things: Array.from({ length: 25 }, () => ({ id: keys, label: 'ключи', seenAt: minutesAgo(1) })) }) }), 'invalid_scene');
+    assert.equal(code({ text: 'Где ключи?', scene: scene() }), 'ok');                        // older phones send none
+    const context = roomContext(turn);
+    assert.match(context, /ключи — на: Синтетический стол, 12 мин назад/);
+    assert.match(context, /покажешь её рукой/);
+    assert.ok(!context.includes(keys));
+});
+
+test('point: a thing on the frame, a remembered thing or furniture; one at a time, from either pose', () => {
+    const s = parseSceneTurn({ text: 'Где телефон?', scene: roomWithThings() }).scene;
+    // named only in words: looked for on the frame, so only with one
+    assert.deepEqual(validateActions([{ kind: 'point', label: ' телефон ' }], s, true).actions.map(a => [a.kind, a.label, a.targetId]), [['point', 'телефон', undefined]]);
+    assert.equal(validateActions([{ kind: 'point', label: 'телефон' }], s, false).rejected[0].reason, 'нет кадра, и такой вещи Кира не помнит');
+    assert.equal(validateActions([{ kind: 'point' }], s, true).rejected[0].reason, 'не сказано, что показать');
+    // a remembered thing or a piece of furniture by id, with or without a frame; never an invented id
+    assert.deepEqual(validateActions([{ kind: 'point', targetId: keys, label: 'ключи' }], s).actions.map(a => [a.targetId, a.label]), [[keys, 'ключи']]);
+    assert.equal(validateActions([{ kind: 'point', targetId: table }], s).actions[0].targetId, table);
+    assert.equal(validateActions([{ kind: 'point', targetId: '99999999-9999-4999-8999-999999999999', label: 'очки' }], s, true).rejected[0].reason, 'нет такой вещи или предмета');
+    assert.deepEqual(validateActions([{ kind: 'point', targetId: keys }, { kind: 'point', targetId: table }], s).rejected.map(r => r.reason), ['показать можно одно место за раз']);
+    const seated = { ...s, avatar: { ...s.avatar, pose: 'seated' as const, seatId: seat } };
+    assert.equal(validateActions([{ kind: 'point', targetId: keys }], seated).actions.length, 1);
+});
+
+test('the photo model finds the thing on the frame under the app mode; the phone gets a picture point, never room coordinates', async t => {
+    sessions(t);
+    const channel = new Channel();
+    const calls: Array<{ task: string; preset: string; params: any }> = [];
+    const service = new SceneService(owner, new AppMode({ preset: 'gpt-lean', revision: 'r' }), channel, planner([{ kind: 'point', label: 'телефон' }],
+        { target: { found: true, point: [420, 610], box: [380, 560, 470, 660] }, others: [{ label: 'кружка', point: [700, 500], box: [660, 450, 740, 560] }, { label: '', point: [1, 1] }, { label: 'пульт', point: [1200, 5] }] }, calls));
+    const turn = parseSceneTurn({ text: 'Кира, где мой телефон?', scene: roomWithThings(), frame: frame() });
+    const reply = await service.turn(turn, await service.ready(turn)) as any;
+    assert.deepEqual(calls.map(c => [c.task, c.preset]), [['intentClassification', 'gpt-lean'], ['conversation', 'gpt-lean']]);
+    assert.match(calls[0].params.messages[1].content, /приложен кадр/);
+    assert.ok(calls[0].params.messages[1].content.includes(keys));                                  // the planner sees remembered ids
+    const ask = calls[1].params.messages[1].content;
+    assert.equal(ask[0].text, 'Найди на кадре: телефон');
+    assert.equal(ask[1].image_url.url, `data:image/jpeg;base64,${jpeg.toString('base64')}`);
+    assert.deepEqual(reply.actions.map((a: any) => [a.kind, a.label, a.at, a.targetId]),
+        [['point', 'телефон', { x: 0.42, y: 0.61, box: { x0: 0.38, y0: 0.56, x1: 0.47, y1: 0.66 } }, undefined]]);
+    assert.deepEqual(reply.seen, [{ label: 'кружка', at: { x: 0.7, y: 0.5, box: { x0: 0.66, y0: 0.45, x1: 0.74, y1: 0.56 } } }]);
+    assert.equal(channel.looked.length, 1);                                                          // the answer read the frame once, as a photo
+});
+
+test('a thing not found on the frame is not pointed at, unless Kira remembers where it lay', async t => {
+    sessions(t);
+    const missing = { target: { found: false }, others: [] };
+    const lost = new SceneService(owner, new AppMode(), new Channel(), planner([{ kind: 'point', label: 'очки' }], missing));
+    const none = await lost.turn(parseSceneTurn({ text: 'Где мои очки?', scene: roomWithThings(), frame: frame() }), null) as any;
+    assert.deepEqual(none.actions, []);
+    assert.deepEqual(none.rejectedActions.map((r: any) => r.reason), ['на кадре не нашлось: очки']);
+    assert.equal(none.seen, undefined);
+    // remembered: shown where they lay
+    const remembered = new SceneService(owner, new AppMode(), new Channel(), planner([{ kind: 'point', label: 'ключи', targetId: keys }], missing));
+    const kept = await remembered.turn(parseSceneTurn({ text: 'Где ключи?', scene: roomWithThings(), frame: frame() }), null) as any;
+    assert.deepEqual(kept.actions.map((a: any) => [a.targetId, a.at]), [[keys, undefined]]);
+    // a failing search is a search that found nothing, not a failed turn
+    const failing = new SceneService(owner, new AppMode(), new Channel(), (async (task: string) => { if (task === 'conversation') throw new Error('down'); return { actions: [{ kind: 'point', label: 'пульт' }] }; }) as any);
+    assert.deepEqual((await failing.turn(parseSceneTurn({ text: 'Где пульт?', scene: scene(), frame: frame() }), null) as any).actions, []);
+    // no frame: only what she remembers, without asking the photo model
+    const calls: Array<{ task: string; preset: string; params: any }> = [];
+    const words = new SceneService(owner, new AppMode(), new Channel(), planner([{ kind: 'point', label: 'ключи', targetId: keys }], missing, calls));
+    assert.equal((await words.turn(parseSceneTurn({ text: 'Где ключи?', scene: roomWithThings() }), null) as any).actions[0].targetId, keys);
+    assert.deepEqual(calls.map(c => c.task), ['intentClassification']);
+});
+
+test('several such things, a poor view or a box over the whole picture: no point, and the words ask instead of claiming', async t => {
+    sessions(t);
+    const ask = async (located: unknown, label = 'книга', targetId?: string) => {
+        const channel = new Channel();
+        const service = new SceneService(owner, new AppMode(), channel, planner([{ kind: 'point', label, ...(targetId ? { targetId } : {}) }], located));
+        const reply = await service.turn(parseSceneTurn({ text: `Покажи ${label}`, scene: roomWithThings(), frame: frame() }), null) as any;
+        return { reply, context: channel.looked[0].context };
+    };
+    const shelf = await ask({ target: { found: true, count: 3, confidence: 'high', point: [300, 400], box: [250, 350, 350, 450] } });
+    assert.deepEqual(shelf.reply.actions, []);
+    assert.deepEqual(shelf.reply.rejectedActions.map((r: any) => [r.code, r.label]), [['ambiguous', 'книга']]);
+    assert.match(shelf.context, /несколько вещей «книга»: не выбирай сама/);
+    const blurry = await ask({ target: { found: true, count: 1, confidence: 'low', point: [300, 400], box: [250, 350, 350, 450] } });
+    assert.deepEqual(blurry.reply.rejectedActions.map((r: any) => r.code), ['unsure']);
+    assert.match(blurry.context, /видно плохо/);
+    const whole = await ask({ target: { found: true, count: 1, confidence: 'high', point: [500, 500], box: [10, 10, 990, 990] } });
+    assert.deepEqual(whole.reply.rejectedActions.map((r: any) => r.code), ['unsure']);
+    const outside = await ask({ target: { found: true, count: 1, confidence: 'high', point: [1300, 400] } });
+    assert.deepEqual(outside.reply.rejectedActions.map((r: any) => r.code), ['unsure']);
+    const failed = await ask(null);
+    assert.deepEqual(failed.reply.rejectedActions.map((r: any) => r.code), ['unsure']);
+    // a poor view of a thing she remembers: shown where she saw it, and said to be an old sighting
+    const remembered = await ask({ target: { found: false, count: 0 } }, 'ключи', keys);
+    assert.deepEqual(remembered.reply.actions.map((a: any) => [a.targetId, a.at]), [[keys, undefined]]);
+    assert.match(remembered.context, /«ключи» на кадре нет.*Ты помнишь, что видела её на: Синтетический стол 12 мин назад/);
+    // found: the words are told she is about to show it
+    const found = await ask({ target: { found: true, count: 1, confidence: 'medium', point: [420, 610], box: [380, 560, 470, 660] } }, 'телефон');
+    assert.equal(found.reply.actions[0].at.x, 0.42);
+    assert.match(found.context, /нашла на кадре «телефон» и сейчас покажешь рукой/);
+});
+
+test('words without a frame are answered alongside the choice of actions, with no search line', async t => {
+    sessions(t);
+    let answering = 0, choosing = 0;
+    const channel = new Channel();
+    channel.say = async (text, room) => { answering = Date.now(); await new Promise(r => setTimeout(r, 30)); channel.said.push({ text, context: room.context, preset: null }); return channel.reply; };
+    const service = new SceneService(owner, new AppMode(), channel, (async () => { choosing = Date.now(); await new Promise(r => setTimeout(r, 30)); return { actions: [] }; }) as any);
+    await service.turn(parseSceneTurn({ text: 'Как дела?', scene: scene() }), null);
+    assert.ok(Math.abs(answering - choosing) < 25);                                                  // in parallel, not one after the other
+    assert.doesNotMatch(channel.said[0].context, /нашла на кадре|несколько вещей|видно плохо/);
+});
+
+test('picture points from a model: 0–1000, a box in order, the point inside it', () => {
+    assert.deepEqual(framePoint([500, 250], [400, 200, 600, 300]), { x: 0.5, y: 0.25, box: { x0: 0.4, y0: 0.2, x1: 0.6, y1: 0.3 } });
+    assert.deepEqual(framePoint([900, 900], [400, 200, 600, 300]), { x: 0.5, y: 0.25, box: { x0: 0.4, y0: 0.2, x1: 0.6, y1: 0.3 } });   // outside: the box's middle
+    assert.deepEqual(framePoint(undefined, [400, 200, 600, 300]), { x: 0.5, y: 0.25, box: { x0: 0.4, y0: 0.2, x1: 0.6, y1: 0.3 } });
+    assert.deepEqual(framePoint([120, 880], [600, 300, 400, 200]), { x: 0.12, y: 0.88 });                                         // a box out of order is dropped
+    assert.equal(framePoint([1200, 300], undefined), undefined);
+    assert.equal(framePoint(['a', 3], [1, 2]), undefined);
+    assert.ok(framePoint([0.5, 0.5], undefined)!.x < 0.002);                                                                        // 0–1000, not 0–1
+});
+
+test('the phone reports what it showed; the dialogue gets the thing in words', async t => {
+    sessions(t);
+    const channel = new Channel();
+    const service = new SceneService(owner, new AppMode(), channel, planner([{ kind: 'point', label: 'ключи', targetId: keys }], null));
+    const capabilities = await service.capabilities() as any;
+    assert.equal(capabilities.pointing, true);
+    assert.ok(capabilities.actions.includes('point'));
+    const id = (await service.turn(parseSceneTurn({ text: 'Покажи ключи', scene: roomWithThings() }), null) as any).actions[0].id;
+    await service.actionResult({ actionId: id, status: 'completed', targetId: keys, detail: 'показала: ключи, на: Синтетический стол, 0.8 м от неё; подошла на 1.9 м' });
+    assert.match(channel.notes[0], /^\[Результат действия «показать «ключи»» в AR — выполнено: ты смогла показать «ключи» \(показала: ключи, на: Синтетический стол/);
+    assert.ok(!channel.notes[0].includes(keys));
 });
 
 class Receipts implements ApiOperationStore {
