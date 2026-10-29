@@ -958,6 +958,29 @@
                         "type": "integer"
                       }
                     }
+                  },
+                  "followUp": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "label",
+                      "reason"
+                    ],
+                    "description": "This turn answers Kira's question about a thing she did not show yet (which one / a better view). Servers with pointing. With a frame and no other action chosen, the same thing is searched on the new frame with the words as the distinction.",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "maxLength": 60
+                      },
+                      "reason": {
+                        "type": "string",
+                        "enum": [
+                          "ambiguous",
+                          "unsure",
+                          "not_found"
+                        ]
+                      }
+                    }
                   }
                 }
               }
