@@ -44,12 +44,12 @@ test('owner topic follow-up stays scoped without requiring a new self pronoun', 
     const context = ctx(); const owner = { ...person, personIds: ['user'], contactId: undefined, owner: true };
     const first = { ...plan(), references: [{ kind: 'person' as const, from: 'owner' as const, mention: 'мою', relationPath: [] }] };
     saveMemoryFocus(context, [owner], 'Что знаешь про мою работу?', ['old'], Date.now(), first);
-    let domains: string[] = [];
+    const domains: string[][] = [];
     t.mock.method(vector, 'getVectorService', () => ({ getOwnerMemories: async (_owner: string, selected: string[]) => {
-        domains = selected; return [{ ...fact('new', 'work', 'Владелец разрабатывает тестовый компилятор.'), subject: 'user', tags: ['subject:user'] }];
+        domains.push(selected); return [{ ...fact('new', 'work', 'Владелец разрабатывает тестовый компилятор.'), subject: 'user', tags: ['subject:user'] }];
     } } as any));
     const result = await getMultiQueryMemoryContextDetailed(context, 'А что ещё?', 'full', { queryPlan: { answerQueries: ['другие подробности'], contextQueries: [], requestKind: 'overview' }, trackAccess: false });
-    assert.deepEqual(domains, ['work']); assert.equal(result.recall?.state, 'found'); assert.equal(result.recall?.subjects[0].owner, true);
+    assert.deepEqual(domains, [['work'], ['work', 'general']]); assert.equal(result.recall?.state, 'found'); assert.equal(result.recall?.subjects[0].owner, true);
     assert.deepEqual(validMemoryFocus(context)?.domains, ['work']);
 });
 
@@ -100,8 +100,8 @@ test('ambiguous identity has a distinct outcome and cannot be rendered as an emp
 test('a topic-shaped follow-up keeps the owner as subject instead of dropping attribution', async t => {
     const context = ctx(), owner = { ...person, personIds: ['user'], contactId: undefined, owner: true };
     saveMemoryFocus(context, [owner], 'Мои рабочие проекты', ['old'], Date.now(), plan());
-    t.mock.method(vector, 'getVectorService', () => ({ getOwnerMemories: async (_owner: string, domains: string[]) => {
-        assert.deepEqual(domains, ['work']); return [{ ...fact('work', 'work', 'Пользователь ведёт учебный проект.'), subject: 'user', tags: ['subject:user'] }];
+    t.mock.method(vector, 'getVectorService', () => ({ getOwnerMemories: async (_owner: string, domains: string[], limit: number) => {
+        assert.deepEqual(domains, limit === 120 ? ['work', 'general'] : ['work']); return [{ ...fact('work', 'work', 'Пользователь ведёт учебный проект.'), subject: 'user', tags: ['subject:user'] }];
     } } as any));
     const result = await getMultiQueryMemoryContextDetailed(context, 'Расскажи об этом подробнее', 'full', { trackAccess: false,
         queryPlan: { answerQueries: ['подробности'], contextQueries: [], requestKind: 'overview', references: [{ kind: 'topic', from: 'focus', mention: 'этом', relationPath: [] }] } });

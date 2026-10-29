@@ -29,7 +29,7 @@ import type { AiPresetName } from '../ai/modelPresets';
 import { registerDialogueLifecycle, publicDialogueJob, activateDialogueJob } from '../services/dialogueJobs';
 import { DialogueJobRepository } from '../services/DialogueJobRepository';
 import { MAX_PHOTO_BYTES, PHOTO_STORAGE_NOTE, photoVisionRoute } from './photos';
-import { registerProductAnalytics, recordDeferredOutcome, feedbackKeyboard } from '../services/productAnalytics';
+import { registerProductAnalytics, recordDeferredOutcome } from '../services/productAnalytics';
 
 /** Same handlers, orchestrator, identity and knowledge; only the delivery and session channel differ. */
 export class BotApiBackend implements ApiBackend {
@@ -135,15 +135,9 @@ export class BotApiBackend implements ApiBackend {
 
     async dialogueJobs() {
         const jobs = await DialogueJobRepository.list(this.sessionKey);
-        const version = (await this.storage.read(this.sessionKey))?.apiActionVersion || '';
         for (const job of jobs) if (job.input.required && job.status === 'completed')
             await recordDeferredOutcome(job.input.analyticsTaskId, this.options.ownerId, job.error ? 'failed' : 'delivered', true);
-        return { jobs: jobs.map(job => ({ ...publicDialogueJob(job),
-            ...(job.status === 'completed' && job.resultText && job.input.analyticsTaskId ? {
-                feedback: feedbackKeyboard(job.input.analyticsTaskId).inline_keyboard.map(row => row.map(button => ({ text: button.text,
-                    actionToken: this.actions.sign(job.messageId || nextApiMessageId(), 'callback_data' in button ? button.callback_data : '', '', version) }))),
-            } : {}),
-        })) };
+        return { jobs: jobs.map(publicDialogueJob) };
     }
     async cancelDialogueJob(id: string) { return { cancelled: await DialogueJobRepository.cancel(this.sessionKey, id) }; }
 

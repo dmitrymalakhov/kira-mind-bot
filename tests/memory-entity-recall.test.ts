@@ -180,7 +180,10 @@ test('owner topic overview reads authenticated subject evidence and addresses th
     const ctx = context(); saveMemoryFocus(ctx, [person], 'Предыдущий человек', ['saved-link']);
     const own = record('own-hobby', 'Увлекается тестовыми головоломками.', { subject: 'user', tags: ['subject:user'], domain: 'hobbies' });
     t.mock.method(vector, 'getVectorService', () => ({ getOwnerMemories: async (userId: string, domains: string[], limit: number) => {
-        assert.equal(userId, owner); assert.deepEqual(domains, ['hobbies']); assert.equal(limit, 300);
+        assert.equal(userId, owner);
+        // The primary pool stays in-topic; a separate bounded read checks legacy general evidence.
+        assert.deepEqual(domains, limit === 120 ? ['hobbies', 'general'] : ['hobbies']);
+        assert.ok(limit === 300 || limit === 120);
         return [own, record('foreign-hobby', 'Чужое увлечение.', { domain: 'hobbies' })];
     }, searchAllDomains: async () => { throw Error('No embeddings for a topic overview'); } } as any));
     const plan: MemoryQueryPlan = { answerQueries: ['хобби увлечения интересы пользователя'], contextQueries: [], domains: ['hobbies'], requestKind: 'overview',

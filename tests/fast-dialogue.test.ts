@@ -305,6 +305,24 @@ test('API delivery stays in API history and result polling; no Telegram call is 
     assert.equal('input' in publicDialogueJob(deps.stored()), false); assert.equal('userId' in publicDialogueJob(deps.stored()), false);
 });
 
+test('deferred Telegram answers and API polling have no automatic rating buttons', async t => {
+    const value = job(true); value.status = 'delivering'; value.resultText = 'Синтетический итог.';
+    value.input.analyticsTaskId = '00000000-0000-4000-8000-000000000001';
+    const deps = worker(t, value);
+    t.mock.method(session, 'appendPersistedHistory', async () => {});
+    let delivered = 0;
+    await executeDialogueJob({ api: { sendMessage: async (_chat: number, _text: string, options: any) => {
+        delivered++; assert.equal(options.reply_markup, undefined);
+    } } } as any, value, { repository: deps.repository, enabled: deps.enabled });
+    assert.equal(delivered, 1);
+    const apiJob = { ...value, channel: `api:${OWNER}`, status: 'completed' as const };
+    t.mock.method(DialogueJobRepository, 'list', async (channel: string) => { assert.equal(channel, apiJob.channel); return [apiJob]; });
+    const bot = new Bot<BotContext>('1234567890:abcdefghijklmnopqrstuvwxyzABCDE', { botInfo: { id: 1234567890, is_bot: true, first_name: 'Synthetic' } as any });
+    const backend = new BotApiBackend(bot, { token: 'synthetic-feedback-token-with-at-least-32-characters', ownerId: OWNER, host: '127.0.0.1', port: 0 });
+    const result = await backend.dialogueJobs();
+    assert.equal(result.jobs.length, 1); assert.equal('feedback' in result.jobs[0], false);
+});
+
 test('read-only background mode denies mutations even if the model or direct registry call requests them', async t => {
     environment(t); const value = ctx(); let mutations = 0;
     const registry = new ToolRegistry([{ name: 'memory.forget', skill: 'people-and-memory', effect: 'state', ownerOnly: true,

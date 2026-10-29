@@ -8,6 +8,7 @@ import { validMemoryFocus, isMemoryContinuation, saveMemoryFocus, memoryQueryHis
 import { memoryContentExcerpt } from './memoryRanking';
 import { tokenizeMemoryRetrievalText, scoreMemoryLexicalMatch } from './memoryRetrieval';
 import { isPersonRoleLabel, PERSON_RELATION_QUERY_SUBTYPES, INVERSE_PERSON_RELATION_TYPES, SYMMETRIC_PERSON_RELATION_TYPES } from './personRelation';
+import { readOwnerRecallSupplement, formatOwnerSourcedEvidence } from './ownerRecallEvidence';
 
 export function personRecallScope(person: MemoryPerson): ContactIdentityScope {
     return { status: 'resolved', queryName: person.displayName, displayName: person.displayName,
@@ -190,12 +191,15 @@ export async function readUnresolvedOwnerRelationEvidence(service: IDomainVector
     if (refs.length !== 1 || refs[0].kind !== 'person' || refs[0].from !== 'owner' || refs[0].relationPath.length !== 1) return undefined;
     const person: MemoryPerson = { owner: true, personIds: ['user'], displayName: 'владелец диалога', evidenceIds: [] };
     const query = [...plan.answerQueries, question].join(' ');
-    const records = (await readPersonEvidence(service, owner, person, plan.domains ?? [])).filter(record =>
+    const [ownerRecords, supplement] = await Promise.all([readPersonEvidence(service, owner, person, plan.domains ?? []), readOwnerRecallSupplement(service, owner, plan, question)]);
+    const records = [...new Map([...ownerRecords, ...supplement.direct].map(record => [record.id, record])).values()].filter(record =>
         !['chapter', 'episode'].includes(record.memoryKind ?? '') && !/^(?:user_schema|memory_chapter):/.test(record.predicate ?? '') &&
         scoreMemoryLexicalMatch(record.content, query).score > 0);
     const selected = selectPersonEvidence(records, person, query, false, 8);
-    if (!selected.length) return undefined;
-    const packed = formatPersonOverview([{ person, records: selected }], 4500);
+    const sourced = formatOwnerSourcedEvidence(supplement.sourced);
+    if (!selected.length && !sourced.included.length) return undefined;
+    const packed = formatPersonOverview([{ person, records: selected }], 4500 - sourced.context.length - 2);
+    if (sourced.context) { packed.context += '\n\n' + sourced.context; packed.included.push(...sourced.included); }
     return { context: 'Каноническая личность по связи не установлена. Ниже — сохранённые факты о владельце, которые могут прямо отвечать на вопрос. Используй буквальное содержание, субъекта, отрицание и время. Отсутствие ребра графа не означает отсутствие имени в этих фактах. Не выдумывай личность или связь; неоднозначность и противоречия обозначай явно.\n' + packed.context,
         included: packed.included };
 }

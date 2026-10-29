@@ -16,7 +16,7 @@ export function memoryQueryHistory(ctx: BotContext, message: string): Array<{ ro
 }
 
 export function memoryQueryCacheKey(message: string, history: Array<{ role: string; content: string }>): string {
-    return 'queries_v13:' + createHash('sha256').update(JSON.stringify({ message, history })).digest('hex');
+    return 'queries_v14:' + createHash('sha256').update(JSON.stringify({ message, history })).digest('hex');
 }
 
 /** A demonstrative reference cannot become a literal name even if the planner labels it named. */
@@ -56,7 +56,7 @@ export function parseMemoryQueryPlan(text: string, question: string, history: Ar
         domains: Array.isArray(value.domains) ? [...new Set(value.domains.filter((domain: unknown) =>
             typeof domain === 'string' && Object.values(PREDEFINED_DOMAINS).includes(domain as any)))].slice(0, 3) as string[] : [],
         standaloneQuery: typeof value.standaloneQuery === 'string' && value.standaloneQuery.length <= 600 ? value.standaloneQuery.trim() : undefined,
-        peopleQuery: value.requestKind === 'people_list' && value.peopleQuery && ['relationships', 'communication', 'both'].includes(value.peopleQuery.basis)
+        peopleQuery: ['people_list', 'overview'].includes(value.requestKind) && value.peopleQuery && ['relationships', 'communication', 'both'].includes(value.peopleQuery.basis)
             ? { basis: value.peopleQuery.basis, relations: Array.isArray(value.peopleQuery.relations)
                 ? value.peopleQuery.relations.filter((step: any) => step && PERSON_RELATION_TYPES.includes(step.type) &&
                     ['out', 'in', 'either'].includes(step.direction) && (step.direction !== 'either' || SYMMETRIC_PERSON_RELATION_TYPES.has(step.type)))
@@ -80,11 +80,14 @@ export function isMemoryContinuation(message: string): boolean {
 export function continueMemoryQueryPlan(plan: MemoryQueryPlan, question: string, focus?: MemoryRecallFocus): MemoryQueryPlan {
     plan = { ...plan, references: plan.references?.map(normalizeMemoryReference) };
     if (!focus || !isMemoryContinuation(question) || plan.references?.some(ref => ref.from !== 'focus')) return plan;
+    const collectionFocus = focus.requestKind === 'people_list' && !focus.people.length ||
+        focus.requestKind === 'overview' && focus.peopleQuery && focus.people.length === 1 && focus.people[0].owner;
     return { ...plan, domains: plan.domains?.length ? plan.domains : focus.domains,
         includeConversations: plan.domains?.length ? plan.includeConversations : plan.includeConversations || focus.includeConversations,
-        ...(focus.requestKind === 'people_list' && !focus.people.length && !plan.peopleQuery &&
+        peopleQuery: plan.peopleQuery ?? (!plan.domains?.length && plan.requestKind === 'overview' && focus.requestKind === 'overview' ? focus.peopleQuery : undefined),
+        ...(collectionFocus &&
             /^(?:а\s+)?(?:что\s+ещ[её]|кто\s+ещ[её]|расскажи\s+ещ[её]|продолжи|подробнее)[\s?!.,]*$/iu.test(question.trim())
-            ? { requestKind: 'people_list', peopleQuery: focus.peopleQuery,
+            ? { requestKind: focus.requestKind, domains: focus.domains, peopleQuery: focus.peopleQuery,
                 references: [{ kind: 'person', mention: 'я', from: 'owner', relationPath: [] }] } : {}),
     };
 }
@@ -102,5 +105,5 @@ export function saveMemoryFocus(ctx: BotContext, people: MemoryRecallFocus['peop
 export function memoryFocusMatches(focus: MemoryRecallFocus, people: MemoryRecallFocus['people'], plan?: MemoryQueryPlan): boolean {
     const keys = (items: MemoryRecallFocus['people']) => items.map(person => person.contactId ?? [...person.personIds].sort().join(',')).sort().join(';');
     return keys(focus.people) === keys(people) && JSON.stringify([...(focus.domains ?? [])].sort()) === JSON.stringify([...(plan?.domains ?? [])].sort()) &&
-        focus.requestKind === plan?.requestKind;
+        focus.requestKind === plan?.requestKind && JSON.stringify(focus.peopleQuery) === JSON.stringify(plan?.peopleQuery);
 }

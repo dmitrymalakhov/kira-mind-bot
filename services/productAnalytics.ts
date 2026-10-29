@@ -150,27 +150,25 @@ export async function recordDeferredOutcome(id: string | undefined, owner: numbe
         WHERE id=$1 AND actor=$2 AND delivered_at IS NULL`, [id, analyticsActor(owner), status, delivered]));
 }
 
-export async function sendProactiveWithFeedback(bot: Bot<BotContext>, chatId: number, text: string, scenario: 'conversation' | 'memory') {
+export async function sendProactiveWithAnalytics(bot: Bot<BotContext>, chatId: number, text: string, scenario: 'conversation' | 'memory') {
     const task: ProductAnalyticsTask = { id: randomUUID(), actor: analyticsActor(config.allowedUserId), channel: 'telegram',
         startedAt: Date.now(), kind: 'proactive', scenario };
-    // Feedback is only collected in the owner's private chat.
+    // Delivery metadata is only collected in the owner's private chat.
     if (chatId === config.allowedUserId) task.persisted = await safely(() => store.startTask(AppDataSource, task));
     try {
-        const sent = await bot.api.sendMessage(chatId, text, task.persisted ? { reply_markup: feedbackKeyboard(task.id) } : undefined);
-        await updateTask({ productAnalytics: task }, { status: 'delivered', delivered: true, offered: task.persisted });
+        const sent = await bot.api.sendMessage(chatId, text);
+        await updateTask({ productAnalytics: task }, { status: 'delivered', delivered: true });
         return sent;
     } catch (error) { await updateTask({ productAnalytics: task }, { status: 'failed', technicalOk: false }); throw error; }
 }
 
-export async function recordResultDelivery(ctx: BotContext, result: ProcessingResult, send: () => Promise<{ message_id: number }>, options: { feedback?: boolean } = {}): Promise<{ message_id: number }> {
+export async function recordResultDelivery(ctx: BotContext, result: ProcessingResult, send: () => Promise<{ message_id: number }>): Promise<{ message_id: number }> {
     const task = ctx.productAnalytics;
     await observeResult(ctx, result);
-    const offered = Boolean(options.feedback !== false && task?.persisted && !result.keyboard && !task.deferred && !result.clarificationQuestion && task.status !== 'waiting');
-    if (offered) result.keyboard = feedbackKeyboard(task!.id);
     try {
         const sent = await send();
         if (result.operationStatus === 'failed' || result.operationStatus === 'unknown') await observeResult(ctx, result);
-        await updateTask(ctx, { delivered: !task?.deferred && task?.status !== 'waiting', offered,
+        await updateTask(ctx, { delivered: !task?.deferred && task?.status !== 'waiting',
             status: task?.deferred || task?.status === 'waiting' ? 'waiting' : task?.status === 'failed' || task?.status === 'unknown' ? task.status : 'delivered' });
         if (task) task.delivered = true;
         return sent;

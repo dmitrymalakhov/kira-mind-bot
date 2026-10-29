@@ -60,6 +60,7 @@ export interface MemoryQueryPlan {
     contextQueries: string[];
     standaloneQuery?: string;
     requestKind?: 'identity' | 'overview' | 'relationship' | 'highlight' | 'people_list' | 'specific';
+    /** A collection, or related people supplementing an owner's topic overview. */
     peopleQuery?: { basis: 'relationships' | 'communication' | 'both'; relations: MemoryRelationStep[] };
     /** Validated memory domains for the explicitly requested topic, never identities. */
     domains?: string[];

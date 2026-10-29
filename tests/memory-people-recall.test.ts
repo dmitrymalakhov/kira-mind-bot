@@ -7,7 +7,7 @@ import * as vector from '../services/VectorServiceFactory';
 import * as ai from '../ai/chatCompletion';
 import { AppDataSource } from '../data-source';
 import { QdrantVectorService } from '../services/QdrantVectorService';
-import { parseMemoryQueryPlan, validMemoryFocus } from '../utils/memoryQueryPlan';
+import { parseMemoryQueryPlan, validMemoryFocus, continueMemoryQueryPlan, saveMemoryFocus } from '../utils/memoryQueryPlan';
 import { recallMemoryPeople, formatMemoryPeople } from '../utils/memoryPeopleRecall';
 import { getMultiQueryMemoryContextDetailed } from '../utils/multiQueryMemory';
 
@@ -32,7 +32,7 @@ function edge(id: string, subject: string, object: string, type = 'works_with', 
         subject === 'user' ? 'relation_subject:user' : `relation_subject_person_id:${subject}`,
         object === 'user' ? 'relation_object:user' : `relation_object_person_id:${object}`], ...patch });
 }
-const service = (records: SearchResult[]) => ({ getPeopleMemories: async (userId: string, domains: string[], _limit: number, options: any) => {
+const service = (records: SearchResult[]) => ({ getOwnerMemories: async () => [], getPeopleMemories: async (userId: string, domains: string[], _limit: number, options: any) => {
     assert.equal(userId, owner); assert.deepEqual(domains, ['work']); return records.filter(options.acceptCandidate);
 } } as any);
 
@@ -43,6 +43,89 @@ test('semantic plan accepts highlight and a directed people collection with a va
     const directed = parseMemoryQueryPlan(JSON.stringify(value), 'С кем я общаюсь?')!;
     assert.equal(directed.peopleQuery?.relations.length, 1); assert.equal(directed.peopleQuery?.relations[0].direction, 'out');
     assert.equal(parseMemoryQueryPlan(JSON.stringify({ answerQueries: ['факт'], requestKind: 'highlight' }), 'Расскажи интересный факт')?.requestKind, 'highlight');
+});
+
+function familyPlan(kind: 'overview' | 'people_list' = 'overview'): MemoryQueryPlan {
+    return { answerQueries: ['семья родственники родители дети супруги'], contextQueries: [], domains: ['family'], requestKind: kind,
+        peopleQuery: { basis: 'relationships', relations: [{ type: 'partner_of', direction: 'either' },
+            { type: 'parent_of', direction: 'out' }, { type: 'parent_of', direction: 'in' },
+            { type: 'sibling_of', direction: 'either' }, { type: 'relative_of', direction: 'either' }] },
+        references: [{ kind: 'person', mention: 'моей', from: 'owner', relationPath: [] }] };
+}
+
+test('a family overview accepts a collection without turning the family into one person', () => {
+    const result = parseMemoryQueryPlan(JSON.stringify(familyPlan()), 'Что ты помнишь о моей семье?')!;
+    assert.deepEqual(result.peopleQuery, familyPlan().peopleQuery);
+    assert.equal(result.references?.[0].relationPath.length, 0);
+});
+
+test('a short collection continuation keeps the grounded root even when the model changes overview into a list', () => {
+    const ctx = context();
+    const ownerPerson = { owner: true, personIds: ['user'], displayName: 'владелец', evidenceIds: [] };
+    saveMemoryFocus(ctx, [ownerPerson], 'Семья владельца', ['spouse'], Date.now(), familyPlan());
+    for (const peopleQuery of [undefined, familyPlan().peopleQuery]) {
+        const continued = continueMemoryQueryPlan({ answerQueries: ['другие люди'], contextQueries: [], requestKind: 'people_list', peopleQuery,
+            references: [{ kind: 'person', from: 'focus', mention: 'ещё', relationPath: [] }] }, 'А кто ещё?', validMemoryFocus(ctx));
+        assert.equal(continued.requestKind, 'overview'); assert.deepEqual(continued.peopleQuery, familyPlan().peopleQuery);
+        assert.equal(continued.references?.[0].from, 'owner'); assert.deepEqual(continued.domains, ['family']);
+    }
+    const changed = continueMemoryQueryPlan({ answerQueries: ['увлечения'], contextQueries: [], requestKind: 'overview', domains: ['hobbies'],
+        references: [{ kind: 'person', from: 'owner', mention: 'моих', relationPath: [] }] }, 'А что помнишь о моих увлечениях?', validMemoryFocus(ctx));
+    assert.equal(changed.peopleQuery, undefined); assert.deepEqual(changed.domains, ['hobbies']);
+});
+
+for (const kind of ['overview', 'people_list'] as const) test(`${kind} combines literal owner facts with named family edges across domains and keeps their subjects`, async t => {
+    t.mock.method(identity, 'listPersonIdentitiesForRecall', async () => people as any);
+    const records = [fact('literal-child', 0, { content: 'У владельца есть дочь Вера Учебная.', subject: 'user', tags: ['subject:user'], domain: 'family' }),
+        edge('spouse', 'synthetic-lada', 'user', 'spouse_of', { content: 'Лада Тестовая — жена владельца.', subject: 'contact', domain: 'personal' }),
+        edge('parent', 'synthetic-miron', 'user', 'parent_of', { content: 'Мирон Примеров — отец владельца.', subject: 'contact', domain: 'family' }),
+        edge('stranger-family', 'synthetic-ella', 'synthetic-miron', 'spouse_of', { content: 'Не является связью владельца.', subject: 'contact', domain: 'family' }),
+        fact('foreign', 2, { content: 'ЧУЖАЯ_СЕМЬЯ', domain: 'family' }),
+        fact('source-owner', 2, { content: 'ЧУЖАЯ_ПЕРЕПИСКА', subject: 'user', tags: ['subject:user', 'source_chat:555125'], domain: 'family' }),
+        fact('bot-claim', 2, { content: 'НЕПОДТВЕРЖДЁННОЕ_ИМЯ', subject: 'bot', tags: ['subject:bot'], domain: 'family' })];
+    const svc = { getOwnerMemories: async (_owner: string, domains: string[], _limit: number, options: any) => {
+        assert.equal(_owner, owner); assert.deepEqual(domains, _limit === 120 ? ['family', 'general'] : ['family']);
+        return records.filter(record => domains.includes(record.domain) && options.acceptCandidate(record));
+    }, getMemoriesByTags: async (_owner: string, tags: string[], _limit: number, options: any) => {
+        assert.equal(_owner, owner); return records.filter(record => record.tags.some(tag => tags.includes(tag)) && options.acceptCandidate(record));
+    } } as any;
+    t.mock.method(vector, 'getVectorService', () => svc);
+    const inference = t.mock.method(ai, 'createChatCompletionForTask', async () => { throw Error('No extra model or embedding call after a collection plan'); });
+    const ctx = context();
+    const result = await getMultiQueryMemoryContextDetailed(ctx, 'Что помнишь о моей семье?', 'full', { queryPlan: familyPlan(kind), trackAccess: false });
+    assert.deepEqual(new Set(result.recalledMemories.map(item => item.id)), new Set(['literal-child', 'spouse', 'parent']));
+    for (const name of ['Вера Учебная', 'Лада Тестовая', 'Мирон Примеров']) assert.ok(result.context.includes(name));
+    assert.match(result.context, /subject=user/); assert.match(result.context, /relationship/);
+    assert.doesNotMatch(result.context, /ЧУЖАЯ_|НЕПОДТВЕРЖДЁННОЕ_|Не является связью владельца/);
+    assert.ok(result.context.length <= 6500); assert.equal(result.recall?.state, 'found');
+    assert.equal(inference.mock.callCount(), 0);
+    ctx.session = JSON.parse(JSON.stringify(ctx.session));
+    const more = await getMultiQueryMemoryContextDetailed(ctx, 'А кто ещё?', 'full', { queryPlan: { answerQueries: ['другие родственники'], contextQueries: [], requestKind: 'overview' }, trackAccess: false });
+    assert.deepEqual(validMemoryFocus(ctx)?.peopleQuery, familyPlan().peopleQuery);
+    if (kind === 'people_list') assert.equal(more.recalledMemories.length, 0);
+    else assert.equal(more.recall?.noNewEvidenceInPool, true);
+    assert.doesNotMatch(more.context, /Лада Тестовая|Мирон Примеров/);
+});
+
+test('a family list can answer literal owner evidence even with no directory or canonical edges', async t => {
+    t.mock.method(identity, 'listPersonIdentitiesForRecall', async () => []);
+    t.mock.method(vector, 'getVectorService', () => ({ getOwnerMemories: async () => [fact('legacy', 0, {
+        content: 'Жена владельца — Лада Учебная, дочь — Вера Учебная.', subject: 'user', domain: 'family', tags: ['subject:user'],
+    })] } as any));
+    const result = await getMultiQueryMemoryContextDetailed(context(), 'Перечисли всех в моей семье', 'full', { queryPlan: familyPlan('people_list'), trackAccess: false });
+    assert.deepEqual(result.recalledMemories.map(item => item.id), ['legacy']);
+    assert.equal(result.recall?.state, 'found'); assert.match(result.context, /Лада Учебная.*Вера Учебная/);
+});
+
+test('a small supplemental budget shows a page of a large circle instead of losing every name', () => {
+    const entries = Array.from({ length: 50 }, (_, i) => {
+        const person = { personIds: [`synthetic-${i}`], displayName: `Синтетический Родственник ${i}`, evidenceIds: [] };
+        return { person, evidence: [{ person, basis: 'relationship' as const, memory: edge(`00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, 'user', `synthetic-${i}`) }] };
+    });
+    const packed = formatMemoryPeople({ entries, totalFound: 50, truncated: false }, 2500);
+    assert.ok(packed.included.length > 0); assert.ok(packed.included.length < 50);
+    assert.ok(packed.context.length <= 2500); assert.match(packed.context, /Синтетический Родственник 0/);
+    assert.match(packed.context, /достигнута граница выборки/);
 });
 
 test('people collection combines saved relationships and direct topic conversations without inventing employment', async t => {
