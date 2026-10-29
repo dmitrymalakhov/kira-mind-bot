@@ -1,9 +1,16 @@
 import type { ApiSettings, ApiSettingsPatch } from './settings';
 
 export class ApiError extends Error {
-    constructor(public readonly status: number, public readonly code: string, message: string) {
+    /** `released`: refused before anything ran, so a durable receipt for the request is dropped, not kept as failed,
+     *  and a corrected retry may run. */
+    constructor(public readonly status: number, public readonly code: string, message: string, public readonly released = false) {
         super(message);
     }
+}
+/** The same refusal, marked as having run nothing (a validation or availability error). */
+export function released(error: unknown): unknown {
+    return error instanceof ApiError && !error.released && error.status < 500 || error instanceof ApiError && error.code === 'vision_unavailable'
+        ? new ApiError(error.status, error.code, error.message, true) : error;
 }
 
 export interface ApiButton {
@@ -53,6 +60,10 @@ export interface ApiBackend {
     sceneCapabilities(): Promise<unknown>;
     sceneReady(turn: import('./scene').SceneTurn): Promise<import('../ai/modelPresets').AiPresetName | null>;
     sceneTurn(turn: import('./scene').SceneTurn, preset: import('../ai/modelPresets').AiPresetName | null): Promise<ApiReply>;
+    /** Stage "prepare" of a scene turn: what the words ask for, before any frame; nothing answered, stored or done. */
+    scenePrepare?(turn: import('./scene').SceneTurn): Promise<unknown>;
+    /** Stage "cancel": a prepared turn the owner stopped can no longer be executed. */
+    sceneCancel?(planId: string): Promise<unknown>;
     sceneActionResult(body: Record<string, unknown>): Promise<unknown>;
     saveModelSettings(body: Record<string, unknown>): Promise<unknown>;
 }

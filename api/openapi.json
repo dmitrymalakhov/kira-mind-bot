@@ -851,7 +851,7 @@
         "summary": "AR scene capabilities: the photo model that reads a frame in the app's mode, frame limits, allowed actions",
         "responses": {
           "200": {
-            "description": "Capabilities: version, frame limits, actions, autoSeat (true: sit without targetId lets the phone choose the seat; results may name it), pointing (true: point actions and scene.things are accepted), mode, vision route"
+            "description": "Capabilities: version, frame limits, actions, autoSeat (true: sit without targetId lets the phone choose the seat; results may name it), pointing (true: point actions and scene.things are accepted), mode, vision route; intentPlanning {version, intents, planTtlSeconds}: stage \"prepare\" decides by meaning whether a turn needs a frame"
           },
           "401": {
             "description": "Error",
@@ -977,10 +977,45 @@
                         "enum": [
                           "ambiguous",
                           "unsure",
-                          "not_found"
+                          "not_found",
+                          "shown"
                         ]
                       }
                     }
+                  },
+                  "plan": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "A prepared turn (stage \"prepare\") whose decision this execution uses; the execution's receipt is keyed by owner + plan and fingerprints the whole request. 409 plan_stale (expired, unknown after a restart, other words/room/follow-up/model mode/frame recipient), plan_superseded (newer words prepared in the same room), plan_cancelled; none of them ran anything"
+                  },
+                  "avoid": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "x",
+                      "y"
+                    ],
+                    "description": "With a frame only: where the thing Kira just showed is on this frame (0–1), for \"no, the other one\"",
+                    "properties": {
+                      "x": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "y": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      }
+                    }
+                  },
+                  "stage": {
+                    "type": "string",
+                    "enum": [
+                      "prepare",
+                      "cancel"
+                    ],
+                    "description": "prepare: {stage, text, scene, followUp?} — no frame, plan or avoid, no Idempotency-Key, no receipt; returns {plan: {id, expiresAt, intent: chat|look|find|clarify|cancel, frame, referent?, vision}}. cancel: {stage, plan} — that plan can no longer be executed."
                   }
                 }
               }

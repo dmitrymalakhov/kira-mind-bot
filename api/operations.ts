@@ -24,7 +24,10 @@ export class PersistentApiOperations implements ApiOperationStore {
             await repo.update({ key }, { status: 'completed', result });
             return result;
         } catch (error) {
-            await repo.update({ key }, { status: 'failed' }).catch(() => {});
+            // refused before anything ran: no receipt is kept, a corrected retry may run; otherwise the outcome is
+            // unknown and never replayed blindly
+            if (error instanceof ApiError && error.released) await repo.delete({ key }).catch(() => {});
+            else await repo.update({ key }, { status: 'failed' }).catch(() => {});
             throw error;
         }
     }

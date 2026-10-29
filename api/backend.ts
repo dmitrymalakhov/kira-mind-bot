@@ -82,6 +82,8 @@ export class BotApiBackend implements ApiBackend {
     sceneCapabilities() { return this.scene.capabilities(); }
     sceneReady(turn: SceneTurn) { return this.scene.ready(turn); }
     sceneTurn(turn: SceneTurn, preset: AiPresetName | null) { return this.scene.turn(turn, preset); }
+    scenePrepare(turn: SceneTurn) { return this.scene.prepare(turn); }
+    async sceneCancel(planId: string) { return this.scene.cancel(planId); }
     sceneActionResult(body: Record<string, unknown>) { return this.scene.actionResult(body); }
     modelSettings() { return buildApiModelSettings(this.models, this.catalog); }
     async turnReady() { await apiTurnPreset(this.models); }

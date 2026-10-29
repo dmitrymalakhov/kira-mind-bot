@@ -1,9 +1,9 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import * as http from 'node:http';
-import { ApiBackend, ApiError, ApiOperationStore } from './contracts';
+import { ApiBackend, ApiError, ApiOperationStore, released } from './contracts';
 import { ExternalApiOptions } from './options';
 import { parseSettingsPatch } from './settings';
-import { MAX_SCENE_BODY_BYTES, parseSceneTurn } from './scene';
+import { MAX_SCENE_BODY_BYTES, parseScenePlanCancel, parseScenePreparation, parseSceneTurn } from './scene';
 import { MAX_PHOTO_BODY_BYTES, parsePhotoTurn } from './photos';
 
 const PREFIX = '/api/v1';
@@ -162,9 +162,39 @@ export function createExternalApiServer(
                 }
                 const isTurn = path.endsWith('/turns');
                 const body = await readBody(req, isTurn ? MAX_SCENE_BODY_BYTES : MAX_BODY_BYTES);
+                // stage "prepare": the words understood before any frame; no receipt, no dialogue, no action, so it
+                // also reaches Kira while a turn runs (a spoken "wait, stop")
+                if (isTurn && body.stage !== undefined) {
+                    if (!backend.scenePrepare || !backend.sceneCancel) throw new ApiError(404, 'not_found', 'Ресурс не найден.');
+                    // stage "cancel": a prepared turn the owner stopped is refused whenever its execution arrives
+                    if (body.stage === 'cancel') return json(200, await backend.sceneCancel(parseScenePlanCancel(body)));
+                    return json(200, await backend.scenePrepare(parseScenePreparation(body)));
+                }
+                const sceneKey = req.headers['idempotency-key'];
+                // a prepared turn: its plan is the execution's identity, durable across keys, restarts and consent
+                // pauses. A completed one replays before any check of its (by now old) snapshot; a pending, failed or
+                // interrupted one is never run again blindly; a refused one ran nothing and may be corrected
+                const planId = isTurn && typeof body.plan === 'string' && /^[0-9a-f-]{36}$/i.test(body.plan) ? body.plan.toLowerCase() : undefined;
+                if (planId) {
+                    if (typeof sceneKey !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(sceneKey)) {
+                        throw new ApiError(400, 'idempotency_key_required', 'Нужен Idempotency-Key: 8–128 букв, цифр, _ или -.');
+                    }
+                    // the receipt answers only the exact execution: the same frame, snapshot and room (old picture
+                    // coordinates must never meet new frame geometry); the phone retries the very request it chose
+                    const fingerprint = hash(`${path}:${JSON.stringify(body)}`);
+                    return json(200, await operations.run(`${options.ownerId}:scene-plan:${planId}`, fingerprint, async () => {
+                        let turn, preset;
+                        try {
+                            turn = parseSceneTurn(body);
+                            preset = await backend.sceneReady(turn);
+                            if (busy) { res.setHeader('Retry-After', '2'); throw new ApiError(409, 'conversation_busy', 'Предыдущий запрос ещё выполняется.'); }
+                        } catch (error) { throw released(error); }
+                        busy = true;
+                        try { return await backend.sceneTurn(turn, preset); } finally { busy = false; }
+                    }));
+                }
                 const turn = isTurn ? parseSceneTurn(body) : undefined;
                 const preset = turn ? await backend.sceneReady(turn) : null; // vision refused before any receipt
-                const sceneKey = req.headers['idempotency-key'];
                 if (isTurn && (typeof sceneKey !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(sceneKey))) {
                     throw new ApiError(400, 'idempotency_key_required', 'Нужен Idempotency-Key: 8–128 букв, цифр, _ или -.');
                 }
