@@ -412,7 +412,7 @@ export async function sendResultToUser(
     result: ProcessingResult,
     voiceRequested = false,
 ): Promise<{ message_id: number }> {
-    return recordResultDelivery(ctx, result, () => sendResultPayload(ctx, result, voiceRequested), { feedback: !voiceRequested });
+    return recordResultDelivery(ctx, result, () => sendResultPayload(ctx, result, voiceRequested));
 }
 
 async function sendResultPayload(ctx: BotContext, result: ProcessingResult, voiceRequested: boolean): Promise<{ message_id: number }> {

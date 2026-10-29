@@ -211,6 +211,12 @@ export function assessFactEvidenceAttribution(
     };
 }
 
+/** Share the same speaker/forward parser with read-only source evidence. */
+export function isForwardOnlyAttributionEvidence(evidence: string): boolean {
+    const segments = parseEvidenceSegments(evidence);
+    return segments.length > 0 && segments.every(segment => segment.forwarded);
+}
+
 /**
  * Penalizes facts whose declared subject is contradicted by the speaker-aware
  * evidence. With requireSupport=true, missing/ambiguous attribution is also

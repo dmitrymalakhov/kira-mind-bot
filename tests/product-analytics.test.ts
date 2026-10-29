@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { Api, Bot, Context } from 'grammy';
+import { Api, Bot, Context, InlineKeyboard } from 'grammy';
 import { AppDataSource } from '../data-source';
 import { config } from '../config';
 import type { BotContext } from '../types';
 import { analyticsActor, continueAnalyticsTask, observeClassification, productAnalyticsMiddleware,
-    recordDeferredOutcome, recordResultDelivery } from '../services/productAnalytics';
+    recordDeferredOutcome, recordResultDelivery, sendProactiveWithAnalytics } from '../services/productAnalytics';
 import { sendResultToUser, canSendResultAsVoice } from '../handlers/shared';
 import { provisionTenantAnalytics } from '../platform/analytics';
 const { summarizeProductAnalytics, parseFilters, validateTargets, registerProductAnalyticsRoutes } = require('../admin-panel/productAnalytics');
@@ -153,7 +153,7 @@ function harness(t: any) {
     return { ...db, bot, sent, context, dispatch: (ctx: BotContext) => bot.middleware()(ctx, async () => {}) };
 }
 
-test('Telegram result -> persisted delivery -> authenticated feedback; duplicate updates and feedback clicks stay idempotent', async t => {
+test('Telegram delivery stays tracked without a survey; historical feedback remains authenticated and idempotent', async t => {
     const h = harness(t);
     h.bot.on('message:text', async ctx => {
         await observeClassification(ctx, { intent: 'РАЗГОВОР', confidenceLevel: 'ВЫСОКИЙ', details: { memoryTask: 'lookup' } });
@@ -163,7 +163,8 @@ test('Telegram result -> persisted delivery -> authenticated feedback; duplicate
     assert.equal(h.tasks.size, 1);
     const row = [...h.tasks.values()][0];
     assert.equal(row.scenario, 'memory'); assert.equal(row.status, 'delivered'); assert.ok(row.delivered_at);
-    assert.match(h.sent[0].payload.reply_markup.inline_keyboard[0][0].callback_data, /^pa:helpful:/);
+    assert.equal(h.sent[0].payload.reply_markup, undefined);
+    assert.equal(row.feedback_offered, false);
     await h.dispatch(h.context(2, `pa:helpful:${row.id}`)); await h.dispatch(h.context(2, `pa:helpful:${row.id}`));
     assert.equal(h.assessments.size, 1); assert.equal(h.tasks.size, 1);
     await h.dispatch(h.context(3, `pa:trust:${row.id}`, 990003));
@@ -223,8 +224,21 @@ test('analytics does not replace a requested voice response with text by adding 
     await recordResultDelivery(ctx, result, async () => {
         assert.equal(canSendResultAsVoice(result), true);
         return { message_id: 31 };
-    }, { feedback: false });
+    });
     assert.equal(h.tasks.get(id).feedback_offered, false);
+});
+
+test('analytics preserves task buttons and sends proactive messages without a survey', async t => {
+    const h = harness(t);
+    const keyboard = new InlineKeyboard().text('Продолжить', 'synthetic:continue');
+    h.bot.on('message:text', async ctx => { await sendResultToUser(ctx, { responseText: 'Синтетический ответ', keyboard }); });
+    await h.dispatch(h.context(32));
+    assert.deepEqual(h.sent[0].payload.reply_markup, keyboard);
+    await sendProactiveWithAnalytics(h.bot, 990001, 'Синтетическое наблюдение', 'memory');
+    const sent = h.sent.filter(row => row.method === 'sendMessage');
+    assert.equal(sent[1].payload.reply_markup, undefined);
+    assert.equal([...h.tasks.values()].filter(row => row.status === 'delivered').length, 2);
+    assert.ok([...h.tasks.values()].every(row => !row.feedback_offered));
 });
 
 test('assessment writes require a delivered task owned by the authenticated user', async t => {
