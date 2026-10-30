@@ -540,7 +540,7 @@ export async function classifyMessage(
     forwardFrom: string = "",
     messageHistory: MessageHistory[] = [],
     knownChatGroups?: { name: string; chatNames: string[] }[],
-    fastDialogue?: { topic?: string },
+    fastDialogue?: { topic?: string; room?: string },
     pendingProfile?: ReturnType<typeof pendingTelegramProfileQuestion>,
 ): Promise<MessageClassification> {
     try {
@@ -580,6 +580,8 @@ export async function classifyMessage(
                 {
                     role: "user",
                     content: prompt + (fastDialogue?.topic ? `\nТема предыдущего эпизода (не факт): ${fastDialogue.topic.slice(0, 400)}` : '')
+                        // a room turn: the quick answer is given there, in her presence (context, not a request)
+                        + (fastDialogue?.room ? `\nГде идёт разговор (контекст, не просьба):\n${fastDialogue.room.slice(0, 2500)}` : '')
                 }
             ],
             temperature: 1, // модель поддерживает только default (1)
@@ -839,7 +841,7 @@ async function processMessageInternal(
             !internalBrowserContinuation && !isBrowserTaskLike && !hasActivePendingBrowserTask(ctx) && isSimpleSocialMessage(originalMessage, config.characterName);
         const fastTurn = options.turn ?? { userText: originalMessage };
         const fastEligible = options.fastDialogue === true && !options.recurringTaskRun && !options.voiceReplyRequested &&
-            !isForwarded && !isBrowserTaskLike && !explicitRemember && !ctx?.arRoom && canUseFastDialogue(ctx, fastTurn);
+            !isForwarded && !isBrowserTaskLike && !explicitRemember && canUseFastDialogue(ctx, fastTurn);
         const presenceReply = fastEligible && simplePresenceReply(originalMessage, config.characterName);
         if (presenceReply) return { responseText: presenceReply, operationStatus: 'ok', skipOptionalFollowups: true, fastResponse: true };
         const socialClassification: MessageClassification | null = simpleSocial && !fastEligible ? {
@@ -853,7 +855,7 @@ async function processMessageInternal(
             ?? socialClassification
             ?? await classifyMessage(originalMessage, isForwarded, forwardFrom,
                 fastEligible ? messageHistory.slice(-4).map(item => ({ ...item, content: item.content.slice(0, 700) })) : messageHistory,
-                knownChatGroups, fastEligible ? { topic: fastTurn.currentTopic } : undefined,
+                knownChatGroups, fastEligible ? { topic: fastTurn.currentTopic, room: ctx?.arRoom?.context } : undefined,
                 !isForwarded && !forwardContext ? pendingTelegramProfileQuestion(ctx, replyContext?.text) : undefined);
         if (!isForwarded && !forwardContext) {
             const continuation = await continueClassifiedProfileQuestion(ctx, classification, originalMessage, replyContext?.text);

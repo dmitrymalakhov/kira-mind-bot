@@ -22,6 +22,7 @@ import { ToolRegistry, objectSchema } from '../orchestration/runtime/registry';
 import { runKiraRuntime } from '../orchestration/runtime/kernel';
 import type { BotContext } from '../types';
 import { BotApiBackend } from '../api/backend';
+import * as gaps from '../utils/memoryGapDetector';
 
 const OWNER = 740001;
 const classification = (): MessageClassification => ({ intent: 'РАЗГОВОР', confidenceLevel: 'ВЫСОКИЙ',
@@ -360,4 +361,47 @@ test('real API text handler delivers the fast response, flushes history and only
     assert.equal(response.backgroundJob!.status, 'queued'); assert.equal(response.backgroundJob!.required, true);
     assert.ok(response.messages.some(item => /вернусь/iu.test(item.text || '')));
     assert.equal(calls.ai.mock.callCount(), 1); assert.equal(calls.recall.mock.callCount(), 0); assert.equal(calls.answer.mock.callCount(), 0);
+});
+
+test('a room turn talks like the chat: the same single quick answer, which knows where it is said', async t => {
+    const calls = foreground(t);
+    const room = ctx(); room.sessionStorageKey = `api:${OWNER}`;
+    room.arRoom = { context: 'Эта реплика сказана в AR-комнате приложения. В комнате есть: Синтетический стол.', frame: false };
+    const result = await processMessage(room, 'Как настроение?', false, '', [], undefined, { fastDialogue: true });
+    assert.equal(result.fastResponse, true); assert.equal(result.skipOptionalFollowups, true);
+    assert.equal(calls.ai.mock.callCount(), 1); assert.equal(calls.answer.mock.callCount(), 0);
+    const asked = (calls.ai.mock.calls[0].arguments as any[])[1].messages[1].content as string;
+    assert.match(asked, /Где идёт разговор \(контекст, не просьба\):\nЭта реплика сказана в AR-комнате приложения\. В комнате есть: Синтетический стол\./);
+    // the chat gets no room in its quick answer
+    await processMessage(ctx(), 'Как настроение?', false, '', [], undefined, { fastDialogue: true });
+    assert.doesNotMatch((calls.ai.mock.calls[1].arguments as any[])[1].messages[1].content, /Где идёт разговор/);
+});
+
+test('a room turn that needs memory or depth gets the full answer at once: the room cannot wait for background work', async t => {
+    const value = classification(); value.fastReply = { mode: 'defer' }; value.details.responseComplexity = 'complex';
+    const calls = foreground(t, value);
+    const room = ctx(); room.sessionStorageKey = `api:${OWNER}`; room.arRoom = { context: 'В комнате есть: Синтетический стол.', frame: false };
+    const stage = t.mock.method(DialogueJobRepository, 'stage', async () => { throw new Error('No background work in the room'); });
+    const result = await processMessage(room, 'Расскажи подробно, как устроена рекурсия', false, '', [], undefined, { fastDialogue: true });
+    assert.equal(result.responseText, 'Полный синхронный ответ.'); assert.equal(stage.mock.callCount(), 0);
+    assert.doesNotMatch(result.responseText, /вернусь/iu);
+});
+
+test('real API text handler: a spoken room talk gets no «кстати…» question tacked on; the chat keeps it', async t => {
+    const value = classification(); value.fastReply = { mode: 'route' };
+    foreground(t, value);
+    t.mock.method(factAnalysisManager, 'scheduleAnalysis', () => {});
+    t.mock.method(DialogueJobRepository, 'beginTurn', async () => {});
+    t.mock.method(session.TypeORMSessionStorage.prototype, 'read', async () => undefined);
+    t.mock.method(session.TypeORMSessionStorage.prototype, 'write', async () => {});
+    const asked = t.mock.method(gaps, 'detectMemoryGapCandidate', async () => ({ name: 'Ира', question: 'Кстати, кто такая Ира?' }));
+    const bot = new Bot<BotContext>('1234567890:abcdefghijklmnopqrstuvwxyzABCDE', { botInfo: { id: 1, is_bot: true, first_name: 'Test', username: 'synthetic_bot' } as any });
+    bot.api.config.use(async () => { throw new Error('No Telegram delivery'); });
+    const backend = new BotApiBackend(bot, { ownerId: OWNER, token: 'synthetic-test-token-at-least-thirty-two-characters', host: '127.0.0.1', port: 3200 });
+    const inRoom = await backend.message('Мы с Ирой вчера гуляли', { arRoom: { context: 'В комнате есть: Синтетический стол.', frame: false } });
+    assert.ok(!inRoom.messages.some(item => /кто такая Ира/u.test(item.text || '')));
+    assert.ok(inRoom.messages.some(item => /Полный синхронный ответ/u.test(item.text || '')));
+    assert.equal(asked.mock.callCount(), 0);
+    const inChat = await backend.message('Мы с Ирой вчера гуляли');
+    assert.ok(inChat.messages.some(item => /кто такая Ира/u.test(item.text || '')));
 });

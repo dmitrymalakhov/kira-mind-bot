@@ -580,8 +580,9 @@ export function registerTextMessageHandler(bot: Bot<BotContext>, options: { imme
                     // отдельным fire-and-forget сообщением после него.
                     let identityGapCandidate: Awaited<ReturnType<typeof detectMemoryGapCandidate>>;
                     let proactiveCandidate: ProactiveHintCandidate | undefined;
+                    // a spoken talk in the AR room stays a talk: no «кстати…» questions or offers tacked onto her answer
                     if (
-                        !result.skipOptionalFollowups && shouldRunProactiveHint(result, messageForProcessing) &&
+                        !result.skipOptionalFollowups && !ctx.arRoom && shouldRunProactiveHint(result, messageForProcessing) &&
                         !decideKnowledgeSource(message, turn.replyContext, turn.currentTopic).requiresWeb &&
                         !result.keyboard &&
                         !ctx.session.pendingContactMemory
