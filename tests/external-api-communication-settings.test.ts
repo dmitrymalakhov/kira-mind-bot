@@ -43,7 +43,7 @@ async function http(t: TestContext, changes: Partial<ApiBackend>) {
     return async (route: string, method = 'GET', body?: unknown, auth = true) => {
         const response = await fetch(base + route, { method, headers: { ...(auth ? { Authorization: 'Bearer ' + token } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) },
             ...(body ? { body: JSON.stringify(body) } : {}) });
-        return { status: response.status, body: await response.json() as any, allow: response.headers.get('allow') };
+        return { status: response.status, body: await response.json() as any, allow: response.headers.get('allow'), retryAfter: response.headers.get('retry-after') };
     };
 }
 
@@ -78,6 +78,32 @@ test('the actual backend advertises the canonical communication capability witho
     const backend = new BotApiBackend(bot, { token, ownerId: owner, host: '127.0.0.1', port: 0 });
     assert.deepEqual((await backend.capabilities()).profile.communication, COMMUNICATION_CAPABILITY);
     example('capabilities.profile', { profile: { communication: COMMUNICATION_CAPABILITY } });
+});
+
+test('profile reads and patches share the REST window and reject over-budget work before migration or storage', async t => {
+    let now = Date.now(); t.mock.method(Date, 'now', () => now);
+    const rows = new Map<string, string>();
+    let reads = 0, inserts = 0, replacements = 0, migrations = 0;
+    const profile = new CommunicationProfileService(owner, {
+        read: async key => { reads++; return rows.get(key); },
+        insert: async (key, value) => { inserts++; rows.set(key, value); return true; },
+        replace: async (key, previous, value) => { replacements++; if (rows.get(key) !== previous) return false; rows.set(key, value); return true; },
+    }, async () => { migrations++; return {}; });
+    const request = await http(t, { communicationProfile: () => profile.read(), updateCommunicationProfile: p => profile.patch(p) });
+    for (let i = 0; i < 120; i++) assert.equal((await request('/status')).status, 200);
+    for (const method of ['GET', 'PATCH']) {
+        const denied = await request('/profile/communication', method, method === 'PATCH' ? { expectedRevision: 'synthetic-revision', name: 'Лис' } : undefined);
+        assert.equal(denied.status, 429); assert.equal(denied.body.error.code, 'rate_limited'); assert.equal(denied.retryAfter, '60');
+    }
+    assert.deepEqual([reads, inserts, replacements, migrations, rows.size], [0, 0, 0, 0, 0]);
+    now += 60_000;
+    const allowed = await request('/profile/communication'); assert.equal(allowed.status, 200);
+    assert.equal((await request('/profile/communication', 'PATCH', { expectedRevision: allowed.body.revision, name: 'Лис' })).status, 200);
+    assert.deepEqual([reads, inserts, replacements, migrations], [2, 1, 1, 1]);
+    for (let i = 0; i < 118; i++) assert.equal((await request('/status')).status, 200);
+    assert.equal((await request('/status')).status, 429);
+    assert.equal((await request('/profile/communication')).status, 429);
+    assert.deepEqual([reads, inserts, replacements, migrations], [2, 1, 1, 1]);
 });
 
 function account(t: TestContext) {

@@ -71,22 +71,23 @@ export function createExternalApiServer(
             }
             const url = new URL(req.url ?? '/', 'http://localhost');
             const path = url.pathname;
-            if (path === `${PREFIX}/profile/communication` && backend.communicationProfile && backend.updateCommunicationProfile) {
-                if (req.method === 'GET') return json(200, await backend.communicationProfile());
-                if (req.method === 'PATCH') return json(200, await backend.updateCommunicationProfile(parseCommunicationPatch(await readBody(req))));
-                res.setHeader('Allow', 'GET, PATCH'); req.resume();
-                throw new ApiError(405, 'method_not_allowed', 'Ожидается GET или PATCH.');
-            }
             if (Date.now() - windowStarted >= 60_000) { windowStarted = Date.now(); requests = 0; browserRequests = 0; }
             if (path.startsWith(`${PREFIX}/browser/`)) {
                 if (++browserRequests > 360) { res.setHeader('Retry-After', '60'); throw new ApiError(429, 'rate_limited', 'Слишком много запросов браузера.'); }
                 if (!backend.browserSession) throw new ApiError(404, 'not_found', 'Общий браузер недоступен.');
                 return await backend.browserSession.handle(req, res, url);
             }
+            // Every ordinary REST handler, including profile/settings reads and writes, stays below this guard.
             if (++requests > 120) {
                 res.setHeader('Retry-After', '60');
                 req.resume();
                 throw new ApiError(429, 'rate_limited', 'Слишком много запросов.');
+            }
+            if (path === `${PREFIX}/profile/communication` && backend.communicationProfile && backend.updateCommunicationProfile) {
+                if (req.method === 'GET') return json(200, await backend.communicationProfile());
+                if (req.method === 'PATCH') return json(200, await backend.updateCommunicationProfile(parseCommunicationPatch(await readBody(req))));
+                res.setHeader('Allow', 'GET, PATCH'); req.resume();
+                throw new ApiError(405, 'method_not_allowed', 'Ожидается GET или PATCH.');
             }
             if (path === `${PREFIX}/model-preferences`) {
                 if (req.method === 'GET' && backend.modelPreferences) return json(200, await backend.modelPreferences());

@@ -14,7 +14,7 @@ async function fixture(t: any) {
     let release!: () => void;
     const held = new Promise<void>(resolve => { release = resolve; });
     let operationId: string | undefined;
-    const backend = { browserSession: browser, turnReady: async () => {}, message: async (_text: string, options: any) => {
+    const backend = { browserSession: browser, status: async () => ({ ok: true }), turnReady: async () => {}, message: async (_text: string, options: any) => {
         operationId = options.liveBrowserRequest?.operationId;
         registry.create(owner, scope, operationId!);
         await held; return { messages: [] };
@@ -64,6 +64,8 @@ test('public routes enforce account/scope, method, observer, confirmation and in
 
 test('SSE starts with an ordered authoritative snapshot and closing its socket safely disconnects the task', async t => {
     const f = await fixture(t); const session = f.registry.create(f.owner, f.scope, 'synthetic-operation'); t.after(() => session.dispose());
+    for (let i = 0; i < 120; i++) assert.equal((await f.request('/status')).status, 200);
+    assert.equal((await f.request('/status')).status, 429);
     const observerId = randomUUID(), path = `/browser/sessions/${session.id}`;
     assert.equal((await f.post(`${path}/observers`, { observerId })).status, 200);
     const abort = new AbortController();
@@ -75,4 +77,14 @@ test('SSE starts with an ordered authoritative snapshot and closing its socket s
     abort.abort();
     for (let i = 0; i < 30 && session.state !== 'disconnected'; i++) await new Promise(r => setTimeout(r, 5));
     assert.equal(session.state, 'disconnected');
+});
+
+test('browser requests keep their own 360-request budget and cannot consume the ordinary REST budget', async t => {
+    const f = await fixture(t);
+    for (let i = 0; i < 360; i++) assert.equal((await f.request('/browser/sessions/active')).status, 200);
+    const denied = await f.request('/browser/sessions/active');
+    assert.equal(denied.status, 429); assert.equal(denied.headers.get('retry-after'), '60');
+    assert.equal((await denied.json() as any).error.code, 'rate_limited');
+    for (let i = 0; i < 120; i++) assert.equal((await f.request('/status')).status, 200);
+    assert.equal((await f.request('/status')).status, 429);
 });

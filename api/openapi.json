@@ -1820,6 +1820,18 @@
           },
           "503": {
             "description": "communication_profile_unavailable: failed read/write is not an empty profile"
+          },
+          "429": {
+            "description": "rate_limited: shared authenticated REST budget exceeded before profile/memory/storage work",
+            "headers": {
+              "Retry-After": {
+                "description": "Retry delay in seconds",
+                "schema": {
+                  "type": "integer",
+                  "example": 60
+                }
+              }
+            }
           }
         }
       },
@@ -1921,6 +1933,18 @@
                       "$ref": "#/components/schemas/CommunicationProfile"
                     }
                   }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited: shared authenticated REST budget exceeded before profile/memory/storage work",
+            "headers": {
+              "Retry-After": {
+                "description": "Retry delay in seconds",
+                "schema": {
+                  "type": "integer",
+                  "example": 60
                 }
               }
             }
