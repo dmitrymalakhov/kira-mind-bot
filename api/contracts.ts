@@ -48,6 +48,8 @@ export interface ApiBackend {
     modelPreferences?(): Promise<unknown>;
     updateModelPreferences?(body: unknown): Promise<unknown>;
     updateSettings?(patch: ApiSettingsPatch): Promise<ApiSettings>;
+    communicationProfile?(): Promise<import('../services/communicationProfileService').CommunicationProfile>;
+    updateCommunicationProfile?(patch: import('../services/communicationProfileService').CommunicationPatch): Promise<import('../services/communicationProfileService').CommunicationProfile>;
     message(text: string, options?: { deferredDialogue?: boolean; liveBrowserRequest?: { operationId: string } }): Promise<ApiReply>;
     photoReady(): Promise<import('../ai/modelPresets').AiPresetName | null>;
     photo(buffer: Buffer, caption?: string, preset?: import('../ai/modelPresets').AiPresetName | null): Promise<ApiReply>;

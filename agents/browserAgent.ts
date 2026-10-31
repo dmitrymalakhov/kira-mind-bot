@@ -22,6 +22,7 @@ import { BrowserInterrupted, LiveBrowserSession, liveBrowserInvocation, liveBrow
 import { LivePlaywrightAdapter } from '../services/liveBrowserPlaywright';
 import { hasApprovedBrowserAction, runReviewedBrowserAction } from '../services/liveBrowserActionPolicy';
 import { liveBrowserKeyboard, notifyLiveBrowserState } from '../services/liveBrowserTelegram';
+import { browserInternalDiagnostic, browserPublicFailure } from '../utils/browserFailureReply';
 
 const createChatCompletionForTask: typeof requestBrowserChatCompletion = async (...args) => {
     const invocation = liveBrowserInvocation();
@@ -14830,13 +14831,14 @@ async function runBrowserAgent(
             });
             return { responseText: 'Ок, браузерную задачу остановила.' };
         }
-        console.error('[BROWSER] fatal error:', err);
+        const failure = browserPublicFailure(err);
+        console.error('[BROWSER] fatal error:', { code: failure.code, diagnostic: browserInternalDiagnostic(err) });
         recordBrowserTrajectoryEvent(state, 'lifecycle.error', {
-            error: safeErrorMessage(err),
+            code: failure.code,
         });
         ctx.session.pendingBrowserTask = undefined;
         ctx.session.activeBrowserTask = undefined;
-        return { operationStatus: 'unknown', responseText: `❌ Ошибка браузера: ${safeErrorMessage(err) || 'неизвестная ошибка'}` };
+        return { operationStatus: 'unknown', responseText: failure.reply };
     } finally {
         if (state && ctx.session.activeBrowserTask?.sessionId === state.id) {
             ctx.session.activeBrowserTask = undefined;

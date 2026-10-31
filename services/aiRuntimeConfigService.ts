@@ -33,6 +33,10 @@ let lastRefreshAt = 0;
 let cachedFromDb = false;
 let activePresetRefreshPromise: Promise<AiPresetName> | null = null;
 
+export function invalidateActiveAiPresetCache(): void {
+    cachedPresetName = null; lastRefreshAt = 0; cachedFromDb = false;
+}
+
 function setCachedPresetName(preset: AiPresetName, fromDb = false): AiPresetName {
     cachedPresetName = preset;
     lastRefreshAt = Date.now();

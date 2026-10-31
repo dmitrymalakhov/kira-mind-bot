@@ -36,6 +36,7 @@ export function getSameProviderDegradedModel(
     retryable: boolean,
     triedModels: ReadonlySet<string> = new Set(),
 ): AiModelRef | null {
+    if (currentModel.allowFallback === false) return null;
     const parsedPresetName = parseAiPresetName(presetName);
     if (!retryable || !parsedPresetName || !isTrueFullAiPreset(parsedPresetName)) return null;
 

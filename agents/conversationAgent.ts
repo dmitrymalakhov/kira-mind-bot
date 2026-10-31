@@ -36,6 +36,7 @@ import { buildMemoryAnswerPrompt, MEMORY_ANSWER_RULES, confirmedMemoryIdentityAn
 import { requiresTelegramProfile } from '../utils/telegramProfileRequest';
 import { BEHAVIOR_MEMORY_RULES } from '../services/behaviorMemoryService';
 import { AVAILABILITY_SEARCH_RULES } from '../utils/availabilityVerification';
+import { communicationProfileContext } from '../services/communicationProfileService';
 
 const MEDICAL_CONTEXT_RE = /(?:здоров|медицин|врач|доктор|клиник|больниц|симптом|болит|боль\b|температур|давлен|пульс|лекар|препарат|дозиров|анализ[ыа]?|обследован|диагноз|лечени|операц|процедур|риск|опасн|наркоз|анестез|госпитал|травм|инфекц|аллерг|сыпь|от[её]к|беременн|психиатр|психолог|терапи)/iu;
 
@@ -357,6 +358,7 @@ ${historyContext}
             'Только saved подтверждает запись нового урока; unchanged означает, что эта обратная связь уже обработана. При unavailable/rejected не говори «запомнила», «усвоила» или «буду всегда». Даже сохранённый урок не гарантирует отсутствия ошибок. Упоминай сохранение кратко, только если уместно.',
         ].join('\n');
 
+        const communicationPreferences = await communicationProfileContext(ctx);
         // Отправка запроса к API OpenAI
         const response = await createChatCompletionForTask(selectConversationTask(classification, isMedicalContextMessage(message)), {
             messages: [
@@ -374,7 +376,7 @@ ${historyContext}
                         (injectedMemoryContext?.allowSideEffects === false ? 'Времена MCP marketTimesUTC уже подписаны как UTC: копируй эти цифры и часовой пояс без пересчёта. Последняя свеча (lastCandleAtUTC) и время получения (fetchedAtUTC) — разные моменты. Местное время можно опустить; не подписывай UTC время после прибавления местного смещения.\n' : '') +
                         (memoryAnswer ? 'Говори естественно и по делу. Найденные свидетельства важнее прежних реплик ассистента.\n' :
                             `Твои ответы звучат естественно, как от настоящего человека. Внутри персоны у тебя есть реалистичная биография, память, привычки, долгие линии, настроение и отношение к владельцу. В личном диалоге не отрицай эту жизнь техническими фразами про отсутствие тела, камеры или реального кадра. Не добавляй цифровые архивы, сюрреалистические места или фантастические профессии. Учитывай время суток и день недели в своём настроении и реакциях — вечер пятницы отличается от утра понедельника. Тон ответа должен соответствовать твоему текущему настроению из контекста — не будь всегда одинаково «${genderForms.warmAndSupportive}».`) +
-                        (groupChatContext.systemHint ? `\n${groupChatContext.systemHint}` : '')
+                        (groupChatContext.systemHint ? `\n${groupChatContext.systemHint}` : '') + '\n' + communicationPreferences
                 },
                 {
                     role: "user",

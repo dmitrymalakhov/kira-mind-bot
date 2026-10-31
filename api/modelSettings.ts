@@ -36,7 +36,7 @@ export interface ApiModelSettingsStore {
     write(preset: AiPresetName | null, expectedRevision: string): Promise<ApiModelSelection>;
 }
 
-function parseStored(value: string | undefined): ApiModelSelection {
+export function parseStoredApiModelSelection(value: string | undefined): ApiModelSelection {
     if (!value) return { preset: null, revision: NO_REVISION };
     try {
         const parsed = JSON.parse(value) as { preset?: unknown; revision?: unknown };
@@ -52,7 +52,7 @@ export class BotSettingsApiModelStore implements ApiModelSettingsStore {
         // a failing query on a live database still throws, so a turn never runs on a guessed mode.
         if (!AppDataSource.isInitialized) return { preset: null, revision: NO_REVISION };
         const row = await AppDataSource.getRepository(BotSettingEntity).findOneBy({ key: API_AI_MODEL_PRESET_SETTING_KEY });
-        return parseStored(row?.value);
+        return parseStoredApiModelSelection(row?.value);
     }
 
     async write(preset: AiPresetName | null, expectedRevision: string): Promise<ApiModelSelection> {
@@ -60,7 +60,7 @@ export class BotSettingsApiModelStore implements ApiModelSettingsStore {
         const next: ApiModelSelection = { preset, revision: randomUUID() };
         const value = JSON.stringify(next);
         const row = await repo.findOneBy({ key: API_AI_MODEL_PRESET_SETTING_KEY });
-        if (parseStored(row?.value).revision !== expectedRevision) throw conflict();
+        if (parseStoredApiModelSelection(row?.value).revision !== expectedRevision) throw conflict();
         if (!row) {
             const inserted = await repo.createQueryBuilder().insert().values({ key: API_AI_MODEL_PRESET_SETTING_KEY, value })
                 .orIgnore().returning('key').execute();

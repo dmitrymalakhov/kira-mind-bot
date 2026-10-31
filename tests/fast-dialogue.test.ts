@@ -22,6 +22,7 @@ import { ToolRegistry, objectSchema } from '../orchestration/runtime/registry';
 import { runKiraRuntime } from '../orchestration/runtime/kernel';
 import type { BotContext } from '../types';
 import { BotApiBackend } from '../api/backend';
+import * as communication from '../services/communicationProfileService';
 
 const OWNER = 740001;
 const classification = (): MessageClassification => ({ intent: 'РАЗГОВОР', confidenceLevel: 'ВЫСОКИЙ',
@@ -57,6 +58,20 @@ test('self-contained question returns the answer in the routing call, without me
     assert.match(result.responseText, /Рекурсия/); assert.equal(result.fastResponse, true);
     assert.equal(result.skipOptionalFollowups, true); assert.equal(result.dialogueJobId, undefined);
     assert.equal(calls.ai.mock.callCount(), 1); assert.equal(calls.recall.mock.callCount(), 0); assert.equal(calls.answer.mock.callCount(), 0); assert.equal(stage.mock.callCount(), 0);
+});
+
+test('fast answers receive fresh canonical communication settings in their existing model call', async t => {
+    const calls = foreground(t);
+    let preference = '{"name":"Синтетическое имя","replyLength":"short"}';
+    t.mock.method(communication, 'communicationProfileContext', async (c: BotContext) => { assert.equal(c.from?.id, OWNER); return preference; });
+    const prompts: string[] = [];
+    calls.ai.mock.mockImplementation(async (task: string, args: any) => { assert.equal(task, 'fastDialogue'); prompts.push(args.messages[0].content); return classification() as any; });
+    await processMessage(ctx(), 'Объясни рекурсию', false, '', [], undefined, { fastDialogue: true });
+    assert.ok(prompts[0].includes(preference));
+    preference = '{"name":null,"replyLength":"detailed"}';
+    await processMessage(ctx(), 'Объясни циклы', false, '', [], undefined, { fastDialogue: true });
+    assert.ok(prompts[1].includes(preference)); assert.ok(!prompts[1].includes('Синтетическое имя'));
+    assert.equal(calls.ai.mock.callCount(), 2);
 });
 
 test('short personal identity questions use synchronous retrieval even if fast classification wants to defer or answer', async t => {

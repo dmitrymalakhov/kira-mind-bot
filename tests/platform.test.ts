@@ -17,6 +17,7 @@ import { createBrowserProxy, publicAddress } from '../platform/browserProxy';
 import { createExternalApiServer } from '../api/server';
 import type { ApiSettings } from '../api/settings';
 import { parsePreferences } from '../ai/modelPreferences';
+import { CommunicationProfileService } from '../services/communicationProfileService';
 import { DataSource } from 'typeorm';
 
 class MemoryApiOperations implements ApiOperationStore {
@@ -187,11 +188,17 @@ test('two API accounts register/login, pair separate bots, and route history, fi
             let photoExecutions = 0;
             let modelPreset: unknown = null;
             let modelPreferences = { quality: 'high' };
+            const profiles = new Map<string, string>();
+            const communication = new CommunicationProfileService(Number(store.accounts.get(id)!.owner_id), {
+                read: async k => profiles.get(k), insert: async (k, v) => { if (profiles.has(k)) return false; profiles.set(k, v); return true; },
+                replace: async (k, old, value) => { if (profiles.get(k) !== old) return false; profiles.set(k, value); return true; },
+            }, async () => ({}));
             const internalToken = secrets.derive(id, 'api');
             let settings: ApiSettings = { budgetMode: 'normal', budgetModes: [], telegram: { personalSessionConfigured: false }, features: [] };
             const worker = createExternalApiServer({ token: internalToken, ownerId: Number(store.accounts.get(id)!.owner_id), host: '127.0.0.1', port: 0 }, {
                 status: async () => ({ accountId: id }), history: async () => ({ messages: [{ text: id }] }),
                 capabilities: async () => ({}), reminders: async () => ({ reminders: [id] }), tasks: async () => ({ tasks: [id] }),
+                communicationProfile: () => communication.read(), updateCommunicationProfile: p => communication.patch(p),
                 file: async () => ({ filename: `${id}.txt`, data: Buffer.from(id) }),
                 message: async () => ({ messages: [{ id: 1, type: 'text', text: `${id}:${++executions}` }] }),
                 action: async () => ({ messages: [] }),
@@ -219,6 +226,17 @@ test('two API accounts register/login, pair separate bots, and route history, fi
             endpoints.set(id, { port: (worker.address() as AddressInfo).port, token: internalToken });
         }
         assert.equal((await call('/api/v1/model-preferences')).status, 401);
+        assert.equal((await call('/api/v1/profile/communication')).status, 401);
+        const initialA = await call('/api/v1/profile/communication', 'GET', a);
+        const initialB = await call('/api/v1/profile/communication', 'GET', b);
+        assert.equal(initialA.status, 200); assert.equal(initialB.status, 200);
+        const changedProfile = await call('/api/v1/profile/communication', 'PATCH', a, { expectedRevision: initialA.data.revision, name: 'Синтетический Лис' });
+        assert.equal(changedProfile.status, 200); assert.equal(changedProfile.data.name.value, 'Синтетический Лис');
+        assert.deepEqual((await call('/api/v1/profile/communication', 'GET', b)).data, initialB.data);
+        assert.deepEqual((await call('/api/v1/profile/communication?accountId=' + second.data.account.id, 'GET', a)).data, changedProfile.data);
+        const conflictProfile = await call('/api/v1/profile/communication', 'PATCH', a, { expectedRevision: initialA.data.revision, name: 'Синтетический Сокол' });
+        assert.equal(conflictProfile.status, 409); assert.deepEqual(conflictProfile.data.profile, changedProfile.data);
+        assert.equal((await call('/api/v1/profile/communication', 'PATCH', a, { expectedRevision: changedProfile.data.revision, name: 'Чужой', ownerId: 10002 })).status, 400);
         assert.equal((await call('/api/v1/model-preferences', 'PUT', a, { quality: 'standard' })).data.accountId, first.data.account.id);
         assert.equal((await call('/api/v1/model-preferences', 'GET', a)).data.preferences.quality, 'standard');
         assert.equal((await call('/api/v1/model-preferences', 'GET', b)).data.preferences.quality, 'high');

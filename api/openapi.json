@@ -1516,7 +1516,8 @@
           "401": {
             "description": "Требуется токен"
           }
-        }
+        },
+        "description": "Account-shared admin strategy plus qualityLevels, textTasks, safe unavailableCode/unavailableReason, appOverride and effectivePlan task recipients/fallbacks. GET never rewrites manual/custom. recipientDisclosure.complete=false: task routes are not a complete data-processing consent descriptor."
       },
       "put": {
         "summary": "Сохранить автоматическую стратегию по качеству и API либо Custom",
@@ -1660,7 +1661,8 @@
           "401": {
             "description": "Требуется токен"
           }
-        }
+        },
+        "description": "Automatic body exactly {quality:\"high\",provider:\"auto\"}, without mode:\"automatic\". Custom uses the shared admin contract. Saves account policy/preset and clears the legacy app override in one transaction, preserving unrelated settings. Success returns the complete normalized GET plus success:true."
       }
     },
     "/photos": {
@@ -1795,6 +1797,133 @@
           },
           "default": {
             "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/profile/communication": {
+      "get": {
+        "summary": "Read canonical owner communication preferences",
+        "responses": {
+          "200": {
+            "description": "Full canonical profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunicationProfile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "503": {
+            "description": "communication_profile_unavailable: failed read/write is not an empty profile"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Patch only changed fields with compare-and-set; null is a durable clear",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "minProperties": 2,
+                "required": [
+                  "expectedRevision"
+                ],
+                "properties": {
+                  "expectedRevision": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80,
+                    "nullable": true
+                  },
+                  "address": {
+                    "type": "string",
+                    "enum": [
+                      "informal",
+                      "formal",
+                      null
+                    ],
+                    "nullable": true
+                  },
+                  "replyLength": {
+                    "type": "string",
+                    "enum": [
+                      "short",
+                      "detailed",
+                      null
+                    ],
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Full canonical profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunicationProfile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "503": {
+            "description": "communication_profile_unavailable: failed read/write is not an empty profile"
+          },
+          "400": {
+            "description": "invalid_communication_profile"
+          },
+          "409": {
+            "description": "revision_conflict with current profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "requestId",
+                    "profile"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "revision_conflict"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "profile": {
+                      "$ref": "#/components/schemas/CommunicationProfile"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -2712,6 +2841,142 @@
           "requestId": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "CommunicationProfile": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revision",
+          "name",
+          "address",
+          "replyLength"
+        ],
+        "properties": {
+          "revision": {
+            "type": "string"
+          },
+          "name": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "state",
+              "source",
+              "updatedAt"
+            ],
+            "properties": {
+              "value": {
+                "type": "string",
+                "nullable": true
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "known",
+                  "unknown"
+                ]
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "setting",
+                  "memory",
+                  null
+                ],
+                "nullable": true
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              }
+            }
+          },
+          "address": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "state",
+              "source",
+              "updatedAt"
+            ],
+            "properties": {
+              "value": {
+                "type": "string",
+                "enum": [
+                  "informal",
+                  "formal",
+                  null
+                ],
+                "nullable": true
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "known",
+                  "unknown"
+                ]
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "setting",
+                  "memory",
+                  null
+                ],
+                "nullable": true
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              }
+            }
+          },
+          "replyLength": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "state",
+              "source",
+              "updatedAt"
+            ],
+            "properties": {
+              "value": {
+                "type": "string",
+                "enum": [
+                  "short",
+                  "detailed",
+                  null
+                ],
+                "nullable": true
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "known",
+                  "unknown"
+                ]
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "setting",
+                  "memory",
+                  null
+                ],
+                "nullable": true
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              }
+            }
           }
         }
       }

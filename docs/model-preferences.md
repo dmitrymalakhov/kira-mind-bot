@@ -23,13 +23,17 @@
 
 `GET /api/v1/model-preferences` возвращает режим `automatic/manual/custom`, предпочтения, действующий план, три автоматических уровня, `providerPlans`, список `providers`, подключённый `catalog` и локальные роли без credentials. `manual` — совместимый старый профиль, в UI он представлен как Custom. Настройка ограничена аккаунтом; явный режим приложения имеет приоритет только в его диалоге.
 
+Мобильный ответ дополнительно содержит `qualityLevels`, `textTasks`, `appOverride` и `effectivePlan`: маршруты аккаунта и текущего app override с реальным provider/model/location и допустимыми fallback, отдельно `memoryEmbedding`. У недоступных вариантов есть безопасные `unavailableCode/unavailableReason`, без ENV-имён. `recipientDisclosure.complete:false` явно отмечает пробелы: endpoint identity, нетекстовая обработка и retention провайдеров не составляют полный descriptor согласия. Метаданные описывают текущую конфигурацию, не гарантируют будущий маршрут после изменения настроек.
+
 Автоматическая стратегия, `PUT /api/v1/model-preferences`:
 
 ```json
-{"quality":"high","provider":"openai"}
+{"quality":"high","provider":"auto"}
 ```
 
 `provider` необязателен; отсутствие или `auto` означает выбор системы. Разрешены `standard/high/maximum` и `auto/openai/gemini/zai/openrouter`.
+
+Для автоматического сохранения не передаётся `mode:"automatic"`. Успех API возвращает полный нормализованный GET с `success:true`. API сохраняет общую стратегию и снимает старое перекрытие `API_AI_MODEL_PRESET` в одной транзакции, сохраняя прочие настройки. GET ничего не переводит в automatic и не переписывает Custom. Ошибка записи отменяет обе части; запоздалое чтение старой политики не заполняет кеш следующего хода.
 
 Custom: `{mode:"custom", quality:"high", provider:"openai", routes:<все TEXT_TASKS>}`. Один провайдер (`openai/gemini/zai/openrouter/lmstudio`) применяется ко всем текстовым задачам. Каждый маршрут принимает строго `{model,maxTokens,reasoningEffort}`; отдельный provider внутри маршрута и прежний presetName не принимаются. Модель проверяется по подключённому каталогу выбранного провайдера, лимит 32–16384, рассуждения `none/low/medium/high`. Служебные подключения сервер определяет по провайдеру; они и действующий профиль памяти проверяются до записи. Локальные роли и произвольные ENV-ссылки не принимаются; сохраняется точный ID модели и её параметры.
 

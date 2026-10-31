@@ -1,6 +1,7 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import * as http from 'node:http';
 import { ApiBackend, ApiError, ApiOperationStore, released } from './contracts';
+import { CommunicationProfileConflict, parseCommunicationPatch } from '../services/communicationProfileService';
 import { ExternalApiOptions } from './options';
 import { parseSettingsPatch } from './settings';
 import { MAX_SCENE_BODY_BYTES, parseScenePlanCancel, parseScenePreparation, parseSceneTurn } from './scene';
@@ -70,6 +71,12 @@ export function createExternalApiServer(
             }
             const url = new URL(req.url ?? '/', 'http://localhost');
             const path = url.pathname;
+            if (path === `${PREFIX}/profile/communication` && backend.communicationProfile && backend.updateCommunicationProfile) {
+                if (req.method === 'GET') return json(200, await backend.communicationProfile());
+                if (req.method === 'PATCH') return json(200, await backend.updateCommunicationProfile(parseCommunicationPatch(await readBody(req))));
+                res.setHeader('Allow', 'GET, PATCH'); req.resume();
+                throw new ApiError(405, 'method_not_allowed', 'Ожидается GET или PATCH.');
+            }
             if (Date.now() - windowStarted >= 60_000) { windowStarted = Date.now(); requests = 0; browserRequests = 0; }
             if (path.startsWith(`${PREFIX}/browser/`)) {
                 if (++browserRequests > 360) { res.setHeader('Retry-After', '60'); throw new ApiError(429, 'rate_limited', 'Слишком много запросов браузера.'); }
@@ -264,7 +271,8 @@ export function createExternalApiServer(
                 : new ApiError(500, 'internal_error', 'Не удалось выполнить запрос.');
             if (!(error instanceof ApiError)) console.error(`[external-api] request=${requestId} failed`);
             if (!res.headersSent && !res.destroyed) {
-                json(safe.status, { error: { code: safe.code, message: safe.message }, requestId });
+                json(safe.status, { error: { code: safe.code, message: safe.message }, requestId,
+                    ...(error instanceof CommunicationProfileConflict ? { profile: error.profile } : {}) });
             }
         }
     });

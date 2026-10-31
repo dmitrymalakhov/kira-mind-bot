@@ -190,9 +190,9 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
                 } finally { connecting.delete(account.id); }
             }
             const readable = req.method === 'GET' && (/^\/api\/v1\/(status|capabilities|history|reminders|tasks|dialogue-jobs|settings|model-settings|model-preferences|scene)$/.test(route)
-                || /^\/api\/v1\/files\/[0-9a-f-]{36}$/.test(route));
+                || route === '/api/v1/profile/communication' || /^\/api\/v1\/files\/[0-9a-f-]{36}$/.test(route));
             const writable = (req.method === 'POST' && /^\/api\/v1\/(messages|actions|photos|scene\/turns|scene\/action-results)$/.test(route))
-                || (req.method === 'PATCH' && route === '/api/v1/settings')
+                || (req.method === 'PATCH' && ['/api/v1/settings', '/api/v1/profile/communication'].includes(route))
                 || (req.method === 'PUT' && ['/api/v1/model-settings', '/api/v1/model-preferences'].includes(route))
                 || (req.method === 'DELETE' && /^\/api\/v1\/dialogue-jobs\/[0-9a-f-]{36}$/.test(route));
             if (!readable && !writable && !browserRoute) throw new ApiError(404, 'not_found', 'Ресурс не найден.');

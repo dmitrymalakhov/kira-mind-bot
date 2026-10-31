@@ -1,6 +1,7 @@
 import { Bot, Context } from 'grammy';
 import { randomUUID } from 'node:crypto';
 import { readModelPreferences, saveModelPreferences } from '../services/modelPreferenceService';
+import { COMMUNICATION_CAPABILITY, CommunicationProfileService, type CommunicationPatch } from '../services/communicationProfileService';
 import type { Update, UserFromGetMe } from 'grammy/types';
 import { config } from '../config';
 import { BOT_CAPABILITIES } from '../capabilities';
@@ -76,13 +77,15 @@ export class BotApiBackend implements ApiBackend {
         const vision: VisionRoute = await this.photoRoute().catch((error: unknown) => ({ available: false,
             reason: error instanceof ApiError ? error.message : 'Не удалось определить модель для анализа фото.' }));
         return { input: ['text', 'actions', 'photo'], photo: { mime: ['image/jpeg'], maxBytes: MAX_PHOTO_BYTES, vision, notes: PHOTO_STORAGE_NOTE }, output: ['text', 'photo', 'document', 'voice'],
-            browserSession: this.browserSession.capability, settings: ['modelMode', 'modelPreferences'], scene: { version: 1 }, deferredDialogue: { preference: 'respond-async', results: '/api/v1/dialogue-jobs', cancellation: true }, capabilities: BOT_CAPABILITIES };
+            browserSession: this.browserSession.capability, profile: { communication: COMMUNICATION_CAPABILITY }, settings: ['modelMode', 'modelPreferences'], scene: { version: 1 }, deferredDialogue: { preference: 'respond-async', results: '/api/v1/dialogue-jobs', cancellation: true }, capabilities: BOT_CAPABILITIES };
     }
 
     settings() { return readUserSettings(); }
     modelPreferences() { return readModelPreferences(); }
     updateModelPreferences(body: unknown) { return saveModelPreferences(body); }
     updateSettings(patch: ApiSettingsPatch) { return updateUserSettings(patch); }
+    communicationProfile() { return new CommunicationProfileService(this.options.ownerId).read(); }
+    updateCommunicationProfile(patch: CommunicationPatch) { return new CommunicationProfileService(this.options.ownerId).patch(patch); }
     private sceneService?: SceneService;
     private get scene() { return this.sceneService ??= new SceneService(this.options.ownerId, this.models, this.sceneChannel()); }
     sceneCapabilities() { return this.scene.capabilities(); }
