@@ -12,6 +12,16 @@ function enabled(work: () => Promise<void>) {
 }
 
 describe('optional Decisions routing adapter', () => {
+    test('feedback and availability predicates request the evidence-capable JSON classifier', async t => {
+        t.mock.method(resolver, 'resolveModelForTaskAsync', async () => ({ presetName: 'gpt-balanced', modelRef: { provider: 'openai', model: 'synthetic-classifier' } }) as any);
+        let name = 'behavior_feedback';
+        t.mock.method(decisionAdapter, 'createDecision', async () => ({ model: 'gpt-6-luna', answers: [{ type: 'predicate', name, probability: .96 }] }) as any);
+        await enabled(async () => {
+            assert.equal(await classifyWithDecisions('Синтетическая поправка'), null);
+            name = 'availability';
+            assert.equal(await classifyWithDecisions('Синтетический выбор места'), null);
+        });
+    });
     test('does no work unless explicitly enabled', async t => {
         const previous = process.env.KIRA_DECISIONS_ENABLED; delete process.env.KIRA_DECISIONS_ENABLED;
         const resolve = t.mock.method(resolver, 'resolveModelForTaskAsync', async () => { throw new Error('Unexpected routing lookup'); });

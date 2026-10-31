@@ -158,7 +158,7 @@ export function ProductAnalyticsSection() {
         <Box sx={{ display: 'flex', alignItems: 'end', gap: .5, height: 160, overflowX: 'auto' }} role="img" aria-label="Число пользователей с подтверждённой пользой по дням">
           {data.daily.map(day => <Box key={day.date} title={`${day.date}: пользователей с пользой ${day.valueUsers}; обращений ${day.tasks}`} sx={{ flex: 1, minWidth: 7, height: '100%', display: 'flex', alignItems: 'end' }}>
             <Box sx={{ width: '100%', height: `${Math.max(2, 100 * day.valueUsers / Math.max(1, ...data.daily.map(item => item.valueUsers)))}%`, bgcolor: day.valueUsers ? 'primary.main' : 'action.hover', borderRadius: '3px 3px 0 0' }} />
-          </Box>)}</Box><Stack direction="row" justifyContent="space-between"><Typography variant="caption">{data.daily[0]?.date}</Typography><Typography variant="caption">{data.daily.at(-1)?.date}</Typography></Stack>
+          </Box>)}</Box><Stack direction="row" justifyContent="space-between"><Typography variant="caption">{data.daily[0]?.date}</Typography><Typography variant="caption">{data.daily[data.daily.length - 1]?.date}</Typography></Stack>
       </Paper>
       <Paper variant="outlined"><TableContainer><Table size="small"><TableHead><TableRow><TableCell>Сценарий</TableCell><TableCell>Обращения</TableCell><TableCell>Оценено</TableCell><TableCell>Подтверждённый успех</TableCell></TableRow></TableHead><TableBody>
         {data.scenarios.map(row => <TableRow key={row.scenario}><TableCell>{SCENARIOS[row.scenario]}</TableCell><TableCell>{row.tasks}</TableCell><TableCell>{row.assessed}</TableCell><TableCell>{pct(row.success)} · {sample(row.success)}</TableCell></TableRow>)}

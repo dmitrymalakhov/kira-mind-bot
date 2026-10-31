@@ -29,7 +29,9 @@ export interface MemoryRecallFocus {
 
 /** Retrieval outcome, separate from conversational summaries or assistant claims. */
 export interface MemoryRecallSummary {
-    state: 'found' | 'empty' | 'ambiguous' | 'unresolved' | 'unavailable';
+    state: 'found' | 'empty' | 'partial' | 'ambiguous' | 'unresolved' | 'unavailable';
+    /** Availability of attempted reads, never completeness of the whole archive. */
+    readCoverage?: MemoryReadCoverage;
     requestKind?: MemoryQueryPlan['requestKind'];
     subjects: Array<{ name: string; owner: boolean }>;
     domains: string[];
@@ -39,6 +41,12 @@ export interface MemoryRecallSummary {
     noNewEvidenceInPool?: boolean;
     /** Only a successful scoped typed-relation resolver may set this flag. */
     identityVerified?: boolean;
+}
+
+export interface MemoryReadCoverage {
+    status: 'available' | 'partial' | 'unavailable';
+    succeeded: number;
+    failed: number;
 }
 
 export interface MemoryRelationStep {
@@ -60,6 +68,7 @@ export interface MemoryQueryPlan {
     contextQueries: string[];
     standaloneQuery?: string;
     requestKind?: 'identity' | 'overview' | 'relationship' | 'highlight' | 'people_list' | 'specific';
+    /** A collection, or related people supplementing an owner's topic overview. */
     peopleQuery?: { basis: 'relationships' | 'communication' | 'both'; relations: MemoryRelationStep[] };
     /** Validated memory domains for the explicitly requested topic, never identities. */
     domains?: string[];

@@ -6,6 +6,7 @@ import { devLog, parseLLMJson } from '../utils';
 import { getVectorService } from './VectorServiceFactory';
 import { isEligibleForUserSynthesis } from '../utils/userSynthesisFilter';
 import { replaceDerivedMemories } from './derivedMemoryReplacement';
+import { snapshotMemorySources } from '../utils/derivedMemoryFreshness';
 
 const CHAPTER_TAG = 'memory-chapter';
 const DEFAULT_LIMIT = 600;
@@ -241,7 +242,7 @@ async function readExistingChapters(userId: string, chapterKey: string, domain: 
     if (!svc) return [];
 
     const tag = `chapter_key:${chapterKey}`;
-    const existing = await svc.getMemoriesByTag(userId, CHAPTER_TAG);
+    const existing = await svc.getMemoriesByTag(userId, CHAPTER_TAG, { includeStaleDerived: true });
     return existing.filter((memory) =>
         memory.domain === domain &&
         (memory.tags ?? []).includes(tag)
@@ -352,6 +353,7 @@ export async function runMemoryConsolidationForUser(
                 specificity: Math.min(1, 0.45 + (chapter.entities?.length ?? 0) * 0.025 + sourceIds.length * 0.004),
                 sourceContext: `Сводная глава по ${sources.length} воспоминаниям домена ${domain} за ${periodDays} дней.`,
                 sourceMemoryIds: sourceIds,
+                sourceMemorySnapshots: snapshotMemorySources(sources, sourceIds),
                 extractionMethod: 'consolidation',
                 subject: 'user',
                 predicate: `memory_chapter:${domain}`,

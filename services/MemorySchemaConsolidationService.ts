@@ -6,6 +6,7 @@ import { devLog, parseLLMJson } from '../utils';
 import { getVectorService } from './VectorServiceFactory';
 import { isEligibleForUserSynthesis } from '../utils/userSynthesisFilter';
 import { replaceDerivedMemories } from './derivedMemoryReplacement';
+import { snapshotMemorySources } from '../utils/derivedMemoryFreshness';
 
 const SCHEMA_TAG = 'memory-schema';
 const SCHEMA_SET_TAG = 'schema_set:user-model-v1';
@@ -358,7 +359,7 @@ async function readExistingSchemas(userId: string, domain?: string) {
     const svc = getVectorService();
     if (!svc) return [];
     const normalizedDomain = domain ? normalizeDomain(domain) : undefined;
-    const existing = await svc.getMemoriesByTag(userId, SCHEMA_SET_TAG);
+    const existing = await svc.getMemoriesByTag(userId, SCHEMA_SET_TAG, { includeStaleDerived: true });
     return normalizedDomain
         ? existing.filter((memory) =>
             normalizeDomain(memory.domain) === normalizedDomain ||
@@ -456,6 +457,7 @@ export async function runMemorySchemaConsolidationForUser(
             specificity: Math.min(1, 0.46 + schema.entities.length * 0.025 + sourceIds.length * 0.004),
             sourceContext: `Синтезированная модель пользователя по ${sources.length} воспоминаниям за ${periodDays} дней.`,
             sourceMemoryIds: sourceIds,
+            sourceMemorySnapshots: snapshotMemorySources(sources, sourceIds),
             extractionMethod: 'consolidation',
             subject: 'user',
             predicate: `user_schema:${schema.dimension}`,

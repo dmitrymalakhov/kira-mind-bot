@@ -7,6 +7,7 @@ import { createChatCompletionForTask } from '../ai/chatCompletion';
 import { devLog, parseLLMJson } from '../utils';
 import { isEligibleForUserSynthesis } from '../utils/userSynthesisFilter';
 import { memoryAssertionVersion } from '../utils/memoryProvenance';
+import { snapshotMemorySources } from '../utils/derivedMemoryFreshness';
 
 const OPEN_LOOP_INDEX_TAG = 'sleep_open_loop_index';
 const UNCERTAINTY_INDEX_TAG = 'sleep_uncertainty_index';
@@ -301,18 +302,7 @@ export async function runMemorySleepCycleForUser(userId: string): Promise<SleepC
 
     const skipped: string[] = [];
     const recent = await svc.getRecentMemories(userId, 700);
-    const openLoops = recent
-        .filter(isOpenLoopCandidate)
-        .sort((a, b) => rankOpenLoop(b) - rankOpenLoop(a))
-        .slice(0, MAX_OPEN_LOOP_SOURCES);
-    const uncertaintyCandidates = recent
-        .filter(isUncertaintyCandidate)
-        .sort((a, b) => rankUncertainty(b) - rankUncertainty(a))
-        .slice(0, MAX_UNCERTAINTY_SOURCES);
-
-    if (openLoops.length < 3) {
-        skipped.push(`open-loops: only ${openLoops.length}/3`);
-    }
+    const softened = new Map<string, MemoryEntry>();
 
     let openLoopIndexCreated = false;
     let uncertaintyIndexCreated = false;
@@ -324,7 +314,11 @@ export async function runMemorySleepCycleForUser(userId: string): Promise<SleepC
             .sort((a, b) => rankUncertainty(b) - rankUncertainty(a))
             .slice(0, 25);
         const results = await Promise.allSettled(
-            staleTemporal.map((memory) => svc.updateMemory(memory.id, memory.domain, softenTemporalMemory(memory, userId), { expectedAssertion: memoryAssertionVersion(memory) }))
+            staleTemporal.map(async memory => {
+                const patch = softenTemporalMemory(memory, userId);
+                await svc.updateMemory(memory.id, memory.domain, patch, { expectedAssertion: memoryAssertionVersion(memory) });
+                softened.set(memory.id, { ...memory, ...patch });
+            })
         );
         staleFactsSoftened = results.filter((result) => result.status === 'fulfilled').length;
         if (staleFactsSoftened > 0) {
@@ -335,6 +329,19 @@ export async function runMemorySleepCycleForUser(userId: string): Promise<SleepC
         skipped.push('stale-temporal-softening-failed');
     }
 
+    // Synthesize from acknowledged mutations, not the older pre-softening scan.
+    // A concurrent correction still invalidates the resulting snapshot at recall.
+    const current = recent.map(memory => softened.get(memory.id) ?? memory);
+    const openLoops = current
+        .filter(isOpenLoopCandidate)
+        .sort((a, b) => rankOpenLoop(b) - rankOpenLoop(a))
+        .slice(0, MAX_OPEN_LOOP_SOURCES);
+    const uncertaintyCandidates = current
+        .filter(isUncertaintyCandidate)
+        .sort((a, b) => rankUncertainty(b) - rankUncertainty(a))
+        .slice(0, MAX_UNCERTAINTY_SOURCES);
+    if (openLoops.length < 3) skipped.push(`open-loops: only ${openLoops.length}/3`);
+
     try {
         if (openLoops.length >= 3) {
             const index = await synthesizeOpenLoopIndex(openLoops);
@@ -342,7 +349,7 @@ export async function runMemorySleepCycleForUser(userId: string): Promise<SleepC
             if (!summary) {
                 skipped.push('empty-open-loop-index');
             } else {
-                const previous = await svc.getMemoriesByTag(userId, OPEN_LOOP_INDEX_TAG);
+                const previous = await svc.getMemoriesByTag(userId, OPEN_LOOP_INDEX_TAG, { includeStaleDerived: true });
                 const now = new Date();
                 const priorities = Array.isArray(index?.priorities) ? index!.priorities.filter(Boolean).slice(0, 12) : [];
                 const stale = Array.isArray(index?.staleOrUnclear) ? index!.staleOrUnclear.filter(Boolean).slice(0, 8) : [];
@@ -366,6 +373,7 @@ export async function runMemorySleepCycleForUser(userId: string): Promise<SleepC
                     lastAccessedAt: now,
                     sourceContext: `Индекс собран sleep-cycle по ${openLoops.length} активным целям/планам/обещаниям.`,
                     sourceMemoryIds: openLoops.map(memory => memory.id),
+                    sourceMemorySnapshots: snapshotMemorySources(openLoops),
                     extractionMethod: 'consolidation',
                     subject: 'user',
                     predicate: 'open_loop_index',
@@ -397,7 +405,7 @@ export async function runMemorySleepCycleForUser(userId: string): Promise<SleepC
             if (!summary) {
                 skipped.push('empty-uncertainty-index');
             } else {
-                const previous = await svc.getMemoriesByTag(userId, UNCERTAINTY_INDEX_TAG);
+                const previous = await svc.getMemoriesByTag(userId, UNCERTAINTY_INDEX_TAG, { includeStaleDerived: true });
                 const now = new Date();
                 const cues = Array.isArray(index?.clarificationCues) ? index!.clarificationCues.filter(Boolean).slice(0, 12) : [];
                 const stale = Array.isArray(index?.likelyStale) ? index!.likelyStale.filter(Boolean).slice(0, 8) : [];
@@ -422,6 +430,7 @@ export async function runMemorySleepCycleForUser(userId: string): Promise<SleepC
                     lastAccessedAt: now,
                     sourceContext: `Индекс сомнений собран sleep-cycle по ${uncertaintyCandidates.length} слабым/устаревающим воспоминаниям.`,
                     sourceMemoryIds: uncertaintyCandidates.map(memory => memory.id),
+                    sourceMemorySnapshots: snapshotMemorySources(uncertaintyCandidates),
                     extractionMethod: 'consolidation',
                     subject: 'user',
                     predicate: 'memory_uncertainty_index',

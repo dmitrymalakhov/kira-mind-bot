@@ -8,6 +8,8 @@ import { validMemoryFocus, isMemoryContinuation, saveMemoryFocus, memoryQueryHis
 import { memoryContentExcerpt } from './memoryRanking';
 import { tokenizeMemoryRetrievalText, scoreMemoryLexicalMatch } from './memoryRetrieval';
 import { isPersonRoleLabel, PERSON_RELATION_QUERY_SUBTYPES, INVERSE_PERSON_RELATION_TYPES, SYMMETRIC_PERSON_RELATION_TYPES } from './personRelation';
+import { readOwnerRecallSupplement, formatOwnerSourcedEvidence } from './ownerRecallEvidence';
+import { memoryReadIncomplete, readMemoryOr } from './memoryReadCoverage';
 
 export function personRecallScope(person: MemoryPerson): ContactIdentityScope {
     return { status: 'resolved', queryName: person.displayName, displayName: person.displayName,
@@ -21,7 +23,7 @@ export async function resolveNamedMemoryPerson(owner: string, mention: string): 
     const contact = resolveContactIdentity(mention);
     if (contact.status === 'ambiguous') return { ambiguous: true };
     const contactId = contact.status === 'resolved' && contact.contact ? String(contact.contact.id) : undefined;
-    const rawCandidates = await findPersonIdentitiesForRecall(owner, mention, contactId);
+    const rawCandidates = await readMemoryOr(() => findPersonIdentitiesForRecall(owner, mention, contactId), []);
     const candidates = rawCandidates.filter(candidate => contactId ||
         [candidate.displayName, ...(candidate.aliases ?? [])].some(alias => recallPersonNameMatches(alias, mention)));
     const groups = new Map<string, typeof candidates>();
@@ -50,6 +52,8 @@ export async function followMemoryRelations(service: IDomainVectorService, owner
         const inverse = INVERSE_PERSON_RELATION_TYPES[step.type];
         if (inverse) variants.push({ type: inverse, direction: direction === 'in' ? 'out' : 'in' });
         const matches = await Promise.all(variants.map(variant => recallOwnerRelationship(service, owner, '', Date.now(), { step: variant, anchor: person, identities: readPersonIdentities, referenceText: index === path.length - 1 ? referenceText : undefined })));
+        if (matches.some(match => match.ambiguous)) return { memories: [...memories.values()], ambiguous: true };
+        if (matches.some(match => match.unavailable)) return { memories: [...memories.values()], ambiguous: false };
         const resolved = matches.filter(match => match.complete && match.person);
         if (matches.some(match => match.context && !match.complete)) return { memories: [...memories.values()], ambiguous: true };
         const keys = new Set(resolved.map(match => personKey(match.person!)));
@@ -154,9 +158,9 @@ export function isUsablePersonEvidence(memory: SearchResult, person: MemoryPerso
 export async function readPersonEvidence(service: IDomainVectorService, owner: string, person: MemoryPerson, domains: string[] = []): Promise<SearchResult[]> {
     const eligibility = { acceptCandidate: (record: SearchResult) => isUsablePersonEvidence(record, person) && (!domains.length || domains.includes(record.domain)) };
     if (person.owner) {
-        const records = service.getOwnerMemories ? await service.getOwnerMemories(owner, domains, 300, eligibility) :
+        const records = await readMemoryOr(async () => service.getOwnerMemories ? await service.getOwnerMemories(owner, domains, 300, eligibility) :
             service.getMemoriesByTags ? await service.getMemoriesByTags(owner, ['subject:user', 'person_id:user'], 300, eligibility) :
-                await service.getMemoriesByTag(owner, 'subject:user');
+                await service.getMemoriesByTag(owner, 'subject:user'), []);
         return [...new Map(records.filter(record => isUsablePersonEvidence(record, person) && (!domains.length || domains.includes(record.domain)))
             .map(record => [record.id, record])).values()];
     }
@@ -165,8 +169,8 @@ export async function readPersonEvidence(service: IDomainVectorService, owner: s
         `contact_name:${person.displayName}`, `contact:${person.displayName}`,
         ...(person.username ? [`contact_username:@${person.username.replace(/^@/, '')}`, `contact_username:${person.username.replace(/^@/, '')}`] : []),
     ];
-    const records = service.getMemoriesByTags ? await service.getMemoriesByTags(owner, tags, 300, eligibility) :
-        (await Promise.all(tags.map(tag => service.getMemoriesByTag(owner, tag)))).flat();
+    const records = await readMemoryOr(async () => service.getMemoriesByTags ? await service.getMemoriesByTags(owner, tags, 300, eligibility) :
+        (await Promise.all(tags.map(tag => readMemoryOr(() => service.getMemoriesByTag(owner, tag), [])))).flat(), []);
     // An edge may be stored on its other endpoint and have no person_id/contact_id
     // tag for this person. Read endpoint tags explicitly instead of scanning all edges.
     const endpointTags = person.personIds.filter(id => id !== 'user').slice(0, 12)
@@ -174,10 +178,10 @@ export async function readPersonEvidence(service: IDomainVectorService, owner: s
     const relations: SearchResult[] = [];
     for (let start = 0; start < endpointTags.length; start += 16) {
         const batch = endpointTags.slice(start, start + 16);
-        relations.push(...(service.getMemoriesByTags ? await service.getMemoriesByTags(owner, batch, 100, {
+        relations.push(...(service.getMemoriesByTags ? await readMemoryOr(() => service.getMemoriesByTags!(owner, batch, 100, {
             acceptCandidate: record => record.tags.includes('person_relation') && eligibility.acceptCandidate(record),
-        }).catch(() => []) :
-            (await Promise.all(batch.map(tag => service.getMemoriesByTag(owner, tag).catch(() => [])))).flat())
+        }), []) :
+            (await Promise.all(batch.map(tag => readMemoryOr(() => service.getMemoriesByTag(owner, tag), [])))).flat())
             .filter(record => record.tags.includes('person_relation')));
     }
     return [...new Map([...relations, ...records].filter(eligibility.acceptCandidate).map(record => [record.id, record])).values()].slice(0, 400);
@@ -190,12 +194,15 @@ export async function readUnresolvedOwnerRelationEvidence(service: IDomainVector
     if (refs.length !== 1 || refs[0].kind !== 'person' || refs[0].from !== 'owner' || refs[0].relationPath.length !== 1) return undefined;
     const person: MemoryPerson = { owner: true, personIds: ['user'], displayName: 'владелец диалога', evidenceIds: [] };
     const query = [...plan.answerQueries, question].join(' ');
-    const records = (await readPersonEvidence(service, owner, person, plan.domains ?? [])).filter(record =>
+    const [ownerRecords, supplement] = await Promise.all([readPersonEvidence(service, owner, person, plan.domains ?? []), readOwnerRecallSupplement(service, owner, plan, question)]);
+    const records = [...new Map([...ownerRecords, ...supplement.direct].map(record => [record.id, record])).values()].filter(record =>
         !['chapter', 'episode'].includes(record.memoryKind ?? '') && !/^(?:user_schema|memory_chapter):/.test(record.predicate ?? '') &&
         scoreMemoryLexicalMatch(record.content, query).score > 0);
     const selected = selectPersonEvidence(records, person, query, false, 8);
-    if (!selected.length) return undefined;
-    const packed = formatPersonOverview([{ person, records: selected }], 4500);
+    const sourced = formatOwnerSourcedEvidence(supplement.sourced);
+    if (!selected.length && !sourced.included.length) return undefined;
+    const packed = formatPersonOverview([{ person, records: selected }], 4500 - sourced.context.length - 2);
+    if (sourced.context) { packed.context += '\n\n' + sourced.context; packed.included.push(...sourced.included); }
     return { context: 'Каноническая личность по связи не установлена. Ниже — сохранённые факты о владельце, которые могут прямо отвечать на вопрос. Используй буквальное содержание, субъекта, отрицание и время. Отсутствие ребра графа не означает отсутствие имени в этих фактах. Не выдумывай личность или связь; неоднозначность и противоречия обозначай явно.\n' + packed.context,
         included: packed.included };
 }
@@ -316,5 +323,6 @@ export function formatPersonOverview(people: Array<{ person: MemoryPerson; recor
 }
 
 export function rememberResolvedSearch(ctx: BotContext, entities: MemoryEntityResolution, records: Array<{ id: string }>, plan?: MemoryQueryPlan): void {
+    if (memoryReadIncomplete()) return;
     saveMemoryFocus(ctx, entities.people, entities.query, [...entities.memories.map(record => record.id), ...records.map(record => record.id)], Date.now(), plan);
 }

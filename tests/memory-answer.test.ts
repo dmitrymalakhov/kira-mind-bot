@@ -44,12 +44,12 @@ test('owner topic follow-up stays scoped without requiring a new self pronoun', 
     const context = ctx(); const owner = { ...person, personIds: ['user'], contactId: undefined, owner: true };
     const first = { ...plan(), references: [{ kind: 'person' as const, from: 'owner' as const, mention: 'мою', relationPath: [] }] };
     saveMemoryFocus(context, [owner], 'Что знаешь про мою работу?', ['old'], Date.now(), first);
-    let domains: string[] = [];
+    const domains: string[][] = [];
     t.mock.method(vector, 'getVectorService', () => ({ getOwnerMemories: async (_owner: string, selected: string[]) => {
-        domains = selected; return [{ ...fact('new', 'work', 'Владелец разрабатывает тестовый компилятор.'), subject: 'user', tags: ['subject:user'] }];
+        domains.push(selected); return [{ ...fact('new', 'work', 'Владелец разрабатывает тестовый компилятор.'), subject: 'user', tags: ['subject:user'] }];
     } } as any));
     const result = await getMultiQueryMemoryContextDetailed(context, 'А что ещё?', 'full', { queryPlan: { answerQueries: ['другие подробности'], contextQueries: [], requestKind: 'overview' }, trackAccess: false });
-    assert.deepEqual(domains, ['work']); assert.equal(result.recall?.state, 'found'); assert.equal(result.recall?.subjects[0].owner, true);
+    assert.deepEqual(domains, [['work'], ['work', 'general']]); assert.equal(result.recall?.state, 'found'); assert.equal(result.recall?.subjects[0].owner, true);
     assert.deepEqual(validMemoryFocus(context)?.domains, ['work']);
 });
 
@@ -100,8 +100,8 @@ test('ambiguous identity has a distinct outcome and cannot be rendered as an emp
 test('a topic-shaped follow-up keeps the owner as subject instead of dropping attribution', async t => {
     const context = ctx(), owner = { ...person, personIds: ['user'], contactId: undefined, owner: true };
     saveMemoryFocus(context, [owner], 'Мои рабочие проекты', ['old'], Date.now(), plan());
-    t.mock.method(vector, 'getVectorService', () => ({ getOwnerMemories: async (_owner: string, domains: string[]) => {
-        assert.deepEqual(domains, ['work']); return [{ ...fact('work', 'work', 'Пользователь ведёт учебный проект.'), subject: 'user', tags: ['subject:user'] }];
+    t.mock.method(vector, 'getVectorService', () => ({ getOwnerMemories: async (_owner: string, domains: string[], limit: number) => {
+        assert.deepEqual(domains, limit === 120 ? ['work', 'general'] : ['work']); return [{ ...fact('work', 'work', 'Пользователь ведёт учебный проект.'), subject: 'user', tags: ['subject:user'] }];
     } } as any));
     const result = await getMultiQueryMemoryContextDetailed(context, 'Расскажи об этом подробнее', 'full', { trackAccess: false,
         queryPlan: { answerQueries: ['подробности'], contextQueries: [], requestKind: 'overview', references: [{ kind: 'topic', from: 'focus', mention: 'этом', relationPath: [] }] } });
@@ -214,7 +214,7 @@ test('specific retrieval preserves subject, negation and temporal status in the 
 });
 
 test('answer eval rejects blanket refusals and missing facets rather than rewarding context hits', () => {
-    const cases = memoryAnswerEvalCases(); assert.equal(cases.length, 12);
+    const cases = memoryAnswerEvalCases(); assert.equal(cases.length, 15);
     const byId = (id: string) => { const item = cases.find(value => value.id === id); assert.ok(item, id); return item; };
     assert.equal(checkMemoryAnswer(byId('owner-work-breadth'), 'Почти ничего не знаю.').passed, false);
     assert.equal(checkMemoryAnswer(byId('owner-work-breadth'), 'Ты разрабатываешь компиляторы.').passed, false);
@@ -224,6 +224,10 @@ test('answer eval rejects blanket refusals and missing facets rather than reward
     assert.equal(checkMemoryAnswer(byId('empty-is-not-never-told'), 'В найденных сведениях не указано, какая у тебя любимая настольная игра.').passed, true);
     assert.equal(checkMemoryAnswer(byId('owner-role-without-edge'), 'Твою дочь зовут Вера Учебная.').passed, true);
     assert.equal(checkMemoryAnswer(byId('owner-role-without-edge'), 'Имя не найдено.').passed, false);
+    assert.equal(checkMemoryAnswer(byId('read-unavailable-is-not-empty'), 'В памяти нет сведений.').passed, false);
+    assert.equal(checkMemoryAnswer(byId('read-unavailable-is-not-empty'), 'Сейчас не удалось проверить память.').passed, true);
+    assert.equal(checkMemoryAnswer(byId('read-partial-keeps-evidence'), 'Ты разрабатываешь учебный симулятор. Поиск пока неполный.').passed, true);
+    assert.equal(checkMemoryAnswer(byId('read-failed-continuation'), 'Больше ничего нового нет.').passed, false);
 });
 
 test('broad owner activity can include direct conversations as separate evidence without promoting contact facts', async t => {

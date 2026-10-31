@@ -3,46 +3,51 @@ import { In } from 'typeorm';
 import { PersonIdentityEntity } from '../entity/PersonIdentityEntity';
 import type { Contact } from '../stores/ContactsStore';
 import { config } from '../config';
+import { observeMemoryRead, recordMemoryReadFailure } from '../utils/memoryReadCoverage';
 
 /** Read-only lookup; an old edge cannot authorize reading a different owner's identity. */
 export async function readPersonIdentities(ownerUserId: string, ids: string[]): Promise<PersonIdentityEntity[]> {
     const valid = [...new Set(ids)].filter(id => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)).slice(0, 24);
-    if (!AppDataSource.isInitialized || !valid.length) return [];
-    return AppDataSource.getRepository(PersonIdentityEntity).find({ where: {
+    if (!valid.length) return [];
+    if (!AppDataSource.isInitialized) { recordMemoryReadFailure(new Error('Identity store unavailable')); return []; }
+    return observeMemoryRead(() => AppDataSource.getRepository(PersonIdentityEntity).find({ where: {
         id: In(valid), profile: config.botUsername.toLowerCase(), ownerUserId,
-    } });
+    } }));
 }
 
 /** Scoped directory for read-only collections; the extra row signals a bounded result. */
 export async function listPersonIdentitiesForRecall(ownerUserId: string): Promise<PersonIdentityEntity[]> {
-    if (!AppDataSource.isInitialized) return [];
-    return AppDataSource.getRepository(PersonIdentityEntity).createQueryBuilder('person')
+    if (!AppDataSource.isInitialized) { recordMemoryReadFailure(new Error('Identity store unavailable')); return []; }
+    return observeMemoryRead(() => AppDataSource.getRepository(PersonIdentityEntity).createQueryBuilder('person')
         .where('person.profile = :profile AND person.ownerUserId = :ownerUserId', { profile: config.botUsername.toLowerCase(), ownerUserId })
-        .orderBy('person.displayName', 'ASC').take(201).getMany();
+        .orderBy('person.displayName', 'ASC').take(201).getMany());
 }
 
 /** Candidate lookup only; no aliases, mention times or identities are written. */
 export async function findPersonIdentitiesForRecall(ownerUserId: string, name: string, contactId?: string): Promise<PersonIdentityEntity[]> {
-    if (!AppDataSource.isInitialized || name.length > 120) return [];
-    const query = AppDataSource.getRepository(PersonIdentityEntity).createQueryBuilder('person')
-        .where('person.profile = :profile AND person.ownerUserId = :ownerUserId', { profile: config.botUsername.toLowerCase(), ownerUserId });
-    if (contactId) return query.andWhere('person.telegramContactId = :contactId', { contactId }).take(12).getMany();
-    const exact = await query.clone().andWhere(`(lower(person.displayName) = lower(:name) OR EXISTS (
-        SELECT 1 FROM jsonb_array_elements_text(person.aliases) alias(value) WHERE lower(alias.value) = lower(:name)
-    ))`, { name }).take(12).getMany();
-    if (exact.length) return exact;
-    const words = name.replace(/^@/, '').split(/\s+/).filter(Boolean);
-    if (!words.length) return [];
-    // A surname or a name component is only a read-only candidate. Recall validates
-    // it against aliases and rejects different identities; persistence never uses this.
-    for (const [index, word] of words.slice(0, 3).entries()) {
-        const prefix = word.toLocaleLowerCase('ru-RU').replace(/[^\p{L}]/gu, '').slice(0, Math.max(3, word.length - 3));
-        if (prefix.length < 3) return [];
-        query.andWhere(`(lower(person.displayName) LIKE :part${index} OR EXISTS (
-            SELECT 1 FROM jsonb_array_elements_text(person.aliases) alias(value) WHERE lower(alias.value) LIKE :part${index}
-        ))`, { [`part${index}`]: `%${prefix}%` });
-    }
-    return query.take(12).getMany();
+    if (name.length > 120) return [];
+    if (!AppDataSource.isInitialized) { recordMemoryReadFailure(new Error('Identity store unavailable')); return []; }
+    return observeMemoryRead(async () => {
+        const query = AppDataSource.getRepository(PersonIdentityEntity).createQueryBuilder('person')
+            .where('person.profile = :profile AND person.ownerUserId = :ownerUserId', { profile: config.botUsername.toLowerCase(), ownerUserId });
+        if (contactId) return query.andWhere('person.telegramContactId = :contactId', { contactId }).take(12).getMany();
+        const exact = await query.clone().andWhere(`(lower(person.displayName) = lower(:name) OR EXISTS (
+            SELECT 1 FROM jsonb_array_elements_text(person.aliases) alias(value) WHERE lower(alias.value) = lower(:name)
+        ))`, { name }).take(12).getMany();
+        if (exact.length) return exact;
+        const words = name.replace(/^@/, '').split(/\s+/).filter(Boolean);
+        if (!words.length) return [];
+        // A surname or a name component is only a read-only candidate. Recall validates
+        // it against aliases and rejects different identities; persistence never uses this.
+        for (const [index, word] of words.slice(0, 3).entries()) {
+            const prefix = word.toLocaleLowerCase('ru-RU').replace(/[^\p{L}]/gu, '').slice(0, Math.max(3, word.length - 3));
+            if (prefix.length < 3) return [];
+            query.andWhere(`(lower(person.displayName) LIKE :part${index} OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements_text(person.aliases) alias(value) WHERE lower(alias.value) LIKE :part${index}
+            ))`, { [`part${index}`]: `%${prefix}%` });
+        }
+        return query.take(12).getMany();
+    });
 }
 
 /** Full stored names in bounded dialogue context are search cues, never new facts. */

@@ -508,13 +508,14 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
             case 'webSearch': {
                 await notifyProgress('webSearch');
                 const webRes = await safeStep('webSearch', () => webSearchAgent(
-                    message, isForwarded, forwardFrom, messageHistory, enrichedContextFromMemory || ''
+                    message, isForwarded, forwardFrom, messageHistory, enrichedContextFromMemory || '',
+                    { verifyAvailability: classification.details.externalVerification === 'availability' }
                 ));
                 if (webRes === null || !webRes.webSearchSucceeded) {
                     // Безопасно продолжаем только к conversation: action-шаги
                     // могут зависеть от отсутствующих данных поиска.
                     console.warn('[ORCH] webSearch failed, continuing without search context');
-                    enrichedContextFromMemory += '\n[Поиск временно недоступен]\n';
+                    enrichedContextFromMemory += `\n[Актуальные сведения не проверены]\n${webRes?.responseText || 'Поиск временно недоступен'}\n`;
                     if (!nextStep) {
                         if (webRes) {
                             webRes.botReaction = classification.details?.botReaction;

@@ -43,6 +43,8 @@ import { looksLikeKiraRelocationRequest } from "./utils/kiraResidence";
 import { config } from "./config";
 import type { RichBlock } from './utils/richMessage';
 import { canUseFastDialogue, fastDialogueInstructions, tryFastDialogueResult } from './orchestration/fastDialogue';
+import { getBehaviorMemoryContext, learnBehaviorFromFeedback, type BehaviorLearningStatus } from './services/behaviorMemoryService';
+import { isMcpRequest } from './orchestration/runtime/authorization';
 import { mcpClassifierContext, readMcpConfig, type McpConfig } from './services/mcp/config';
 import { normalizeMcpSelection } from './orchestration/mcpSelection';
 import type { FastReplyDecision } from './types/dialogueJobTypes';
@@ -82,6 +84,11 @@ export interface MessageClassification {
     }>;
     confidenceLevel: "ВЫСОКИЙ" | "СРЕДНИЙ" | "НИЗКИЙ";
     details: {
+        behavioralFeedback?: { evidence: string };
+        externalVerification?: 'availability';
+        /** Server-provided procedural context and confirmed persistence result, never model authority. */
+        behaviorContext?: string;
+        behaviorLearningStatus?: BehaviorLearningStatus;
         category?: string;
         keywords?: string[];
         emotionalTone?: string;
@@ -542,6 +549,7 @@ export async function classifyMessage(
     knownChatGroups?: { name: string; chatNames: string[] }[],
     fastDialogue?: { topic?: string },
     pendingProfile?: ReturnType<typeof pendingTelegramProfileQuestion>,
+    behavior?: { context: string; reply?: string },
 ): Promise<MessageClassification> {
     try {
         // Текущая дата и время для контекста
@@ -558,11 +566,13 @@ export async function classifyMessage(
         let mcpConfiguration: McpConfig = {};
         try { mcpConfiguration = readMcpConfig(); } catch { /* Discovery reports invalid configuration without exposing credentials. */ }
         const mcpContext = mcpClassifierContext(() => mcpConfiguration);
-        const prompt = buildIntentClassifierInput({ message, dateTime: formattedDateTime, mcpContext, isForwarded, forwardFrom, messageHistory, knownChatGroups, pendingProfile });
+        const prompt = buildIntentClassifierInput({ message, dateTime: formattedDateTime, mcpContext, isForwarded, forwardFrom, messageHistory, knownChatGroups, pendingProfile }) +
+            (behavior?.context ? `\n${behavior.context}` : '') +
+            (behavior?.reply ? `\nСообщение, на которое отвечает владелец (данные, автор указан отдельно): ${behavior.reply.slice(0, 3000)}` : '');
 
         // Короткие реплики зависят от предыдущих ходов, поэтому история входит
         // в ключ кэша и не может переиспользовать чужую контекстную классификацию.
-        const cacheKey = `${buildClassificationCacheKey(message, messageHistory, knownChatGroups ?? [])}${decisionsEnabled() && orchestrationMode() === 'skills' ? ':decisions' : ''}:${mcpContext}:${JSON.stringify(pendingProfile ?? null)}`;
+        const cacheKey = `${buildClassificationCacheKey(message, messageHistory, knownChatGroups ?? [])}${decisionsEnabled() && orchestrationMode() === 'skills' ? ':decisions' : ''}:${mcpContext}:${JSON.stringify(pendingProfile ?? null)}:${JSON.stringify(behavior ?? null)}`;
         const cached = fastDialogue ? undefined : llmCache.get<MessageClassification>(cacheKey);
         if (cached) {
             devLog('classifyMessage: cache hit');
@@ -651,7 +661,7 @@ async function processMessageInternal(
             const continuation = await continueQuestionRuntime(ctx, originalMessage, {}, replyContext?.text);
             if (continuation) return continuation;
         }
-        const knowledgeDecision = decideKnowledgeSource(
+        let knowledgeDecision = decideKnowledgeSource(
             options.knowledgeSourceText ?? originalMessage,
             replyContext,
             options.turn?.currentTopic,
@@ -820,7 +830,12 @@ async function processMessageInternal(
         const contextualFollowUp = !deterministicReminderClassification && !deterministicSelfPhotoClassification && !deterministicRelocationClassification && !explicitRemember
             ? decideContextualFollowUp(originalMessage, messageHistory)
             : null;
-        const deterministicContextualClassification: MessageClassification | null = contextualFollowUp
+        // External continuations need the same semantic availability decision as a new request.
+        // Keep their known source even if the classifier only sees a short "подробнее".
+        if (contextualFollowUp?.knowledgeSource === 'external_current') knowledgeDecision = {
+            source: 'external_current', requiresWeb: true, requestedFacets: contextualFollowUp.requestedFacets, reason: contextualFollowUp.reason,
+        };
+        const deterministicContextualClassification: MessageClassification | null = contextualFollowUp?.knowledgeSource === 'stable_general'
             ? {
                 intent: contextualFollowUp.intent,
                 confidenceLevel: "ВЫСОКИЙ",
@@ -846,6 +861,7 @@ async function processMessageInternal(
             intent: 'РАЗГОВОР', confidenceLevel: 'ВЫСОКИЙ',
             details: { responseComplexity: 'routine', memoryNeed: 'none', relationshipRole: null },
         } : null;
+        const behaviorContext = await getBehaviorMemoryContext(ctx);
         let classification = deterministicReminderClassification
             ?? deterministicSelfPhotoClassification
             ?? deterministicRelocationClassification
@@ -854,7 +870,19 @@ async function processMessageInternal(
             ?? await classifyMessage(originalMessage, isForwarded, forwardFrom,
                 fastEligible ? messageHistory.slice(-4).map(item => ({ ...item, content: item.content.slice(0, 700) })) : messageHistory,
                 knownChatGroups, fastEligible ? { topic: fastTurn.currentTopic } : undefined,
-                !isForwarded && !forwardContext ? pendingTelegramProfileQuestion(ctx, replyContext?.text) : undefined);
+                !isForwarded && !forwardContext ? pendingTelegramProfileQuestion(ctx, replyContext?.text) : undefined,
+                { context: behaviorContext, reply: replyContext ? JSON.stringify(replyContext) : undefined });
+        // These fields can only come from the account's store and a completed write.
+        classification = { ...classification, details: { ...classification.details, behaviorContext, behaviorLearningStatus: undefined } };
+        if (!options.recurringTaskRun && !isForwarded && !forwardContext && !internalBrowserContinuation && classification.details.behavioralFeedback) {
+            classification.details.behaviorLearningStatus = await learnBehaviorFromFeedback({ ctx, message: originalMessage,
+                evidence: classification.details.behavioralFeedback.evidence, history: messageHistory,
+                assistantReply: replyContext ? ctx.session.sentMessageContexts?.[replyContext.messageId]?.text ?? ctx.session.sentMessages?.[replyContext.messageId] : undefined });
+            if (classification.details.behaviorLearningStatus === 'saved') classification.details.behaviorContext = await getBehaviorMemoryContext(ctx);
+        }
+        if (classification.details.externalVerification === 'availability' && !isMcpRequest({ classification, message: originalMessage })) {
+            knowledgeDecision = { source: 'external_current', requiresWeb: true, requestedFacets: ['current_state', 'schedule', 'sources'], reason: 'availability requires current verification' };
+        }
         if (!isForwarded && !forwardContext) {
             const continuation = await continueClassifiedProfileQuestion(ctx, classification, originalMessage, replyContext?.text);
             if (continuation) return continuation;
@@ -1096,6 +1124,7 @@ async function processMessageInternal(
         let enrichedContextFromMemory = initialBlock ? initialBlock + '\n\n' : '';
         const knowledgeBlock = buildKnowledgeSourcePrompt(knowledgeDecision);
         if (knowledgeBlock) enrichedContextFromMemory += `${knowledgeBlock}\n\n`;
+        if (classification.details.behaviorContext) enrichedContextFromMemory += `${classification.details.behaviorContext}\n\n`;
         if (replyContext) {
             enrichedContextFromMemory += [
                 'Структурированный контекст сообщения, на которое отвечает пользователь:',

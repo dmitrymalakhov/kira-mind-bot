@@ -187,3 +187,12 @@ test('navigation invalidates a pending question or confirmation without leaving 
     await f.session.requireConfirmation({ target: 'test-submit' }, 'Отправить?'); f.session.pageChanged();
     assert.equal(f.session.state, 'paused'); assert.equal(f.session.snapshot().pendingConfirmation, null);
 });
+
+test('a second observer cannot acquire a lease while the first takeover is draining', async t => {
+    const f = await fixture(t), pending = deferred(); f.session.subscribe(f.other, () => true, () => {});
+    const action = f.session.agentCall(f.session.generation, () => pending.promise).catch(() => {});
+    const first = f.command('take_control'); await new Promise(r => setImmediate(r));
+    await assert.rejects(f.session.command(randomUUID(), { type: 'take_control', observerId: f.other, expectedRevision: f.session.snapshot().revision }), /Смена управления/);
+    pending.resolve(); await action; await first;
+    assert.equal(f.session.snapshot().control.observerId, f.observer); assert.equal(f.session.state, 'user_control');
+});

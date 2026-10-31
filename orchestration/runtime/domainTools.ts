@@ -42,11 +42,12 @@ function readTool(name: string, skill: string, description: string, schema: Tool
 
 export function domainTools(): ToolDefinition[] {
     return [
-        readTool('web.search', 'web-research', 'Найти актуальную информацию и прямые источники. Ошибка поиска не является доказательством отсутствия события.', objectSchema({ query: textSchema('Поисковый запрос, покрывающий нужные аспекты') }), async args => {
-            const result = await performWebSearch(String(args.query));
+        readTool('web.search', 'web-research', 'Найти актуальную информацию и прямые источники. Ошибка поиска не является доказательством отсутствия события.', objectSchema({ query: textSchema('Поисковый запрос, покрывающий нужные аспекты') }), async (args, context) => {
+            const result = await performWebSearch(String(args.query), { verifyAvailability: context.classification.details.externalVerification === 'availability',
+                context: JSON.stringify({ request: context.message, history: context.messageHistory.slice(-6).map(({ role, content }) => ({ role, content: content.slice(0, 1400) })), behavior: context.classification.details.behaviorContext }) });
             return result.success && result.results
                 ? { status: 'ok', summary: result.results, context: result.results, data: { text: result.results } }
-                : { status: 'failed', summary: 'Веб-поиск недоступен; актуальные сведения не проверены.' };
+                : { status: 'failed', summary: result.results || 'Веб-поиск недоступен; актуальные сведения не проверены.' };
         }, false),
         readTool('maps.geocode', 'places-and-routes', 'Найти адрес и координаты.', objectSchema({ address: textSchema('Адрес') }), async args => {
             const data = await new GoogleMapsService().geocodeAddress(String(args.address));

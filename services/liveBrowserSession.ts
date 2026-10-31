@@ -237,9 +237,13 @@ export class LiveBrowserSession {
         if (timer) clearTimeout(timer);
         if (timedOut) { this.effect = 'unknown'; this.stop('action_drain_timeout'); fail('browser_action_uncertain', 'Действие не завершилось; браузер остановлен.'); }
     }
-    async suspend(target: 'paused' | 'user_control' | 'disconnected' | 'needs_user' | 'awaiting_confirmation', reason: string) {
+    async suspend(target: 'paused' | 'user_control' | 'disconnected' | 'needs_user' | 'awaiting_confirmation', reason: string): Promise<void> {
         if (TERMINAL.has(this.state)) return;
-        if (this.suspending) { await this.suspending; return; }
+        if (this.suspending) {
+            await this.suspending;
+            if (!TERMINAL.has(this.state)) return this.suspend(target, reason);
+            return;
+        }
         this.invalidate(); this.state = 'pausing'; this.reason = reason; this.controller = null; this.lease = null; this.changed();
         const generation = this.generation;
         this.suspending = (async () => {
@@ -313,11 +317,16 @@ export class LiveBrowserSession {
                 if (own || ![...this.observers.values()].some(o => o.sink)) await this.suspend('disconnected', 'app_background');
                 return this.ack(key, String(type));
             }
+            if (this.suspending || this.state === 'pausing') fail('browser_transition_busy', 'Смена управления ещё не завершилась.');
             this.assertForeground(observerId);
             this.assertController(observerId, body.leaseId);
             if (type === 'pause' || type === 'take_control') {
+                const transitionGeneration = this.generation + 1;
                 await this.suspend(type === 'pause' ? 'paused' : 'user_control', String(type));
-                if (type === 'take_control' && !TERMINAL.has(this.state)) { this.controller = observerId; this.lease = randomUUID(); }
+                if (type === 'take_control' && !TERMINAL.has(this.state)) {
+                    if (this.generation !== transitionGeneration || this.state !== 'user_control') fail('browser_control_stale', 'Состояние изменилось; управление не передано.');
+                    this.controller = observerId; this.lease = randomUUID();
+                }
                 return this.ack(key, String(type));
             }
             let answer = this.corrections.slice(-8).join('\n');

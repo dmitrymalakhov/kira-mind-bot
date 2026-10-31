@@ -1,5 +1,6 @@
 import { Context, SessionFlavor } from "grammy";
 import { Reminder } from "./reminder";
+import type { MemorySourceSnapshot } from './services/interfaces/IVectorService';
 
 // Возможные состояния диалога с неавторизованным пользователем
 export enum UnauthorizedChatState {
@@ -668,6 +669,7 @@ export interface MemoryEntry {
     sourceMessageIds?: string[];
     /** ID исходных воспоминаний, из которых синтезирована эта запись. */
     sourceMemoryIds?: string[];
+    sourceMemorySnapshots?: MemorySourceSnapshot[];
     /** Как факт попал в память: явная команда, quick extraction, delayed extraction и т.п. */
     extractionMethod?: MemoryExtractionMethod;
     /** О ком факт: пользователь, контакт, бот или системный объект. */
@@ -729,6 +731,7 @@ export interface SearchResult {
     sourceContext?: string;
     sourceMessageIds?: string[];
     sourceMemoryIds?: string[];
+    sourceMemorySnapshots?: MemorySourceSnapshot[];
     extractionMethod?: MemoryExtractionMethod;
     subject?: MemorySubject;
     predicate?: string;
