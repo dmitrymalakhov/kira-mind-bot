@@ -9791,7 +9791,7 @@ async function doAction(page: Page, decision: BrowserAction, credentials: Creden
         }
         const snapshot = state.shared.snapshot();
         const proposal = { action: decision.action, selector: decision.selector,
-            value: decision.action === 'fill_credential' ? '[credential]' : decision.value,
+            value: decision.value,
             pageId: snapshot.page?.pageId, navigationEpoch: snapshot.page?.navigationEpoch };
         return runReviewedBrowserAction(proposal, { task: state.shared.task, page: snapshot.page,
             visibleText: (await getVisiblePageText(page)).slice(0, 6000),
