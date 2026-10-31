@@ -49,6 +49,7 @@ export function createExternalApiServer(
 ): http.Server {
     const expectedToken = Buffer.from(hash(options.token));
     let requests = 0;
+    let browserRequests = 0;
     let windowStarted = Date.now();
     let busy = false;
     const server = http.createServer(async (req, res) => {
@@ -67,14 +68,19 @@ export function createExternalApiServer(
                 req.resume();
                 throw new ApiError(401, 'unauthorized', 'Нужен действующий токен доступа.');
             }
-            if (Date.now() - windowStarted >= 60_000) { windowStarted = Date.now(); requests = 0; }
+            const url = new URL(req.url ?? '/', 'http://localhost');
+            const path = url.pathname;
+            if (Date.now() - windowStarted >= 60_000) { windowStarted = Date.now(); requests = 0; browserRequests = 0; }
+            if (path.startsWith(`${PREFIX}/browser/`)) {
+                if (++browserRequests > 360) { res.setHeader('Retry-After', '60'); throw new ApiError(429, 'rate_limited', 'Слишком много запросов браузера.'); }
+                if (!backend.browserSession) throw new ApiError(404, 'not_found', 'Общий браузер недоступен.');
+                return await backend.browserSession.handle(req, res, url);
+            }
             if (++requests > 120) {
                 res.setHeader('Retry-After', '60');
                 req.resume();
                 throw new ApiError(429, 'rate_limited', 'Слишком много запросов.');
             }
-            const url = new URL(req.url ?? '/', 'http://localhost');
-            const path = url.pathname;
             if (path === `${PREFIX}/model-preferences`) {
                 if (req.method === 'GET' && backend.modelPreferences) return json(200, await backend.modelPreferences());
                 if (req.method === 'PUT' && backend.updateModelPreferences) return json(200, await backend.updateModelPreferences(await readBody(req)));
@@ -248,7 +254,8 @@ export function createExternalApiServer(
                 const result = await operations.run(`${options.ownerId}:request:${hash(idempotencyKey)}`, fingerprint,
                     () => isAction
                         ? operations.run(`${options.ownerId}:action:${hash(value)}`, fingerprint, () => backend.action(value))
-                        : backend.message(value.trim(), { deferredDialogue }));
+                        : backend.message(value.trim(), { deferredDialogue,
+                            ...(req.headers['x-kira-browser-session'] === 'v1' ? { liveBrowserRequest: { operationId: idempotencyKey } } : {}) }));
                 if (deferredDialogue && result.backgroundJob) res.setHeader('Preference-Applied', 'respond-async');
                 json(200, result);
             } finally { busy = false; }

@@ -8,7 +8,7 @@ import { InlineKeyboard, InputFile } from 'grammy';
 import type { BotContext, MessageHistory } from '../types';
 import { browserContextScopeKey, browserRuntimeOwnerKey, browserRunBelongsToContext } from '../utils/browserRuntimeScope';
 import type { ProcessingResult, MessageClassification } from '../orchestrator';
-import { createChatCompletionForTask } from '../ai/chatCompletion';
+import { createChatCompletionForTask as requestBrowserChatCompletion } from '../ai/chatCompletion';
 import { devLog, parseLLMJson } from '../utils';
 import { fetchAgentMemoryContext, buildMemoryContextBlock } from '../utils/agentMemoryContext';
 import { BrowserSessionStore } from '../services/BrowserSessionStore';
@@ -17,6 +17,19 @@ import { looksLikeBrowserTaskCancellation } from '../utils/browserTaskCancellati
 import { RUNTIME_DATA_DIR } from '../utils/runtimeData';
 import { describeOutgoingImage } from '../services/outgoingImageDescription';
 import { replyWithPhotoAndStore } from '../handlers/shared';
+import { config } from '../config';
+import { BrowserInterrupted, LiveBrowserSession, liveBrowserInvocation, liveBrowserSessions, isLiveBrowserTerminal } from '../services/liveBrowserSession';
+import { LivePlaywrightAdapter } from '../services/liveBrowserPlaywright';
+import { hasApprovedBrowserAction, runReviewedBrowserAction } from '../services/liveBrowserActionPolicy';
+import { liveBrowserKeyboard, notifyLiveBrowserState } from '../services/liveBrowserTelegram';
+
+const createChatCompletionForTask: typeof requestBrowserChatCompletion = async (...args) => {
+    const invocation = liveBrowserInvocation();
+    invocation?.session.assertAgent(invocation.generation);
+    const response = await requestBrowserChatCompletion(...args);
+    invocation?.session.assertAgent(invocation.generation);
+    return response;
+};
 
 const MAX_ITERATIONS = 35;
 const MAX_MEMORY_LOOKUPS = 6;
@@ -438,6 +451,8 @@ interface ArmedBrowserDialogResponse {
 }
 
 interface BrowserRunState {
+    shared?: LiveBrowserSession;
+    sharedAdapter?: LivePlaywrightAdapter;
     id: string;
     userId: number;
     chatId?: number;
@@ -719,6 +734,7 @@ async function getHumanVerificationDiagnosticsText(page: Page): Promise<string> 
         if (!signals.length) return '';
         return ['human_verification:', ...signals.map((signal) => `  - ${signal}`)].join('\n');
     } catch (e) {
+        if (e instanceof BrowserInterrupted) throw e;
         devLog('browserAgent: human verification diagnostics failed:', e);
         return '';
     }
@@ -787,6 +803,7 @@ async function getScrollDiagnosticsText(page: Page): Promise<string> {
         ].filter(Boolean);
         return lines.join('\n');
     } catch (e) {
+        if (e instanceof BrowserInterrupted) throw e;
         devLog('browserAgent: scroll diagnostics failed:', e);
         return '';
     }
@@ -896,6 +913,7 @@ async function getFilterControlsText(page: Page): Promise<string> {
         });
         return limitText(lines.join('\n'), 8500);
     } catch (e) {
+        if (e instanceof BrowserInterrupted) throw e;
         devLog('browserAgent: filter controls failed:', e);
         return '';
     }
@@ -1048,6 +1066,7 @@ async function getInteractiveElementsText(page: Page): Promise<string> {
             });
         return limitText(lines.join('\n'), 7000);
     } catch (e) {
+        if (e instanceof BrowserInterrupted) throw e;
         devLog('browserAgent: interactive snapshot failed:', e);
         return '';
     }
@@ -1231,6 +1250,7 @@ async function getVisualControlMapText(page: Page): Promise<string> {
         });
         return limitText(lines.join('\n'), 9000);
     } catch (e) {
+        if (e instanceof BrowserInterrupted) throw e;
         devLog('browserAgent: visual control map failed:', e);
         return '';
     }
@@ -1461,6 +1481,7 @@ async function getStructuredPageText(page: Page): Promise<string> {
         });
         return limitText(lines.join('\n'), 8500);
     } catch (e) {
+        if (e instanceof BrowserInterrupted) throw e;
         devLog('browserAgent: structured page snapshot failed:', e);
         return '';
     }
@@ -1595,6 +1616,7 @@ async function getSemanticPageMapText(page: Page): Promise<string> {
         });
         return limitText(lines.join('\n'), 8500);
     } catch (e) {
+        if (e instanceof BrowserInterrupted) throw e;
         devLog('browserAgent: semantic page map failed:', e);
         return '';
     }
@@ -1705,6 +1727,7 @@ async function getStructuredDataText(page: Page): Promise<string> {
         }
         return limitText(lines.join('\n'), 7000);
     } catch (e) {
+        if (e instanceof BrowserInterrupted) throw e;
         devLog('browserAgent: structured data extraction failed:', e);
         return '';
     }
@@ -1858,6 +1881,7 @@ async function getProductCardsText(page: Page): Promise<string> {
         });
         return limitText(lines.join('\n'), 9000);
     } catch (e) {
+        if (e instanceof BrowserInterrupted) throw e;
         devLog('browserAgent: product card snapshot failed:', e);
         return '';
     }
@@ -1960,6 +1984,7 @@ async function getTableDiagnosticsText(page: Page): Promise<string> {
         }
         return limitText(lines.join('\n'), 9000);
     } catch (e) {
+        if (e instanceof BrowserInterrupted) throw e;
         devLog('browserAgent: table diagnostics failed:', e);
         return '';
     }
@@ -2072,6 +2097,7 @@ async function getFormDiagnosticsText(page: Page): Promise<string> {
         }
         return limitText(lines.join('\n'), 6000);
     } catch (e) {
+        if (e instanceof BrowserInterrupted) throw e;
         devLog('browserAgent: form diagnostics failed:', e);
         return '';
     }
@@ -2230,6 +2256,7 @@ async function getFormBrainText(page: Page): Promise<string> {
         }
         return limitText(lines.join('\n'), 7500);
     } catch (e) {
+        if (e instanceof BrowserInterrupted) throw e;
         devLog('browserAgent: form brain failed:', e);
         return '';
     }
@@ -2392,6 +2419,7 @@ async function getModalDiagnosticsText(page: Page): Promise<string> {
             return `  modal#${modal.index} ${modal.role}${label}${buttons}\n    ${modal.text}`;
         }).join('\n'), 5000);
     } catch (e) {
+        if (e instanceof BrowserInterrupted) throw e;
         devLog('browserAgent: modal diagnostics failed:', e);
         return '';
     }
@@ -2506,6 +2534,7 @@ async function getFrameDiagnosticsText(page: Page): Promise<string> {
                 lines.push(`    #${el.index} ${el.role}${type}${label}${flags} -> frame=${index + 1} >> ${el.selector}`);
             }
         } catch (e) {
+        if (e instanceof BrowserInterrupted) throw e;
             devLog('browserAgent: frame diagnostics failed:', e);
         }
     }
@@ -2671,6 +2700,7 @@ async function getAffordanceGraphText(page: Page): Promise<string> {
         });
         return limitText(lines.join('\n'), 9000);
     } catch (e) {
+        if (e instanceof BrowserInterrupted) throw e;
         devLog('browserAgent: affordance graph failed:', e);
         return '';
     }
@@ -2706,6 +2736,7 @@ function collectBlockerSignals(parts: string[]): string {
 async function getPageObservation(page: Page, pageEvents: string[] = []): Promise<PageObservation> {
     const [screenshotBuf, pageState, scrollDiagnosticsText, filterControlsText, a11yText, interactiveText, structureText, semanticMapText, structuredDataText, productCardsText, tableText, affordanceGraphText, formText, formBrainText, modalText, humanVerificationText, frameText, tabsText, visualMapText, pageText, selectOptions] = await Promise.all([
         takeJpeg(page).catch((err) => {
+            if (liveBrowserInvocation()) throw err;
             browserLog('observation_screenshot_failed', {
                 url: safeLogUrl(page.url()),
                 reason: safeErrorMessage(err),
@@ -2789,9 +2820,11 @@ function fallbackScreenshotBuffer(): Buffer {
 }
 
 async function takeJpeg(page: Page): Promise<Buffer> {
+    if (liveBrowserInvocation()) return page.screenshot({ type: 'jpeg', quality: 72, fullPage: false, timeout: 8000 });
     try {
         return await page.screenshot({ type: 'jpeg', quality: 72, fullPage: false, timeout: 8_000 });
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         browserLog('screenshot_primary_failed', {
             url: safeLogUrl(page.url()),
             reason: safeErrorMessage(err),
@@ -2816,6 +2849,7 @@ async function takeJpeg(page: Page): Promise<Buffer> {
         });
         if (result.data) return Buffer.from(result.data, 'base64');
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         browserLog('screenshot_cdp_failed', {
             url: safeLogUrl(page.url()),
             reason: safeErrorMessage(err),
@@ -2828,6 +2862,8 @@ async function takeJpeg(page: Page): Promise<Buffer> {
 }
 
 async function sendScreenshot(ctx: BotContext, page: Page, caption?: string): Promise<void> {
+    // Live frames have a separate bounded, nonpersistent transport. Telegram shared tasks use text only.
+    if (liveBrowserInvocation()) return;
     try {
         const buf = await takeJpeg(page);
         const description = await describeOutgoingImage(buf)
@@ -2835,6 +2871,7 @@ async function sendScreenshot(ctx: BotContext, page: Page, caption?: string): Pr
         if (caption) await ctx.reply(caption);
         await replyWithPhotoAndStore(ctx, new InputFile(buf, 'screen.jpg'), description);
     } catch (e) {
+        if (e instanceof BrowserInterrupted) throw e;
         devLog('browserAgent: screenshot send failed:', e);
     }
 }
@@ -2890,6 +2927,7 @@ function loadBrowserSitePatterns(): BrowserSitePattern[] {
         const parsed = JSON.parse(fs.readFileSync(BROWSER_SITE_PATTERNS_FILE, 'utf8'));
         return Array.isArray(parsed) ? parsed as BrowserSitePattern[] : [];
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         devLog('browserAgent: failed to load site patterns:', err);
         return [];
     }
@@ -2900,6 +2938,7 @@ function saveBrowserSitePatterns(patterns: BrowserSitePattern[]): void {
         fs.mkdirSync(path.dirname(BROWSER_SITE_PATTERNS_FILE), { recursive: true });
         fs.writeFileSync(BROWSER_SITE_PATTERNS_FILE, JSON.stringify(patterns.slice(0, 120), null, 2), 'utf8');
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         devLog('browserAgent: failed to save site patterns:', err);
     }
 }
@@ -3174,6 +3213,7 @@ function isTransientLlmError(err: any): boolean {
 }
 
 async function sendProgress(ctx: BotContext, text: string): Promise<void> {
+    if (liveBrowserInvocation()) return;
     try {
         await ctx.api.sendChatAction(ctx.chat!.id, 'typing');
         await ctx.reply(text);
@@ -3398,6 +3438,7 @@ function cleanupBrowserTrajectoryFiles(): void {
             fs.unlink(file.filePath, () => {});
         }
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         devLog('browserAgent: trajectory cleanup failed:', safeErrorMessage(err));
     }
 }
@@ -3419,6 +3460,7 @@ function createBrowserTrajectoryRecorder(state: BrowserRunState): BrowserTraject
             stopped: false,
         };
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         devLog('browserAgent: trajectory create failed:', safeErrorMessage(err));
         return undefined;
     }
@@ -3479,6 +3521,7 @@ function recordBrowserTrajectoryEvent(
         recorder.seq = nextSeq;
         recorder.acceptedBytes += bytes;
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         recorder.stopped = true;
         devLog('browserAgent: trajectory write failed:', safeErrorMessage(err));
     }
@@ -4038,6 +4081,7 @@ async function executeBrowserStuckRecoveryPlan(
         await state.page.waitForTimeout(350);
         return true;
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         const reason = safeErrorMessage(err);
         state.iterationCount = iteration;
         state.notes.push(`Stuck recovery failed: ${plan.kind}; ${reason}`.slice(0, 700));
@@ -5410,6 +5454,7 @@ function isListingMetaSegment(segment: string): boolean {
 }
 
 function attachPageObserversToPage(state: BrowserRunState, page: Page): void {
+    if (state.shared) return;
     if (observedPages.has(page)) return;
     observedPages.add(page);
     page.on('dialog', async (dialog) => {
@@ -5436,6 +5481,7 @@ function attachPageObserversToPage(state: BrowserRunState, page: Page): void {
                 handled = 'dismissed_for_safety';
             }
         } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
             handled = 'failed';
             pushPageEvent(state, `[dialog:error] ${safeErrorMessage(err)}`);
         } finally {
@@ -5483,6 +5529,7 @@ function attachPageObserversToPage(state: BrowserRunState, page: Page): void {
                 createdAt: new Date().toISOString(),
             });
         } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
             devLog('browserAgent: failed to capture network response:', safeErrorMessage(err));
         }
     });
@@ -5498,12 +5545,15 @@ function attachPageObserversToPage(state: BrowserRunState, page: Page): void {
             pushEvidence(state, 'download', `Скачан файл: ${filename}`, download.url() || state.page.url());
             pushPageEvent(state, `[download] ${filename}`);
         } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
             pushPageEvent(state, `[download:error] ${safeErrorMessage(err)}`);
         }
     });
 }
 
 function attachPageObservers(state: BrowserRunState): void {
+    // Shared sessions use the adapter's lifecycle events; don't record human input/network bodies in trajectories.
+    if (state.shared) return;
     attachPageObserversToPage(state, state.page);
     state.browserCtx.on('page', (page) => {
         installBrowserPageDefaults(page);
@@ -5721,8 +5771,11 @@ function pauseBrowserRun(
     state: BrowserRunState,
     question: string,
     risk?: 'high_impact',
-    choices?: BrowserUserChoice[]
+    choices?: BrowserUserChoice[],
+    external = false
 ): void {
+    const invocation = liveBrowserInvocation();
+    if (!external && invocation) invocation.session.assertAgent(invocation.generation);
     state.expiresAt = Date.now() + PENDING_BROWSER_TTL_MS;
     if (state.timeout) clearTimeout(state.timeout);
     state.timeout = setTimeout(() => {
@@ -5740,6 +5793,8 @@ function pauseBrowserRun(
         createdAt: Date.now(),
         expiresAt: state.expiresAt,
     };
+    if (state.shared && !external && !isLiveBrowserTerminal(state.shared.state))
+        void state.shared.needsUser(question, 'information').catch(() => {});
     browserLog('pause_browser_run', {
         sessionId: state.id,
         risk,
@@ -5798,6 +5853,13 @@ async function closeBrowserRunState(state: BrowserRunState, reason: 'done' | 'fa
     finishBrowserTrajectory(state, reason);
     state.trajectory = undefined;
 
+    if (state.sharedAdapter) {
+        if (reason === 'cancelled' || reason === 'expired') state.shared?.stop(reason);
+        await state.sharedAdapter.close();
+        for (const download of state.downloads) fs.unlink(download.filePath, () => {});
+        return;
+    }
+
     const domain = extractDomain(state.page.url());
     if (domain && domain !== 'about:blank') {
         await BrowserSessionStore.save(state.browserCtx, state.userId, domain).catch(() => {});
@@ -5823,6 +5885,7 @@ async function sendDownloadedFiles(ctx: BotContext, state: BrowserRunState): Pro
             await ctx.replyWithDocument(new InputFile(fs.createReadStream(download.filePath), download.filename));
             sent.push(download.filename);
         } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
             devLog('browserAgent: failed to send download', download.filename, err);
         }
     }
@@ -6300,6 +6363,7 @@ async function extractSemanticFormValuesWithLlm(
             if (!parsed || typeof parsed !== 'object') return null;
             return parsed;
         } catch (err: any) {
+        if (err instanceof BrowserInterrupted) throw err;
             lastError = err;
             devLog('browserAgent: semantic form extraction failed:', err?.message ?? err);
             if (!isTransientLlmError(err) || attempt === 1) break;
@@ -6691,6 +6755,7 @@ async function reliableFillElement(page: Page, element: any, value: string): Pro
         await element.fill(value, { timeout: ACTION_TIMEOUT_MS });
         return await verify();
     } catch (primaryErr) {
+        if (primaryErr instanceof BrowserInterrupted) throw primaryErr;
         await element.click({ timeout: ACTION_TIMEOUT_MS }).catch(() => {});
         await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
         await page.keyboard.type(value, { delay: 20 });
@@ -6890,6 +6955,9 @@ async function maybeFillBookingFormFromKnownData(
     state: BrowserRunState,
     observation: PageObservation
 ): Promise<BookingFormFillResult> {
+    // Shared tasks re-observe user edits through the existing planner. This legacy prefill helper
+    // infers missing fields from remembered facts, which cannot describe a human-edited live form.
+    if (state.shared) return { status: 'none', reason: 'shared form is handled from the fresh page observation' };
     if (!hasVisibleBookingContactFields(observation)) {
         return { status: 'none', reason: 'no booking/contact fields visible' };
     }
@@ -7115,6 +7183,7 @@ async function repairBrowserActionJson(text: string): Promise<BrowserAction | nu
         });
         return parseBrowserActionJson(response.choices[0]?.message?.content?.trim() ?? '');
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         devLog('browserAgent: failed to repair LLM response:', err);
         return null;
     }
@@ -7260,6 +7329,7 @@ async function inferTaskContractWithLlm(
         });
         return normalizeTaskContract(parseLLMJson<unknown>(response.choices[0]?.message?.content?.trim() || ''), task);
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         browserLog('task_contract_error', { reason: safeErrorMessage(err) });
         return heuristicTaskContract(task);
     }
@@ -7594,6 +7664,7 @@ async function understandPageStateWithLlm(
         const parsed = parseLLMJson<unknown>(response.choices[0]?.message?.content?.trim() || '');
         return normalizePageUnderstanding(parsed, previousLedger, previousPlan);
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         browserLog('page_understanding_error', { reason: safeErrorMessage(err) });
         return null;
     }
@@ -7761,6 +7832,7 @@ async function critiqueDecisionWithLlm(
         });
         return normalizeDecisionCriticResult(parseLLMJson<unknown>(response.choices[0]?.message?.content?.trim() || ''));
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         browserLog('decision_critic_error', { reason: safeErrorMessage(err) });
         return null;
     }
@@ -7825,6 +7897,7 @@ async function verifyActionOutcomeWithLlm(
             confidence: Math.max(0, Math.min(1, Number(parsed.confidence ?? 0))),
         };
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         browserLog('action_outcome_error', { reason: safeErrorMessage(err) });
         return null;
     }
@@ -7930,6 +8003,7 @@ async function reviewTaskCompletionWithLlm(
         });
         return normalizeCompletionReviewResult(parseLLMJson<unknown>(response.choices[0]?.message?.content?.trim() || ''));
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         browserLog('completion_review_error', { reason: safeErrorMessage(err) });
         return null;
     }
@@ -8229,6 +8303,7 @@ ${observation.runtimeSignals || '(нет ошибок/предупреждени
                 summary: 'Я не смогла надёжно выбрать следующий шаг на странице. Подскажи, что нажать дальше, или уточни цель.',
             };
         } catch (err: any) {
+        if (err instanceof BrowserInterrupted) throw err;
             lastError = err;
             console.error('[BROWSER] askNextAction error:', err?.message ?? err);
             if (!isTransientLlmError(err) || attempt === 2) break;
@@ -8478,6 +8553,7 @@ async function tryLocators<T>(
             await first.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
             return await action(first);
         } catch (e) {
+        if (e instanceof BrowserInterrupted) throw e;
             lastError = e;
         }
     }
@@ -8501,6 +8577,7 @@ async function clickLocatorLikeUser(page: Page, target: Locator | any): Promise<
         await target.click({ timeout: ACTION_TIMEOUT_MS, delay: 25 + Math.floor(Math.random() * 55) });
         return;
     } catch (primaryErr) {
+        if (primaryErr instanceof BrowserInterrupted) throw primaryErr;
         const box = await target.boundingBox().catch(() => null);
         if (box && box.width > 0 && box.height > 0) {
             try {
@@ -9707,6 +9784,19 @@ async function describeActionTarget(page: Page, decision: BrowserAction): Promis
 }
 
 async function doAction(page: Page, decision: BrowserAction, credentials: CredentialMaterial | null, state?: BrowserRunState): Promise<string | void> {
+    if (state?.shared && !hasApprovedBrowserAction()) {
+        if (decision.action === 'fill_credential') {
+            await state.shared.needsUser('Введи учётные данные непосредственно на сайте и затем явно верни управление.', 'login');
+            throw new BrowserInterrupted();
+        }
+        const snapshot = state.shared.snapshot();
+        const proposal = { action: decision.action, selector: decision.selector,
+            value: decision.action === 'fill_credential' ? '[credential]' : decision.value,
+            pageId: snapshot.page?.pageId, navigationEpoch: snapshot.page?.navigationEpoch };
+        return runReviewedBrowserAction(proposal, { task: state.shared.task, page: snapshot.page,
+            visibleText: (await getVisiblePageText(page)).slice(0, 6000),
+            currentForm: (await getFormBrainText(page)).slice(0, 6000) }, () => doAction(page, decision, credentials, state));
+    }
     const sel = decision.selector ?? '';
     const val = decision.value ?? '';
     const targetSelector = actionTargetSelector(decision);
@@ -9879,6 +9969,7 @@ async function waitForBrowserSelector(page: Page, selector: string, timeoutMs: n
             await locator.first().waitFor({ state: 'visible', timeout: timeoutMs });
             return;
         } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
             lastError = err;
         }
     }
@@ -10045,7 +10136,7 @@ async function createBrowserRun(
             ? { source: 'saved' as const, domain: explicitSavedCreds.domain, login: explicitSavedCreds.login, password: BrowserCredentialService.get(userId, explicitSavedCreds.domain)?.password }
             : chooseCredentialCandidate(credentialCandidates) ?? null;
     const state: BrowserRunState = {
-        id: randomUUID(),
+        id: liveBrowserInvocation()?.session.id ?? randomUUID(),
         userId,
         chatId: ctx.chat?.id,
         sessionScopeKey: browserContextScopeKey(ctx),
@@ -10092,7 +10183,26 @@ async function createBrowserRun(
         cancelAcknowledged: false,
         expiresAt: Date.now() + PENDING_BROWSER_TTL_MS,
     };
-    state.trajectory = createBrowserTrajectoryRecorder(state);
+    const live = liveBrowserInvocation();
+    if (live) {
+        state.shared = live.session;
+        const adapter = new LivePlaywrightAdapter(live.session, browser, browserCtx, page);
+        state.sharedAdapter = adapter;
+        state.browser = adapter.guard(browser); state.browserCtx = adapter.guard(browserCtx); state.page = adapter.guard(page);
+        live.session.onSuspend = () => {
+            state.highImpactConfirmed = false;
+            pauseBrowserRun(ctx, state, 'Задача приостановлена. Продолжить с этой же страницы?', undefined, undefined, true);
+        };
+        live.session.onStop = () => {
+            state.cancelRequested = true;
+            if (state.timeout) clearTimeout(state.timeout);
+            pausedBrowserSessions.delete(state.id);
+            activeBrowserSessions.delete(browserRunOwnerKey(state.userId, state.chatId, state.sessionScopeKey));
+            ctx.session.pendingBrowserTask = undefined; ctx.session.activeBrowserTask = undefined;
+        };
+        live.session.attach(adapter);
+    }
+    state.trajectory = live ? undefined : createBrowserTrajectoryRecorder(state);
     recordBrowserTrajectoryEvent(state, 'lifecycle.start', {
         originalTask: originalTask.slice(0, 1200),
         memoryContextChars: memoryContext?.length ?? 0,
@@ -11375,6 +11485,7 @@ async function chooseVisualClickCandidateWithLlm(
             });
             return null;
         } catch (err: any) {
+        if (err instanceof BrowserInterrupted) throw err;
             lastError = err;
             devLog('browserAgent: visual layout resolver failed:', err?.message ?? err);
             if (!isTransientLlmError(err) || attempt === 1) break;
@@ -11425,6 +11536,7 @@ async function maybeUseVisualLayoutClick(
             reason: choice.reason,
         };
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         return { status: 'failed', reason: safeErrorMessage(err) };
     }
 }
@@ -11490,6 +11602,7 @@ async function chooseTaskScopedCandidateWithLlm(
         }
         devLog('browserAgent: task-scoped candidate remained ambiguous:', parsed);
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         devLog('browserAgent: task-scoped candidate LLM choice failed:', safeErrorMessage(err));
     }
 
@@ -11555,6 +11668,7 @@ async function maybeUseTaskScopedAction(page: Page, task: string): Promise<TaskS
 
         return { status: 'none', reason: 'target_block_action_not_found' };
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         browserLog('task_scoped_failed', { reason: safeErrorMessage(err) });
         return { status: 'failed', reason: safeErrorMessage(err) };
     }
@@ -11768,6 +11882,7 @@ async function maybeUseTargetBlockClick(
 
         return { status: 'none', reason: 'target_block_not_found' };
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         browserLog('target_block_failed', { clickLabel, reason: safeErrorMessage(err) });
         return { status: 'failed', reason: safeErrorMessage(err) };
     }
@@ -12023,6 +12138,7 @@ async function chooseContextualCandidateWithLlm(
             return candidates[choice!];
         }
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         browserLog('contextual_llm_choice_failed', {
             clickLabel,
             reason: safeErrorMessage(err),
@@ -12086,6 +12202,7 @@ async function maybeUseContextualClick(
 
         return { status: 'none', reason: 'no_contextual_score' };
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         browserLog('contextual_failed', { clickLabel, reason: safeErrorMessage(err) });
         return { status: 'failed', reason: safeErrorMessage(err) };
     }
@@ -12148,6 +12265,7 @@ async function guardRawClickAgainstTargetContext(
                 : `Сырой клик "${clickLabel}" заблокирован: ближайший найденный элемент не находится в блоке с целевым объектом (${hints.join(', ')}). Сначала найди блок по тексту/DOM/context, затем действие внутри него.`,
         };
     } catch (err) {
+        if (err instanceof BrowserInterrupted) throw err;
         browserLog('raw_click_guard_failed', { clickLabel, reason: safeErrorMessage(err) });
         return { status: 'failed', reason: safeErrorMessage(err) };
     }
@@ -12761,7 +12879,7 @@ async function runBrowserAgent(
             const answer = pendingBrowserTask?.userAnswer || continuation?.answer || browserTaskAnswerFromMessage(message) || message;
             const pendingQuestion = pendingBrowserTask?.question || continuation?.question || '';
             state.lastUserAnswer = answer;
-            if (isBrowserCancellationText(answer)) {
+            if (!state.shared && isBrowserCancellationText(answer)) {
                 shouldClose = false;
                 ctx.session.pendingBrowserTask = undefined;
                 ctx.session.activeBrowserTask = undefined;
@@ -12781,7 +12899,7 @@ async function runBrowserAgent(
             const confirmedHighImpact =
                 isExplicitUserConfirmation(answer) &&
                 (pendingBrowserTask?.risk === 'high_impact' || isHighImpactConfirmationPrompt(pendingQuestion));
-            if (confirmedHighImpact) {
+            if (confirmedHighImpact && !state.shared) {
                 state.highImpactConfirmed = true;
                 browserLog('high_impact_confirmed', {
                     sessionId: state.id,
@@ -13083,6 +13201,8 @@ async function runBrowserAgent(
         await maybeUpdateTaskContract(state, taskForLlm, memoryForLlm, recentUserContext);
 
         for (let i = state.iterationCount; i < MAX_ITERATIONS; i++) {
+            const invocation = liveBrowserInvocation();
+            if (invocation) invocation.session.assertAgent(invocation.generation);
             if (state.cancelRequested) {
                 ctx.session.pendingBrowserTask = undefined;
                 ctx.session.activeBrowserTask = undefined;
@@ -13095,7 +13215,7 @@ async function runBrowserAgent(
             let domain = extractDomain(url);
 
             if (domain && domain !== state.lastCredentialDomain && domain !== 'about:blank') {
-                const loaded = await BrowserSessionStore.load(state.browserCtx, state.userId, domain);
+                const loaded = state.shared ? false : await BrowserSessionStore.load(state.browserCtx, state.userId, domain);
                 if (loaded) {
                     devLog('browserAgent: loaded session for', domain);
                     console.log(`[BROWSER] session loaded for ${domain}`);
@@ -13502,6 +13622,7 @@ async function runBrowserAgent(
                     state
                 );
             }
+            if (invocation) invocation.session.assertAgent(invocation.generation);
             devLog('browserAgent decision:', sanitizeDecisionForLog(decision));
             console.log(formatDecisionForLog(decision));
             recordBrowserTrajectoryEvent(state, 'decision', {
@@ -13548,7 +13669,7 @@ async function runBrowserAgent(
             }
 
             const earlyBookingSubmitDecision = isBookingSubmitDecision(decision, observation);
-            if (earlyBookingSubmitDecision && !state.highImpactConfirmed) {
+            if (earlyBookingSubmitDecision && !state.highImpactConfirmed && !state.shared) {
                 const question = 'Подтверди, что можно отправить заявку/форму записи на сайте. Ответь «да, подтверждаю», если действительно продолжаем.';
                 const choices = highImpactConfirmationChoices();
                 browserLog('high_impact_pause', {
@@ -13568,7 +13689,7 @@ async function runBrowserAgent(
                 };
             }
 
-            if (isHighImpactAction(decision) && !state.highImpactConfirmed) {
+            if (isHighImpactAction(decision) && !state.highImpactConfirmed && !state.shared) {
                 const question = highImpactQuestion(decision);
                 const choices = highImpactConfirmationChoices();
                 browserLog('high_impact_pause', {
@@ -14479,6 +14600,7 @@ async function runBrowserAgent(
                 await adoptLatestPage(state);
                 state.consecutiveActionFailures = 0;
             } catch (err: any) {
+                if (err instanceof BrowserInterrupted) throw err;
                 result = 'failed';
                 error = safeErrorMessage(err);
                 state.consecutiveActionFailures += 1;
@@ -14693,6 +14815,13 @@ async function runBrowserAgent(
             keyboard: buildBrowserPauseKeyboard(state.id, choices),
         };
     } catch (err: any) {
+        const invocation = liveBrowserInvocation();
+        if (invocation && (err instanceof BrowserInterrupted || invocation.generation !== invocation.session.generation)) {
+            shouldClose = false;
+            return { operationStatus: invocation.session.state === 'cancelled' ? 'failed' : 'needs_input',
+                responseText: invocation.session.state === 'cancelled' ? 'Браузерная задача остановлена.' :
+                    invocation.session.snapshot().assistanceRequest?.prompt ?? invocation.session.snapshot().pendingConfirmation?.summary ?? 'Задача на паузе. Страница сохранена.' };
+        }
         if (state?.cancelRequested) {
             ctx.session.pendingBrowserTask = undefined;
             ctx.session.activeBrowserTask = undefined;
@@ -14712,7 +14841,7 @@ async function runBrowserAgent(
         if (state && ctx.session.activeBrowserTask?.sessionId === state.id) {
             ctx.session.activeBrowserTask = undefined;
         }
-        if (state && shouldClose) {
+        if (state && shouldClose && (!state.shared || ['running','starting'].includes(state.shared.state))) {
             await closeBrowserRunState(state, 'done').catch(() => {});
         }
     }
@@ -14727,6 +14856,37 @@ export async function browserAgent(
     classification?: MessageClassification,
     injectedMemoryContext?: string
 ): Promise<ProcessingResult> {
+    const scope = browserContextScopeKey(ctx);
+    const sharedRequested = Boolean(ctx.liveBrowserRequest) || (!scope.startsWith('api:') && !ctx.agentRuntimeStorageKey &&
+        ctx.from?.id === config.allowedUserId && ctx.chat?.type === 'private' && ctx.session.isAllowedUser);
+    if (sharedRequested && !liveBrowserInvocation()) {
+        const session = liveBrowserSessions.create(ctx.from!.id, scope, ctx.liveBrowserRequest?.operationId ?? `telegram-${ctx.message?.message_id ?? randomUUID()}`);
+        session.task = message;
+        ctx.releaseBrowserUpdate?.();
+        if (!session.requiresObserver) notifyLiveBrowserState(ctx, session);
+        const execute = (task: string) => session.runAgent(() => enqueueBrowserAgentLane(ctx,
+            () => runBrowserAgent(ctx, task, isForwarded, forwardFrom, messageHistory, classification, injectedMemoryContext)));
+        session.resume = async answer => {
+            session.backgroundDelivery = true;
+            const paused = pausedBrowserSessions.get(session.id);
+            if (!paused) throw new BrowserInterrupted();
+            paused.taskContract = undefined; paused.taskContractSource = undefined; paused.pageUnderstanding = undefined;
+            paused.taskPlan = undefined; paused.lastActionOutcome = undefined; paused.highImpactConfirmed = false;
+            if (ctx.session.pendingBrowserTask) ctx.session.pendingBrowserTask.userAnswer = answer;
+            const generation = session.generation;
+            const result = await execute(answer);
+            if (generation === session.generation && ['running','starting'].includes(session.state)) {
+                session.finish(result.operationStatus === 'unknown' || result.operationStatus === 'failed' ? 'failed' : 'completed', generation);
+                if (!session.requiresObserver && result.responseText) await ctx.reply(result.responseText);
+            }
+        };
+        const generation = session.generation;
+        const result = await execute(message);
+        if (generation === session.generation && ['running','starting'].includes(session.state))
+            session.finish(result.operationStatus === 'unknown' || result.operationStatus === 'failed' ? 'failed' : 'completed', generation);
+        if (!isLiveBrowserTerminal(session.state)) result.keyboard = session.requiresObserver ? undefined : liveBrowserKeyboard(session);
+        return result;
+    }
     if (shouldInterruptActiveBrowserRun(ctx, message)) {
         const activeState = getActiveBrowserSession(ctx);
         if (activeState) {

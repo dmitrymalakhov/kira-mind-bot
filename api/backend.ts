@@ -13,6 +13,7 @@ import { TypeORMSessionStorage } from '../services/SessionStorage';
 import { ReminderRegistry } from '../stores/ReminderRegistry';
 import { RecurringTaskRepository } from '../services/RecurringTaskRepository';
 import { ApiBackend, ApiError, ApiReply } from './contracts';
+import { BrowserSessionApi } from './browser';
 import { ApiActionTokens } from './actionTokens';
 import { ApiFiles } from './files';
 import { ApiTransport, nextApiMessageId } from './transport';
@@ -32,6 +33,7 @@ import { registerProductAnalytics, recordDeferredOutcome, feedbackKeyboard } fro
 
 /** Same handlers, orchestrator, identity and knowledge; only the delivery and session channel differ. */
 export class BotApiBackend implements ApiBackend {
+    readonly browserSession: BrowserSessionApi;
     private readonly dispatcher: Bot<BotContext>;
     private readonly storage = new TypeORMSessionStorage(true);
     private readonly files = new ApiFiles();
@@ -44,6 +46,10 @@ export class BotApiBackend implements ApiBackend {
                 private readonly models: ApiModelSettingsStore = new BotSettingsApiModelStore(),
                 private readonly catalog = new ApiModelCatalog()) {
         this.sessionKey = `api:${options.ownerId}`;
+        this.browserSession = new BrowserSessionApi(options.ownerId, this.sessionKey, async work => {
+            const preset = await apiTurnPreset(this.models);
+            return runWithChannelPreset(preset, work);
+        });
         this.actions = new ApiActionTokens(options.token, options.ownerId);
         this.botInfo = bot.botInfo;
         this.dispatcher = new Bot<BotContext>(config.botToken, { botInfo: this.botInfo });
@@ -70,7 +76,7 @@ export class BotApiBackend implements ApiBackend {
         const vision: VisionRoute = await this.photoRoute().catch((error: unknown) => ({ available: false,
             reason: error instanceof ApiError ? error.message : 'Не удалось определить модель для анализа фото.' }));
         return { input: ['text', 'actions', 'photo'], photo: { mime: ['image/jpeg'], maxBytes: MAX_PHOTO_BYTES, vision, notes: PHOTO_STORAGE_NOTE }, output: ['text', 'photo', 'document', 'voice'],
-            settings: ['modelMode', 'modelPreferences'], scene: { version: 1 }, deferredDialogue: { preference: 'respond-async', results: '/api/v1/dialogue-jobs', cancellation: true }, capabilities: BOT_CAPABILITIES };
+            browserSession: this.browserSession.capability, settings: ['modelMode', 'modelPreferences'], scene: { version: 1 }, deferredDialogue: { preference: 'respond-async', results: '/api/v1/dialogue-jobs', cancellation: true }, capabilities: BOT_CAPABILITIES };
     }
 
     settings() { return readUserSettings(); }
@@ -143,13 +149,13 @@ export class BotApiBackend implements ApiBackend {
 
     file(id: string) { return this.files.read(id); }
 
-    async message(text: string, options: { deferredDialogue?: boolean; preset?: AiPresetName | null; arRoom?: BotContext['arRoom'] } = {}): Promise<ApiReply> {
+    async message(text: string, options: { deferredDialogue?: boolean; preset?: AiPresetName | null; arRoom?: BotContext['arRoom']; liveBrowserRequest?: BotContext['liveBrowserRequest'] } = {}): Promise<ApiReply> {
         const command = text.match(/^\/[a-zA-Z0-9_]+(?:@[a-zA-Z0-9_]+)?/);
         return this.dispatch({ update_id: 0, message: {
             message_id: nextApiMessageId(), date: Math.floor(Date.now() / 1000),
             from: this.owner(), chat: this.chat(), text,
             ...(command ? { entities: [{ type: 'bot_command', offset: 0, length: command[0].length }] } : {}),
-        } }, false, undefined, options.deferredDialogue === true, options.preset, options.arRoom);
+        } }, false, undefined, options.deferredDialogue === true, options.preset, options.arRoom, options.liveBrowserRequest);
     }
 
     async action(token: string): Promise<ApiReply> {
@@ -197,7 +203,7 @@ export class BotApiBackend implements ApiBackend {
     private chat() { return { id: this.options.ownerId, type: 'private' as const, first_name: 'Владелец' }; }
 
     private async dispatch(update: Update, confirmation = false, expectedVersion?: string, deferredDialogue = false, selectedPreset?: AiPresetName | null,
-                           arRoom?: BotContext['arRoom']): Promise<ApiReply> {
+                           arRoom?: BotContext['arRoom'], liveBrowserRequest?: BotContext['liveBrowserRequest']): Promise<ApiReply> {
         const persisted = await this.storage.read(this.sessionKey);
         if (expectedVersion !== undefined && persisted?.apiActionVersion !== expectedVersion) {
             throw new ApiError(410, 'action_expired', 'Кнопка относится к предыдущему запросу. Повтори исходный запрос.');
@@ -217,6 +223,7 @@ export class BotApiBackend implements ApiBackend {
         ctx.sessionStorageKey = this.sessionKey;
         ctx.allowDeferredDialogue = deferredDialogue;
         ctx.arRoom = arRoom;
+        ctx.liveBrowserRequest = liveBrowserRequest;
         // The app's own text mode, read once per turn; null follows the server's global preset.
         const preset = selectedPreset === undefined ? await apiTurnPreset(this.models) : selectedPreset;
         await runWithChannelPreset(preset, async () => { await this.dispatcher.middleware()(ctx, async () => {}); });

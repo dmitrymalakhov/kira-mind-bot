@@ -3,6 +3,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { BotContext } from "../types";
 import { processMessage } from "../orchestrator";
+import { handleLiveBrowserText, runTelegramBrowserResponsive } from '../services/liveBrowserTelegram';
+import { flushSessionAfterAsyncWork } from './shared';
 import { downloadVoiceMessage, transcribeAudio } from "../services/speechRecognition";
 import { devLog } from "../utils";
 import { addToHistory } from "../utils/history";
@@ -22,7 +24,7 @@ import { getForwardedMessageInfo } from "../utils/forwardedMessage";
 // ── Регистрация обработчика голосовых сообщений ─────────────
 
 export function registerVoiceMessageHandler(bot: Bot<BotContext>): void {
-    bot.on("message:voice", async (ctx) => {
+    bot.on("message:voice", async (ctx) => runTelegramBrowserResponsive(ctx, async () => {
         try {
             devLog('🎤 Получено голосовое сообщение от пользователя:', ctx.from?.id);
             await ctx.api.sendChatAction(ctx.chat.id, "typing");
@@ -68,6 +70,10 @@ export function registerVoiceMessageHandler(bot: Bot<BotContext>): void {
                     const transcribedText = await transcribeAudio(tempFilePath);
 
                     if (transcribedText && transcribedText.trim() !== '') {
+                        if (handleLiveBrowserText(ctx, transcribedText, 'voice')) {
+                            await ctx.api.editMessageText(ctx.chat.id, processingMsg.message_id, 'Распознала реплику для текущей браузерной задачи.');
+                            return;
+                        }
                         // Обновляем запись в истории с распознанным текстом
                         let transcribedMessage = `[Голосовое сообщение]: ${transcribedText}`;
                         const lastUserMsgIndex = ctx.session.messageHistory.findIndex(msg => msg.role === 'user');
@@ -180,6 +186,8 @@ export function registerVoiceMessageHandler(bot: Bot<BotContext>): void {
         } catch (error) {
             console.error("Ошибка при обработке голосового сообщения:", error);
             await ctx.reply("Произошла ошибка при обработке твоего голосового сообщения. Пожалуйста, попробуй еще раз или отправь свой вопрос текстом. 🙏");
+        } finally {
+            await flushSessionAfterAsyncWork(ctx, 'browser-responsive voice processing');
         }
-    });
+    }));
 }

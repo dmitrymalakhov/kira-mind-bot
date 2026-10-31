@@ -366,6 +366,10 @@ export interface ForwardedMessageGroup {
 }
 
 export type BotContext = Context & SessionFlavor<SessionData> & {
+    /** Transport-only live browser opt-in; never persisted or accepted as an account identity. */
+    liveBrowserRequest?: { operationId: string };
+    /** Releases only this Telegram update when the existing browser agent starts; its session flush still completes. */
+    releaseBrowserUpdate?: () => void;
     productAnalytics?: import('./services/productAnalytics').ProductAnalyticsTask;
     /** Internal orchestration collects intermediate progress into one final response. */
     suppressAgentProgress?: boolean;

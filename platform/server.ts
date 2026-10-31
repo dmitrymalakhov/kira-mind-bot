@@ -4,6 +4,7 @@ import { ApiError } from '../api/contracts';
 import { readBody } from '../api/server';
 import { MAX_SCENE_BODY_BYTES } from '../api/scene';
 import { MAX_PHOTO_BODY_BYTES } from '../api/photos';
+import { isBrowserApiRoute } from '../api/browser';
 import { checkPassword, digest, newToken, passwordHash, PlatformSecrets } from './crypto';
 import { Account, AccountStore } from './store';
 import { AccountRuntimes, TenantCredentials } from './runtime';
@@ -53,16 +54,19 @@ async function proxy(req: http.IncomingMessage, res: http.ServerResponse, endpoi
             headers: { authorization: `Bearer ${endpoint.token}`, ...(body ? {
                 'content-type': 'application/json', 'content-length': Buffer.byteLength(body),
             } : {}), ...(typeof req.headers.prefer === 'string' ? { prefer: req.headers.prefer } : {}),
+                ...(req.headers['x-kira-browser-session'] === 'v1' ? { 'x-kira-browser-session': 'v1' } : {}),
                 ...(typeof req.headers['idempotency-key'] === 'string' ? { 'idempotency-key': req.headers['idempotency-key'] } : {}) },
         }, response => {
             res.statusCode = response.statusCode || 502;
-            for (const name of ['content-type', 'content-disposition', 'retry-after', 'preference-applied']) {
+            for (const name of ['content-type', 'content-disposition', 'retry-after', 'preference-applied', 'x-accel-buffering']) {
                 if (response.headers[name]) res.setHeader(name, response.headers[name]!);
             }
             response.on('error', reject);
             response.on('end', resolve);
             response.pipe(res);
         });
+        // Browser observers must detach promptly; ordinary held messages retain their existing completion semantics.
+        if (/^\/api\/v1\/browser\/sessions\/[0-9a-f-]+\/events$/.test(route)) res.once('close', () => upstream.destroy());
         upstream.setTimeout(600_000, () => upstream.destroy(new Error('Runtime timeout')));
         upstream.once('error', () => reject(new ApiError(502, 'kira_unavailable', 'Кира временно недоступна. После сбоя повторяй действие с прежним Idempotency-Key.')));
         upstream.end(body);
@@ -121,7 +125,8 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
                 res.setHeader('WWW-Authenticate', 'Bearer');
                 throw new ApiError(401, 'unauthorized', 'Нужен токен аккаунта.');
             }
-            limits.take(`account:${account.id}`, 120);
+            const browserRoute = isBrowserApiRoute(route, req.method ?? '');
+            limits.take(`${browserRoute ? 'browser' : 'account'}:${account.id}`, browserRoute ? 360 : 120);
             if (route === '/api/v1/account' && req.method === 'GET') return json(200, { account: publicAccount(account, runtimes) });
             if (route === '/api/v1/accounts/logout' && req.method === 'POST') {
                 await store.logout(digest(bearer!));
@@ -190,7 +195,7 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
                 || (req.method === 'PATCH' && route === '/api/v1/settings')
                 || (req.method === 'PUT' && ['/api/v1/model-settings', '/api/v1/model-preferences'].includes(route))
                 || (req.method === 'DELETE' && /^\/api\/v1\/dialogue-jobs\/[0-9a-f-]{36}$/.test(route));
-            if (!readable && !writable) throw new ApiError(404, 'not_found', 'Ресурс не найден.');
+            if (!readable && !writable && !browserRoute) throw new ApiError(404, 'not_found', 'Ресурс не найден.');
             if (!account.owner_id) throw new ApiError(409, 'telegram_pairing_required', 'Сначала подключи своего бота и открой ссылку подтверждения в Telegram.');
             await proxy(req, res, runtimes.endpoint(account), route);
         } catch (error) {

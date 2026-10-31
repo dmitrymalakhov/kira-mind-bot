@@ -1,4 +1,5 @@
 import { Bot, InlineKeyboard } from "grammy";
+import { handleLiveBrowserCallback } from '../services/liveBrowserTelegram';
 import { InputFile } from "grammy/types";
 import { BotContext } from "../types";
 import { Reminder, ReminderStatus, cancelReminder, markReminderAsCompleted, postponeReminderUntil } from "../reminder";
@@ -238,6 +239,7 @@ export function registerCallback(bot: Bot<BotContext>): void {
     bot.on("callback_query:data", async (ctx, next) => {
         try {
             const callbackData = ctx.callbackQuery.data;
+            if (await handleLiveBrowserCallback(ctx, callbackData)) return;
 
             if (await handleRecurringTaskCallback(ctx, callbackData)) {
                 return;

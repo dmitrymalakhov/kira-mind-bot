@@ -3,6 +3,7 @@ import { Chat, User } from "grammy/types";
 import { Reminder, postponeReminderUntil } from "../reminder";
 import { BotContext, ConversationTurn } from "../types";
 import { processMessage } from "../orchestrator";
+import { handleLiveBrowserText, runTelegramBrowserResponsive } from '../services/liveBrowserTelegram';
 import { getMessageDraft, saveMessageDraft } from "../agents/sendMessagesAgent";
 import {
     NegotiationStore,
@@ -235,6 +236,7 @@ export function registerTextMessageHandler(bot: Bot<BotContext>, options: { imme
                 return;
             }
 
+            if (handleLiveBrowserText(ctx, message, 'text')) return;
             if (message.startsWith('/')) {
                 await next();
                 return;
@@ -670,7 +672,8 @@ export function registerTextMessageHandler(bot: Bot<BotContext>, options: { imme
                 }
             };
             // HTTP callers must await the same complete flow, including its session flush.
-            if (options.immediate || fastDialogueEnabled()) await processText();
+            if (options.immediate) await processText();
+            else if (fastDialogueEnabled()) await runTelegramBrowserResponsive(ctx, processText);
             else setTimeout(processText, 2000);
         } catch (error) {
             console.error("Ошибка при обработке сообщения:", error);

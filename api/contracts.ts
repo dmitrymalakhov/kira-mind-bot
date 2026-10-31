@@ -36,6 +36,7 @@ export interface ApiReply {
 }
 
 export interface ApiBackend {
+    browserSession?: import('./browser').BrowserSessionApi;
     status(): Promise<unknown>;
     capabilities(): Promise<unknown>;
     history(limit: number): Promise<unknown>;
@@ -47,7 +48,7 @@ export interface ApiBackend {
     modelPreferences?(): Promise<unknown>;
     updateModelPreferences?(body: unknown): Promise<unknown>;
     updateSettings?(patch: ApiSettingsPatch): Promise<ApiSettings>;
-    message(text: string, options?: { deferredDialogue?: boolean }): Promise<ApiReply>;
+    message(text: string, options?: { deferredDialogue?: boolean; liveBrowserRequest?: { operationId: string } }): Promise<ApiReply>;
     photoReady(): Promise<import('../ai/modelPresets').AiPresetName | null>;
     photo(buffer: Buffer, caption?: string, preset?: import('../ai/modelPresets').AiPresetName | null): Promise<ApiReply>;
     action(token: string): Promise<ApiReply>;
