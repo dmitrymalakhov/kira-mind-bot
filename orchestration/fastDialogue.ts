@@ -50,6 +50,7 @@ export function deepWorkNotice(classification: MessageClassification, optional =
 export async function tryFastDialogueResult(ctx: BotContext, turn: ConversationTurn, classification: MessageClassification,
     knowledge: KnowledgeSourceDecision, history: MessageHistory[]): Promise<ProcessingResult | undefined> {
     if (isMcpRequest({ classification, message: turn.userText })) return;
+    if (classification.details.behavioralFeedback || classification.details.externalVerification === 'availability') return;
     // A short factual lookup uses synchronous evidence retrieval, not a deferred research job.
     if (isFocusedPersonalRecall(turn.userText) || classification.details.memoryTask === 'lookup' || validMemoryFocus(ctx) && isMemoryContinuation(turn.userText)) return;
     const decision = classification.fastReply;

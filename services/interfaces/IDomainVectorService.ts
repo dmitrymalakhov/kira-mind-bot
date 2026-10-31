@@ -5,6 +5,8 @@ export interface MemoryCandidateOptions {
     /** Conversational recall filters before top-k; storage/dedup callers keep their ranking. */
     acceptCandidate?: (candidate: SearchResult) => boolean;
     relevanceOnly?: boolean;
+    /** Read-only candidates from a rejected summary, separate from dense/lexical scores. */
+    onStaleDerivedSources?: (parent: SearchResult, sources: SearchResult[]) => void;
 }
 
 export interface MemoryPoolReadOptions {
@@ -43,7 +45,7 @@ export abstract class IDomainVectorService extends IVectorService {
      * Возвращает все записи пользователя с указанным тегом (во всех доменах).
      * Используется для получения психологических портретов по тегу `portrait:<Name>`.
      */
-    abstract getMemoriesByTag(userId: string, tag: string): Promise<SearchResult[]>;
+    abstract getMemoriesByTag(userId: string, tag: string, options?: { includeStaleDerived?: boolean }): Promise<SearchResult[]>;
     /** Bounded, paginated identity pool; no embedding or model call. */
     abstract getMemoriesByTags?(userId: string, tags: string[], limit?: number, options?: MemoryPoolReadOptions): Promise<SearchResult[]>;
     /** Read-only, bounded owner-subject evidence in validated topic domains. */

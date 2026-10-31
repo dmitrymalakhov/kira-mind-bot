@@ -8,6 +8,7 @@ import { isUsablePersonEvidence } from './memoryEntityRecall';
 import { memoryContentExcerpt } from './memoryRanking';
 import { scoreMemoryLexicalMatch } from './memoryRetrieval';
 import { hasDirectContactConversationSource } from './contactMemory';
+import { readMemoryOr } from './memoryReadCoverage';
 
 interface PersonEvidence { person: MemoryPerson; basis: 'relationship' | 'communication'; memory: SearchResult }
 export interface MemoryPeopleEntry { person: MemoryPerson; evidence: PersonEvidence[] }
@@ -19,7 +20,7 @@ const key = (person: MemoryPerson) => person.contactId ? `contact:${person.conta
 export async function recallMemoryPeople(service: IDomainVectorService, owner: string, plan: MemoryQueryPlan, now = Date.now()): Promise<MemoryPeopleCollection> {
     const empty = { entries: [], totalFound: 0, truncated: false };
     if (!plan.peopleQuery || !plan.references?.some(ref => ref.from === 'owner' && !ref.relationPath.length)) return empty;
-    const directory = await listPersonIdentitiesForRecall(owner);
+    const directory = await readMemoryOr(() => listPersonIdentitiesForRecall(owner), []);
     const groups = new Map<string, MemoryPerson>();
     for (const identity of directory.slice(0, 200)) {
         if (!identity.displayName.trim() || isPersonRoleLabel(identity.displayName)) continue;
@@ -73,10 +74,10 @@ export async function recallMemoryPeople(service: IDomainVectorService, owner: s
     } };
     const relationTags = [...new Set(variants.map(step => `relation_type:${step.type}`))];
     const [relationRecords, topicRecords] = await Promise.all([
-        basis !== 'communication' && relationTags.length && service.getMemoriesByTags ? service.getMemoriesByTags(owner, relationTags, 200, options) : [],
+        basis !== 'communication' && relationTags.length && service.getMemoriesByTags ? readMemoryOr(() => service.getMemoriesByTags!(owner, relationTags, 200, options), []) : [],
         basis === 'relationships' && service.getMemoriesByTags ? [] : service.getPeopleMemories
-            ? service.getPeopleMemories(owner, plan.domains, 200, options)
-            : service.getMemoriesByTags ? service.getMemoriesByTags(owner, ['subject:contact'], 200, options) : [],
+            ? readMemoryOr(() => service.getPeopleMemories!(owner, plan.domains, 200, options), [])
+            : service.getMemoriesByTags ? readMemoryOr(() => service.getMemoriesByTags!(owner, ['subject:contact'], 200, options), []) : [],
     ]);
     const records = [...new Map([...relationRecords, ...topicRecords].map(record => [record.id, record])).values()].slice(0, 200);
     const entries = new Map<string, MemoryPeopleEntry>();

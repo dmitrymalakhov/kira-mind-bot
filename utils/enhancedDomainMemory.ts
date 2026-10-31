@@ -14,6 +14,9 @@ import { containsMultipleAssertions } from './atomicAssertion';
 import { inferMemoryRetention, isDurableMemory } from './memoryRetention';
 import { isIndependentMemoryEvidence, memoryAssertionVersion } from './memoryProvenance';
 import { createHash } from 'node:crypto';
+import { snapshotMemorySources } from './derivedMemoryFreshness';
+import { recordMemoryReadFailure } from './memoryReadCoverage';
+import type { MemoryCandidateOptions } from '../services/interfaces/IDomainVectorService';
 import {
     fuseMemoryRetrievalCandidates,
     HybridMemoryRetrievalResult,
@@ -1224,13 +1227,14 @@ export async function searchMemories(ctx: BotContext, query: string, options?: S
     }
 }
 
-export async function searchAllDomainsMemories(ctx: BotContext, query: string, limit = 5, acceptCandidate?: (candidate: SearchResult) => boolean) {
+export async function searchAllDomainsMemories(ctx: BotContext, query: string, limit = 5, acceptCandidate?: (candidate: SearchResult) => boolean,
+    onStaleDerivedSources?: MemoryCandidateOptions['onStaleDerivedSources']) {
     const svc = vectorService();
     if (!svc) return [];
     try {
         devLog('Searching all domains:', { query: query.slice(0, 100), limit });
         const candidates = await svc.searchAllDomains(query, String(ctx.from?.id), limit,
-            acceptCandidate ? { relevanceOnly: true, acceptCandidate } : undefined);
+            acceptCandidate || onStaleDerivedSources ? { relevanceOnly: true, acceptCandidate, onStaleDerivedSources } : undefined);
         const res = acceptCandidate ? candidates.filter(acceptCandidate) : candidates;
         devLog('Cross-domain result count:', res.length);
         if (res.length === 0) {
@@ -1238,6 +1242,7 @@ export async function searchAllDomainsMemories(ctx: BotContext, query: string, l
         }
         return res;
     } catch (e) {
+        recordMemoryReadFailure(e);
         console.error('Cross-domain vector search error', e);
         return [];
     }
@@ -1253,6 +1258,7 @@ export async function searchHybridAllDomainsMemories(
     query: string,
     limit = 5,
     acceptCandidate?: (candidate: SearchResult) => boolean,
+    onStaleDerivedSources?: MemoryCandidateOptions['onStaleDerivedSources'],
 ): Promise<Array<HybridMemoryRetrievalResult<SearchResult>>> {
     const svc = vectorService();
     if (!svc) return [];
@@ -1260,12 +1266,14 @@ export async function searchHybridAllDomainsMemories(
     const semanticLimit = Math.max(12, limit * 3);
     const lexicalLimit = Math.max(20, limit * 4);
     const [semantic, lexical] = await Promise.all([
-        svc.searchAllDomains(query, String(ctx.from?.id), semanticLimit, { relevanceOnly: true, acceptCandidate }).catch((error) => {
+        svc.searchAllDomains(query, String(ctx.from?.id), semanticLimit, { relevanceOnly: true, acceptCandidate, onStaleDerivedSources }).catch((error) => {
+            recordMemoryReadFailure(error);
             console.error('Cross-domain vector search error', error);
             return [] as SearchResult[];
         }),
         svc.searchLexicalAllDomains
-            ? svc.searchLexicalAllDomains(query, String(ctx.from?.id), lexicalLimit, { acceptCandidate }).catch((error) => {
+            ? svc.searchLexicalAllDomains(query, String(ctx.from?.id), lexicalLimit, { acceptCandidate, onStaleDerivedSources }).catch((error) => {
+                recordMemoryReadFailure(error);
                 devLog('Cross-domain lexical search unavailable:', error);
                 return [] as SearchResult[];
             })
@@ -1463,6 +1471,7 @@ export async function getRecentMemories(ctx: BotContext, limit = 5): Promise<Mem
         devLog('Recent memories fetched:', res.length);
         return res;
     } catch (e) {
+        recordMemoryReadFailure(e);
         console.error('Recent memories fetch error', e);
         return [];
     }
@@ -1476,6 +1485,7 @@ export async function getAnchorMemories(ctx: BotContext, limit = 3) {
         devLog('Anchor memories fetched:', res.length);
         return res;
     } catch (e) {
+        recordMemoryReadFailure(e);
         console.error('Anchor memories fetch error', e);
         return [];
     }
@@ -1800,6 +1810,7 @@ JSON: {"summaries": ["утверждение 1", "утверждение 2", ...
             confidence: 0.8,
             lastAccessedAt: now,
             sourceMemoryIds: old.map(memory => memory.id),
+            sourceMemorySnapshots: snapshotMemorySources(old),
             extractionMethod: 'compression',
             memoryKind: 'chapter',
             subject: 'user',

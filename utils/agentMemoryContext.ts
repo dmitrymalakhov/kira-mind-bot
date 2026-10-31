@@ -8,6 +8,7 @@ import { recallOwnerRelationship } from './personalRelationshipRecall';
 import { isFocusedPersonalRecall, ownerRelationshipIntent } from './personalRecallIntent';
 import { readPersonIdentities } from '../services/PersonIdentityService';
 import { validMemoryFocus, isMemoryContinuation, saveMemoryFocus } from './memoryQueryPlan';
+import { applyMemoryReadCoverage, collectMemoryReads, readMemoryOr } from './memoryReadCoverage';
 
 export interface AgentMemoryContext {
     /** The new kernel handles mutations through tools, so synthesis is read-only. */
@@ -39,6 +40,13 @@ export async function fetchAgentMemoryContext(
     message: string,
     options: AgentMemoryContextOptions = {},
 ): Promise<AgentMemoryContext> {
+    const { value, coverage } = await collectMemoryReads(() => readAgentMemoryContext(ctx, message, options));
+    return applyMemoryReadCoverage(value, coverage);
+}
+
+async function readAgentMemoryContext(
+    ctx: BotContext, message: string, options: AgentMemoryContextOptions,
+): Promise<AgentMemoryContext> {
     // Personal memory is only available in private chat to prevent leaking private info in group chats
     if (ctx.chat?.type !== 'private') {
         return { domain: 'personal', context: '' };
@@ -52,7 +60,7 @@ export async function fetchAgentMemoryContext(
     const focused = isFocusedPersonalRecall(trimmed);
     const service = ownerRelationshipIntent(trimmed) ? getVectorService() : null;
     const relationship = service && ctx.from?.id
-        ? await recallOwnerRelationship(service, String(ctx.from.id), trimmed, Date.now(), { identities: readPersonIdentities }).catch(() => undefined) : undefined;
+        ? await readMemoryOr(() => recallOwnerRelationship(service, String(ctx.from!.id), trimmed, Date.now(), { identities: readPersonIdentities }), undefined) : undefined;
     if (relationship?.complete && relationship.person) saveMemoryFocus(ctx, [relationship.person], trimmed, relationship.memories.map(memory => memory.id));
     const memoryNeed = focused || relationship?.context || (validMemoryFocus(ctx) || options.replyPerson?.personId || options.replyPerson?.contactId) && isMemoryContinuation(trimmed) ? 'full' : options.memoryNeed && ['none', 'light', 'full'].includes(options.memoryNeed)
         ? options.memoryNeed : await classifyMemoryNeed(trimmed);
@@ -88,7 +96,8 @@ export async function fetchAgentMemoryContext(
         ? { state: 'found' as const, requestKind: 'identity' as const, identityVerified: true,
             subjects: [{ name: relationship.person.displayName, owner: Boolean(relationship.person.owner) }], domains: [], evidenceCount: recalled.size }
         : memory.recall;
-    return { domain: 'personal', context: enrichedContext, recalledMemories: [...recalled.values()], recall };
+    return { domain: 'personal', context: enrichedContext, recalledMemories: [...recalled.values()],
+        recall: recall ? { ...recall, evidenceCount: Math.max(recall.evidenceCount, recalled.size) } : undefined };
 }
 
 function formatWorkingMemory(ctx: BotContext): string {

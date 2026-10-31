@@ -13,6 +13,7 @@ import {
     contactIdentityTags,
     ContactIdentityScope,
     isMemoryEntryAllowedForContactScope,
+    isOwnerRecallEvidence,
     normalizeContactLookupValue,
     resolveContactIdentityScope,
 } from './contactMemory';
@@ -29,6 +30,8 @@ import { resolveMemoryQueryEntities, personRecallScope, readPersonEvidence, read
 import { recallMemoryPeople, formatMemoryPeople, formatTopicConversations } from './memoryPeopleRecall';
 import { scoreMemoryLexicalMatch } from './memoryRetrieval';
 import { readOwnerRecallSupplement, formatOwnerSourcedEvidence } from './ownerRecallEvidence';
+import { applyMemoryReadCoverage, collectMemoryReads, isMemoryReadFailure, memoryReadIncomplete, readMemoryOr } from './memoryReadCoverage';
+import type { MemoryCandidateOptions } from '../services/interfaces/IDomainVectorService';
 
 const ANSWER_RESULTS_PER_QUERY = 5;
 const CONTEXT_RESULTS_PER_QUERY = 2;
@@ -1316,6 +1319,21 @@ export async function getMultiQueryMemoryContextDetailed(
     memoryNeed?: MemoryNeed,
     options?: MultiQueryMemoryOptions
 ): Promise<MultiQueryMemoryContextResult> {
+    const previous = validMemoryFocus(ctx);
+    const { value, coverage } = await collectMemoryReads(async () => {
+        try { return await readMultiQueryMemoryContext(ctx, userMessage, memoryNeed, options); }
+        catch (error) {
+            if (!isMemoryReadFailure(error)) throw error;
+            return { context: '', recalledMemories: [], recall: memoryRecallSummary(options?.queryPlan ?? { answerQueries: [], contextQueries: [] }, [], 'unavailable', 0) };
+        }
+    });
+    if (coverage?.failed && previous && isMemoryContinuation(userMessage)) ctx.session.memoryRecallFocus = previous;
+    return applyMemoryReadCoverage(value, coverage);
+}
+
+async function readMultiQueryMemoryContext(
+    ctx: BotContext, userMessage: string, memoryNeed?: MemoryNeed, options?: MultiQueryMemoryOptions,
+): Promise<MultiQueryMemoryContextResult> {
     // Если memoryNeed не передан — классифицируем
     const need = memoryNeed ?? await classifyMemoryNeed(userMessage);
     const explain = options?.explain ?? process.env.MEMORY_RETRIEVAL_EXPLAIN === 'true';
@@ -1367,6 +1385,8 @@ export async function getMultiQueryMemoryContextDetailed(
     const previousFocus = validMemoryFocus(ctx);
     const generatedQueries = continueMemoryQueryPlan(options?.queryPlan ?? await generateMemoryQueries(userMessage, recentHistory.length > 0 ? recentHistory : undefined), userMessage, previousFocus);
     const service = getVectorService();
+    if (!service) return { context: 'Сейчас не удалось прочитать память. Это не означает отсутствие сохранённых сведений.', recalledMemories: [],
+        recall: memoryRecallSummary(generatedQueries, [], 'unavailable', 0) };
     if (generatedQueries.requestKind === 'people_list') {
         if (ctx.chat?.type !== 'private' || !service) return { context: '', recalledMemories: [] };
         const ownerPerson: MemoryPerson = { owner: true, personIds: ['user'], displayName: 'текущий пользователь (владелец диалога)', evidenceIds: [] };
@@ -1401,10 +1421,10 @@ export async function getMultiQueryMemoryContextDetailed(
             packed.included = [...new Map([...packed.included, ...literal.included].map(record => [record.id, record])).values()];
         }
         if (sourced.context) { packed.context += '\n\n' + sourced.context; packed.included.push(...sourced.included.filter(record => !packed.included.some(item => item.id === record.id))); }
-        if (continuingList && !packed.included.length) packed.context += '\nНовых людей сверх уже показанных в этой ограниченной выборке не найдено. Не повторяй прежний список и не утверждай полноту всего архива.';
+        if (!memoryReadIncomplete() && continuingList && !packed.included.length) packed.context += '\nНовых людей сверх уже показанных в этой ограниченной выборке не найдено. Не повторяй прежний список и не утверждай полноту всего архива.';
         // A collection is a topic, not a truncated single-person action context.
         if (!continuingList) ctx.session.memoryRecallFocus = undefined;
-        saveMemoryFocus(ctx, [], userMessage, packed.included.map(record => record.id), Date.now(), generatedQueries);
+        if (!memoryReadIncomplete()) saveMemoryFocus(ctx, [], userMessage, packed.included.map(record => record.id), Date.now(), generatedQueries);
         return { context: packed.context, recall: memoryRecallSummary(generatedQueries, [], packed.included.length ? 'found' : 'empty', packed.included.length), recalledMemories: packed.included.map(memory => ({ id: memory.id, domain: memory.domain, content: memory.content, score: 1,
             ...recalledAssertion(memory), memoryKind: memory.memoryKind, confidence: memory.confidence, status: memory.status, sourceMemoryIds: memory.sourceMemoryIds, sourceEpisodeId: memory.sourceEpisodeId })),
             retrievalTrace: explain ? { memoryNeed: need, queries: { answer: generatedQueries.answerQueries, context: [], associative: [] },
@@ -1427,7 +1447,7 @@ export async function getMultiQueryMemoryContextDetailed(
             'Не удалось связать запрошенного человека с однозначной сохранённой личностью. Уточни имя или связь. Это ограничение разрешения ссылки, а не доказательство отсутствия сведений в памяти.', recalledMemories: [],
             recall: memoryRecallSummary(generatedQueries, [], entities.ambiguous ? 'ambiguous' : 'unresolved', 0) };
     }
-    if ((generatedQueries.requestKind === 'identity' || isFocusedPersonalRecall(userMessage)) && entities.people.length && entities.memories.some(memory => memory.tags.includes('person_relation'))) {
+    if (!memoryReadIncomplete() && (generatedQueries.requestKind === 'identity' || isFocusedPersonalRecall(userMessage)) && entities.people.length && entities.memories.some(memory => memory.tags.includes('person_relation'))) {
         const packed = formatResolvedMemoryIdentity(entities);
         const identityPlan = { ...generatedQueries, requestKind: 'identity' as const };
         rememberResolvedSearch(ctx, entities, packed.included, identityPlan);
@@ -1468,7 +1488,7 @@ export async function getMultiQueryMemoryContextDetailed(
             !continuing || entry.evidence.some(item => !seen.has(item.memory.id))) }, supplement.sourced.length ? 1800 : 2500) : { context: '', included: [] };
         const sourced = formatOwnerSourcedEvidence([...supplement.sourced].sort((a, b) => Number(seen.has(a.id)) - Number(seen.has(b.id))),
             Math.min(2400, 6500 - conversations.context.length - relationships.context.length - 1100));
-        const noNewEvidenceInPool = continuing && !personPools.some(pool => pool.records.some(record => !seen.has(record.id))) &&
+        const noNewEvidenceInPool = !memoryReadIncomplete() && continuing && !personPools.some(pool => pool.records.some(record => !seen.has(record.id))) &&
             !conversations.included.some(record => !seen.has(record.id)) && !relatedPeople?.entries.some(entry => entry.evidence.some(item => !seen.has(item.memory.id))) &&
             !supplement.sourced.some(record => !seen.has(record.id));
         const exhaustionNote = noNewEvidenceInPool ? '\nВ этой ограниченной выборке новых сведений сверх уже показанных нет. Не повторяй прежний перечень под видом новых фактов; это не вывод о полноте всего архива.' : '';
@@ -1509,6 +1529,22 @@ export async function getMultiQueryMemoryContextDetailed(
     ].filter(Boolean);
 
     const seen = new Map<string, SearchResultLike>();
+    const staleSources = new Map<string, { parent: SearchResultLike; sources: SearchResultLike[] }>();
+    const allowSource = (source: SearchResultLike) => allowCandidate(source) &&
+        (entities.people.length ? true : contactScope?.status === 'resolved'
+            ? isMemoryEntryAllowedForContactScope(source, { ...contactScope, requireEntityMatch: true })
+            : isOwnerRecallEvidence(source));
+    const onStaleDerivedSources: MemoryCandidateOptions['onStaleDerivedSources'] = (parent, sources) => {
+        if (!allowSource(parent)) return;
+        const allowed = sources.filter(allowSource).slice(0, CHAPTER_SOURCE_MAX_PER_CHAPTER);
+        if (!allowed.length) return;
+        const key = JSON.stringify([parent.domain, parent.id]);
+        const existing = staleSources.get(key);
+        if (!existing || parent.score > existing.parent.score) staleSources.set(key, { parent, sources: allowed });
+        // Admission limits follow person/topic filtering, not the raw source order.
+        const ranked = [...staleSources.entries()].sort((a, b) => b[1].parent.score - a[1].parent.score || a[0].localeCompare(b[0]));
+        for (const [id] of ranked.slice(CHAPTER_SOURCE_TOP_N)) staleSources.delete(id);
+    };
     const addScopedCandidate = (candidate: SearchResultLike, scoreOverride?: number) => {
         if (!allowCandidate(candidate)) return;
         addCandidate(seen, {
@@ -1538,7 +1574,7 @@ export async function getMultiQueryMemoryContextDetailed(
     if ((need === 'full' || inventoryRequest) && ctx.from?.id) {
         const svcForSchemas = getVectorService();
         if (svcForSchemas) {
-            const schemaResults = await svcForSchemas.getMemoriesByTag(String(ctx.from.id), MEMORY_SCHEMA_TAG).catch(() => []);
+            const schemaResults = await readMemoryOr(() => svcForSchemas.getMemoriesByTag(String(ctx.from!.id), MEMORY_SCHEMA_TAG), []);
             const rankedSchemas = schemaResults
                 .filter((schema) => schema.status !== 'expired' && schema.status !== 'superseded')
                 .map((schema) => ({
@@ -1558,7 +1594,7 @@ export async function getMultiQueryMemoryContextDetailed(
     if ((need === 'full' || inventoryRequest) && ctx.from?.id) {
         const svcForMeta = getVectorService();
         if (svcForMeta) {
-            const uncertaintyResults = await svcForMeta.getMemoriesByTag(String(ctx.from.id), MEMORY_UNCERTAINTY_TAG).catch(() => []);
+            const uncertaintyResults = await readMemoryOr(() => svcForMeta.getMemoriesByTag(String(ctx.from!.id), MEMORY_UNCERTAINTY_TAG), []);
             const index = uncertaintyResults
                 .filter((memory) => memory.status !== 'expired' && memory.status !== 'superseded')
                 .map((memory) => ({
@@ -1578,7 +1614,7 @@ export async function getMultiQueryMemoryContextDetailed(
             const tags = contactIdentityTags(contactScope.queryName, contactScope.contact);
             const tagResults = await Promise.all(
                 [...new Set(tags)].map(tag =>
-                    svcForTags.getMemoriesByTag(String(ctx.from?.id), tag).catch(() => [])
+                    readMemoryOr(() => svcForTags.getMemoriesByTag(String(ctx.from?.id), tag), [])
                 )
             );
             for (const results of tagResults) {
@@ -1633,7 +1669,7 @@ export async function getMultiQueryMemoryContextDetailed(
     await Promise.all(
         answerQueries.map(async (query) => {
             const results = await searchHybridAllDomainsMemories(ctx, query, ANSWER_RESULTS_PER_QUERY,
-                allowCandidate);
+                allowCandidate, onStaleDerivedSources);
             for (const r of results) {
                 addScopedCandidate({ ...r, recallSources: ['direct'] });
             }
@@ -1644,7 +1680,7 @@ export async function getMultiQueryMemoryContextDetailed(
     await Promise.all(
         contextQueries.map(async (query) => {
             const results = await searchAllDomainsMemories(ctx, query, CONTEXT_RESULTS_PER_QUERY,
-                allowCandidate);
+                allowCandidate, onStaleDerivedSources);
             for (const r of results) {
                 addScopedCandidate({ ...r, recallSources: ['context'] }, r.score * CONTEXT_QUERY_SCORE_DISCOUNT);
             }
@@ -1656,7 +1692,7 @@ export async function getMultiQueryMemoryContextDetailed(
     await Promise.all(
         associativeQueries.map(async (query) => {
             const results = await searchAllDomainsMemories(ctx, query, ASSOCIATIVE_RESULTS_PER_QUERY,
-                allowCandidate);
+                allowCandidate, onStaleDerivedSources);
             const discount = contextDependent
                 ? ASSOCIATIVE_CONTEXTUAL_SCORE_DISCOUNT
                 : ASSOCIATIVE_QUERY_SCORE_DISCOUNT;
@@ -1665,6 +1701,14 @@ export async function getMultiQueryMemoryContextDetailed(
             }
         })
     );
+
+    // The rejected summary is only a lookup hint. Current primary records retain
+    // their own subject, negation and time; association weight is not dense cosine.
+    for (const { parent, sources } of [...staleSources.values()].sort((a, b) => b.parent.score - a.parent.score)) {
+        const score = Math.max(0.50, parent.score * CHAPTER_SOURCE_DISCOUNT);
+        for (const source of sources) if (!seen.has(source.id)) addScopedCandidate({ ...source, score,
+            recallSources: ['chapter'], recallPath: `currentSourceOfRejectedSummary=${parent.id}` });
+    }
 
     // 1-hop graph expansion: только в full-режиме
     if (need === 'full') {

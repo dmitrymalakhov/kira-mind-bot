@@ -65,6 +65,13 @@ export type MemoryExtractionMethod =
     | 'manual'
     | 'unknown';
 
+/** Assertion version actually presented to a derived-memory synthesis. */
+export interface MemorySourceSnapshot {
+    id: string;
+    domain: string;
+    assertionVersion: string;
+}
+
 export interface MemoryEntry {
     id: string;
     content: string;
@@ -97,6 +104,7 @@ export interface MemoryEntry {
     sourceContext?: string;
     sourceMessageIds?: string[];
     sourceMemoryIds?: string[];
+    sourceMemorySnapshots?: MemorySourceSnapshot[];
     extractionMethod?: MemoryExtractionMethod;
     subject?: MemorySubject;
     predicate?: string;
@@ -147,6 +155,7 @@ export interface SearchResult {
     sourceContext?: string;
     sourceMessageIds?: string[];
     sourceMemoryIds?: string[];
+    sourceMemorySnapshots?: MemorySourceSnapshot[];
     extractionMethod?: MemoryExtractionMethod;
     subject?: MemorySubject;
     predicate?: string;

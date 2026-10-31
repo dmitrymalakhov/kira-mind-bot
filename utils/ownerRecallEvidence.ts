@@ -8,6 +8,7 @@ import { tokenizeMemoryRetrievalText } from './memoryRetrieval';
 import { memoryContentExcerpt } from './memoryRanking';
 import { hasOwnerSelfReference } from './personalRecallIntent';
 import { PorterStemmerRu } from 'natural/lib/natural/stemmers';
+import { readMemoryOr } from './memoryReadCoverage';
 
 export interface OwnerRecallSupplement { direct: SearchResult[]; sourced: SearchResult[] }
 
@@ -61,8 +62,8 @@ export async function readOwnerRecallSupplement(service: IDomainVectorService, o
     // General is the legacy import bucket, not an additional identity scope.
     const domains = [...new Set([...plan.domains, 'general'])];
     for (let index = 0; index < domains.length; index += 3) {
-        const records = await service.getOwnerMemories(owner, domains.slice(index, index + 3), 120, { acceptCandidate: record =>
-            primaryReadable(record) && relevance(record) > 0 && (record.domain === 'general' && isOwnerRecallEvidence(record) || admitSource(record)) });
+        const records = await readMemoryOr(() => service.getOwnerMemories!(owner, domains.slice(index, index + 3), 120, { acceptCandidate: record =>
+            primaryReadable(record) && relevance(record) > 0 && (record.domain === 'general' && isOwnerRecallEvidence(record) || admitSource(record)) }), []);
         for (const record of records) {
             if (!primaryReadable(record) || relevance(record) <= 0) continue;
             if (record.domain === 'general' && isOwnerRecallEvidence(record)) direct.push(record);

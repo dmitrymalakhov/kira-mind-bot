@@ -214,7 +214,7 @@ test('specific retrieval preserves subject, negation and temporal status in the 
 });
 
 test('answer eval rejects blanket refusals and missing facets rather than rewarding context hits', () => {
-    const cases = memoryAnswerEvalCases(); assert.equal(cases.length, 12);
+    const cases = memoryAnswerEvalCases(); assert.equal(cases.length, 15);
     const byId = (id: string) => { const item = cases.find(value => value.id === id); assert.ok(item, id); return item; };
     assert.equal(checkMemoryAnswer(byId('owner-work-breadth'), 'Почти ничего не знаю.').passed, false);
     assert.equal(checkMemoryAnswer(byId('owner-work-breadth'), 'Ты разрабатываешь компиляторы.').passed, false);
@@ -224,6 +224,10 @@ test('answer eval rejects blanket refusals and missing facets rather than reward
     assert.equal(checkMemoryAnswer(byId('empty-is-not-never-told'), 'В найденных сведениях не указано, какая у тебя любимая настольная игра.').passed, true);
     assert.equal(checkMemoryAnswer(byId('owner-role-without-edge'), 'Твою дочь зовут Вера Учебная.').passed, true);
     assert.equal(checkMemoryAnswer(byId('owner-role-without-edge'), 'Имя не найдено.').passed, false);
+    assert.equal(checkMemoryAnswer(byId('read-unavailable-is-not-empty'), 'В памяти нет сведений.').passed, false);
+    assert.equal(checkMemoryAnswer(byId('read-unavailable-is-not-empty'), 'Сейчас не удалось проверить память.').passed, true);
+    assert.equal(checkMemoryAnswer(byId('read-partial-keeps-evidence'), 'Ты разрабатываешь учебный симулятор. Поиск пока неполный.').passed, true);
+    assert.equal(checkMemoryAnswer(byId('read-failed-continuation'), 'Больше ничего нового нет.').passed, false);
 });
 
 test('broad owner activity can include direct conversations as separate evidence without promoting contact facts', async t => {

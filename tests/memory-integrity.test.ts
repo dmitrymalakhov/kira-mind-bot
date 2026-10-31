@@ -13,6 +13,7 @@ import { compressOldMemories, saveMemory } from '../utils/enhancedDomainMemory';
 import { formatMemoryRerankCandidate } from '../utils/memoryRanking';
 import { canDeduplicateMemoryAssertions } from '../utils/memoryAssertion';
 import { detectEmotionalTag } from '../utils/emotionalTagger';
+import { snapshotMemorySources } from '../utils/derivedMemoryFreshness';
 
 const owner = '900000041';
 const memory = (id: string, extra: Partial<MemoryEntry> = {}): MemoryEntry => ({
@@ -110,6 +111,7 @@ test('compression preserves primary facts and records its bounded source pool as
     assert.equal(saved[0].subject, 'user');
     assert.equal(saved[0].extractionMethod, 'compression');
     assert.deepEqual(saved[0].sourceMemoryIds, sources.map(source => source.id));
+    assert.deepEqual(saved[0].sourceMemorySnapshots, snapshotMemorySources(sources));
     assert.ok(!saved[0].isAnchor);
 });
 

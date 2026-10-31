@@ -8,7 +8,7 @@ export function memoryRecallSummary(plan: MemoryQueryPlan, people: MemoryPerson[
 
 /** Do not ask a language model to re-identify an already proved endpoint. */
 export function confirmedMemoryIdentityAnswer(summary?: MemoryRecallSummary): string | undefined {
-    if (!summary?.identityVerified || summary.state !== 'found' || summary.requestKind !== 'identity' || summary.evidenceCount < 1 || summary.subjects.length !== 1) return undefined;
+    if (!summary?.identityVerified || summary.readCoverage?.failed || summary.state !== 'found' || summary.requestKind !== 'identity' || summary.evidenceCount < 1 || summary.subjects.length !== 1) return undefined;
     const subject = summary.subjects[0], name = subject.name.trim();
     if (!name || name.length > 160 || /[\r\n\p{Cc}]/u.test(name)) return undefined;
     return subject.owner ? 'Это ты.' : `Это ${name}.`;
@@ -24,6 +24,7 @@ export const MEMORY_ANSWER_RULES = `Ты отвечаешь на вопрос о
 Исторические свидетельства разрешено рассказывать как историю: «вы обсуждали», «ты рассказывал», «тогда планировал». Отсутствие подтверждения текущей должности или состава команды не причина скрывать известные проекты, темы обсуждений и прошлые события. Оговорку об актуальности относись только к соответствующей детали.
 Отделяй прямую сохранённую связь от переписки, упоминания третьего лица и предположения. Не выводи брак, трудоустройство, знакомство, мотивы или хронологию из совпадения темы. При реальной неоднозначности личности задай одно конкретное уточнение.
 При найденных сведениях изложи то, что они подтверждают; не отвечай общим отказом «почти ничего не знаю». Не заполняй пробелы догадками. Если ответ покрыт частично, сначала известное, затем конкретный пробел. Пустая/ограниченная выдача означает ограничение поиска, а не отсутствие знаний во всём архиве и не «ты никогда не говорил».
+Статусы partial/unavailable и readCoverage описывают сбой чтения. При partial сначала изложи найденное и кратко обозначь неполноту поиска; при unavailable скажи, что сейчас не удалось проверить память. Не превращай сбой в «сведений нет», не проси пользователя повторно сообщить всё и не показывай техническую ошибку. Неполный поиск не доказывает единственность человека, полноту списка или отсутствие новых фактов. При этом явно найденная неоднозначность остаётся неоднозначностью.
 Если пользователь просит «что ещё» и результат отмечен noNewEvidenceInPool=true, в текущей выборке нет новых сведений сверх уже показанных. Скажи это кратко; не пересказывай весь прежний список под видом новых фактов. На прямую просьбу объяснить прежнюю подробность можно пояснить её, сохраняя опору на запись.
 Не рассказывай о собственной жизни, настроении или памяти Киры в ответе на вопрос о пользователе/его окружении. Не предлагай повторно рассказать всё, что уже дано в свидетельствах. Оговорки нужны для конкретного пробела, а не как обязательный финал каждого ответа. Технические ID, ранги и служебные метки не выводи. Используй обычный текст: без Markdown-разметки и звёздочек; списки допустимы. Только готовый естественный ответ.`;
 
@@ -31,7 +32,8 @@ export function buildMemoryAnswerPrompt(input: { question: string; dateTime: str
     // Small cue window, explicitly separated from evidence. No assistant biography or
     // unbounded dialogue summary is appended after the retrieved facts.
     const history = input.history.slice(-6).map(({ role, content }) => ({ role, content: content.slice(0, 700) }));
-    const exhaustedAddition = input.summary?.noNewEvidenceInPool === true && input.summary.freshEvidenceCount === 0 &&
+    const incomplete = input.summary?.state === 'partial' || input.summary?.state === 'unavailable' || Boolean(input.summary?.readCoverage?.failed);
+    const exhaustedAddition = !incomplete && input.summary?.noNewEvidenceInPool === true && input.summary.freshEvidenceCount === 0 &&
         !/(?:подроб|объясн|поясн|что\s+знач|почему|как\s)/iu.test(input.question);
     // Already presented records remain available for explicit explanations, but
     // cannot look like a fresh packet when the user only asks for more facts.
@@ -39,6 +41,6 @@ export function buildMemoryAnswerPrompt(input: { question: string; dateTime: str
     return `Сейчас: ${input.dateTime}.\nТекущий вопрос: ${JSON.stringify(input.question)}\n\n` +
         `Поисковый результат (ограниченная выборка): ${JSON.stringify(input.summary ?? { state: 'unknown' })}\n` +
         `Предыдущий диалог — только контекст ссылок, не доказательства:\n${JSON.stringify(history)}\n\n` +
-        `Найденные свидетельства и результаты инструментов:\n${evidence || 'В текущем поиске подходящих свидетельств не найдено.'}\n\n` +
+        `Найденные свидетельства и результаты инструментов:\n${evidence || (incomplete ? 'Чтение памяти не завершилось. Отсутствие свидетельств в ответе не означает их отсутствие в памяти.' : 'В текущем поиске подходящих свидетельств не найдено.')}\n\n` +
         'Сформируй ответ по правилам работы со свидетельствами. Для обзора раскрой несколько разных аспектов с конкретными деталями; длину соотнеси с вопросом и объёмом найденного. Не перечисляй внутренние ограничения вместо ответа.';
 }
