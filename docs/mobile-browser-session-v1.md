@@ -19,6 +19,8 @@ The following fields and request shapes are fixed for the v1 adapter. Clients mu
 
 ## Reuse and scope
 
+Opening/inspecting a page or leaving it ready for manual control is a browser task even without form submission. The existing semantic intake preserves restrictions such as “do not book/send” and distinguishes them from cancellation of the whole task. The opt-in header advertises client support; it does not turn greetings or ordinary research into browser tasks. `tests/browser-message-entry.test.ts` exercises the accounts proxy, actual API backend, text handler and runtime with and without `Prefer: respond-async`; the real Chromium checks use that same backend rather than creating a session directly in a fake message handler. `scripts/testBrowserMessageEntryProvider.cjs` checks fictional phrasing variants with the configured provider in an isolated image without account data.
+
 The existing `agents/browserAgent.ts` Playwright browser/context/page and model loop remain the executor. The phone displays real pixels from that page and sends input to it. It must not open a second WKWebView as the task surface. Existing tenant workers, account Bearer authentication, app model selection, browser network proxy and confirmation checks remain authoritative. Browser control routes bypass the ordinary conversation execution mutex, but do not bypass browser ownership or authorization.
 
 Base path is the app's existing `/api/v1`; use the same origin and account `Authorization: Bearer …`. Never put authorization, cookies, typed content or credentials in a URL. A missing `browserSession` capability means this feature is unavailable; retain the old chat UI. Do not infer support from the server version or a successful ordinary message.

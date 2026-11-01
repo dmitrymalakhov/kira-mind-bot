@@ -16,7 +16,7 @@ import { addToHistory } from "../utils/history";
 import { ContactsStore } from "../stores/ContactsStore";
 import { ReminderRegistry } from "../stores/ReminderRegistry";
 import { reconsolidateAfterResponse } from "../services/MemoryReconsolidationService";
-import { looksLikeBrowserTaskCancellation } from "../utils/browserTaskCancellation";
+import { shouldCancelBrowserTask } from "../utils/browserTaskCancellation";
 import { browserConfirmationKey } from '../orchestration/runtime/confirmation';
 import { applyReminderEditInput, extractReminderPostponeDate } from "../utils/reminderEditor";
 import { stripVoiceReplyDirective, wantsVoiceReply } from "../utils/voiceReply";
@@ -514,7 +514,10 @@ export function registerTextMessageHandler(bot: Bot<BotContext>, options: { imme
                         return;
                     }
 
-                    if ((orchestrationMode() === 'legacy' || !hasCompoundActionRequest(message) || ctx.session.pendingRecurringTaskEdit) && await handleRecurringTaskText(ctx, message, {
+                    // An active website workflow needs the shared semantic pass:
+                    // "stop this browser task" is not recurring-task management.
+                    if ((orchestrationMode() === 'legacy' || ctx.session.pendingRecurringTaskEdit ||
+                        !ctx.session.pendingBrowserTask && !ctx.session.activeBrowserTask && !hasCompoundActionRequest(message)) && await handleRecurringTaskText(ctx, message, {
                         messageId: ctx.message.message_id,
                         contextHistory: recurringContextHistory,
                     })) {
@@ -532,7 +535,7 @@ export function registerTextMessageHandler(bot: Bot<BotContext>, options: { imme
                             }
                             ctx.session.pendingBrowserTask = undefined;
                         } else {
-                            if (looksLikeBrowserTaskCancellation(message)) {
+                            if (shouldCancelBrowserTask(message)) {
                                 if (pendingBrowserTask.sessionId) {
                                     import('../agents/browserAgent')
                                         .then((m) => m.cancelPausedBrowserSession(pendingBrowserTask.sessionId))

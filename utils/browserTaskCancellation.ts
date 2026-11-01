@@ -5,8 +5,15 @@ function cleanWhitespace(text: string): string {
     return text.replace(/\s+/g, ' ').trim();
 }
 
+/** A prohibition on one website action is not a cancellation of the whole goal.
+ * Natural-language scope is supplied by the existing intent pass. Only an
+ * unambiguous standalone stop command bypasses that semantic decision. */
+export function shouldCancelBrowserTask(text: string, control?: 'cancel' | 'continue'): boolean {
+    return isDirectBrowserCancellationCommand(text) || control === 'cancel';
+}
+
 export function isDirectBrowserCancellationCommand(text: string): boolean {
-    return /^(?:отмена|отмени(?:ть)?|cancel|stop|стоп|(?:просто\s+)?останови\p{L}*(?:\s+вс[её].*)?|остановить(?:\s+вс[её].*)?|прекрати|хватит|не\s+продолжай|ничего\s+не\s+делай|просто\s+остановить.*)\s*[.!?…]*$/iu
+    return /^(?:отмена|отмени(?:ть)?|cancel|stop|стоп|(?:просто\s+)?(?:останови|остановить)(?:\s+(?:вс[её](?:\s+действия)?|задачу|браузер(?:ную\s+задачу)?))?|прекрати|хватит|не\s+продолжай|ничего\s+не\s+делай)\s*[.!?…]*$/iu
         .test(cleanWhitespace(text));
 }
 

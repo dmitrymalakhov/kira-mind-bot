@@ -143,18 +143,30 @@ for (const persistent of [false, true]) test(`HTTP opt-in (${persistent ? 'persi
         return response({});
     };
     chat.createJsonChatCompletionForTask = async (_task, options) => {
+        if (_task === 'intentClassification' || _task === 'fastDialogue') return { intent:'БРАУЗЕР_ЗАДАЧА', confidenceLevel:'ВЫСОКИЙ',
+            details:{ memoryNeed:'none', responseComplexity:'routine', browserTaskControl:'continue' }, fastReply:{mode:'route'} };
         const text = JSON.stringify(options.messages);
         return text.includes('#book') ? {kind:'commitment',summary:'Submit TEST for Anna Harness?'} : {kind:'routine',summary:'Synthetic safe navigation'};
     };
-    const owner = 94003, scope = `api:${owner}`, token = 'synthetic-browser-token';
-    const ctx = { from:{id:owner}, chat:{id:owner,type:'private'}, sessionStorageKey:scope,
-        session:{isAllowedUser:true,messageHistory:[]}, reply:async()=>({message_id:1}), replyWithChatAction:async()=>{}, api:{} };
-    const api = new BrowserSessionApi(owner, scope, work => work());
-    const backend = { browserSession:api, turnReady:async()=>{}, message:async(text, options)=> {
-        ctx.liveBrowserRequest = options.liveBrowserRequest;
-        const result = await browserAgent(ctx,text,false,'',[],undefined,'Synthetic empty memory.');
-        return {messages:[{role:'assistant',text:result.responseText}]};
-    }};
+    const owner = 94003, scope = `api:${owner}`, token = 'synthetic-browser-token-at-least-thirty-two-characters';
+    const { config } = require('../config'), oldOwner=config.allowedUserId; config.allowedUserId=owner; t.after(()=>config.allowedUserId=oldOwner);
+    const { Bot } = require('grammy'), { BotApiBackend } = require('../api/backend');
+    const { TypeORMSessionStorage } = require('../services/SessionStorage');
+    let stored;
+    t.mock.method(TypeORMSessionStorage.prototype,'read',async()=>stored && structuredClone(stored));
+    t.mock.method(TypeORMSessionStorage.prototype,'write',async(_key,value)=>{stored=structuredClone(value);});
+    t.mock.method(require('../services/ChatGroupRepository').ChatGroupRepository,'findAll',async()=>[]);
+    t.mock.method(require('../services/DialogueJobRepository').DialogueJobRepository,'beginTurn',async()=>{});
+    t.mock.method(require('../services/communicationProfileService'),'communicationProfileContext',async()=>'');
+    t.mock.method(require('../services/behaviorMemoryService'),'getBehaviorMemoryContext',async()=>'');
+    t.mock.method(require('../services/MemoryReconsolidationService'),'reconsolidateAfterResponse',async()=>{});
+    t.mock.method(require('../utils/factAnalysisTimer').factAnalysisManager,'scheduleAnalysis',()=>{});
+    t.mock.method(require('../utils/history'),'addToHistory',async(ctx,role,content)=>{ctx.session.messageHistory.unshift({role,content,timestamp:new Date()});});
+    const bot=new Bot(process.env.KIRA_BOT_TOKEN,{botInfo:{id:1234567890,is_bot:true,first_name:'Synthetic',username:'synthetic_bot'}});
+    bot.api.config.use(async()=>{throw Error('No Telegram traffic');});
+    const backend=new BotApiBackend(bot,{ownerId:owner,token,host:'127.0.0.1',port:0},
+        {read:async()=>({preset:null,revision:'none'}),write:async()=>{throw Error('No settings writes');}});
+    const api=backend.browserSession;
     const server = createExternalApiServer({ownerId:owner,token,host:'127.0.0.1',port:0},backend,{run:async(_key,_fp,work)=>work()});
     await new Promise(r => server.listen(0,'127.0.0.1',r));
     const base = `http://127.0.0.1:${server.address().port}/api/v1`;
@@ -170,7 +182,8 @@ for (const persistent of [false, true]) test(`HTTP opt-in (${persistent ? 'persi
         await fs.rm(root,{recursive:true,force:true});
     });
     const key = randomUUID();
-    const pending = post('/messages',{text:'Open https://fixture.example/ and submit the TEST form. I will enter my name myself. Ask before the final submission.'},{'Idempotency-Key':key,'X-Kira-Browser-Session':'v1'});
+    const pending = post('/messages',{text:'Открой https://fixture.example/. Ничего не бронируй без подтверждения. Я сам введу имя; спроси перед финальной отправкой.'},
+        {'Idempotency-Key':key,'X-Kira-Browser-Session':'v1',...(persistent?{Prefer:'respond-async'}:{})});
     pending.catch(()=>{});
     const until = async (predicate, label) => { const end=Date.now()+25000; while(!predicate()) {if(Date.now()>end) throw Error(`Timed out: ${label}; state=${session?.state}`);await new Promise(r=>setTimeout(r,50));} };
     await until(()=>Boolean(session=api.active(key)),'discovery');
@@ -204,6 +217,11 @@ for (const persistent of [false, true]) test(`HTTP opt-in (${persistent ? 'persi
     await until(()=>lastSseFrame?.session?.page?.title==='TEST name Anna Harness','actual updated JPEG through HTTP SSE');
     const qaFrame=lastSseFrame;
     assert.equal(Buffer.from(qaFrame.jpegBase64,'base64').readUInt16BE(0),0xffd8);
+    const correction=await post('/messages',{text:'Не бронируй и ничего не отправляй, оставь эту же страницу для дальнейшего просмотра.'},
+        {'X-Kira-Browser-Session':'v1',...(persistent?{Prefer:'respond-async'}:{})});
+    assert.equal(correction.status,200,JSON.stringify(await correction.json()));
+    assert.equal(session.state,'paused'); assert.equal(api.active(key).id,session.id);
+    assert.equal(session.adapter.rawPage,page); assert.equal(await page.locator('#name').inputValue(),'Anna Harness');
     await command('resume',{leaseId:session.snapshot().control.leaseId});
     await until(()=>session.state==='awaiting_confirmation','confirmation after fresh observation');
     assert.equal(session.adapter.rawPage,page); assert.equal(await page.locator('#name').inputValue(),'Anna Harness');assert.equal(freshObservation,true);

@@ -28,7 +28,7 @@ import { ChatGroupRepository } from "./services/ChatGroupRepository";
 import { handlePendingContactMemoryText } from "./utils/contactMemory";
 import { handlePendingContactLookupText, maybeStartContactMemoryLookup } from "./utils/contactMemoryLookup";
 import { hasActiveBrowserRunForContext } from "./agents/browserAgent";
-import { looksLikeBrowserTaskCancellation, looksLikeNegatedBookingRequest } from "./utils/browserTaskCancellation";
+import { shouldCancelBrowserTask } from "./utils/browserTaskCancellation";
 import { isTodayImportanceRequest } from "./utils/todayImportanceIntent";
 import { applyKnowledgeSourceDecision, buildKnowledgeSourcePrompt, decideKnowledgeSource, shouldInterruptPendingContactMemory } from "./utils/knowledgeSource";
 import { decideContextualFollowUp } from "./utils/contextualFollowUp";
@@ -87,6 +87,8 @@ export interface MessageClassification {
     details: {
         behavioralFeedback?: { evidence: string };
         externalVerification?: 'availability';
+        /** Semantic scope of website-task cancellation, assessed in the existing intent call. */
+        browserTaskControl?: 'cancel' | 'continue';
         /** Server-provided procedural context and confirmed persistence result, never model authority. */
         behaviorContext?: string;
         behaviorLearningStatus?: BehaviorLearningStatus;
@@ -940,8 +942,8 @@ async function processMessageInternal(
 
         if (
             !deterministicOverrideApplied &&
-            (hasActiveRunningBrowserTask(ctx) || hasActiveBrowserRunForContext(ctx)) &&
-            looksLikeBrowserTaskCancellation(message) &&
+            (hasActiveRunningBrowserTask(ctx) || hasActiveBrowserRunForContext(ctx) || hasActivePendingBrowserTask(ctx)) &&
+            shouldCancelBrowserTask(message, classification.details.browserTaskControl) &&
             !explicitRemember
         ) {
             classification = { ...classification, intent: "БРАУЗЕР_ЗАДАЧА", confidenceLevel: "ВЫСОКИЙ" };
@@ -958,22 +960,6 @@ async function processMessageInternal(
             classification = { ...classification, intent: "БРАУЗЕР_ЗАДАЧА", confidenceLevel: "ВЫСОКИЙ" };
             deterministicOverrideApplied = true;
             devLog("Pending browser task answer detected, routing to browserTask");
-        }
-
-        if (
-            !deterministicOverrideApplied &&
-            looksLikeNegatedBookingRequest(message) &&
-            !explicitRemember
-        ) {
-            classification = {
-                ...classification,
-                intent: "РАЗГОВОР",
-                confidenceLevel: "ВЫСОКИЙ",
-                ambiguityReason: undefined,
-                clarificationQuestion: undefined,
-            };
-            deterministicOverrideApplied = true;
-            devLog("Negated booking request without active browser task, routing to conversation");
         }
 
         if (
@@ -1195,7 +1181,7 @@ async function processMessageInternal(
                 recurringTaskRun: options.recurringTaskRun === true || suspended?.backgroundRun === true,
             });
             if (suspended && !ctx.session.pendingBrowserTask) {
-                const cancelled = !internalBrowserContinuation && looksLikeBrowserTaskCancellation(originalMessage);
+                const cancelled = !internalBrowserContinuation && shouldCancelBrowserTask(originalMessage, classification.details.browserTaskControl);
                 if (cancelled || result.operationStatus === 'failed' || result.operationStatus === 'unknown') {
                     const status = result.operationStatus === 'unknown' ? 'unknown' : 'failed';
                     await cancelRuntimeContinuation(ctx, ['agents.start', 'agents.resume'], continuationKey, cancelled ? 'Браузерная задача отменена владельцем.' : result.responseText, status);

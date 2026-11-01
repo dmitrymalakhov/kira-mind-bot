@@ -13,7 +13,7 @@ import { devLog, parseLLMJson } from '../utils';
 import { fetchAgentMemoryContext, buildMemoryContextBlock } from '../utils/agentMemoryContext';
 import { BrowserSessionStore } from '../services/BrowserSessionStore';
 import { BrowserCredentialService } from '../services/BrowserCredentialService';
-import { looksLikeBrowserTaskCancellation } from '../utils/browserTaskCancellation';
+import { shouldCancelBrowserTask } from '../utils/browserTaskCancellation';
 import { RUNTIME_DATA_DIR } from '../utils/runtimeData';
 import { describeOutgoingImage } from '../services/outgoingImageDescription';
 import { replyWithPhotoAndStore } from '../handlers/shared';
@@ -5679,11 +5679,6 @@ function browserRunOwnerKeyForContext(ctx: BotContext): string {
     return browserRunOwnerKey(ctx.from?.id ?? 0, ctx.chat?.id);
 }
 
-function shouldInterruptActiveBrowserRun(ctx: BotContext, message: string): boolean {
-    if (BROWSER_CONTINUATION_RE.test(message) || !isBrowserCancellationText(message)) return false;
-    return Boolean(getActiveBrowserSession(ctx) || ctx.session.activeBrowserTask || ctx.session.pendingBrowserTask);
-}
-
 async function enqueueBrowserAgentLane<T>(
     ctx: BotContext,
     run: () => Promise<T>
@@ -5750,8 +5745,8 @@ export function hasActiveBrowserRunForContext(ctx: BotContext): boolean {
     return Boolean(getActiveBrowserSession(ctx));
 }
 
-function isBrowserCancellationText(text: string): boolean {
-    return looksLikeBrowserTaskCancellation(text);
+function isBrowserCancellationText(text: string, classification?: MessageClassification): boolean {
+    return shouldCancelBrowserTask(text, classification?.details.browserTaskControl);
 }
 
 function compactBrowserChoiceLabel(label: string): string {
@@ -12889,7 +12884,7 @@ async function runBrowserAgent(
     _isForwarded: boolean = false,
     _forwardFrom: string = '',
     messageHistory: MessageHistory[] = [],
-    _classification?: MessageClassification,
+    classification?: MessageClassification,
     injectedMemoryContext?: string
 ): Promise<ProcessingResult> {
     const userId = ctx.from?.id ?? 0;
@@ -12902,21 +12897,6 @@ async function runBrowserAgent(
     let memoryForLlm = injectedMemoryContext;
 
     try {
-        const activeState = getActiveBrowserSession(ctx);
-        if (!BROWSER_CONTINUATION_RE.test(message) && isBrowserCancellationText(message) && activeState) {
-            activeState.cancelRequested = true;
-            activeState.cancelAcknowledged = true;
-            ctx.session.pendingBrowserTask = undefined;
-            ctx.session.activeBrowserTask = undefined;
-            await closeBrowserRunState(activeState, 'cancelled').catch(() => {});
-            return { responseText: 'Ок, браузерную задачу остановила.' };
-        }
-        if (!BROWSER_CONTINUATION_RE.test(message) && isBrowserCancellationText(message) && ctx.session.activeBrowserTask) {
-            ctx.session.pendingBrowserTask = undefined;
-            ctx.session.activeBrowserTask = undefined;
-            return { responseText: 'Ок, браузерную задачу остановила.' };
-        }
-
         state = getPausedBrowserSession(ctx, message);
         const continuation = parseBrowserContinuationMessage(message);
         if (state) {
@@ -12926,7 +12906,7 @@ async function runBrowserAgent(
             const answer = pendingBrowserTask?.userAnswer || continuation?.answer || browserTaskAnswerFromMessage(message) || message;
             const pendingQuestion = pendingBrowserTask?.question || continuation?.question || '';
             state.lastUserAnswer = answer;
-            if (!state.shared && isBrowserCancellationText(answer)) {
+            if (!state.shared && isBrowserCancellationText(answer, classification)) {
                 shouldClose = false;
                 ctx.session.pendingBrowserTask = undefined;
                 ctx.session.activeBrowserTask = undefined;
@@ -14906,6 +14886,20 @@ export async function browserAgent(
     injectedMemoryContext?: string
 ): Promise<ProcessingResult> {
     const scope = browserContextScopeKey(ctx);
+    if (!BROWSER_CONTINUATION_RE.test(message) && isBrowserCancellationText(message, classification)) {
+        await cancelBrowserRunForContext(ctx);
+        const shared = liveBrowserSessions.active(ctx.from?.id ?? 0, scope);
+        shared?.stop();
+        return { responseText: 'Ок, браузерную задачу остановила.', operationStatus: 'ok' };
+    }
+    const existing = liveBrowserSessions.active(ctx.from?.id ?? 0, scope);
+    if (!liveBrowserInvocation() && existing && !isLiveBrowserTerminal(existing.state) &&
+        ctx.session.pendingBrowserTask?.sessionId === existing.id) {
+        // A normal message has no observer/lease binding. Keep this page and its
+        // correction, but require the existing explicit control route to resume.
+        await existing.correct(message);
+        return { responseText: 'Уточнение учтено. Та же страница остаётся открытой на паузе; продолжить можно в управлении браузером.', operationStatus: 'needs_input' };
+    }
     const sharedRequested = Boolean(ctx.liveBrowserRequest) || (!scope.startsWith('api:') && !ctx.agentRuntimeStorageKey &&
         ctx.from?.id === config.allowedUserId && ctx.chat?.type === 'private' && ctx.session.isAllowedUser);
     if (sharedRequested && !liveBrowserInvocation()) {
@@ -14936,24 +14930,6 @@ export async function browserAgent(
         if (!isLiveBrowserTerminal(session.state)) result.keyboard = session.requiresObserver ? undefined : liveBrowserKeyboard(session);
         return result;
     }
-    if (shouldInterruptActiveBrowserRun(ctx, message)) {
-        const activeState = getActiveBrowserSession(ctx);
-        if (activeState) {
-            activeState.cancelRequested = true;
-            activeState.cancelAcknowledged = true;
-        }
-        if (ctx.session.pendingBrowserTask?.sessionId) {
-            await cancelPausedBrowserSession(ctx.session.pendingBrowserTask.sessionId).catch(() => {});
-        }
-        ctx.session.pendingBrowserTask = undefined;
-        ctx.session.activeBrowserTask = undefined;
-        browserLog('browser_lane_interrupt', {
-            laneKey: browserRunOwnerKeyForContext(ctx),
-            activeSessionId: activeState?.id,
-        });
-        return { responseText: 'Ок, браузерную задачу остановила.' };
-    }
-
     return enqueueBrowserAgentLane(ctx, () =>
         runBrowserAgent(
             ctx,

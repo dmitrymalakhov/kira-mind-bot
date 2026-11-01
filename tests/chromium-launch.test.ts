@@ -29,12 +29,17 @@ test('failed launch cleans only its own directory and concurrent launches never 
     const failure = new Error('Synthetic launch failure');
     await assert.rejects(launchChromium(async env => { failed = env.TMPDIR!; throw failure; }), error => error === failure);
     await assert.rejects(fs.stat(failed), { code: 'ENOENT' });
-    const directories: string[] = [];
-    const launch = () => launchChromium(async env => { directories.push(env.TMPDIR!); return { close: async () => {} }; });
+    const launch = async () => {
+        let directory = '';
+        const browser = await launchChromium(async env => { directory = env.TMPDIR!; return { close: async () => {} }; });
+        return { browser, directory };
+    };
     const [first, second] = await Promise.all([launch(), launch()]);
-    assert.notEqual(directories[0], directories[1]);
-    await first.close(); assert.ok((await fs.stat(directories[1])).isDirectory());
-    await second.close();
+    assert.notEqual(first.directory, second.directory);
+    await first.browser.close(); assert.ok((await fs.stat(second.directory)).isDirectory());
+    await assert.rejects(fs.stat(first.directory), { code: 'ENOENT' });
+    await second.browser.close();
+    await assert.rejects(fs.stat(second.directory), { code: 'ENOENT' });
 });
 
 for (const synchronous of [true, false]) test(`a ${synchronous ? 'sync' : 'async'} failed close retains the directory and permits retry`, async () => {
