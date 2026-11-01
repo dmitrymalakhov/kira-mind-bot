@@ -23,6 +23,7 @@ import { LivePlaywrightAdapter } from '../services/liveBrowserPlaywright';
 import { hasApprovedBrowserAction, runReviewedBrowserAction } from '../services/liveBrowserActionPolicy';
 import { liveBrowserKeyboard, notifyLiveBrowserState } from '../services/liveBrowserTelegram';
 import { browserInternalDiagnostic, browserPublicFailure } from '../utils/browserFailureReply';
+import { launchChromium } from '../services/chromiumLaunch';
 
 const createChatCompletionForTask: typeof requestBrowserChatCompletion = async (...args) => {
     const invocation = liveBrowserInvocation();
@@ -10074,10 +10075,11 @@ async function createBrowserLaunchResources(userId: number, chatId?: number): Pr
         if (persistentBrowserProfileEnabled()) {
             const profileDir = browserProfileDirForRun(userId, chatId);
             fs.mkdirSync(profileDir, { recursive: true });
-            const browserCtx = await chromium.launchPersistentContext(profileDir, {
+            const browserCtx = await launchChromium(env => chromium.launchPersistentContext(profileDir, {
                 ...launchOptions,
                 ...contextOptions,
-            });
+                env,
+            }));
             acquired.browserCtx = browserCtx;
             const browser = browserCtx.browser();
             acquired.browser = browser ?? undefined;
@@ -10090,7 +10092,7 @@ async function createBrowserLaunchResources(userId: number, chatId?: number): Pr
             return { browser, browserCtx, page, persistentProfile: true, profileDir };
         }
 
-        const browser = await chromium.launch(launchOptions);
+        const browser = await launchChromium(env => chromium.launch({ ...launchOptions, env }));
         acquired.browser = browser;
         const browserCtx = await browser.newContext(contextOptions);
         acquired.browserCtx = browserCtx;
@@ -14874,6 +14876,7 @@ async function runBrowserAgent(
             return { responseText: 'Ок, браузерную задачу остановила.' };
         }
         const failure = browserPublicFailure(err);
+        invocation?.session.reportFailure(failure.code);
         console.error('[BROWSER] fatal error:', { code: failure.code, diagnostic: browserInternalDiagnostic(err) });
         recordBrowserTrajectoryEvent(state, 'lifecycle.error', {
             code: failure.code,

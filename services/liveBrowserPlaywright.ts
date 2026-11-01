@@ -13,6 +13,7 @@ export class LivePlaywrightAdapter implements LiveBrowserAdapter {
     private viewportKey = '';
     private observed = new WeakSet<Page>();
     private closed = false;
+    private closing?: Promise<void>;
     private wrappers = new WeakMap<object, object>();
     private originals = new WeakMap<object, object>();
     private privateValues: string[] = [];
@@ -101,7 +102,21 @@ export class LivePlaywrightAdapter implements LiveBrowserAdapter {
             case 'reload': await this.current.reload({ waitUntil: 'domcontentloaded', timeout: 15_000 }); break;
         }
     }
-    async close() { if (this.closed) return; this.closed = true; await this.context.close().catch(() => {}); await this.browser.close().catch(() => {}); this.privateValues = []; }
+    close(): Promise<void> {
+        if (!this.closing) {
+            const attempt = Promise.resolve().then(async () => {
+                this.closed = true;
+                let failure: unknown;
+                try { await this.context.close(); } catch (error) { failure = error; }
+                try { await this.browser.close(); } catch (error) { failure ??= error; }
+                this.privateValues = [];
+                if (failure) throw failure;
+            });
+            this.closing = attempt;
+            void attempt.catch(() => { if (this.closing === attempt) this.closing = undefined; });
+        }
+        return this.closing;
+    }
     async readyToResume() {
         const body = (await Promise.all(this.current.frames().map(frame => frame.locator('body').innerText()))).join('\n');
         if (this.privateValues.some(value => value.length > 2 && body.includes(value)))

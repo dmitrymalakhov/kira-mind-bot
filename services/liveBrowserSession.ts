@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
 import { ApiError } from '../api/contracts';
+import type { BrowserFailureCode } from '../utils/browserFailureReply';
 
 export type LiveBrowserState = 'starting' | 'running' | 'pausing' | 'paused' | 'user_control' | 'needs_user' |
     'awaiting_confirmation' | 'completed' | 'cancelled' | 'failed' | 'disconnected';
@@ -259,6 +260,9 @@ export class LiveBrowserSession {
         this.invalidate(); this.state = 'cancelled'; this.reason = reason; this.controller = null; this.lease = null;
         this.expires = this.now() + RETENTION; this.frame = null; this.frameBytes = undefined;
         this.onStop?.(); this.changed(); void this.adapter?.close().catch(() => {});
+    }
+    reportFailure(code: BrowserFailureCode) {
+        if (!TERMINAL.has(this.state)) this.reason = code;
     }
     finish(state: 'completed' | 'failed', generation: number) {
         if (generation !== this.generation || TERMINAL.has(this.state)) return;

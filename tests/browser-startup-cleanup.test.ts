@@ -24,6 +24,9 @@ function fixture(t: TestContext, persistent: boolean, fault?: Fault, closeFailur
     process.env.BROWSER_PERSISTENT_PROFILE = String(persistent);
     const failure = new Error(`synthetic startup ${fault}`);
     const closes: string[] = [], launches: string[] = [];
+    const temporary: string[] = [];
+    // These handles are mocks: even intentionally failed close calls leave no live process.
+    t.after(() => { for (const directory of temporary) fs.rmSync(directory, { recursive: true, force: true }); });
     const ctx = { from: { id: 94041 }, chat: { id: 94041, type: 'private' }, session: {} } as unknown as BotContext;
     const page = Object.assign(new EventEmitter(), {
         isClosed: () => false, url: () => 'about:blank',
@@ -51,12 +54,14 @@ function fixture(t: TestContext, persistent: boolean, fault?: Fault, closeFailur
     fs.mkdirSync(profile, { recursive: true });
     const marker = path.join(profile, 'synthetic-cookie-marker');
     fs.writeFileSync(marker, 'synthetic persisted session');
-    t.mock.method(chromium, 'launchPersistentContext', async (directory: string) => {
+    t.mock.method(chromium, 'launchPersistentContext', async (directory: string, options?: { env?: NodeJS.ProcessEnv }) => {
+        if (options?.env?.TMPDIR) temporary.push(options.env.TMPDIR);
         assert.equal(directory, profile); launches.push('persistent');
         if (fault === 'launch') throw failure;
         return context;
     });
-    t.mock.method(chromium, 'launch', async () => {
+    t.mock.method(chromium, 'launch', async (options?: { env?: NodeJS.ProcessEnv }) => {
+        if (options?.env?.TMPDIR) temporary.push(options.env.TMPDIR);
         launches.push('ephemeral'); if (fault === 'launch') throw failure; return browser;
     });
     t.mock.method(BrowserCredentialService, 'parseAndSave', () => { if (fault === 'credentials') throw failure; return null; });
@@ -155,5 +160,6 @@ for (const shared of [false, true]) test(`public ${shared ? 'shared' : 'plain'} 
         const session = liveBrowserSessions.active(94041, '94041', operationId)!;
         t.after(() => session.dispose());
         assert.equal(session.state, 'failed');
+        assert.equal(session.snapshot().reason, 'browser_failed');
     }
 });

@@ -94,8 +94,13 @@ test('real Chromium: navigation during review and late helper operations after p
     assert.throws(() => f.adapter.guard(f.page).locator('#book'), BrowserInterrupted);
 });
 
-test('HTTP opt-in drives the existing browserAgent; takeover interrupts its pending model and fresh resume retains human state', { timeout: 60000 }, async t => {
-    process.env.BROWSER_PERSISTENT_PROFILE = 'false';
+for (const persistent of [false, true]) test(`HTTP opt-in (${persistent ? 'persistent' : 'ephemeral'}): existing agent, tenant temp path, takeover, fresh resume and cleanup`, { timeout: 60000 }, async t => {
+    const fs = require('node:fs/promises'), path = require('node:path');
+    const root = await fs.mkdtemp('/tmp/k-'), parentTemp = path.join(root,'kt_00000000_0000_0000_0000_000000000000','temp');
+    await fs.mkdir(parentTemp,{recursive:true}); assert.equal(parentTemp.length,58);
+    const originalEnv = {TMPDIR:process.env.TMPDIR,BROWSER_PROFILE_DIR:process.env.BROWSER_PROFILE_DIR,BROWSER_PERSISTENT_PROFILE:process.env.BROWSER_PERSISTENT_PROFILE};
+    process.env.TMPDIR=parentTemp; process.env.BROWSER_PROFILE_DIR=path.join(root,'profiles');
+    process.env.BROWSER_PERSISTENT_PROFILE = String(persistent);
     const { browserAgent } = require('../agents/browserAgent');
     const { liveBrowserSessions } = require('../services/liveBrowserSession');
     const { BrowserSessionApi } = require('../api/browser');
@@ -104,13 +109,22 @@ test('HTTP opt-in drives the existing browserAgent; takeover interrupts its pend
     memory.fetchAgentMemoryContext = async () => ({ text: '', memories: [], memoryContext: '' });
     memory.buildMemoryContextBlock = () => '';
     const launch = chromium.launch.bind(chromium);
+    const launchPersistent = chromium.launchPersistentContext.bind(chromium);
+    let childTemp;
     chromium.launch = async options => {
+        childTemp=options.env.TMPDIR;
         const browser = await launch(options), newContext = browser.newContext.bind(browser);
         browser.newContext = async options => {
             const context = await newContext(options);
             await context.route('https://fixture.example/**', route => route.fulfill({ contentType:'text/html', body:fixtureHtml }));
             return context;
         }; return browser;
+    };
+    chromium.launchPersistentContext = async (directory,options) => {
+        childTemp=options.env.TMPDIR;
+        const context=await launchPersistent(directory,options);
+        await context.route('https://fixture.example/**',route=>route.fulfill({contentType:'text/html',body:fixtureHtml}));
+        return context;
     };
     let releaseModel, enteredModel;
     const heldModel = new Promise(r => releaseModel = r), modelEntered = new Promise(r => enteredModel = r);
@@ -146,8 +160,15 @@ test('HTTP opt-in drives the existing browserAgent; takeover interrupts its pend
     const base = `http://127.0.0.1:${server.address().port}/api/v1`;
     const get = p => fetch(base+p,{headers:{Authorization:`Bearer ${token}`}});
     const post = (p,body,headers={}) => fetch(base+p,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':randomUUID(),...headers},body:JSON.stringify(body)});
-    let session, streamAbort = new AbortController();
-    t.after(async()=> { releaseModel(); session?.dispose(); server.closeAllConnections(); server.close(); chromium.launch=launch; streamAbort.abort(); });
+    let session, streamAbort = new AbortController(), lastSseFrame, receivedFrames=0;
+    const states=[];
+    t.after(async()=> {
+        releaseModel(); session?.dispose(); await session?.adapter?.close();
+        server.closeAllConnections(); server.close(); chromium.launch=launch; chromium.launchPersistentContext=launchPersistent; streamAbort.abort();
+        if(childTemp) await assert.rejects(fs.stat(childTemp),{code:'ENOENT'});
+        for(const [key,value] of Object.entries(originalEnv)) {if(value===undefined)delete process.env[key];else process.env[key]=value;}
+        await fs.rm(root,{recursive:true,force:true});
+    });
     const key = randomUUID();
     const pending = post('/messages',{text:'Open https://fixture.example/ and submit the TEST form. I will enter my name myself. Ask before the final submission.'},{'Idempotency-Key':key,'X-Kira-Browser-Session':'v1'});
     pending.catch(()=>{});
@@ -157,10 +178,20 @@ test('HTTP opt-in drives the existing browserAgent; takeover interrupts its pend
     assert.equal((await post(route+'/observers',{observerId})).status,200);
     const stream=await fetch(base+route+`/events?observerId=${observerId}`,{headers:{Authorization:`Bearer ${token}`},signal:streamAbort.signal});
     assert.equal(stream.status,200);
-    const reader=stream.body.getReader(); void (async()=>{try{while(!(await reader.read()).done){}}catch{}})();
+    const reader=stream.body.getReader(); void (async()=>{let text='';const decoder=new TextDecoder();try{
+        while(true){const chunk=await reader.read();if(chunk.done)break;text+=decoder.decode(chunk.value,{stream:true});
+            let cut;while((cut=text.indexOf('\n\n'))>=0){const block=text.slice(0,cut);text=text.slice(cut+2);
+                const data=block.split('\n').find(line=>line.startsWith('data: '));if(!data)continue;
+                const event=JSON.parse(data.slice(6));if(event.session?.state)states.push(event.session.state);
+                if(event.event==='frame'){receivedFrames++;lastSseFrame=event;}
+            }
+        }
+    }catch{}})();
     const heart=setInterval(()=>void post(route+'/heartbeat',{observerId}),4000); t.after(()=>clearInterval(heart));
     await Promise.race([modelEntered,new Promise((_,reject)=>setTimeout(()=>reject(Error(`Agent did not reach held model; state=${session.state}`)),25000))]);
     const page=session.adapter.rawPage; assert.equal(page.url(),'https://fixture.example/');
+    assert.equal(process.env.TMPDIR,parentTemp); assert.notEqual(childTemp,parentTemp);
+    assert.equal((await fs.stat(childTemp)).mode&0o777,0o700);
     const command = async(type,extra={})=> {const response=await post(route+'/commands',{type,observerId,expectedRevision:session.snapshot().revision,...extra});const ack=await response.json();assert.equal(response.status,200,JSON.stringify(ack));return ack;};
     await command('take_control'); assert.equal(session.state,'user_control'); releaseModel();
     assert.equal((await pending).status,200);
@@ -170,10 +201,24 @@ test('HTTP opt-in drives the existing browserAgent; takeover interrupts its pend
         assert.equal(response.status,200,JSON.stringify(await response.json()));
     };
     const box=await page.locator('#name').boundingBox();await enter({type:'tap',x:box.x+10,y:box.y+10});await enter({type:'text',text:'Anna Harness'});
+    await until(()=>lastSseFrame?.session?.page?.title==='TEST name Anna Harness','actual updated JPEG through HTTP SSE');
+    const qaFrame=lastSseFrame;
+    assert.equal(Buffer.from(qaFrame.jpegBase64,'base64').readUInt16BE(0),0xffd8);
     await command('resume',{leaseId:session.snapshot().control.leaseId});
     await until(()=>session.state==='awaiting_confirmation','confirmation after fresh observation');
     assert.equal(session.adapter.rawPage,page); assert.equal(await page.locator('#name').inputValue(),'Anna Harness');assert.equal(freshObservation,true);
     assert.match(session.snapshot().pendingConfirmation.summary,/Anna Harness/);
     await command('confirm',{confirmationId:session.snapshot().pendingConfirmation.confirmationId,decision:'reject'});
     assert.equal(await page.locator('#result').innerText(),'');await command('stop');assert.equal(session.state,'cancelled');
+    await until(()=>states.includes('cancelled'),'cancelled state through HTTP SSE');
+    if(persistent&&process.env.KIRA_BROWSER_QA_DIR){
+        await fs.mkdir(process.env.KIRA_BROWSER_QA_DIR,{recursive:true});
+        await fs.writeFile(path.join(process.env.KIRA_BROWSER_QA_DIR,'live-browser-frame.jpg'),Buffer.from(qaFrame.jpegBase64,'base64'));
+        await fs.writeFile(path.join(process.env.KIRA_BROWSER_QA_DIR,'browser-session-evidence.json'),JSON.stringify({
+            syntheticOnly:true,realChromium:true,authenticatedHttp:true,operationId:key,sessionId:session.id,
+            parentTempLength:parentTemp.length,receivedFrames,states:[...new Set(states)],samePage:true,
+            manualTextRetained:true,freshObservation,finalSubmissionRejected:true,
+            frame:{...qaFrame.frame,pageId:qaFrame.session.page.pageId},
+        },null,2)+'\n');
+    }
 });
