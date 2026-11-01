@@ -222,3 +222,22 @@ for (const persistent of [false, true]) test(`HTTP opt-in (${persistent ? 'persi
         },null,2)+'\n');
     }
 });
+
+test('real browserAgent model failure returns safe text and a discoverable terminal reason', {timeout:20000}, async t=>{
+    const fs=require('node:fs/promises'),path=require('node:path');
+    const root=await fs.mkdtemp('/tmp/k-'),previous=process.env.BROWSER_PROFILE_DIR;
+    process.env.BROWSER_PROFILE_DIR=path.join(root,'profiles');
+    const {browserAgent}=require('../agents/browserAgent'),{liveBrowserSessions}=require('../services/liveBrowserSession');
+    const failure=()=>{throw Error('Unsupported synthetic model: token=synthetic-private-marker https://synthetic.invalid/private');};
+    chat.createChatCompletionForTask=failure;chat.createJsonChatCompletionForTask=failure;
+    const operationId=randomUUID(),scope='api:94007';
+    const ctx={from:{id:94007},chat:{id:94007,type:'private'},sessionStorageKey:scope,liveBrowserRequest:{operationId},
+        session:{isAllowedUser:true,messageHistory:[]},reply:async()=>({message_id:1}),replyWithChatAction:async()=>{},api:{}};
+    let session;
+    t.after(async()=>{session?.dispose();await session?.adapter?.close();if(previous===undefined)delete process.env.BROWSER_PROFILE_DIR;else process.env.BROWSER_PROFILE_DIR=previous;await fs.rm(root,{recursive:true,force:true});});
+    const result=await browserAgent(ctx,'Найди синтетическую публичную страницу',false,'',[],undefined,'Synthetic empty memory.');
+    session=liveBrowserSessions.active(94007,scope,operationId);
+    assert.equal(session.state,'failed');assert.equal(session.snapshot().reason,'browser_model_unavailable');
+    assert.equal(result.responseText,'Не удалось получить следующий шаг от модели. Попробуй продолжить задачу позже.');
+    assert.doesNotMatch(JSON.stringify({reply:result.responseText,session:session.snapshot()}),/synthetic-private-marker|Unsupported|https:\/\/synthetic.invalid/);
+});

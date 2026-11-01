@@ -1,4 +1,4 @@
-export type BrowserFailureCode = 'browser_profile_in_use' | 'browser_runtime_unavailable' | 'browser_launch_failed' | 'browser_navigation_failed' | 'browser_failed';
+export type BrowserFailureCode = 'browser_profile_in_use' | 'browser_runtime_unavailable' | 'browser_launch_failed' | 'browser_navigation_failed' | 'browser_model_unavailable' | 'browser_failed';
 
 function message(error: unknown): string {
     try {
@@ -9,7 +9,8 @@ function message(error: unknown): string {
 }
 
 /** Public messages are constants: provider/Playwright output never becomes an assistant reply or session reason. */
-export function browserPublicFailure(error: unknown): { code: BrowserFailureCode; reply: string } {
+export function browserPublicFailure(error: unknown, phase?: 'model'): { code: BrowserFailureCode; reply: string } {
+    if (phase === 'model') return { code: 'browser_model_unavailable', reply: 'Не удалось получить следующий шаг от модели. Попробуй продолжить задачу позже.' };
     const raw = message(error);
     if (/SingletonLock|ProcessSingleton|profile (?:is |already )?in use|user data directory is already in use/iu.test(raw))
         return { code: 'browser_profile_in_use', reply: 'Браузер сейчас занят другой сессией; попробуй ещё раз позже.' };

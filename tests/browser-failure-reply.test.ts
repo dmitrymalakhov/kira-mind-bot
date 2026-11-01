@@ -46,3 +46,10 @@ test('useful internal diagnostics redact credentials, headers, query values and 
     assert.ok(!browserInternalDiagnostic('password="synthetic password with spaces"').includes('password with spaces'));
     assert.equal(browserInternalDiagnostic({}), '');
 });
+
+test('model failures use a constant public reply rather than a provider exception', () => {
+    const result = browserPublicFailure(new Error('Connection error at https://synthetic.invalid/private token=synthetic-secret'), 'model');
+    assert.equal(result.code, 'browser_model_unavailable');
+    assert.equal(result.reply, 'Не удалось получить следующий шаг от модели. Попробуй продолжить задачу позже.');
+    assert.doesNotMatch(result.reply, /Connection|synthetic|token|https/);
+});

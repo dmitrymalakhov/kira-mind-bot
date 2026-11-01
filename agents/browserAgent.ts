@@ -8313,14 +8313,16 @@ ${observation.runtimeSignals || '(нет ошибок/предупреждени
         }
     }
 
+    const failure = browserPublicFailure(lastError, 'model');
+    liveBrowserInvocation()?.session.reportFailure(failure.code);
     if (isTransientLlmError(lastError)) {
         return {
             action: 'ask_user',
-            summary: `Временная ошибка LLM: ${safeErrorMessage(lastError) || 'неизвестно'}. Браузерная сессия сохранена; ответь «продолжай», и я продолжу с этого места.`,
+            summary: `${failure.reply} Страница сохранена; напиши «продолжай», чтобы повторить.`,
         };
     }
 
-    return { action: 'fail', summary: `Ошибка LLM: ${safeErrorMessage(lastError) || 'неизвестно'}` };
+    return { action: 'fail', summary: failure.reply };
 }
 
 // ─── Выполнение действия ──────────────────────────────────────────────────────
