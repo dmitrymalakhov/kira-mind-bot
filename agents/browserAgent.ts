@@ -10034,6 +10034,13 @@ interface BrowserLaunchResources {
     profileDir?: string;
 }
 
+/** Startup owns these handles until a fully initialized run has been registered. */
+async function closeBrowserStartupResources(resources: { browser?: Browser; browserCtx?: BrowserContext }): Promise<void> {
+    // Attempt both closes, including when the first close throws synchronously.
+    try { await resources.browserCtx?.close(); } catch {}
+    try { await resources.browser?.close(); } catch {}
+}
+
 async function createBrowserLaunchResources(userId: number, chatId?: number): Promise<BrowserLaunchResources> {
     const chromiumExecutablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim();
     const tenantProxy = process.env.KIRA_TENANT_ID ? process.env.KIRA_BROWSER_PROXY_URL : undefined;
@@ -10062,30 +10069,39 @@ async function createBrowserLaunchResources(userId: number, chatId?: number): Pr
         acceptDownloads: true,
     };
 
-    if (persistentBrowserProfileEnabled()) {
-        const profileDir = browserProfileDirForRun(userId, chatId);
-        fs.mkdirSync(profileDir, { recursive: true });
-        const browserCtx = await chromium.launchPersistentContext(profileDir, {
-            ...launchOptions,
-            ...contextOptions,
-        });
-        await installBrowserContextDefaults(browserCtx);
-        const browser = browserCtx.browser();
-        if (!browser) {
-            await browserCtx.close().catch(() => {});
-            throw new Error('Не удалось получить Browser для persistent profile.');
+    const acquired: { browser?: Browser; browserCtx?: BrowserContext } = {};
+    try {
+        if (persistentBrowserProfileEnabled()) {
+            const profileDir = browserProfileDirForRun(userId, chatId);
+            fs.mkdirSync(profileDir, { recursive: true });
+            const browserCtx = await chromium.launchPersistentContext(profileDir, {
+                ...launchOptions,
+                ...contextOptions,
+            });
+            acquired.browserCtx = browserCtx;
+            const browser = browserCtx.browser();
+            acquired.browser = browser ?? undefined;
+            if (!browser) {
+                throw new Error('Не удалось получить Browser для persistent profile.');
+            }
+            await installBrowserContextDefaults(browserCtx);
+            const page = browserCtx.pages().find((candidate) => !candidate.isClosed()) ?? await browserCtx.newPage();
+            installBrowserPageDefaults(page);
+            return { browser, browserCtx, page, persistentProfile: true, profileDir };
         }
-        const page = browserCtx.pages().find((candidate) => !candidate.isClosed()) ?? await browserCtx.newPage();
-        installBrowserPageDefaults(page);
-        return { browser, browserCtx, page, persistentProfile: true, profileDir };
-    }
 
-    const browser = await chromium.launch(launchOptions);
-    const browserCtx = await browser.newContext(contextOptions);
-    await installBrowserContextDefaults(browserCtx);
-    const page = await browserCtx.newPage();
-    installBrowserPageDefaults(page);
-    return { browser, browserCtx, page, persistentProfile: false };
+        const browser = await chromium.launch(launchOptions);
+        acquired.browser = browser;
+        const browserCtx = await browser.newContext(contextOptions);
+        acquired.browserCtx = browserCtx;
+        await installBrowserContextDefaults(browserCtx);
+        const page = await browserCtx.newPage();
+        installBrowserPageDefaults(page);
+        return { browser, browserCtx, page, persistentProfile: false };
+    } catch (error) {
+        await closeBrowserStartupResources(acquired);
+        throw error;
+    }
 }
 
 async function installBrowserContextDefaults(browserCtx: BrowserContext): Promise<void> {
@@ -10101,120 +10117,146 @@ function installBrowserPageDefaults(page: Page): void {
     page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
 }
 
-async function createBrowserRun(
+/** Internal startup entrypoint; ownership transfers to the registered run only on success. */
+export async function createBrowserRun(
     ctx: BotContext,
     userId: number,
     originalTask: string,
     memoryContext?: string,
     recentUserContext?: string
 ): Promise<BrowserRunState> {
+    const resources = await createBrowserLaunchResources(userId, ctx.chat?.id);
     const {
         browser,
         browserCtx,
         page,
         persistentProfile,
         profileDir,
-    } = await createBrowserLaunchResources(userId, ctx.chat?.id);
+    } = resources;
+    let initializingState: BrowserRunState | undefined;
 
-    const explicitSavedCreds = BrowserCredentialService.parseAndSave(userId, originalTask);
-    const credentialCandidates = [
-        ...extractCredentialCandidatesFromText(originalTask, 'user'),
-        ...extractCredentialCandidatesFromText(memoryContext, 'memory'),
-    ];
-    if (explicitSavedCreds) {
-        const saved = BrowserCredentialService.get(userId, explicitSavedCreds.domain);
-        if (saved) {
-            credentialCandidates.unshift({
-                source: 'saved',
-                domain: explicitSavedCreds.domain,
-                login: saved.login,
-                password: saved.password,
-            });
+    try {
+        const explicitSavedCreds = BrowserCredentialService.parseAndSave(userId, originalTask);
+        const credentialCandidates = [
+            ...extractCredentialCandidatesFromText(originalTask, 'user'),
+            ...extractCredentialCandidatesFromText(memoryContext, 'memory'),
+        ];
+        if (explicitSavedCreds) {
+            const saved = BrowserCredentialService.get(userId, explicitSavedCreds.domain);
+            if (saved) {
+                credentialCandidates.unshift({
+                    source: 'saved',
+                    domain: explicitSavedCreds.domain,
+                    login: saved.login,
+                    password: saved.password,
+                });
+            }
         }
-    }
-    const memoryCredentials =
-        explicitSavedCreds
-            ? { source: 'saved' as const, domain: explicitSavedCreds.domain, login: explicitSavedCreds.login, password: BrowserCredentialService.get(userId, explicitSavedCreds.domain)?.password }
-            : chooseCredentialCandidate(credentialCandidates) ?? null;
-    const state: BrowserRunState = {
-        id: liveBrowserInvocation()?.session.id ?? randomUUID(),
-        userId,
-        chatId: ctx.chat?.id,
-        sessionScopeKey: browserContextScopeKey(ctx),
-        browser,
-        browserCtx,
-        persistentProfile,
-        profileDir,
-        page,
-        originalTask,
-        memoryContext,
-        recentUserContext,
-        memoryCredentials,
-        credentialCandidates,
-        activeCredentials: memoryCredentials,
-        history: [],
-        notes: [],
-        memoryLookupQueries: [],
-        pageEvents: [],
-        networkSnippets: [],
-        evidenceStash: [],
-        visibleListingItems: [],
-        formAutofillAttempts: [],
-        loopCheckpointSignatures: [],
-        downloads: [],
-        dialogs: [],
-        armedDialogResponse: undefined,
-        lastComment: '',
-        lastUserAnswer: '',
-        lastScreenshotDomain: '',
-        lastCredentialDomain: '',
-        sessionSavedForDomain: '',
-        followUpOriginDomain: '',
-        iterationCount: 0,
-        consecutiveActionFailures: 0,
-        highImpactConfirmed: false,
-        taskContract: undefined,
-        taskContractSource: undefined,
-        lastUnderstandingUrl: '',
-        lastUnderstandingIteration: -1,
-        pendingBookingMemorySnapshot: undefined,
-        confirmedBookingMemorySnapshot: undefined,
-        rejectedBookingMemorySnapshots: [],
-        cancelRequested: false,
-        cancelAcknowledged: false,
-        expiresAt: Date.now() + PENDING_BROWSER_TTL_MS,
-    };
-    const live = liveBrowserInvocation();
-    if (live) {
-        state.shared = live.session;
-        const adapter = new LivePlaywrightAdapter(live.session, browser, browserCtx, page);
-        state.sharedAdapter = adapter;
-        state.browser = adapter.guard(browser); state.browserCtx = adapter.guard(browserCtx); state.page = adapter.guard(page);
-        live.session.onSuspend = () => {
-            state.highImpactConfirmed = false;
-            pauseBrowserRun(ctx, state, 'Задача приостановлена. Продолжить с этой же страницы?', undefined, undefined, true);
+        const memoryCredentials =
+            explicitSavedCreds
+                ? { source: 'saved' as const, domain: explicitSavedCreds.domain, login: explicitSavedCreds.login, password: BrowserCredentialService.get(userId, explicitSavedCreds.domain)?.password }
+                : chooseCredentialCandidate(credentialCandidates) ?? null;
+        const state: BrowserRunState = {
+            id: liveBrowserInvocation()?.session.id ?? randomUUID(),
+            userId,
+            chatId: ctx.chat?.id,
+            sessionScopeKey: browserContextScopeKey(ctx),
+            browser,
+            browserCtx,
+            persistentProfile,
+            profileDir,
+            page,
+            originalTask,
+            memoryContext,
+            recentUserContext,
+            memoryCredentials,
+            credentialCandidates,
+            activeCredentials: memoryCredentials,
+            history: [],
+            notes: [],
+            memoryLookupQueries: [],
+            pageEvents: [],
+            networkSnippets: [],
+            evidenceStash: [],
+            visibleListingItems: [],
+            formAutofillAttempts: [],
+            loopCheckpointSignatures: [],
+            downloads: [],
+            dialogs: [],
+            armedDialogResponse: undefined,
+            lastComment: '',
+            lastUserAnswer: '',
+            lastScreenshotDomain: '',
+            lastCredentialDomain: '',
+            sessionSavedForDomain: '',
+            followUpOriginDomain: '',
+            iterationCount: 0,
+            consecutiveActionFailures: 0,
+            highImpactConfirmed: false,
+            taskContract: undefined,
+            taskContractSource: undefined,
+            lastUnderstandingUrl: '',
+            lastUnderstandingIteration: -1,
+            pendingBookingMemorySnapshot: undefined,
+            confirmedBookingMemorySnapshot: undefined,
+            rejectedBookingMemorySnapshots: [],
+            cancelRequested: false,
+            cancelAcknowledged: false,
+            expiresAt: Date.now() + PENDING_BROWSER_TTL_MS,
         };
-        live.session.onStop = () => {
-            state.cancelRequested = true;
+        initializingState = state;
+        const live = liveBrowserInvocation();
+        if (live) {
+            state.shared = live.session;
+            const adapter = new LivePlaywrightAdapter(live.session, browser, browserCtx, page);
+            state.sharedAdapter = adapter;
+            state.browser = adapter.guard(browser); state.browserCtx = adapter.guard(browserCtx); state.page = adapter.guard(page);
+            live.session.onSuspend = () => {
+                state.highImpactConfirmed = false;
+                pauseBrowserRun(ctx, state, 'Задача приостановлена. Продолжить с этой же страницы?', undefined, undefined, true);
+            };
+            live.session.onStop = () => {
+                state.cancelRequested = true;
+                if (state.timeout) clearTimeout(state.timeout);
+                pausedBrowserSessions.delete(state.id);
+                activeBrowserSessions.delete(browserRunOwnerKey(state.userId, state.chatId, state.sessionScopeKey));
+                ctx.session.pendingBrowserTask = undefined; ctx.session.activeBrowserTask = undefined;
+            };
+            live.session.attach(adapter);
+        }
+        state.trajectory = live ? undefined : createBrowserTrajectoryRecorder(state);
+        recordBrowserTrajectoryEvent(state, 'lifecycle.start', {
+            originalTask: originalTask.slice(0, 1200),
+            memoryContextChars: memoryContext?.length ?? 0,
+            recentUserContextChars: recentUserContext?.length ?? 0,
+            credentialCandidates: credentialCandidates.length,
+            persistentProfile,
+            profileKey: profileDir ? path.basename(profileDir) : undefined,
+        });
+        attachPageObservers(state);
+        registerActiveBrowserRun(ctx, state);
+        return state;
+    } catch (error) {
+        const state = initializingState;
+        if (state) {
+            const key = browserRunOwnerKey(state.userId, state.chatId, state.sessionScopeKey);
+            if (activeBrowserSessions.get(key) === state) activeBrowserSessions.delete(key);
+            if (pausedBrowserSessions.get(state.id) === state) pausedBrowserSessions.delete(state.id);
             if (state.timeout) clearTimeout(state.timeout);
-            pausedBrowserSessions.delete(state.id);
-            activeBrowserSessions.delete(browserRunOwnerKey(state.userId, state.chatId, state.sessionScopeKey));
-            ctx.session.pendingBrowserTask = undefined; ctx.session.activeBrowserTask = undefined;
-        };
-        live.session.attach(adapter);
+            try {
+                if (ctx.session.activeBrowserTask?.sessionId === state.id) ctx.session.activeBrowserTask = undefined;
+            } catch {}
+            try { finishBrowserTrajectory(state, 'failed'); } catch {}
+        }
+        if (state?.sharedAdapter) {
+            // Mark the adapter closed before closing its context, so teardown isn't a user stop.
+            try { await state.sharedAdapter.close(); }
+            catch { await closeBrowserStartupResources(resources); }
+        } else {
+            await closeBrowserStartupResources(resources);
+        }
+        throw error;
     }
-    state.trajectory = live ? undefined : createBrowserTrajectoryRecorder(state);
-    recordBrowserTrajectoryEvent(state, 'lifecycle.start', {
-        originalTask: originalTask.slice(0, 1200),
-        memoryContextChars: memoryContext?.length ?? 0,
-        recentUserContextChars: recentUserContext?.length ?? 0,
-        credentialCandidates: credentialCandidates.length,
-        persistentProfile,
-        profileKey: profileDir ? path.basename(profileDir) : undefined,
-    });
-    attachPageObservers(state);
-    registerActiveBrowserRun(ctx, state);
-    return state;
 }
 
 function buildResumedTask(state: BrowserRunState, message: string, answer?: string): string {
