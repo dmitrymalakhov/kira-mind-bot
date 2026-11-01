@@ -238,6 +238,6 @@ test('real browserAgent model failure returns safe text and a discoverable termi
     const result=await browserAgent(ctx,'Найди синтетическую публичную страницу',false,'',[],undefined,'Synthetic empty memory.');
     session=liveBrowserSessions.active(94007,scope,operationId);
     assert.equal(session.state,'failed');assert.equal(session.snapshot().reason,'browser_model_unavailable');
-    assert.equal(result.responseText,'Не удалось получить следующий шаг от модели. Попробуй продолжить задачу позже.');
+    assert.equal(result.responseText,'❌ Не удалось выполнить задачу.\n\nНе удалось получить следующий шаг от модели. Попробуй продолжить задачу позже.');
     assert.doesNotMatch(JSON.stringify({reply:result.responseText,session:session.snapshot()}),/synthetic-private-marker|Unsupported|https:\/\/synthetic.invalid/);
 });
