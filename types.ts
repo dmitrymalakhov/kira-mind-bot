@@ -267,6 +267,8 @@ export interface SessionData {
         createdAt: number;
         expiresAt: number;
     };
+    /** Bounded owner/channel workspace, separate from personal memory and live operation receipts. */
+    browserWorkspace?: import('./services/browserWorkspace').BrowserWorkspace;
     /** Ожидает выбора одного из быстрых вариантов уточнения через inline-кнопки */
     pendingQuickChoices?: Record<string, {
         originalMessage: string;
@@ -369,6 +371,8 @@ export interface ForwardedMessageGroup {
 export type BotContext = Context & SessionFlavor<SessionData> & {
     /** Transport-only live browser opt-in; never persisted or accepted as an account identity. */
     liveBrowserRequest?: { operationId: string };
+    /** Validated by the existing semantic intake, never taken from an API request body. */
+    browserWorkspaceContinuation?: string;
     /** Releases only this Telegram update when the existing browser agent starts; its session flush still completes. */
     releaseBrowserUpdate?: () => void;
     productAnalytics?: import('./services/productAnalytics').ProductAnalyticsTask;

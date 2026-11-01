@@ -13,6 +13,7 @@ import { allowsCrossProviderFallback, errorToMessage, getTaskFallbackModel } fro
 import { resolveRetryPolicy } from './providers/policyDefaults';
 import { runSameProviderDegradationChain } from './executionPolicy';
 import { limitChatGeneration } from './generationLimits';
+import { assertAiExecutionActive } from './executionScope';
 
 const MAX_PRESET_REFRESHES_PER_REQUEST = 3;
 
@@ -130,9 +131,11 @@ async function createChatCompletionWithModel(
     const fallbackUsed = stage === 'fallback';
 
     try {
+        assertAiExecutionActive();
         const result = await providerAdapter.createChatCompletion(modelRef.model,
             limitChatGeneration(preset, taskKey, modelRef.provider, params, modelRef.generation?.maxTokens), modelRef.generation);
 
+        assertAiExecutionActive();
         recordAiUsage({
             taskKey,
             provider: modelRef.provider,
@@ -152,6 +155,7 @@ async function createChatCompletionWithModel(
 
         return result;
     } catch (error) {
+        assertAiExecutionActive();
         const parseErrorIdentities = providerAdapter.parseErrorIdentities?.bind(providerAdapter);
         const diagnostics = classifyAiErrorForProvider(error, parseErrorIdentities);
         recordAiUsage({
@@ -232,6 +236,7 @@ async function createChatCompletionForTaskWithTrace(
     };
 
     while (true) {
+        assertAiExecutionActive();
         try {
             const response = await createChatCompletionWithModel(
                 taskKey,
@@ -244,6 +249,7 @@ async function createChatCompletionForTaskWithTrace(
             );
             return { response, route, attempt, stage };
         } catch (error) {
+            assertAiExecutionActive();
             const diagnostics = classifyAiErrorForProvider(error, getErrorIdentityParser(route.modelRef));
 
             if (!diagnostics.retryable) {

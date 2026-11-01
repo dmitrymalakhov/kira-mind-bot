@@ -1,6 +1,7 @@
 import path from 'path';
 import { readFile, stat } from 'fs/promises';
 import { OpenAI } from 'openai';
+import { aiRequestOptions } from '../executionScope';
 import { getAiProviderDescriptor } from '../providerMetadata';
 import type { AiModelRef } from '../modelPresets';
 import type { AiProviderAdapter, AiProviderCapabilities, EmbeddingResult, ResponseResult, RetryPolicy } from './types';
@@ -586,7 +587,7 @@ export const geminiProviderAdapter: AiProviderAdapter = {
         return withGeminiRequestSlot(() => this.client.chat.completions.create({
             ...this.normalizeChatParams(model, params),
             model,
-        }));
+        }, aiRequestOptions()));
     },
     async createResponse(model, params) {
         return withGeminiRequestSlot(async () => {

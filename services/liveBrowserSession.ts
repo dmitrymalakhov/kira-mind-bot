@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
 import { ApiError } from '../api/contracts';
 import type { BrowserFailureCode } from '../utils/browserFailureReply';
+import { withAiExecutionScope } from '../ai/executionScope';
 
 export type LiveBrowserState = 'starting' | 'running' | 'pausing' | 'paused' | 'user_control' | 'needs_user' |
     'awaiting_confirmation' | 'completed' | 'cancelled' | 'failed' | 'disconnected';
@@ -18,27 +19,31 @@ export interface BrowserFrame {
 }
 export interface LiveBrowserAdapter {
     inspect(): Promise<BrowserPageInfo>;
-    capture(): Promise<{ page: BrowserPageInfo; jpeg: Buffer; width: number; height: number }>;
+    capture(): Promise<{ page: BrowserPageInfo; jpeg: Buffer; width: number; height: number; screenshotMs?: number }>;
     input(input: BrowserInput): Promise<void>;
     close(): Promise<void>;
     readyToResume?(): Promise<void>;
+    resolveWebsiteDialog?(id:string,decision:'accept'|'reject'):Promise<void>;
 }
 export interface BrowserSnapshot {
     version: 1; sessionId: string; operationId: string; revision: number; eventSeq: number; state: LiveBrowserState;
     control: { owner: 'agent' | 'user' | 'none'; observerId: string | null; leaseId: string | null };
     page: BrowserPageInfo | null; frame: BrowserFrame | null;
-    pendingConfirmation: { confirmationId: string; summary: string; revision: number } | null;
+    pendingConfirmation: { confirmationId: string; summary: string; revision: number; kind?:'website_dialog'; dialogType?:string } | null;
     assistanceRequest: { requestId: string; revision: number; kind: 'information' | 'login' | 'otp' | 'captcha' | 'clarification' | 'blocked'; prompt: string; responseActions: Array<'answer' | 'take_control' | 'pause' | 'stop'> } | null;
     inFlight: boolean; externalEffect: 'none' | 'possible' | 'confirmed' | 'unknown'; expiresAt: string;
     lastCommand: { commandId: string; type: string; accepted: boolean } | null; reason: string | null;
+    metrics?: { captureIntervalMs: number; lastCaptureMs: number | null; lastScreenshotMs: number | null; lastInputToFrameMs: number | null;
+        staleFrameRejects: number; agentModelCalls: number; agentPageActions: number; framesPublished: number; framesDropped: number };
 }
 export interface BrowserEvent { seq: number; event: 'snapshot' | 'state' | 'frame'; session?: BrowserSnapshot;
     sessionId?: string; frame?: BrowserFrame; jpegBase64?: string; resync?: boolean; }
 export interface BrowserAck { commandId: string; accepted: boolean; session: BrowserSnapshot; interpretation?: string; reply?: string; }
 export const LIVE_BROWSER_CAPABILITY = { version: 1, available: true, transport: 'sse-jpeg',
-    activePath: '/api/v1/browser/sessions/active', maxObservers: 2, maxFrameRate: 1,
+    activePath: '/api/v1/browser/sessions/active', maxObservers: 2, maxFrameRate: 5,
     inputs: ['tap', 'scroll', 'text', 'key', 'back', 'reload'], backgroundPolicy: 'pause', observerTimeoutMs: 15_000,
-    accessibility: { structuredPageControls: false }, secureFocus: true } as const;
+    accessibility: { structuredPageControls: false }, secureFocus: true,
+    websiteDialogs: { confirmationCommand: true, promptInput: false } } as const;
 const TERMINAL = new Set<LiveBrowserState>(['completed', 'cancelled', 'failed']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const KEYS = new Set(['Enter', 'Tab', 'Backspace', 'Delete', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
@@ -69,6 +74,7 @@ export class LiveBrowserSession {
     private reason: string | null = null;
     private effect: BrowserSnapshot['externalEffect'] = 'none';
     private confirmation: BrowserSnapshot['pendingConfirmation'] = null;
+    private dialogReturnState: 'user_control'|'paused' = 'paused';
     private assistance: BrowserSnapshot['assistanceRequest'] = null;
     private confirmationBinding?: string;
     private permittedBinding?: string;
@@ -79,15 +85,27 @@ export class LiveBrowserSession {
     private observers = new Map<string, { heartbeat: number; sink?: (event: BrowserEvent) => boolean; close?: () => void; connection?: symbol }>();
     private calls = new Set<Promise<unknown>>();
     private run?: Promise<unknown>;
+    private agentAbort = new AbortController();
     private timer: NodeJS.Timeout;
     private capturing = false;
     private lastCapture = 0;
+    private captureRequested = false;
+    private captureTimer?: NodeJS.Timeout;
+    private frameKey = '';
+    private equivalentFrames = new Map<number, { revision: number; capturedAt: number }>();
+    private lastInputAt?: number;
+    readonly metrics = { lastCaptureMs: null as number | null, lastScreenshotMs: null as number | null,
+        lastInputToFrameMs: null as number | null, staleFrameRejects: 0, agentModelCalls: 0, agentPageActions: 0,
+        framesPublished: 0, framesDropped: 0 };
     private suspending?: Promise<void>;
     private actionBusy = false;
     adapter?: LiveBrowserAdapter;
     resume?: (answer: string) => Promise<unknown>;
     onSuspend?: () => void;
     onStop?: () => void;
+    workspaceContext?: () => unknown;
+    onCorrection?: (text: string) => void;
+    persistContext?: () => Promise<void>;
     corrections: string[] = [];
     onState?: () => void;
     backgroundDelivery = false;
@@ -99,23 +117,24 @@ export class LiveBrowserSession {
         private readonly now: () => number = Date.now) {
         this.requiresObserver = scope.startsWith('api:');
         if (!this.requiresObserver) this.observers.set(this.telegramObserverId, { heartbeat: this.now(), sink: () => true });
-        this.timer = setInterval(() => { void this.tick(); }, 500);
+        this.timer = setInterval(() => { void this.tick(); }, 100);
         this.timer.unref();
     }
     snapshot(): BrowserSnapshot {
         return { version: 1, sessionId: this.id, operationId: this.operationId, revision: this.revision, eventSeq: this.sequence,
-            state: this.state, control: { owner: this.state === 'running' || this.state === 'starting' ? 'agent' : this.state === 'user_control' ? 'user' : 'none',
+            state: this.state, control: { owner: this.state === 'running' || this.state === 'starting' ? 'agent' : this.state === 'user_control' || this.confirmation?.kind === 'website_dialog' && Boolean(this.controller && this.lease) ? 'user' : 'none',
                 observerId: this.controller, leaseId: this.lease }, page: this.page ? structuredClone(this.page) : null,
             frame: this.frame && this.frame.revision === this.revision && this.now() - this.frameTime <= 2000 ? { ...this.frame } : null,
             pendingConfirmation: this.confirmation ? { ...this.confirmation } : null, inFlight: this.calls.size > 0,
             assistanceRequest: this.assistance ? structuredClone(this.assistance) : null,
-            externalEffect: this.effect, expiresAt: new Date(this.expires).toISOString(), lastCommand: this.lastCommand ? { ...this.lastCommand } : null, reason: this.reason };
+            externalEffect: this.effect, expiresAt: new Date(this.expires).toISOString(), lastCommand: this.lastCommand ? { ...this.lastCommand } : null, reason: this.reason,
+            metrics: { captureIntervalMs: this.captureInterval(), ...this.metrics } };
     }
     private publish(event: BrowserEvent) {
         for (const [id, observer] of this.observers) if (observer.sink && !observer.sink(event)) this.disconnect(id, observer.connection);
     }
-    private changed() { this.revision++; this.sequence++; this.publish({ event: 'state', seq: this.sequence, session: this.snapshot() }); this.onState?.(); }
-    private invalidate() { this.generation++; this.confirmation = null; this.confirmationBinding = undefined; this.permittedBinding = undefined; this.assistance = null; }
+    private changed() { this.revision++; this.sequence++; this.publish({ event: 'state', seq: this.sequence, session: this.snapshot() }); this.onState?.(); void this.capture(true); }
+    private invalidate() { this.generation++; this.agentAbort.abort(); this.agentAbort = new AbortController(); if (this.confirmation?.kind !== 'website_dialog') this.confirmation = null; this.confirmationBinding = undefined; this.permittedBinding = undefined; this.assistance = null; }
     private touch() { this.expires = this.now() + TTL; }
     private checkRevision(value: unknown) { if (value !== this.revision) fail('browser_revision_conflict', 'Обнови состояние браузера.'); }
     private observer(id: unknown) {
@@ -177,6 +196,7 @@ export class LiveBrowserSession {
     }
     pageChanged() {
         if (TERMINAL.has(this.state)) return;
+        if (this.confirmation?.kind === 'website_dialog') { this.frame = null; this.frameBytes = undefined; this.changed(); return; }
         if (this.assistance || this.confirmation) {
             this.invalidate(); this.state = 'paused'; this.reason = 'page_changed';
         }
@@ -190,22 +210,43 @@ export class LiveBrowserSession {
         }
         this.page = page;
     }
-    async capture() {
-        if (!this.requiresObserver || !this.adapter || this.capturing || TERMINAL.has(this.state) || this.now() - this.lastCapture < 1000 ||
+    private captureInterval() { return this.state === 'user_control' ? 200 : 1000; }
+    async capture(request = false) {
+        if (request) this.captureRequested = true;
+        if (!this.requiresObserver || !this.adapter || TERMINAL.has(this.state) ||
             ![...this.observers.values()].some(o => o.sink)) return;
-        this.capturing = true; this.lastCapture = this.now();
+        if (this.capturing) return;
+        const wait = this.captureInterval() - (this.now() - this.lastCapture);
+        if (wait > 0) {
+            if (this.captureRequested && !this.captureTimer) {
+                this.captureTimer = setTimeout(() => { this.captureTimer = undefined; void this.capture(); }, wait);
+                this.captureTimer.unref();
+            }
+            return;
+        }
+        this.capturing = true; this.captureRequested = false; this.lastCapture = this.now();
+        const started = performance.now();
         const revision = this.revision, generation = this.generation;
         try {
             const data = await this.adapter.capture();
-            if (TERMINAL.has(this.state) || revision !== this.revision || generation !== this.generation || data.jpeg.length > 768 * 1024) return;
+            this.metrics.lastCaptureMs = performance.now() - started;
+            this.metrics.lastScreenshotMs = data.screenshotMs ?? null;
+            if (TERMINAL.has(this.state) || revision !== this.revision || generation !== this.generation || data.jpeg.length > 768 * 1024) { this.metrics.framesDropped++; return; }
             this.updatePage(data.page);
+            const key = createHash('sha256').update(data.jpeg).update(JSON.stringify(data.page)).update(String(this.revision)).digest('hex');
+            if (key !== this.frameKey) this.equivalentFrames.clear();
+            this.frameKey = key;
             this.frameTime = this.now(); this.frameBytes = data.jpeg;
             this.frame = { frameSeq: ++this.frameSequence, eventSeq: ++this.sequence, revision: this.revision,
                 pageId: data.page.pageId, navigationEpoch: data.page.navigationEpoch, viewportRevision: data.page.viewportRevision,
                 imageWidth: data.width, imageHeight: data.height, capturedAt: new Date(this.frameTime).toISOString(), mime: 'image/jpeg', focus: data.page.focus };
+            this.equivalentFrames.set(this.frame.frameSeq, { revision: this.revision, capturedAt: this.frameTime });
+            while (this.equivalentFrames.size > 8) this.equivalentFrames.delete(this.equivalentFrames.keys().next().value!);
+            this.metrics.framesPublished++;
+            if (this.lastInputAt !== undefined) { this.metrics.lastInputToFrameMs = performance.now() - this.lastInputAt; this.lastInputAt = undefined; }
             this.publish({ event: 'frame', seq: this.sequence, sessionId: this.id, session: this.snapshot(), frame: this.frame, jpegBase64: data.jpeg.toString('base64') });
         } catch { /* A real capture failure is no frame, never placeholder pixels. */ }
-        finally { this.capturing = false; }
+        finally { this.capturing = false; if (this.captureRequested) void this.capture(); }
     }
     assertAgent(generation: number) {
         if (generation !== this.generation || !['starting', 'running'].includes(this.state)) throw new BrowserInterrupted();
@@ -213,6 +254,7 @@ export class LiveBrowserSession {
     /** Invoked by the Playwright adapter for every protocol operation, including recovery helpers. */
     agentCall<T>(generation: number, work: () => T): T {
         this.assertAgent(generation);
+        this.metrics.agentPageActions++;
         const value = work();
         if (value && typeof (value as any).then === 'function') {
             let guarded: Promise<unknown>;
@@ -226,7 +268,8 @@ export class LiveBrowserSession {
         if (this.run) fail('browser_run_busy', 'Прежний шаг ещё завершается.');
         const generation = this.generation;
         this.assertAgent(generation);
-        const running = invocation.run({ session: this, generation }, work);
+        const running = invocation.run({ session: this, generation }, () => withAiExecutionScope({ signal: this.agentAbort.signal,
+            assertActive: () => this.assertAgent(generation), onRequest: () => { this.metrics.agentModelCalls++; } }, work));
         this.run = running;
         try { return await running; } finally { if (this.run === running) this.run = undefined; }
     }
@@ -250,7 +293,9 @@ export class LiveBrowserSession {
         this.suspending = (async () => {
             await this.drain();
             if (generation !== this.generation || TERMINAL.has(this.state)) return;
-            this.onSuspend?.(); this.state = target; this.touch(); this.changed();
+            this.onSuspend?.(); this.state = this.confirmation?.kind === 'website_dialog' ? 'awaiting_confirmation' : target;
+            if (this.confirmation?.kind === 'website_dialog') this.dialogReturnState = target === 'user_control' ? 'user_control' : 'paused';
+            this.touch(); this.changed();
         })();
         try { await this.suspending; } finally { this.suspending = undefined; }
     }
@@ -258,8 +303,9 @@ export class LiveBrowserSession {
         if (TERMINAL.has(this.state)) return;
         if (this.calls.size || this.effect === 'possible') this.effect = 'unknown';
         this.invalidate(); this.state = 'cancelled'; this.reason = reason; this.controller = null; this.lease = null;
+        this.confirmation = null;
         this.expires = this.now() + RETENTION; this.frame = null; this.frameBytes = undefined;
-        this.onStop?.(); this.changed(); void this.adapter?.close().catch(() => {});
+        this.onStop?.(); this.changed(); void this.persistContext?.().catch(() => {}); void this.adapter?.close().catch(() => {});
     }
     reportFailure(code: BrowserFailureCode) {
         if (!TERMINAL.has(this.state)) this.reason = code;
@@ -267,6 +313,7 @@ export class LiveBrowserSession {
     finish(state: 'completed' | 'failed', generation: number) {
         if (generation !== this.generation || TERMINAL.has(this.state)) return;
         this.invalidate(); this.state = state; this.controller = null; this.lease = null;
+        this.confirmation = null;
         this.expires = this.now() + RETENTION; this.frame = null; this.frameBytes = undefined; this.changed();
     }
     async needsUser(summary: string, kind: NonNullable<BrowserSnapshot['assistanceRequest']>['kind'] = 'blocked') {
@@ -276,6 +323,17 @@ export class LiveBrowserSession {
         this.assistance = { requestId: randomUUID(), revision: this.revision + 1, kind, prompt: summary.slice(0, 700),
             responseActions: ['answer','take_control','pause','stop'] };
         this.changed();
+    }
+    websiteDialog(id:string,type:string,summary:string) {
+        if (TERMINAL.has(this.state)) return;
+        this.dialogReturnState = this.state === 'user_control' || Boolean(this.controller && this.lease) ? 'user_control' : 'paused';
+        if (['starting','running'].includes(this.state)) {
+            this.invalidate(); this.state='needs_user'; this.controller=null; this.lease=null; this.onSuspend?.();
+        }
+        this.state = 'awaiting_confirmation';
+        // Website callbacks can report a blocker; they never dismiss it or take human ownership.
+        this.confirmation={confirmationId:id,summary:summary.slice(0,500),revision:this.revision+1,kind:'website_dialog',dialogType:type};
+        this.reason='website_dialog_pending'; this.changed();
     }
     async requireConfirmation(binding: unknown, summary: string) {
         const key = digest(binding);
@@ -311,7 +369,7 @@ export class LiveBrowserSession {
         return this.receipt(key, body, async () => {
             const type = body.type;
             if (!['pause','take_control','resume','stop','background','confirm'].includes(String(type))) fail('invalid_body', 'Неизвестная команда.', 422);
-            if (type === 'stop') { this.stop(); return this.ack(key, 'stop'); }
+            if (type === 'stop') { this.stop(); await this.persistContext?.(); return this.ack(key, 'stop'); }
             const observerId = this.observer(body.observerId);
             this.checkRevision(body.expectedRevision);
             if (TERMINAL.has(this.state)) fail('browser_session_gone', 'Сессия завершена.', 404);
@@ -321,16 +379,29 @@ export class LiveBrowserSession {
                 if (own || ![...this.observers.values()].some(o => o.sink)) await this.suspend('disconnected', 'app_background');
                 return this.ack(key, String(type));
             }
-            if (this.suspending || this.state === 'pausing') fail('browser_transition_busy', 'Смена управления ещё не завершилась.');
+            if ((this.suspending || this.state === 'pausing') && !(type === 'confirm' && this.confirmation?.kind === 'website_dialog')) fail('browser_transition_busy', 'Смена управления ещё не завершилась.');
             this.assertForeground(observerId);
             this.assertController(observerId, body.leaseId);
+            if (this.confirmation?.kind === 'website_dialog' && type === 'resume') fail('browser_dialog_pending', 'Сначала явно закрой системное окно сайта.');
+            if (this.confirmation?.kind === 'website_dialog' && type === 'confirm') {
+                if (body.confirmationId !== this.confirmation.confirmationId || !['accept','reject'].includes(String(body.decision))) fail('browser_confirmation_expired','Ответ относится к прежнему системному окну.',410);
+                if (this.confirmation.dialogType === 'prompt' && body.decision === 'accept') fail('browser_dialog_prompt_unsupported','Ввод в системное текстовое окно пока не поддерживается. Его можно явно отклонить.',422);
+                if (!this.adapter?.resolveWebsiteDialog) fail('browser_dialog_unavailable','Системное окно недоступно.');
+                const id=this.confirmation.confirmationId,generation=this.generation;
+                this.confirmation=null; this.effect='unknown';
+                await this.adapter.resolveWebsiteDialog(id,body.decision as 'accept'|'reject');
+                if (generation !== this.generation || TERMINAL.has(this.state)) fail('browser_action_uncertain','Управление изменилось во время ответа сайту.');
+                if (!this.confirmation) this.state=this.dialogReturnState;
+                this.reason=null;return this.ack(key,'confirm');
+            }
             if (type === 'pause' || type === 'take_control') {
                 const transitionGeneration = this.generation + 1;
                 await this.suspend(type === 'pause' ? 'paused' : 'user_control', String(type));
                 if (type === 'take_control' && !TERMINAL.has(this.state)) {
-                    if (this.generation !== transitionGeneration || this.state !== 'user_control') fail('browser_control_stale', 'Состояние изменилось; управление не передано.');
+                    if (this.generation !== transitionGeneration || this.state !== 'user_control' && !(this.state === 'awaiting_confirmation' && this.confirmation?.kind === 'website_dialog')) fail('browser_control_stale', 'Состояние изменилось; управление не передано.');
                     this.controller = observerId; this.lease = randomUUID();
                 }
+                await this.persistContext?.();
                 return this.ack(key, String(type));
             }
             let answer = this.corrections.slice(-8).join('\n');
@@ -369,28 +440,34 @@ export class LiveBrowserSession {
             const observerId = this.observer(body.observerId);
             this.assertForeground(observerId); this.assertController(observerId, body.leaseId); this.checkRevision(body.expectedRevision);
             if (this.state !== 'user_control' || this.controller !== observerId || !this.lease || !this.adapter) fail('browser_control_required', 'Сначала возьми управление.');
+            if (this.confirmation?.kind === 'website_dialog') fail('browser_dialog_pending','Сначала явно ответь на системное окно сайта.');
             if (this.actionBusy) fail('browser_input_busy', 'Предыдущее действие ещё выполняется.');
             this.actionBusy = true;
             try {
                 const generation = this.generation;
                 const page = await this.adapter.inspect(); this.updatePage(page); this.checkRevision(body.expectedRevision);
                 const frame = this.frame;
-                if (!frame || this.now() - this.frameTime > 2000 || body.frameSeq !== frame.frameSeq || body.pageId !== page.pageId ||
+                const shown = this.equivalentFrames.get(Number(body.frameSeq));
+                if (!frame || !shown || this.now() - shown.capturedAt > 2000 || shown.revision !== this.revision || this.now() - this.frameTime > 2000 || body.pageId !== page.pageId ||
                     body.navigationEpoch !== page.navigationEpoch || body.viewportRevision !== page.viewportRevision || frame.revision !== this.revision)
-                    fail('browser_stale_frame', 'Кадр устарел. Дождись нового кадра.');
+                    { this.metrics.staleFrameRejects++; void this.capture(true); fail('browser_stale_frame', 'Кадр устарел. Дождись нового кадра.'); }
                 const input = parseBrowserInput(body.input, page);
                 if (generation !== this.generation || this.state !== 'user_control') throw new BrowserInterrupted();
                 this.confirmation = null; this.confirmationBinding = undefined; this.permittedBinding = undefined;
                 this.effect = 'unknown'; this.frame = null; this.frameBytes = undefined; this.revision++;
+                this.equivalentFrames.clear(); this.lastInputAt = performance.now();
                 const action = this.adapter.input(input); this.calls.add(action);
                 try { await action; } finally { this.calls.delete(action); }
                 if (generation !== this.generation || this.state !== 'user_control') fail('browser_action_uncertain', 'Управление изменилось во время действия.');
-                this.touch(); this.lastCapture = 0; void this.capture(); return this.ack(key, 'input');
+                this.touch(); return this.ack(key, 'input');
             } finally { this.actionBusy = false; }
         });
     }
     async correct(text: string) {
         await this.suspend('paused', 'requirements_changed');
+        if (TERMINAL.has(this.state)) throw new BrowserInterrupted();
+        this.onCorrection?.(text);
+        await this.persistContext?.();
         this.corrections.push(text.slice(0, 2000)); this.corrections = this.corrections.slice(-8); this.changed();
     }
     validateUtterance(body: Record<string, unknown>) {
@@ -416,6 +493,8 @@ export class LiveBrowserSession {
         if (!TERMINAL.has(this.state)) this.stop('session_disposed');
         else void this.adapter?.close().catch(() => {});
         clearInterval(this.timer); this.frame = null; this.frameBytes = undefined;
+        if (this.captureTimer) clearTimeout(this.captureTimer);
+        this.equivalentFrames.clear();
         for (const observer of this.observers.values()) observer.close?.();
         this.observers.clear(); this.receipts.clear(); this.corrections = [];
     }

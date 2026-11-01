@@ -39,7 +39,7 @@ export async function browserUtterance(session: LiveBrowserSession, key: string,
     return session.receipt(key, body, async () => {
         const before = session.validateUtterance(body);
         const meaning = await interpret(text, { task: session.task, state: session.state, assistance: before.assistance,
-            pendingConfirmation: session.snapshot().pendingConfirmation, corrections: session.corrections });
+            pendingConfirmation: session.snapshot().pendingConfirmation, corrections: session.corrections, workspace: session.workspaceContext?.() });
         // Model calls are concurrent with explicit controls. Nothing from an older lease may revive the run.
         const intent = meaning.confidence >= .8 ? meaning.intent : 'clarify';
         const interruption = intent === 'pause' || intent === 'stop';

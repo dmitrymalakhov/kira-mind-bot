@@ -5,6 +5,7 @@ import { SessionEntity } from '../entity/SessionEntity';
 import type { BotContext, SentMessageContext, SessionData } from '../types';
 import { scopedBotKey } from '../utils/botIdentity';
 import { PENDING_CONTACT_MEMORY_TTL_MS } from '../utils/contactMemoryConstants';
+import { availableBrowserWorkspace, type BrowserWorkspace } from './browserWorkspace';
 
 const MAX_HISTORY = 20;
 export const MAX_SENT_MESSAGE_CONTEXTS = 50;
@@ -46,6 +47,7 @@ interface PersistedSession {
     pendingHealthDiscomfort?: SessionData['pendingHealthDiscomfort'];
     activeBrowserTask?: SessionData['activeBrowserTask'];
     lastBrowserTask?: SessionData['lastBrowserTask'];
+    browserWorkspace?: SessionData['browserWorkspace'];
     pendingQuickChoices?: SessionData['pendingQuickChoices'];
     studyChatRequest?: SessionData['studyChatRequest'];
     chatAnalysisPeriodRequest?: SessionData['chatAnalysisPeriodRequest'];
@@ -174,8 +176,20 @@ function applyPersistedSessionDelta(
     const currentRecord = current as unknown as Record<string, unknown>;
     for (const key of new Set([...Object.keys(baseRecord), ...Object.keys(currentRecord)])) {
         if (jsonEquals(baseRecord[key], currentRecord[key])) continue;
+        if (key === 'browserWorkspace' && currentRecord[key] === undefined) {
+            const before = base.browserWorkspace, stored = latest.browserWorkspace;
+            if (!stored || before && stored.id === before.id && stored.operationId === before.operationId) delete merged[key];
+            continue;
+        }
         if (!(key in currentRecord) || currentRecord[key] === undefined) {
             delete merged[key];
+            continue;
+        }
+        if (key === 'browserWorkspace') {
+            const before = base.browserWorkspace, next = current.browserWorkspace, stored = latest.browserWorkspace;
+            // An old operation cannot restore a cleared workspace or overwrite its successor.
+            if (before && next?.id === before.id && (!stored || stored.id !== before.id || stored.operationId !== before.operationId && next.operationId === before.operationId)) continue;
+            merged[key] = currentRecord[key];
             continue;
         }
         merged[key] = key === 'messageHistory'
@@ -210,7 +224,7 @@ async function ensureSessionRow(rawQuery: RawQuery, key: string): Promise<void> 
     `, [key, emptySession]);
 }
 
-function extract(data: SessionData): PersistedSession {
+function extract(data: SessionData, key: string): PersistedSession {
     const now = Date.now();
     return {
         agentRuntime: data.agentRuntime,
@@ -270,6 +284,7 @@ function extract(data: SessionData): PersistedSession {
         lastBrowserTask: data.lastBrowserTask && data.lastBrowserTask.expiresAt > now
             ? data.lastBrowserTask
             : undefined,
+        browserWorkspace: availableBrowserWorkspace(data.browserWorkspace, data.browserWorkspace?.owner ?? 0, key, now),
         pendingQuickChoices: prunePendingQuickChoices(data.pendingQuickChoices, now),
         studyChatRequest: pruneStudyChatRequest(data.studyChatRequest, now),
         chatAnalysisPeriodRequest: pruneChatAnalysisPeriodRequest(data.chatAnalysisPeriodRequest, now),
@@ -309,6 +324,7 @@ function merge(initial: SessionData, persisted: PersistedSession): SessionData {
         pendingHealthDiscomfort: persisted.pendingHealthDiscomfort ?? initial.pendingHealthDiscomfort,
         activeBrowserTask: persisted.activeBrowserTask ?? initial.activeBrowserTask,
         lastBrowserTask: persisted.lastBrowserTask ?? initial.lastBrowserTask,
+        browserWorkspace: persisted.browserWorkspace,
         pendingQuickChoices: persisted.pendingQuickChoices ?? initial.pendingQuickChoices,
         studyChatRequest: persisted.studyChatRequest ?? initial.studyChatRequest,
         chatAnalysisPeriodRequest: persisted.chatAnalysisPeriodRequest ?? initial.chatAnalysisPeriodRequest,
@@ -456,6 +472,7 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
             if (persisted.lastBrowserTask?.expiresAt && persisted.lastBrowserTask.expiresAt <= now) {
                 persisted.lastBrowserTask = undefined;
             }
+            persisted.browserWorkspace = availableBrowserWorkspace(persisted.browserWorkspace, persisted.browserWorkspace?.owner ?? 0, key, now);
             persisted.pendingQuickChoices = prunePendingQuickChoices(persisted.pendingQuickChoices, now);
             persisted.studyChatRequest = pruneStudyChatRequest(persisted.studyChatRequest, now);
             persisted.chatAnalysisPeriodRequest = pruneChatAnalysisPeriodRequest(persisted.chatAnalysisPeriodRequest, now);
@@ -473,7 +490,7 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
     async write(key: string, value: SessionData): Promise<void> {
         try {
             const scopedKey = scopedBotKey(key);
-            const current = extract(value);
+            const current = extract(value, key);
             const base = (value as SessionWithSnapshot)[SESSION_SNAPSHOT] ?? {};
             const manager = this.repo.manager;
 
@@ -517,6 +534,16 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
             console.error('[SessionStorage] delete error:', e);
         }
     }
+}
+
+/** Save only this workspace delta; never flush a held request's old history/runtime over a later turn. */
+export async function persistBrowserWorkspace(key: string, workspace: BrowserWorkspace, active: () => boolean = () => true): Promise<void> {
+    const storage = new TypeORMSessionStorage(true), loaded = await storage.read(key);
+    if (!active() || loaded?.browserWorkspace && loaded.browserWorkspace.id !== workspace.id) return;
+    const value = Object.assign({ reminders: [], messageHistory: [], dialogueSummary: '', lastSummarizedIndex: -1, domains: {} }, loaded) as SessionData;
+    value.browserWorkspace = workspace.status === 'cancelled' ? undefined : structuredClone(workspace);
+    if (workspace.status === 'cancelled') value.lastBrowserTask = undefined;
+    await storage.write(key, value);
 }
 
 export async function persistSessionNow(ctx: BotContext): Promise<void> {

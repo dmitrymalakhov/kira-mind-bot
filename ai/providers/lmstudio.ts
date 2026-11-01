@@ -1,4 +1,5 @@
 import { OpenAI } from 'openai';
+import { aiRequestOptions } from '../executionScope';
 import { getAiProviderDescriptor } from '../providerMetadata';
 import type { AiProviderAdapter, AiProviderCapabilities } from './types';
 import { applyChatTokenParamMode, resolveModelCapabilities } from './types';
@@ -48,7 +49,7 @@ export const lmstudioProviderAdapter: AiProviderAdapter = {
             (normalized as Record<string, unknown>).reasoning_effort = generation.reasoningEffort;
             if (generation.temperature !== undefined) normalized.temperature = generation.temperature;
         }
-        const result = await this.client.chat.completions.create({ ...normalized, model });
+        const result = await this.client.chat.completions.create({ ...normalized, model }, aiRequestOptions());
         if (!result.choices[0]?.message?.content?.trim() && !result.choices[0]?.message?.tool_calls?.length) {
             throw new Error('LM Studio не вернула текст ответа. Увеличьте лимит токенов или отключите рассуждения для этой роли в админке.');
         }

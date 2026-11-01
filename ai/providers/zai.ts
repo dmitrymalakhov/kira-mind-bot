@@ -1,4 +1,5 @@
 import { OpenAI } from 'openai';
+import { aiRequestOptions } from '../executionScope';
 import { getAiProviderDescriptor } from '../providerMetadata';
 import type { AiProviderAdapter, AiProviderCapabilities, ResponseResult } from './types';
 import providerCapabilityOverrides from '../provider-capability-overrides.json';
@@ -58,7 +59,7 @@ export const zaiProviderAdapter: AiProviderAdapter = {
         return this.client.chat.completions.create({
             ...this.normalizeChatParams(model, params),
             model,
-        });
+        }, aiRequestOptions());
     },
     async createResponse(model, params) {
         const messages = convertResponsesInputToChatMessages(params)

@@ -24,6 +24,8 @@ import * as communication from '../services/communicationProfileService';
 import * as behavior from '../services/behaviorMemoryService';
 import * as reconsolidation from '../services/MemoryReconsolidationService';
 import type { BotContext, SessionData } from '../types';
+import { createBrowserWorkspace } from '../services/browserWorkspace';
+import { AppDataSource } from '../data-source';
 
 const owner = 94101;
 const botToken = '1234567890:abcdefghijklmnopqrstuvwxyzABCDE';
@@ -36,8 +38,9 @@ for (const deferred of [false, true]) test(`accounts /messages keeps browser vie
         if (previousMode === undefined) delete process.env.KIRA_ORCHESTRATION_MODE; else process.env.KIRA_ORCHESTRATION_MODE = previousMode;
     });
     let stored: SessionData | undefined;
-    t.mock.method(TypeORMSessionStorage.prototype, 'read', async () => stored && structuredClone(stored));
-    t.mock.method(TypeORMSessionStorage.prototype, 'write', async (_key: string, value: SessionData) => { stored = structuredClone(value); });
+    const rows=new Map<string,any>();
+    t.mock.method(AppDataSource,'getRepository',(()=>({findOne:async({where}:any)=>rows.has(where.key)?structuredClone(rows.get(where.key)):null,
+        upsert:async(row:any)=>{const saved=JSON.parse(JSON.stringify(row));rows.set(row.key,saved);stored=saved.data;}})) as any);
     t.mock.method(ChatGroupRepository, 'findAll', async () => []);
     t.mock.method(DialogueJobRepository, 'beginTurn', async () => {});
     t.mock.method(RecurringTaskRepository, 'listByChatId', async () => []);
@@ -52,8 +55,10 @@ for (const deferred of [false, true]) test(`accounts /messages keeps browser vie
     t.mock.method(memory, 'fetchAgentMemoryContext', async () => ({ domain: 'personal', context: '', recalledMemories: [] }));
     let control: 'continue' | 'cancel' = 'continue';
     let mode: 'browser' | 'greeting' | 'research' = 'browser';
+    let workspaceId: string | undefined;
     const classify = t.mock.method(completion, 'createJsonChatCompletionForTask', async (task: string) => {
         assert.ok(['intentClassification','fastDialogue'].includes(task));
+        if (workspaceId) return { intent:'БРАУЗЕР_ЗАДАЧА', confidenceLevel:'ВЫСОКИЙ', details:{memoryNeed:'none',browserWorkspace:{id:workspaceId,relation:'continue'}},fastReply:{mode:'route'} } as any;
         if (mode !== 'browser') return { intent:mode === 'greeting' ? 'РАЗГОВОР' : 'ВЕБ_ПОИСК', confidenceLevel:'ВЫСОКИЙ',
             details:{memoryNeed:'none',responseComplexity:'routine',...(mode === 'research' ? {knowledgeSource:'external_current'} : {})},
             fastReply:mode === 'greeting' ? {mode:'answer',answer:'Привет!'} : {mode:'route'} } as any;
@@ -68,6 +73,12 @@ for (const deferred of [false, true]) test(`accounts /messages keeps browser vie
     const leaf = t.mock.method(browser, 'browserAgent', async (ctx: BotContext, text: string, ...args: any[]) => {
         assert.equal(text, expectedText); assert.equal(ctx.from?.id, owner); assert.equal(ctx.sessionStorageKey, `api:${owner}`);
         assert.equal(ctx.liveBrowserRequest?.operationId, expectedOperation);
+        if (workspaceId) {
+            assert.equal(ctx.browserWorkspaceContinuation,workspaceId);
+            assert.equal(ctx.session.browserWorkspace?.originalGoal,'Compare synthetic items; never buy');
+            assert.equal(ctx.session.browserWorkspace?.records[0].attributes.price,'20 EUR');
+            return {responseText:'Synthetic cheaper item and its verified source',operationStatus:'ok' as const};
+        }
         if (control === 'cancel' || session) return actualBrowserAgent(ctx, text, ...args);
         if (!session) { session = liveBrowserSessions.create(owner, `api:${owner}`, operationId); t.after(() => session.dispose()); }
         ctx.session.pendingBrowserTask = { sessionId: session.id, originalTask: task, question: 'Продолжить просмотр?', createdAt: Date.now(), expiresAt: Date.now() + 60_000 };
@@ -118,4 +129,16 @@ for (const deferred of [false, true]) test(`accounts /messages keeps browser vie
     const research = await send(); assert.equal(research.status,200,await research.text());
     assert.equal(search.mock.callCount(),1); assert.equal(leaf.mock.callCount(),3);
     assert.equal(liveBrowserSessions.active(owner,`api:${owner}`,expectedOperation),null);
+    const workspace=createBrowserWorkspace(owner,`api:${owner}`,'completed-operation','Compare synthetic items; never buy');
+    workspace.status='completed';workspace.currentUrl='https://catalog.example/list';
+    workspace.records=[{id:'synthetic-record',title:'TEST Lamp',url:'https://catalog.example/item',sourceUrl:workspace.currentUrl,attributes:{price:'20 EUR'},excerpt:'Synthetic source',observedAt:new Date().toISOString()}];
+    const storage=new TypeORMSessionStorage(true), previous=(await storage.read(`api:${owner}`))!;
+    previous.browserWorkspace=workspace;await storage.write(`api:${owner}`,previous);workspaceId=workspace.id;
+    for (const text of ['А второй дешевле?','Покажи подробности найденного варианта']) {
+        expectedText=text;expectedOperation=randomUUID();
+        const followup=await send();assert.equal(followup.status,200,await followup.text());
+        assert.equal(session!.id,originalSessionId);assert.equal(session!.state,'cancelled');
+        assert.equal(stored!.browserWorkspace?.operationId,'completed-operation');
+    }
+    assert.equal(leaf.mock.callCount(),5);assert.equal(search.mock.callCount(),1);
 });

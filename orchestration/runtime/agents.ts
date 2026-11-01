@@ -48,7 +48,7 @@ async function run(kind: AgentRunRecord['kind'], task: string, args: Record<stri
     if (kind === 'research') return research(task, context);
     if (kind === 'browser') {
         const pending = context.ctx.session.pendingBrowserTask;
-        if (pending && context.classification.details.browserTaskControl !== 'cancel' && !isBrowserContinuationAnswer(task, pending.sessionId)) return { status: 'failed', summary: 'Сначала заверши или отмени текущую браузерную задачу.' };
+        if (pending && !context.ctx.browserWorkspaceContinuation && context.classification.details.browserTaskControl !== 'cancel' && !isBrowserContinuationAnswer(task, pending.sessionId)) return { status: 'failed', summary: 'Сначала заверши или отмени текущую браузерную задачу.' };
         const result = await browserAgent(context.ctx, task, context.isForwarded, context.forwardFrom, context.messageHistory, { ...context.classification, intent: 'БРАУЗЕР_ЗАДАЧА' }, context.memoryContext);
         const output = processingOutput(result, Boolean(context.ctx.session.pendingBrowserTask));
         const sessionId = context.ctx.session.pendingBrowserTask?.sessionId;

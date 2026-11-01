@@ -12,6 +12,8 @@ const { chromium } = require('playwright');
 const { LiveBrowserSession, BrowserInterrupted } = require('../services/liveBrowserSession');
 const { LivePlaywrightAdapter } = require('../services/liveBrowserPlaywright');
 const { runReviewedBrowserAction } = require('../services/liveBrowserActionPolicy');
+const { createBrowserWorkspace, attachBrowserWorkspace, observeBrowserWorkspace, readBrowserSourceRecords, browserWorkspaceContext } = require('../services/browserWorkspace');
+const { runBrowserTargetAction, BrowserTargetError } = require('../services/browserActionTarget');
 const chat = require('../ai/chatCompletion');
 chat.createJsonChatCompletionForTask = async () => ({ kind: 'routine', summary: 'Synthetic navigation.' });
 const fixtureHtml = `<!doctype html><title>TEST browser fixture</title><style>input{display:block;width:250px;height:32px;margin:15px}iframe{width:300px;height:100px}</style>
@@ -19,19 +21,24 @@ const fixtureHtml = `<!doctype html><title>TEST browser fixture</title><style>in
 <iframe srcdoc='<input id="custom" aria-label="Private custom input">'></iframe><button id="book">Submit TEST booking</button><output id="result"></output>
 <script>nameField=document.querySelector('#name'); nameField.oninput=()=>document.title='TEST name '+nameField.value;
 document.querySelector('#book').onclick=()=>document.querySelector('#result').textContent='TEST submitted';</script>`;
-async function fixture(t) {
+async function fixture(t, realClock = false) {
     const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true, args: ['--no-sandbox','--disable-dev-shm-usage'] });
     const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
     const page = await context.newPage();
     await page.route('https://fixture.example/**', route => route.fulfill({ contentType: 'text/html', body: fixtureHtml }));
     await page.goto('https://fixture.example/');
     let now = Date.now();
-    const session = new LiveBrowserSession(94001, 'api:94001', randomUUID(), () => now);
+    const session = new LiveBrowserSession(94001, 'api:94001', randomUUID(), realClock ? Date.now : () => now);
     const adapter = new LivePlaywrightAdapter(session, browser, context, page); session.attach(adapter);
     const observerId = randomUUID(), events = []; session.registerObserver(observerId);
     session.subscribe(observerId, e => { events.push(e); return true; }, () => {});
     const command = (type, extra = {}) => session.command(randomUUID(), { type, observerId, expectedRevision: session.snapshot().revision, ...extra });
-    const refresh = async () => { await new Promise(r => setTimeout(r, 100)); now += 1001; await session.capture(); };
+    const refresh = async () => {
+        if (!realClock) { await new Promise(r=>setTimeout(r,100)); now+=1001; await session.capture(); return; }
+        const before=session.snapshot().frame?.frameSeq??0,end=Date.now()+2500;
+        while(Date.now()<end) { await session.capture(true); if((session.snapshot().frame?.frameSeq??0)>before)return; await new Promise(r=>setTimeout(r,25)); }
+        throw Error('No fresh real-clock frame');
+    };
     const input = async value => { await refresh(); const s = session.snapshot(), f = s.frame; assert.ok(f, 'real current frame');
         return session.humanInput(randomUUID(), { observerId, leaseId: s.control.leaseId, expectedRevision: s.revision,
             frameSeq: f.frameSeq, pageId: f.pageId, navigationEpoch: f.navigationEpoch, viewportRevision: f.viewportRevision, input: value }); };
@@ -94,6 +101,89 @@ test('real Chromium: navigation during review and late helper operations after p
     assert.throws(() => f.adapter.guard(f.page).locator('#book'), BrowserInterrupted);
 });
 
+test('real Chromium: twenty seconds of manual scroll/navigation publish fresh frames without agent work', { timeout:45000 }, async t => {
+    const f = await fixture(t, true), original = f.adapter.rawPage;
+    await f.context.addCookies([{name:'synthetic-continuity',value:'retained',url:'https://fixture.example/'}]);
+    await f.page.evaluate(()=>{const content=document.createElement('div');content.style.height='12000px';content.textContent='Synthetic scroll surface';document.body.append(content);});
+    let release;
+    const held = new Promise(resolve=>release=resolve);
+    const oldRun = f.session.runAgent(async()=>{await held;await f.adapter.guard(f.page).locator('#book').click();}).catch(error=>error);
+    await f.command('take_control'); release(); assert.ok(await oldRun instanceof BrowserInterrupted);
+    const baseline = {...f.session.metrics}, started = Date.now(); let inputs=0;const inputFrameMs=[];
+    while(Date.now()-started<20500) {
+        f.session.heartbeat(f.observerId);
+        const ack=await f.input(inputs===10?{type:'reload'}:{type:'scroll',deltaX:0,deltaY:120}); inputs++;
+        const acknowledged=Date.now();
+        const fresh=()=>{const s=f.session.snapshot(),frame=s.frame;return frame&&frame.revision>=ack.session.revision&&frame.eventSeq>ack.session.eventSeq&&frame.revision===s.revision&&frame.navigationEpoch===s.page.navigationEpoch;};
+        while(!fresh()&&Date.now()-acknowledged<1000)await new Promise(resolve=>setTimeout(resolve,10));
+        assert.ok(fresh(),'input must promptly produce a fresh frame matching the current page, including post-ACK navigation metadata');
+        inputFrameMs.push(Date.now()-acknowledged);
+        await new Promise(resolve=>setTimeout(resolve,500));
+    }
+    await f.refresh();
+    assert.ok(inputs>=20); assert.equal(f.session.state,'user_control');
+    assert.equal(f.session.metrics.agentModelCalls,baseline.agentModelCalls);
+    assert.equal(f.session.metrics.agentPageActions,baseline.agentPageActions);
+    const p95=inputFrameMs.slice().sort((a,b)=>a-b)[Math.ceil(inputFrameMs.length*.95)-1];
+    console.log(JSON.stringify({type:'manual-stream-metrics',synthetic:true,durationMs:Date.now()-started,inputs,inputAckToFrameP95Ms:p95,viewport:f.session.snapshot().page.viewport,metrics:f.session.snapshot().metrics,agentModelDelta:f.session.metrics.agentModelCalls-baseline.agentModelCalls,agentActionDelta:f.session.metrics.agentPageActions-baseline.agentPageActions}));
+    assert.ok(f.session.metrics.framesPublished-baseline.framesPublished>=50,'manual cadence must exceed the previous one-frame-per-second limit');
+    assert.ok(p95<750,'fresh frame after acknowledged input must stay within the bounded synthetic latency budget');
+    assert.ok(f.session.metrics.lastInputToFrameMs>=0);
+    assert.equal(f.adapter.rawPage,original);
+    assert.equal((await f.context.cookies()).find(cookie=>cookie.name==='synthetic-continuity').value,'retained');
+    let resumed;
+    const returned = new Promise(resolve=>resumed=resolve);
+    f.session.resume=()=>f.session.runAgent(async()=>{await f.adapter.guard(f.page).title();resumed();});
+    await f.command('resume',{leaseId:f.session.snapshot().control.leaseId}); await returned;
+    assert.equal(f.adapter.rawPage,original);
+    await f.command('stop'); const stoppedFrames=f.session.metrics.framesPublished;
+    await new Promise(resolve=>setTimeout(resolve,300));
+    assert.equal(f.session.metrics.framesPublished,stoppedFrames);
+});
+
+const workspaceFixtures = require('./browserWorkspaceFixtures.cjs');
+for(const scenario of workspaceFixtures)test(`rendered general workspace transfers across task/layout: ${scenario.id}`,{timeout:15000},async t=>{
+    const f=await fixture(t),url=`https://${scenario.host}/list`;
+    await f.context.route(`https://${scenario.host}/**`,route=>route.fulfill({contentType:'text/html',body:`<meta charset="utf-8"><div id="loading" aria-busy="true">Loading</div><script>setTimeout(()=>document.body.innerHTML=${JSON.stringify(scenario.html)},100)</script>`}));
+    await f.page.goto(url);await f.page.waitForTimeout(180);
+    const records=await readBrowserSourceRecords(f.page,new Date('2026-11-01T09:00:00Z'));
+    assert.ok(records.some(row=>row.title===scenario.title),JSON.stringify(records));
+    assert.ok(records.some(row=>JSON.stringify(row).includes(scenario.attribute)),JSON.stringify(records));
+    const workspace=createBrowserWorkspace(94009,'api:94009',randomUUID(),scenario.goal);
+    observeBrowserWorkspace(workspace,{url,records,excerpt:await f.page.locator('body').innerText()});workspace.status='completed';
+    const followup=attachBrowserWorkspace(JSON.parse(JSON.stringify(workspace)),randomUUID(),scenario.turn);
+    assert.equal(followup.originalGoal,scenario.goal);assert.match(browserWorkspaceContext(followup),new RegExp(scenario.title));
+    assert.deepEqual(followup.turns,[scenario.turn]);assert.notEqual(followup.operationId,workspace.operationId);assert.equal(workspace.status,'completed');
+});
+test('real target validation rejects tool-name/stale/ambiguous hover and recovers from a fresh semantic locator',async t=>{
+    const f=await fixture(t);let effects=0;
+    await assert.rejects(runBrowserTargetAction('hover',()=>[f.page.locator('hover')],async()=>effects++),BrowserTargetError);
+    await assert.rejects(runBrowserTargetAction('text=Missing',()=>[f.page.getByText('Missing')],async()=>effects++),error=>error.kind==='stale');
+    await f.page.evaluate(()=>{document.body.insertAdjacentHTML('beforeend','<button>TEST choice</button><button>TEST choice</button>');});
+    await assert.rejects(runBrowserTargetAction('role=button[name="TEST choice"]',()=>[f.page.getByRole('button',{name:'TEST choice',exact:true})],async()=>effects++),error=>error.kind==='ambiguous');
+    assert.equal(effects,0);
+    await runBrowserTargetAction('role=button[name="Submit TEST booking"]',()=>[f.page.getByRole('button',{name:'Submit TEST booking',exact:true})],async target=>{await target.hover();effects++;});
+    assert.equal(effects,1);assert.equal(await f.page.locator('#result').innerText(),'');
+});
+test('delayed native dialog after takeover never dismisses itself or revokes human ownership; explicit response and Stop work', {timeout:15000},async t=>{
+    const f=await fixture(t);
+    await f.page.evaluate(()=>{setTimeout(()=>{document.querySelector('#result').textContent=confirm('TEST delayed website question')?'accepted':'rejected';},250);});
+    const takeover=await f.command('take_control'),lease=takeover.session.control.leaseId;
+    await new Promise(resolve=>setTimeout(resolve,400));
+    const pending=f.session.snapshot().pendingConfirmation;
+    assert.equal(f.session.state,'awaiting_confirmation');assert.equal(f.session.snapshot().control.owner,'user');assert.equal(f.session.snapshot().control.leaseId,lease);
+    assert.equal(pending.kind,'website_dialog');assert.equal(pending.dialogType,'confirm');
+    const metrics={...f.session.metrics};
+    const started=Date.now();await assert.rejects(f.command('resume',{leaseId:lease}),error=>error.code==='browser_dialog_pending');assert.ok(Date.now()-started<1000);
+    await new Promise(resolve=>setTimeout(resolve,100));assert.equal(f.session.snapshot().pendingConfirmation.confirmationId,pending.confirmationId);
+    await f.command('confirm',{leaseId:lease,confirmationId:pending.confirmationId,decision:'reject'});
+    assert.equal(await f.page.locator('#result').innerText(),'rejected');assert.equal(f.session.state,'user_control');assert.equal(f.session.snapshot().control.leaseId,lease);
+    assert.equal(f.session.metrics.agentModelCalls,metrics.agentModelCalls);assert.equal(f.session.metrics.agentPageActions,metrics.agentPageActions);
+    await f.page.evaluate(()=>{setTimeout(()=>alert('TEST pending alert at Stop'),50);});await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(f.session.snapshot().pendingConfirmation.kind,'website_dialog');
+    await f.command('stop');assert.equal(f.session.state,'cancelled');assert.equal(f.session.snapshot().pendingConfirmation,null);
+});
+
 for (const persistent of [false, true]) test(`HTTP opt-in (${persistent ? 'persistent' : 'ephemeral'}): existing agent, tenant temp path, takeover, fresh resume and cleanup`, { timeout: 60000 }, async t => {
     const fs = require('node:fs/promises'), path = require('node:path');
     const root = await fs.mkdtemp('/tmp/k-'), parentTemp = path.join(root,'kt_00000000_0000_0000_0000_000000000000','temp');
@@ -143,8 +233,11 @@ for (const persistent of [false, true]) test(`HTTP opt-in (${persistent ? 'persi
         return response({});
     };
     chat.createJsonChatCompletionForTask = async (_task, options) => {
-        if (_task === 'intentClassification' || _task === 'fastDialogue') return { intent:'БРАУЗЕР_ЗАДАЧА', confidenceLevel:'ВЫСОКИЙ',
-            details:{ memoryNeed:'none', responseComplexity:'routine', browserTaskControl:'continue' }, fastReply:{mode:'route'} };
+        if (_task === 'intentClassification' || _task === 'fastDialogue') {
+            const workspaceId=options.messages.map(item=>String(item.content)).join('\n').match(/"workspaceId"\s*:\s*"([^"]+)"/)?.[1];
+            return { intent:'БРАУЗЕР_ЗАДАЧА', confidenceLevel:'ВЫСОКИЙ',
+                details:{ memoryNeed:'none', responseComplexity:'routine', browserTaskControl:'continue',...(workspaceId?{browserWorkspace:{id:workspaceId,relation:'continue'}}:{}) }, fastReply:{mode:'route'} };
+        }
         const text = JSON.stringify(options.messages);
         return text.includes('#book') ? {kind:'commitment',summary:'Submit TEST for Anna Harness?'} : {kind:'routine',summary:'Synthetic safe navigation'};
     };

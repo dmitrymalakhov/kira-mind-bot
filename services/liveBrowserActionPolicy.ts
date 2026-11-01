@@ -24,6 +24,7 @@ export async function runReviewedBrowserAction<T>(proposal: unknown, context: un
     if (!current || hasApprovedBrowserAction()) return work();
     current.session.assertAgent(current.generation);
     const before = await current.session.adapter?.inspect();
+    current.session.assertAgent(current.generation);
     const risk = await review(proposal, context).catch(() => ({ kind: 'uncertain' as const, summary: 'Не удалось проверить следующий шаг. Можно поставить задачу на паузу или помочь вручную.' }));
     current.session.assertAgent(current.generation);
     const after = await current.session.adapter?.inspect();

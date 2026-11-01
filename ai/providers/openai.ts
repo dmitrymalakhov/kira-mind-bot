@@ -1,5 +1,6 @@
 import { OpenAI } from 'openai';
 import { config } from '../../config';
+import { aiRequestOptions } from '../executionScope';
 import { getAiProviderDescriptor } from '../providerMetadata';
 import type { AiProviderAdapter, AiProviderCapabilities } from './types';
 import { gpt6Family, normalizeGpt6Chat, normalizeGpt6Response } from './openaiCompatibility';
@@ -74,7 +75,7 @@ export const openaiProviderAdapter: AiProviderAdapter = {
         return this.client.chat.completions.create({
             ...this.normalizeChatParams(model, normalizeGpt6Chat(model, params, generation?.reasoningEffort)),
             model,
-        });
+        }, aiRequestOptions());
     },
     async createResponse(model, params, generation) {
         const capabilities = this.getModelCapabilities(model);

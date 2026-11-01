@@ -1,4 +1,5 @@
 import { OpenAI } from 'openai';
+import { aiRequestOptions } from '../executionScope';
 import { getAiProviderDescriptor } from '../providerMetadata';
 import type { AiProviderAdapter, AiProviderCapabilities } from './types';
 import {
@@ -45,7 +46,7 @@ export const openrouterProviderAdapter: AiProviderAdapter = {
         return this.client.chat.completions.create({
             ...this.normalizeChatParams(model, params),
             model,
-        });
+        }, aiRequestOptions());
     },
     async createResponse() {
         throw new Error(`Provider ${this.provider} does not support OpenAI Responses API`);

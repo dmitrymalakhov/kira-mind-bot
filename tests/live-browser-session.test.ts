@@ -9,10 +9,10 @@ async function fixture(t: any, scope = 'api:94001') {
     let now = 10_000;
     const session = new LiveBrowserSession(94001, scope, 'synthetic-operation', () => now);
     const observer = session.requiresObserver ? randomUUID() : session.telegramObserverId, other = randomUUID(); const inputs: BrowserInput[] = []; const events: any[] = [];
-    let closed = 0;
+    let closed = 0, pixels = 'synthetic-frame';
     const page: BrowserPageInfo = { pageId: randomUUID(), navigationEpoch: 1, viewportRevision: 1, title: 'Synthetic restaurant',
         url: 'https://restaurant.example/', origin: 'https://restaurant.example', viewport: { width: 1280, height: 720, deviceScaleFactor: 1 }, focus: { editable: true, kind: 'text' } };
-    session.attach({ inspect: async () => structuredClone(page), capture: async () => ({ page: structuredClone(page), jpeg: Buffer.from('synthetic-frame'), width: 1280, height: 720 }),
+    session.attach({ inspect: async () => structuredClone(page), capture: async () => ({ page: structuredClone(page), jpeg: Buffer.from(pixels), width: 1280, height: 720 }),
         input: async input => { inputs.push(input); }, close: async () => { closed++; } });
     session.registerObserver(observer); session.registerObserver(other);
     const disconnect = session.subscribe(observer, event => { events.push(event); return true; }, () => {});
@@ -25,8 +25,31 @@ async function fixture(t: any, scope = 'api:94001') {
         expectedRevision: s.revision, frameSeq: f.frameSeq, pageId: f.pageId, navigationEpoch: f.navigationEpoch, viewportRevision: f.viewportRevision,
         input: { type: 'tap', x: 120, y: 70 } }; };
     t.after(() => session.dispose());
-    return { session, observer, other, inputs, events, page, command, refresh, take, body, disconnect, closed: () => closed, advance: (ms: number) => { now += ms; } };
+    return { session, observer, other, inputs, events, page, command, refresh, take, body, disconnect, closed: () => closed, advance: (ms: number) => { now += ms; }, pixels: (value: string) => { pixels = value; } };
 }
+
+test('a recently shown equivalent static frame remains usable; changed pixels never alias an old frame', async t => {
+    const f = await fixture(t), lease = await f.take(), shown = f.body(lease);
+    await f.refresh(); assert.ok(f.session.snapshot().frame!.frameSeq > shown.frameSeq);
+    await f.session.humanInput(randomUUID(), shown); assert.equal(f.inputs.length, 1);
+    await f.refresh(); const oldPixels = f.body(lease);
+    f.pixels('changed synthetic page pixels'); await f.refresh();
+    await assert.rejects(f.session.humanInput(randomUUID(), oldPixels), /Кадр устарел/);
+    assert.equal(f.inputs.length, 1); assert.equal(f.session.metrics.staleFrameRejects, 1);
+});
+
+test('takeover requests a fresh visual frame even when an older capture is still completing', async t => {
+    const f = await fixture(t), adapter = f.session.adapter!, capture = adapter.capture.bind(adapter);
+    const gate = deferred<Awaited<ReturnType<typeof capture>>>(); let captures = 0;
+    adapter.capture = async () => ++captures === 1 ? gate.promise : capture();
+    const old = capture(), pending = f.refresh();
+    await new Promise(r => setImmediate(r));
+    await f.command('take_control'); f.advance(250); gate.resolve(await old); await pending;
+    await new Promise(r => setImmediate(r));
+    assert.ok(captures >= 2); assert.ok(f.session.snapshot().frame);
+    assert.equal(f.session.snapshot().frame!.revision, f.session.snapshot().revision);
+    assert.equal(f.session.snapshot().metrics!.captureIntervalMs, 200);
+});
 
 test('account and channel scopes cannot discover or control another session; one canonical task per owner', () => {
     const registry = new LiveBrowserRegistry(); const session = registry.create(94001, 'api:94001', 'request-1');
@@ -195,4 +218,17 @@ test('a second observer cannot acquire a lease while the first takeover is drain
     await assert.rejects(f.session.command(randomUUID(), { type: 'take_control', observerId: f.other, expectedRevision: f.session.snapshot().revision }), /Смена управления/);
     pending.resolve(); await action; await first;
     assert.equal(f.session.snapshot().control.observerId, f.observer); assert.equal(f.session.state, 'user_control');
+});
+test('website confirmation keeps the human lease, requires an explicit answer and never resumes the planner',async t=>{
+    const f=await fixture(t),lease=await f.take();const decisions:string[]=[];
+    f.session.adapter!.resolveWebsiteDialog=async(id,decision)=>{decisions.push(id+':'+decision);};
+    const id=randomUUID();f.session.websiteDialog(id,'confirm','Synthetic website question');
+    assert.equal(f.session.state,'awaiting_confirmation');assert.equal(f.session.snapshot().control.owner,'user');assert.equal(f.session.snapshot().control.leaseId,lease);
+    await assert.rejects(f.command('resume',{leaseId:lease}),error=>(error as any).code==='browser_dialog_pending');
+    await assert.rejects(f.command('confirm',{leaseId:lease,confirmationId:randomUUID(),decision:'accept'}),/прежнему/);
+    await f.command('confirm',{leaseId:lease,confirmationId:id,decision:'reject'});
+    assert.deepEqual(decisions,[id+':reject']);assert.equal(f.session.state,'user_control');assert.equal(f.session.snapshot().control.leaseId,lease);
+    f.session.websiteDialog(randomUUID(),'prompt','Synthetic text prompt');
+    await assert.rejects(f.command('confirm',{leaseId:lease,confirmationId:f.session.snapshot().pendingConfirmation!.confirmationId,decision:'accept'}),error=>(error as any).code==='browser_dialog_prompt_unsupported');
+    assert.equal(decisions.length,1);await f.command('stop');assert.equal(f.session.snapshot().pendingConfirmation,null);assert.equal(f.session.state,'cancelled');
 });

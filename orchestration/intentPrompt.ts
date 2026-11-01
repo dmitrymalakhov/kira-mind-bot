@@ -38,28 +38,33 @@ export const PROFILE_CONTINUATION_CONTRACT = 'Для переданного ож
 
 /** Validate the existing semantic pass; at most one repair of malformed output.
  * A second malformed response keeps the server-bound question open. */
-export async function completeClassificationContract(complete: (repair?: string) => Promise<MessageClassification | null>, pendingProfile?: unknown): Promise<MessageClassification> {
+export async function completeClassificationContract(complete: (repair?: string) => Promise<MessageClassification | null>, pendingProfile?: unknown, workspace?: {id:string}): Promise<MessageClassification> {
     const first = await complete();
-    if (!first && !pendingProfile) throw new Error('No classification returned');
+    if (!first && !pendingProfile && !workspace) throw new Error('No classification returned');
     let result: MessageClassification = first ? normalizeClassificationEnvelope(first) : { intent: 'НЕОПРЕДЕЛЕНО', confidenceLevel: 'НИЗКИЙ', details: {} };
-    if (!pendingProfile) return result;
-    const valid = () => {
+    if (!pendingProfile && !workspace) return result;
+    const validProfile = () => {
+        if (!pendingProfile) return true;
         const selection = result.details.telegramProfileSelection;
         if (!selection || !['select', 'reject', 'new_target', 'new_request', 'clarify'].includes(selection.action)) return false;
         if (selection.action === 'select') return Number.isSafeInteger(selection.candidateId) && Number(selection.candidateId) > 0;
         if (selection.action === 'new_target') return typeof selection.query === 'string' && selection.query.trim().length > 0 && selection.query.length <= 200;
         return true;
     };
+    const validWorkspace = () => !workspace || result.details.browserWorkspace?.id === workspace.id && ['continue','new','unrelated'].includes(result.details.browserWorkspace.relation);
+    const valid = () => validProfile() && validWorkspace();
     if (!valid()) {
         try {
-            const repaired = await complete('Предыдущий ответ пропустил обязательное решение по ожидающему уточнению. Исправь формат. ' + PROFILE_CONTINUATION_CONTRACT);
+            const repaired = await complete('Предыдущий ответ пропустил обязательное решение контекста. Исправь формат. ' + (pendingProfile ? PROFILE_CONTINUATION_CONTRACT : '') +
+                (workspace ? ` details.browserWorkspace обязательно даже при смене темы: {"id":${JSON.stringify(workspace.id)},"relation":"continue"|"new"|"unrelated"}. Реши по смыслу новой реплики, не по ключевым словам.` : ''));
             if (repaired) result = normalizeClassificationEnvelope(repaired);
         }
         catch { /* Keep the bound question when repairing a malformed answer fails. */ }
     }
-    if (!valid()) return { ...result, details: { ...result.details, telegramProfileSelection: { action: 'clarify' } }, fastReply: { mode: 'route' } };
+    if (!validWorkspace()) return {intent:'НЕОПРЕДЕЛЕНО',confidenceLevel:'НИЗКИЙ',clarificationQuestion:'Это продолжение прежней браузерной задачи или новое поручение?',details:{},fastReply:{mode:'route'}};
+    if (!validProfile()) return { ...result, details: { ...result.details, telegramProfileSelection: { action: 'clarify' } }, fastReply: { mode: 'route' } };
     const selection = result.details.telegramProfileSelection!;
-    if (selection.action === 'new_target') return { ...result, details: { ...result.details, telegramProfile: true, contactQuery: selection.query!.trim() }, fastReply: { mode: 'route' } };
+    if (selection?.action === 'new_target') return { ...result, details: { ...result.details, telegramProfile: true, contactQuery: selection.query!.trim() }, fastReply: { mode: 'route' } };
     return result;
 }
 

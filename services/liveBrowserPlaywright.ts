@@ -1,4 +1,4 @@
-import type { Browser, BrowserContext, Page } from 'playwright';
+import type { Browser, BrowserContext, Page, Dialog } from 'playwright';
 import { randomUUID } from 'node:crypto';
 import { BrowserInterrupted, LiveBrowserSession, liveBrowserInvocation, type BrowserFocus, type BrowserInput, type BrowserPageInfo, type LiveBrowserAdapter } from './liveBrowserSession';
 import { hasApprovedBrowserAction, runReviewedBrowserAction } from './liveBrowserActionPolicy';
@@ -17,6 +17,8 @@ export class LivePlaywrightAdapter implements LiveBrowserAdapter {
     private wrappers = new WeakMap<object, object>();
     private originals = new WeakMap<object, object>();
     private privateValues: string[] = [];
+    private websiteDialogs: Array<{id:string;dialog:Dialog}> = [];
+    private lastPage?: BrowserPageInfo;
     private redact(value: string) { for (const secret of this.privateValues) if (secret) value = value.split(secret).join('[private input]'); return value; }
     private privateMasks() {
         return this.current.frames().map(frame => frame.locator('input[type="password"],input[autocomplete="one-time-code"],input[autocomplete^="cc-"],[data-kira-private-input]'));
@@ -36,8 +38,22 @@ export class LivePlaywrightAdapter implements LiveBrowserAdapter {
             const next = this.context.pages().find(p => !p.isClosed());
             if (next) this.adopt(next); else this.session.stop('page_closed');
         });
-        // Confirmation dialogs are never automatically accepted by the agent in a shared task.
-        page.on('dialog', dialog => { void dialog.dismiss().catch(() => {}); void this.session.needsUser('Сайт открыл системное окно. Возьми управление и проверь действие.').catch(() => {}); });
+        page.on('dialog', dialog => {
+            if (this.closed) return;
+            this.websiteDialogs.push({id:randomUUID(),dialog});
+            if (this.websiteDialogs.length===1) this.publishWebsiteDialog();
+        });
+    }
+    private publishWebsiteDialog() {
+        const pending=this.websiteDialogs[0];if(!pending)return;
+        const message=this.redact(pending.dialog.message()).replace(/[\w.+-]+@[\w.-]+\.[a-z]+/gi,'[private]').slice(0,350);
+        this.session.websiteDialog(pending.id,pending.dialog.type(),`Системное окно сайта: ${message || pending.dialog.type()}`);
+    }
+    async resolveWebsiteDialog(id:string,decision:'accept'|'reject') {
+        const pending=this.websiteDialogs[0];
+        if(!pending||pending.id!==id)throw new ApiError(410,'browser_confirmation_expired','Системное окно уже изменилось.');
+        if(decision==='accept')await pending.dialog.accept();else await pending.dialog.dismiss();
+        this.websiteDialogs.shift();this.publishWebsiteDialog();
     }
     adopt(value: Page) {
         const page = (this.originals.get(value) ?? value) as Page;
@@ -62,6 +78,11 @@ export class LivePlaywrightAdapter implements LiveBrowserAdapter {
     }
     async inspect(): Promise<BrowserPageInfo> {
         const page = this.current, pageId = this.pageId, epoch = this.navigationEpoch;
+        if (this.websiteDialogs.length) {
+            if (this.lastPage) return {...this.lastPage,focus:{editable:false,kind:'none'}};
+            const viewport=page.viewportSize()??{width:1365,height:900};
+            return {pageId,navigationEpoch:epoch,viewportRevision:this.viewportRevision,origin:'',url:'',title:'',viewport:{...viewport,deviceScaleFactor:1},focus:{editable:false,kind:'none'}};
+        }
         const metrics = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight, deviceScaleFactor: window.devicePixelRatio }));
         const key = JSON.stringify(metrics);
         if (this.viewportKey && this.viewportKey !== key) { this.viewportRevision++; this.session.pageChanged(); }
@@ -71,15 +92,19 @@ export class LivePlaywrightAdapter implements LiveBrowserAdapter {
         const title = this.redact(await page.title()).replace(/[\w.+-]+@[\w.-]+\.[a-z]+/gi, '[private]').replace(/\b[\w-]{24,}\b/g, '[private]').slice(0, 120);
         const focus = await this.focus();
         if (page !== this.current || epoch !== this.navigationEpoch) throw new BrowserInterrupted();
-        return { pageId, navigationEpoch: epoch, viewportRevision: this.viewportRevision, origin, url: origin ? `${origin}/` : '', title, viewport: metrics, focus };
+        this.lastPage={ pageId, navigationEpoch: epoch, viewportRevision: this.viewportRevision, origin, url: origin ? `${origin}/` : '', title, viewport: metrics, focus };
+        return this.lastPage;
     }
     async capture() {
+        if (this.websiteDialogs.length) throw new BrowserInterrupted(); // Native dialogs are reported as metadata, never fabricated pixels.
         const page = await this.inspect(), target = this.current;
+        const started = performance.now();
         const jpeg = await target.screenshot({ type: 'jpeg', quality: 55, fullPage: false, scale: 'css', timeout: 5000,
             mask: this.privateMasks(), maskColor: '#242424' });
+        const screenshotMs = performance.now() - started;
         const after = await this.inspect();
         if (JSON.stringify(page) !== JSON.stringify(after) || target !== this.current) throw new BrowserInterrupted();
-        return { page, jpeg, width: page.viewport.width, height: page.viewport.height };
+        return { page, jpeg, width: page.viewport.width, height: page.viewport.height, screenshotMs };
     }
     async input(input: BrowserInput) {
         switch (input.type) {
@@ -110,6 +135,7 @@ export class LivePlaywrightAdapter implements LiveBrowserAdapter {
                 try { await this.context.close(); } catch (error) { failure = error; }
                 try { await this.browser.close(); } catch (error) { failure ??= error; }
                 this.privateValues = [];
+                this.websiteDialogs = [];
                 if (failure) throw failure;
             });
             this.closing = attempt;
@@ -118,6 +144,7 @@ export class LivePlaywrightAdapter implements LiveBrowserAdapter {
         return this.closing;
     }
     async readyToResume() {
+        if (this.websiteDialogs.length) throw new ApiError(409,'browser_dialog_pending','Сначала явно закрой системное окно сайта.');
         const body = (await Promise.all(this.current.frames().map(frame => frame.locator('body').innerText()))).join('\n');
         if (this.privateValues.some(value => value.length > 2 && body.includes(value)))
             throw new ApiError(409, 'browser_private_content_visible', 'На странице ещё видны введённые секретные данные. Заверши ручной шаг и перейди дальше перед возвратом управления.');
