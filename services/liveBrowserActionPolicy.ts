@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createJsonChatCompletionForTask } from '../ai/chatCompletion';
 import { BrowserInterrupted, liveBrowserInvocation } from './liveBrowserSession';
+import { BrowserActionValidationError } from './browserActionValidation';
 
 const approvedAction = new AsyncLocalStorage<boolean>();
 export function hasApprovedBrowserAction() { return approvedAction.getStore() === true; }
@@ -35,8 +36,10 @@ export async function runReviewedBrowserAction<T>(proposal: unknown, context: un
     }
     if (risk.kind === 'commitment') {
         if (!await current.session.requireConfirmation(proposal, risk.summary)) throw new BrowserInterrupted();
+    } else if (risk.kind === 'uncertain') {
+        throw new BrowserActionValidationError('unverifiable_action');
     } else if (risk.kind !== 'routine') {
-        await current.session.needsUser(risk.summary, risk.kind === 'uncertain' ? 'blocked' : risk.kind);
+        await current.session.needsUser(risk.summary, risk.kind);
         throw new BrowserInterrupted();
     }
     current.session.assertAgent(current.generation);

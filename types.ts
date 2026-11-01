@@ -373,6 +373,9 @@ export type BotContext = Context & SessionFlavor<SessionData> & {
     liveBrowserRequest?: { operationId: string };
     /** Validated by the existing semantic intake, never taken from an API request body. */
     browserWorkspaceContinuation?: string;
+    /** Raw owner-authored turn, set by intake; never supplied by tool arguments or page content. */
+    browserOwnerText?: string;
+    browserOwnerTextBound?: boolean;
     /** Releases only this Telegram update when the existing browser agent starts; its session flush still completes. */
     releaseBrowserUpdate?: () => void;
     productAnalytics?: import('./services/productAnalytics').ProductAnalyticsTask;

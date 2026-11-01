@@ -20,6 +20,7 @@ import { isSimpleSocialMessage, simplePresenceReply, simpleSocialFallback } from
 import { INTENT_CLASSIFIER_INSTRUCTIONS, buildIntentClassifierInput, normalizeClassificationEnvelope, completeClassificationContract, PROFILE_CONTINUATION_CONTRACT } from './orchestration/intentPrompt';
 import { availableBrowserWorkspace, browserWorkspaceContext, BROWSER_WORKSPACE_CLASSIFICATION, type BrowserWorkspace } from './services/browserWorkspace';
 import { browserContextScopeKey } from './utils/browserRuntimeScope';
+import { bindBrowserOwnerText } from './utils/browserOwnerText';
 import { executePlan } from "./orchestration/executor";
 import { Plan } from "./orchestration/types";
 import { runKiraRuntime, orchestrationMode, hasCompoundActionRequest, continueConfirmedRuntime, mergeRuntimeResults, continueQuestionRuntime, cancelRuntimeContinuation, pendingTelegramProfileQuestion, continueClassifiedProfileQuestion } from './orchestration/runtime/kernel';
@@ -668,6 +669,7 @@ async function processMessageInternal(
         const replyContext = options.turn?.replyContext;
         const forwardContext = options.turn?.forwardContext;
         const internalBrowserContinuation = BROWSER_CONTINUATION_RE.test(message);
+        bindBrowserOwnerText(ctx,{userText:originalMessage,isForwarded,forwardContext,internalContinuation:internalBrowserContinuation});
         const routingMessage = internalBrowserContinuation ? message : originalMessage;
         if (orchestrationMode() === 'skills' && !isForwarded && !options.turn?.forwardContext && !internalBrowserContinuation) {
             const continuation = await continueQuestionRuntime(ctx, originalMessage, {}, replyContext?.text);

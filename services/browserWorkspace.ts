@@ -10,6 +10,7 @@ export interface BrowserSourceRecord {
 export interface BrowserWorkspace {
     version: 1; id: string; owner: number; scope: string; operationId: string;
     originalGoal: string; turns: string[]; status: 'active'|'paused'|'completed'|'cancelled';
+    ownerInputs?: string[];
     timeZone: string; currentUrl?: string; title?: string; tabs: string;
     records: BrowserSourceRecord[];
     evidence: Array<{url:string;text:string;observedAt:string}>;
@@ -42,7 +43,7 @@ export function attachBrowserWorkspace(previous:BrowserWorkspace,operationId:str
     value.turns=[...value.turns,compact(turn,1000)].slice(-8);return value;
 }
 export function browserWorkspaceContext(value:BrowserWorkspace):string {
-    const context={workspaceId:value.id,status:value.status,originalGoal:value.originalGoal,ownerTurns:value.turns,
+    const context={workspaceId:value.id,status:value.status,originalGoal:value.originalGoal,ownerTurns:value.turns,ownerInputs:value.ownerInputs,
         timeZone:value.timeZone,currentUrl:value.currentUrl,title:value.title,tabs:value.tabs,
         evidence:value.evidence.slice(-8),actions:value.actions.slice(-8),unresolvedQuestions:value.questions,records:[] as BrowserSourceRecord[]};
     for(const record of value.records.slice(-24)) {

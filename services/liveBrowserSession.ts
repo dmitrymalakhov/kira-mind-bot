@@ -105,6 +105,8 @@ export class LiveBrowserSession {
     onStop?: () => void;
     workspaceContext?: () => unknown;
     onCorrection?: (text: string) => void;
+    onOwnerText?: (text: string) => void;
+    assertTextField?: (field:import('./browserFormControl').BrowserFieldDescriptor,value:string) => void;
     persistContext?: () => Promise<void>;
     corrections: string[] = [];
     onState?: () => void;
@@ -463,10 +465,11 @@ export class LiveBrowserSession {
             } finally { this.actionBusy = false; }
         });
     }
-    async correct(text: string) {
+    async correct(text: string, ownerText: string|null = text) {
         await this.suspend('paused', 'requirements_changed');
         if (TERMINAL.has(this.state)) throw new BrowserInterrupted();
         this.onCorrection?.(text);
+        if (ownerText !== null) this.onOwnerText?.(ownerText);
         await this.persistContext?.();
         this.corrections.push(text.slice(0, 2000)); this.corrections = this.corrections.slice(-8); this.changed();
     }
@@ -485,6 +488,7 @@ export class LiveBrowserSession {
             fail('browser_assistance_expired', 'Ответ относится к прежнему вопросу.', 410);
         if (['login','otp','captcha'].includes(this.assistance.kind))
             fail('browser_manual_step_required', 'Выполни этот шаг непосредственно на сайте.');
+        this.onOwnerText?.(text);
         this.corrections.push(`Ответ на вопрос «${this.assistance.prompt}»: ${text.slice(0, 2000)}`);
         this.corrections = this.corrections.slice(-8);
         return this.command(`${key}_resume`, { type: 'resume', observerId: body.observerId, expectedRevision: this.revision, leaseId: body.leaseId });

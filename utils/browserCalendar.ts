@@ -1,5 +1,6 @@
 /** Calendar dates belong to the website/workspace timezone, never the worker host timezone. */
-export const BROWSER_TIME_ZONE = 'Europe/Moscow';
+import { USER_TIMEZONE } from '../constants';
+export const BROWSER_TIME_ZONE = USER_TIMEZONE;
 const MONTHS = ['января|январь|january|jan','февраля|февраль|february|feb','марта|март|march|mar','апреля|апрель|april|apr',
     'мая|май|may','июня|июнь|june|jun','июля|июль|july|jul','августа|август|august|aug','сентября|сентябрь|september|sept|sep',
     'октября|октябрь|october|oct','ноября|ноябрь|november|nov','декабря|декабрь|december|dec'];

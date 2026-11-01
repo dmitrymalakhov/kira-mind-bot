@@ -3,6 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { BrowserInterrupted, LiveBrowserSession, liveBrowserInvocation, type BrowserFocus, type BrowserInput, type BrowserPageInfo, type LiveBrowserAdapter } from './liveBrowserSession';
 import { hasApprovedBrowserAction, runReviewedBrowserAction } from './liveBrowserActionPolicy';
 import { ApiError } from '../api/contracts';
+import { reviewedEvaluation } from './browserActionValidation';
+import { BrowserActionValidationError } from './browserActionValidation';
+import { browserFieldDescriptor } from './browserFormControl';
 
 /** The very same Playwright context used by browserAgent; no second browser or protocol port. */
 export class LivePlaywrightAdapter implements LiveBrowserAdapter {
@@ -178,18 +181,40 @@ export class LivePlaywrightAdapter implements LiveBrowserAdapter {
                 const name = String(property);
                 if (name === 'screenshot') args[0] = { ...(args[0] as object ?? {}),
                     mask: this.privateMasks(), maskColor: '#242424' };
-                const act = () => this.session.agentCall(current.generation, () => value.apply(object, args.map(unwrap)));
+                const act = () => this.session.agentCall(current.generation, () => {
+                    const assertTextField=this.session.assertTextField;
+                    if (assertTextField && ['fill','type','pressSequentially','insertText'].includes(name)) {
+                        return (async () => {
+                        const targetKind=object.constructor?.name;
+                        const locator=targetKind==='Locator'?object as any:targetKind==='Keyboard'?this.current.locator('input:focus,textarea:focus,[contenteditable="true"]:focus'):undefined;
+                        const handle=targetKind==='ElementHandle'?object as any:await locator?.elementHandle({timeout:1000});
+                        if (!handle) throw new BrowserActionValidationError('unverifiable_action');
+                        try {
+                            const field=await browserFieldDescriptor(handle);
+                            this.session.assertAgent(current.generation);
+                            assertTextField(field,String(args[0]??''));
+                            this.session.assertAgent(current.generation);
+                            // The same checked node receives the native input events; no selector is resolved again after review.
+                            const method=name==='pressSequentially'||name==='insertText'?'type':name;
+                            return await handle[method](...args.map(unwrap));
+                        } finally { if(targetKind!=='ElementHandle')await handle.dispose().catch(()=>{}); }
+                        })();
+                    }
+                    return value.apply(object,args.map(unwrap));
+                });
                 const mutating = ['click','dblclick','tap','fill','type','press','pressSequentially','insertText','selectOption','check','uncheck','setChecked',
                     'dispatchEvent','dragTo','goto','reload','goBack','goForward','wheel','down','up','move','hover','setInputFiles','setViewportSize'].includes(name);
                 // These are code-owned Playwright evaluation functions, never natural-language control routing.
                 // DOM writes outside doAction receive the same review as direct clicks (legacy helper recovery).
+                const evaluationFunction=args[name==='$eval'||name==='$$eval'?1:0];
                 const evaluationWrite = ['evaluate','evaluateHandle','$eval','$$eval'].includes(name) &&
-                    /\.(?:click|focus|submit|requestSubmit|dispatchEvent|scrollTo|scrollBy|scrollIntoView|setRangeText|write)\s*\(|\.value\s*=(?!=)|location\s*=(?!=)|location\.(?:replace|assign)\s*\(/.test(String(args.find(arg => typeof arg === 'function') ?? args[0]));
+                    /\.(?:click|focus|submit|requestSubmit|dispatchEvent|scrollTo|scrollBy|scrollIntoView|setRangeText|write)\s*\(|\.value\s*=(?!=)|location\s*=(?!=)|location\.(?:replace|assign)\s*\(/.test(String(evaluationFunction));
                 if ((mutating || evaluationWrite) && !hasApprovedBrowserAction()) {
                     const target = object.constructor?.name === 'Locator' ? String(object) : name;
+                    const evaluation = evaluationWrite ? reviewedEvaluation(name,args) : undefined;
                     const proposal = { method: name, target, pageId: this.pageId, navigationEpoch: this.navigationEpoch,
                         // No typed values, cookies or passwords are sent to the review call.
-                        argumentKinds: args.map(a => typeof a), evaluation: evaluationWrite ? String(args[0]).slice(0, 3000) : undefined };
+                        argumentKinds: args.map(a => typeof a), evaluation: evaluation?.source, evaluationProof:evaluation&&{sha256:evaluation.sha256,length:evaluation.length,complete:true} };
                     return wrap(runReviewedBrowserAction(proposal, { task: this.session.task, page: this.session.snapshot().page }, async () => act()));
                 }
                 return wrap(act());

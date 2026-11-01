@@ -29,3 +29,8 @@ test('week ranges and year rollover retain calendar boundaries in the browser ti
     assert.throws(()=>browserDateEpoch('2026-11-06','Europe/Moscow','bad'));
     assert.throws(()=>browserDateEpoch('2026-03-29','Europe/Amsterdam','02:30'));
 });
+test('flexible next calendar week retains the whole range in the account timezone',()=>{
+    const range=resolveBrowserDateRange('цены на следующую неделю',now,'Europe/Amsterdam')!;
+    assert.equal(browserLocalDate(new Date(range.startMs),'Europe/Amsterdam'),'2026-11-02');
+    assert.equal(browserLocalDate(new Date(range.endMs-1),'Europe/Amsterdam'),'2026-11-08');
+});

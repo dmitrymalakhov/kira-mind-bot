@@ -1,4 +1,8 @@
 const assert = require('assert');
+// Each case supplies its own credentials. Keep standalone checks independent of host/test keys.
+for (const provider of Object.values(require('../ai/provider-registry.json').providers)) {
+  if (provider.envKey) delete process.env[provider.envKey];
+}
 const { AI_PRESETS } = require('../admin-panel/aiPresetRegistry');
 const {
   getPresetAvailability,
