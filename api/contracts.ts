@@ -36,6 +36,7 @@ export interface ApiReply {
 }
 
 export interface ApiBackend {
+    workouts?: import('./workouts/http').WorkoutHttpApi;
     browserSession?: import('./browser').BrowserSessionApi;
     status(): Promise<unknown>;
     capabilities(): Promise<unknown>;
@@ -73,4 +74,6 @@ export interface ApiBackend {
 
 export interface ApiOperationStore {
     run(key: string, fingerprint: string, work: () => Promise<ApiReply>, options?: { releaseRefusals?: boolean }): Promise<ApiReply>;
+    /** Same durable ledger, for non-dialogue JSON contracts. Older clients retain run(ApiReply). */
+    runJson?<T extends object>(key: string, fingerprint: string, work: () => Promise<T>): Promise<T>;
 }

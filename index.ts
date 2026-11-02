@@ -12,6 +12,7 @@ import { NegotiationStore } from "./stores/NegotiationStore";
 import { getVectorService } from "./services/VectorServiceFactory";
 import { devLog } from "./utils";
 import { AppDataSource } from "./data-source";
+import { ensureWorkoutSchema } from './services/workouts/store';
 import { ReminderRepository } from "./services/ReminderRepository";
 import { getTelegramMenuCommands } from "./capabilities";
 import { warmAiPresetCache } from "./services/aiRuntimeConfigService";
@@ -102,6 +103,7 @@ async function startBot() {
 
         console.log("🗄️  Инициализация базы данных...");
         await AppDataSource.initialize();
+        if (!process.env.KIRA_TENANT_ID && process.env.KIRA_DATABASE_SYNC !== 'false') await AppDataSource.transaction(ensureWorkoutSchema);
         await (await import('./services/productAnalytics')).initializeProductAnalytics();
         console.log("✅ База данных подключена");
 

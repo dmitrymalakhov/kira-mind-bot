@@ -324,7 +324,9 @@ test('browser proxy rejects internal and transition networks, even with public-l
 
 test('manager restores paired accounts, waits for readiness, restarts workers and stops them when its database lease is lost', async t => {
     const provisions: string[] = [];
+    const workoutProvisions: string[] = [];
     t.mock.method(require('../platform/analytics'), 'provisionTenantAnalytics', async (_db: unknown, id: string) => { provisions.push(id); });
+    t.mock.method(require('../platform/workouts'), 'provisionTenantWorkouts', async (_db: unknown, id: string) => { workoutProvisions.push(id); });
     const store = new MemoryAccounts();
     const account = await store.create('synthetic_restored', 'unused');
     account.owner_id = '10001'; account.bot_id = '11001'; account.bot_username = 'synthetic_restored_bot';
@@ -354,6 +356,7 @@ test('manager restores paired accounts, waits for readiness, restarts workers an
         await manager.tick();
         assert.equal(children.length, 1);
         assert.deepEqual(provisions, [account.id], 'metadata schema is provisioned before the account worker starts');
+        assert.deepEqual(workoutProvisions, [account.id], 'workout schema is provisioned before the account worker starts');
         assert.equal(manager.status(account.id), 'starting');
         assert.throws(() => manager.endpoint(account), /ещё запускается/);
         children[0].emit('message', { type: 'kira-ready', port: 12345 });

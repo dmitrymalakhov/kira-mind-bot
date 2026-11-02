@@ -20,6 +20,15 @@ map "$request_method:$uri" $kira_api_route_allowed {
     "~^POST:/api/v1/(messages|actions|photos)$" 1;
     "PATCH:/api/v1/settings" 1;
     "PUT:/api/v1/model-preferences" 1;
+    "~^GET:/api/v1/workouts(/(active|commands|plans|analysis|[0-9a-f-]{36}))?$" 1;
+    "GET:/api/v1/health-sync" 1;
+    "~^POST:/api/v1/workouts/(devices|sync|commands|plans)$" 1;
+    "~^POST:/api/v1/workouts/commands/[0-9a-f-]{36}/(claim|result)$" 1;
+    "POST:/api/v1/health-sync/batch" 1;
+    "~^PUT:/api/v1/workouts/plans/[0-9a-f-]{36}$" 1;
+    "PUT:/api/v1/health-sync/consent" 1;
+    "~^DELETE:/api/v1/workouts/(devices|plans)/[0-9a-f-]{36}$" 1;
+    "DELETE:/api/v1/health-sync/data" 1;
     "~^DELETE:/api/v1/dialogue-jobs/[0-9a-f-]{36}$" 1;
 }
 

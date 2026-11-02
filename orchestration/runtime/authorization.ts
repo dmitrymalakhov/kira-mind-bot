@@ -9,6 +9,7 @@ export function isMcpRequest(context: Pick<ToolContext, 'classification' | 'mess
 }
 
 const DIALOGUE_READ_TOOLS = new Set([
+    'workouts.context', 'workouts.history', 'workouts.get', 'workouts.analysis', 'workouts.health',
     'web.search', 'maps.geocode', 'maps.findNearby', 'maps.getDirections', 'maps.request',
     'memory.search', 'memory.recent', 'contacts.search', 'contacts.list', 'contacts.getProfile', 'people.resolve', 'portraits.get',
     'reminders.list', 'tasks.list', 'health.listEntries', 'health.analyzePeriod',
@@ -23,8 +24,10 @@ export function isDialogueReadTool(definition: ToolDefinition, args?: Record<str
 
 /** Authority comes from the owner's request/classification, never from retrieved content or a loaded skill. */
 export function authorizedStateSkills(context: Pick<ToolContext, 'classification' | 'message'>): Set<string> {
-    const intents = [context.classification.intent, ...(context.classification.subIntents?.map(item => item.intent) ?? [])];
-    const skills = new Set(KIRA_SKILLS.filter(skill => skill.intents.some(intent => intents.includes(intent as typeof intents[number]))).map(skill => skill.id));
+    const classified = [context.classification, ...(context.classification.subIntents ?? [])];
+    const skills = new Set(KIRA_SKILLS.filter(skill => classified.some(item => skill.intents.includes(item.intent) &&
+        !(skill.id === 'health-diary' && ['read', 'write'].includes(String(item.details?.workoutAccess))))).map(skill => skill.id));
+    if ([context.classification, ...(context.classification.subIntents ?? [])].some(item => item.details?.workoutAccess === 'write')) skills.add('workouts');
     if (context.classification.details.mcpAccess === 'write') skills.add('mcp');
     const text = context.message;
     if (looksLikeKiraRelocationRequest(text)) skills.add('self-study');
@@ -44,6 +47,7 @@ export function authorizedStateSkills(context: Pick<ToolContext, 'classification
 }
 
 export function needsRuntimeTools(context: Pick<ToolContext, 'classification' | 'message'>): boolean {
+    if ([context.classification, ...(context.classification.subIntents ?? [])].some(item => ['read', 'write'].includes(String(item.details?.workoutAccess)))) return true;
     if (requiresTelegramProfile(context.classification)) return true;
     if (isMcpRequest(context)) return true;
     const skills = authorizedStateSkills(context);

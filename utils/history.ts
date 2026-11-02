@@ -57,7 +57,7 @@ export async function addToHistory(
         ...(role === 'user' ? { sourceMessageId: currentUserMemorySourceId(ctx, content, { role, content, timestamp }) } : {}),
         ...(options.kind ? { kind: options.kind } : {}),
     });
-    devLog('Added message to history:', { role, content });
+    devLog('Added message to history:', { role, contentLength: content.length });
 
     if (options.deferAnalysis && !extractExplicitRememberFact(content)) {
         // The existing evidence-aware, budget-gated extractor runs after the reply.

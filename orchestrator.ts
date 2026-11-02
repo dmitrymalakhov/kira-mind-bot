@@ -105,6 +105,8 @@ export interface MessageClassification {
         memoryNeed?: 'none' | 'light' | 'full';
         relationshipRole?: string | null;
         memoryTask?: 'none' | 'lookup' | 'analysis';
+        /** Structured workouts/Apple Health source, assessed in the existing classification call. */
+        workoutAccess?: 'none' | 'read' | 'write';
         /** Live contact details (phone, username, bio), distinct from remembered facts. */
         telegramProfile?: boolean;
         /** Semantic clarification; the server validates IDs against its pending tool result. */
@@ -612,7 +614,7 @@ export async function classifyMessage(
             response_format: { type: 'json_object' },
         }), pendingProfile, browserWorkspace);
 
-        devLog("Classification Response:", parsedResponse);
+        devLog("Classification Response:", parsedResponse ? { intent: parsedResponse.intent, confidenceLevel: parsedResponse.confidenceLevel } : null);
 
         if (!parsedResponse) {
             throw new Error("Could not parse JSON from AI response");
@@ -726,7 +728,7 @@ async function processMessageInternal(
         if (!workspace && originalLooksLikeNewBrowserTask && hasActivePendingBrowserTask(ctx)) {
             if (orchestrationMode() === 'skills') return { responseText: 'Сначала заверши или отмени текущую браузерную задачу.', operationStatus: 'failed', skipOptionalFollowups: true };
             devLog("New browser task detected while another browser task is paused; clearing pending browser task");
-            console.log("[ORCH] clearing pending browser task for new request:", originalMessage.slice(0, 100));
+            console.log("[ORCH] clearing pending browser task for new request");
             ctx.session.pendingBrowserTask = undefined;
         }
 
@@ -735,7 +737,7 @@ async function processMessageInternal(
         const browserFollowUpMessage = workspace ? null : buildBrowserFollowUpMessage(ctx, message);
         if (browserFollowUpMessage) {
             devLog("Browser follow-up detected, routing to browserTask");
-            console.log("[ORCH] browser follow-up detected:", message.slice(0, 80));
+            console.log("[ORCH] browser follow-up detected");
             message = browserFollowUpMessage;
         }
         let isBrowserTaskLike = Boolean(browserFollowUpMessage) || looksLikeBrowserTaskText(message);
@@ -1114,7 +1116,7 @@ async function processMessageInternal(
 
         await require('./services/productAnalytics').observeClassification(ctx, classification);
         devLog("Message classified as:", classification.intent, "with confidence:", classification.confidenceLevel);
-        console.log("[ORCH] message:", message.slice(0, 80), "| intent:", classification.intent, "| confidence:", classification.confidenceLevel);
+        console.log("[ORCH] intent:", classification.intent, "| confidence:", classification.confidenceLevel);
 
         // Внутренние browser-continuation/follow-up содержат служебный контекст,
         // обычные ходы и web-search всегда получают только новую реплику.

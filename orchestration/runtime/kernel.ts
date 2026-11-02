@@ -196,6 +196,7 @@ function safeObservation(call: RuntimeToolCall, output: ToolOutput): ToolObserva
 
 function fastCalls(input: KiraRuntimeInput): RuntimeToolCall[] | undefined {
     const classification = input.classification;
+    if ([classification, ...(classification.subIntents ?? [])].some(item => ['read', 'write'].includes(String(item.details?.workoutAccess)))) return undefined;
     if (isMcpRequest(input)) return undefined;
     if (input.images?.length) return [{ id: 'inspect_images', tool: 'images.inspect', args: { caption: input.message } }];
     if (classification.subIntents?.length || hasCompoundActionRequest(input.message)) return undefined;
@@ -283,6 +284,7 @@ export async function runKiraRuntime(input: KiraRuntimeInput, dependencies: Runt
         [classification.intent, ...(classification.subIntents?.map(item => item.intent) ?? [])].includes('БРАУЗЕР_ЗАДАЧА');
     let browserAttempted = observations.some(item => ['agents.start', 'agents.resume'].includes(item.tool) &&
         (item.data as { run?: { kind?: string } } | undefined)?.run?.kind === 'browser');
+    const requiresWorkoutSource = [classification, ...(classification.subIntents ?? [])].some(item => ['read', 'write'].includes(String(item.details?.workoutAccess)));
     const callSkill = (call: RuntimeToolCall): string | undefined => call.tool === 'agents.start'
         ? ({ research: 'web-research', browser: 'browser-workflows', negotiation: 'negotiation', 'study-chat': 'study-chat' } as Record<string, string>)[String(call.args.kind)] ?? registry.get(call.tool)?.skill
         : registry.get(call.tool)?.skill;
@@ -305,6 +307,7 @@ export async function runKiraRuntime(input: KiraRuntimeInput, dependencies: Runt
     let exhausted = true;
     try {
         await skills.forIntents([classification.intent, ...(classification.subIntents?.map(intent => intent.intent) ?? [])]);
+        if ([classification, ...(classification.subIntents ?? [])].some(item => ['read', 'write'].includes(String(item.details?.workoutAccess)))) await skills.load('workouts');
         if (mcpRequested) await skills.load('mcp');
         if (continuation) {
             const resumeSkills = [...new Set([...(continuation.skills ?? []), ...(continuation.pendingCalls ?? []).map(callSkill).filter((id): id is string => Boolean(id))])];
@@ -323,7 +326,9 @@ export async function runKiraRuntime(input: KiraRuntimeInput, dependencies: Runt
                 results.push({ responseText: state.question }); state.status = 'waiting'; exhausted = false; break;
             }
             if (selection.finish || !selection.calls?.length) {
-                if (requiresBrowser && !browserAttempted) {
+                if (requiresWorkoutSource && !observations.some(item => item.tool.startsWith('workouts.'))) {
+                    selection.calls = [{ id: 'required_workouts_' + round, tool: 'workouts.context', args: {} }];
+                } else if (requiresBrowser && !browserAttempted) {
                     selection.calls = [{ id: `required_browser_${round}`, tool: 'agents.start', args: { kind: 'browser', task: input.message } }];
                 } else if (requiresWeb && !hasCurrentEvidence()) {
                     if (mcpRequested) { observations.push({ id: 'missing_mcp_evidence', tool: 'kernel', status: 'failed', summary: 'Запрошенные данные MCP не получены; не подменяй их общими сведениями.' }); exhausted = false; break; }

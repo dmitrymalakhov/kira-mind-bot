@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { ApiError } from '../api/contracts';
 import { readBody } from '../api/server';
 import { MAX_SCENE_BODY_BYTES } from '../api/scene';
+import { workoutRouteAllowed } from '../api/workouts/http';
 import { MAX_PHOTO_BODY_BYTES } from '../api/photos';
 import { isBrowserApiRoute } from '../api/browser';
 import { checkPassword, digest, newToken, passwordHash, PlatformSecrets } from './crypto';
@@ -195,7 +196,7 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
                 || (req.method === 'PATCH' && ['/api/v1/settings', '/api/v1/profile/communication'].includes(route))
                 || (req.method === 'PUT' && ['/api/v1/model-settings', '/api/v1/model-preferences'].includes(route))
                 || (req.method === 'DELETE' && /^\/api\/v1\/dialogue-jobs\/[0-9a-f-]{36}$/.test(route));
-            if (!readable && !writable && !browserRoute) throw new ApiError(404, 'not_found', 'Ресурс не найден.');
+            if (!readable && !writable && !browserRoute && !workoutRouteAllowed(req.method ?? '', route)) throw new ApiError(404, 'not_found', 'Ресурс не найден.');
             if (!account.owner_id) throw new ApiError(409, 'telegram_pairing_required', 'Сначала подключи своего бота и открой ссылку подтверждения в Telegram.');
             await proxy(req, res, runtimes.endpoint(account), route);
         } catch (error) {

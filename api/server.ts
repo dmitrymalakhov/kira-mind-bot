@@ -6,6 +6,7 @@ import { ExternalApiOptions } from './options';
 import { parseSettingsPatch } from './settings';
 import { MAX_SCENE_BODY_BYTES, parseScenePlanCancel, parseScenePreparation, parseSceneTurn } from './scene';
 import { MAX_PHOTO_BODY_BYTES, parsePhotoTurn } from './photos';
+import { workoutRouteAllowed } from './workouts/http';
 
 const PREFIX = '/api/v1';
 const MAX_BODY_BYTES = 64 * 1024;
@@ -82,6 +83,10 @@ export function createExternalApiServer(
                 res.setHeader('Retry-After', '60');
                 req.resume();
                 throw new ApiError(429, 'rate_limited', 'Слишком много запросов.');
+            }
+            if (workoutRouteAllowed(req.method ?? '', path)) {
+                if (!backend.workouts) throw new ApiError(404, 'not_found', 'Тренировки недоступны.');
+                return json(200, await backend.workouts.request(req.method!, path, url.searchParams, () => readBody(req), req.headers['idempotency-key'], operations));
             }
             if (path === `${PREFIX}/profile/communication` && backend.communicationProfile && backend.updateCommunicationProfile) {
                 if (req.method === 'GET') return json(200, await backend.communicationProfile());

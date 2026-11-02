@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { DataSource } from 'typeorm';
 import { provisionTenantAnalytics } from './analytics';
+import { provisionTenantWorkouts } from './workouts';
 import { ApiError } from '../api/contracts';
 import { PlatformSecrets } from './crypto';
 import { Account, AccountStore, provisionTenantDatabase, tenantName } from './store';
@@ -129,6 +130,7 @@ export class TenantRuntimeManager implements AccountRuntimes {
             // Imported runtimes cannot migrate their schema. The operator provisions only metadata tables.
             const analyticsDatabase = credentials.existingStorage?.database || tenantName(account.id);
             await provisionTenantAnalytics(this.admin, account.id, analyticsDatabase, Boolean(credentials.existingStorage));
+            await provisionTenantWorkouts(this.admin, account.id, analyticsDatabase);
             if (this.stopped || revision !== this.revisions.get(account.id)) return;
             const workerEnv = tenantEnvironment(this.env, account, credentials, directory, this.secrets);
             const child = fork(path.resolve(__dirname, '..', 'index.js'), [], {

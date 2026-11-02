@@ -31,9 +31,16 @@ import { registerDialogueLifecycle, publicDialogueJob, activateDialogueJob } fro
 import { DialogueJobRepository } from '../services/DialogueJobRepository';
 import { MAX_PHOTO_BYTES, PHOTO_STORAGE_NOTE, photoVisionRoute } from './photos';
 import { registerProductAnalytics, recordDeferredOutcome } from '../services/productAnalytics';
+import { WorkoutHttpApi } from './workouts/http';
+import { WorkoutService } from '../services/workouts/service';
+import { PgWorkoutStore } from '../services/workouts/store';
+import { AppDataSource } from '../data-source';
+import { getActiveBotProfile } from '../utils/botIdentity';
 
 /** Same handlers, orchestrator, identity and knowledge; only the delivery and session channel differ. */
 export class BotApiBackend implements ApiBackend {
+    private workoutApi?: WorkoutHttpApi;
+    get workouts() { return this.workoutApi ??= new WorkoutHttpApi(new WorkoutService(new PgWorkoutStore(AppDataSource), { profile: getActiveBotProfile(), ownerId: this.options.ownerId })); }
     readonly browserSession: BrowserSessionApi;
     private readonly dispatcher: Bot<BotContext>;
     private readonly storage = new TypeORMSessionStorage(true);
@@ -77,7 +84,7 @@ export class BotApiBackend implements ApiBackend {
         const vision: VisionRoute = await this.photoRoute().catch((error: unknown) => ({ available: false,
             reason: error instanceof ApiError ? error.message : 'Не удалось определить модель для анализа фото.' }));
         return { input: ['text', 'actions', 'photo'], photo: { mime: ['image/jpeg'], maxBytes: MAX_PHOTO_BYTES, vision, notes: PHOTO_STORAGE_NOTE }, output: ['text', 'photo', 'document', 'voice'],
-            browserSession: this.browserSession.capability, profile: { communication: COMMUNICATION_CAPABILITY }, settings: ['modelMode', 'modelPreferences'], scene: { version: 1 }, deferredDialogue: { preference: 'respond-async', results: '/api/v1/dialogue-jobs', cancellation: true }, capabilities: BOT_CAPABILITIES };
+            browserSession: this.browserSession.capability, workouts: this.workouts.capability, profile: { communication: COMMUNICATION_CAPABILITY }, settings: ['modelMode', 'modelPreferences'], scene: { version: 1 }, deferredDialogue: { preference: 'respond-async', results: '/api/v1/dialogue-jobs', cancellation: true }, capabilities: BOT_CAPABILITIES };
     }
 
     settings() { return readUserSettings(); }
