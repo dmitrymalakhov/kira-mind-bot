@@ -1,4 +1,5 @@
 import * as dotenv from "dotenv";
+import { AI_CONTENT_SAFETY_REPLY, isAiContentSafetyError } from './ai/contentSafety';
 import { BotContext, ConversationReplyContext, ConversationTurn, KnowledgeSource, KnowledgeSourceDecision, MessageHistory } from "./types";
 import { reminderAgent } from "./agents/reminderAgent";
 import { imageAgent } from "./agents/imageAgent";
@@ -502,6 +503,7 @@ async function isDuplicateIntentByLLM(params: {
         return result;
     } catch (error) {
         console.error("Error in intent dedup check:", error);
+        if (isAiContentSafetyError(error)) throw error;
         return { isDuplicate: false, confidence: 0 };
     }
 }
@@ -620,6 +622,7 @@ export async function classifyMessage(
         return normalizedClassification;
 
     } catch (error) {
+        if (isAiContentSafetyError(error)) throw error;
         console.error("Error classifying message:", error);
         // Возвращаем стандартный результат в случае ошибки
         return {
@@ -1250,6 +1253,7 @@ async function processMessageInternal(
         saveSessionDedupSnapshot(ctx, { message, classification, plan, result });
         return result;
     } catch (error) {
+        if (isAiContentSafetyError(error)) return { responseText: AI_CONTENT_SAFETY_REPLY, operationStatus: 'failed', skipOptionalFollowups: true };
         console.error("Error in message processing:", error);
         // В случае ошибки возвращаем простой ответ
         return {

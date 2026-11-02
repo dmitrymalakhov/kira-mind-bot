@@ -118,6 +118,29 @@
         "supportsPromptCaching": false,
         "supportsOpenAiCompatibleTransport": true
       }
+    },
+    "kimi": {
+      "id": "kimi",
+      "label": "Kimi · Moonshot",
+      "envKey": "KIMI_API_KEY",
+      "baseURL": "https://api.moonshot.ai/v1",
+      "monitoring": {
+        "kind": "openai-models",
+        "url": "https://api.moonshot.ai/v1/models",
+        "auth": "bearer"
+      },
+      "capabilities": {
+        "supportsChatCompletions": true,
+        "supportsResponsesApi": false,
+        "supportsEmbedding": false,
+        "supportsTranscription": false,
+        "supportsVision": true,
+        "supportsFunctionCalling": true,
+        "supportsThinkingMode": false,
+        "supportsReasoningEffort": true,
+        "supportsPromptCaching": true,
+        "supportsOpenAiCompatibleTransport": true
+      }
     }
   }
 }

@@ -51,18 +51,8 @@ export interface ConfigSourceInfo {
   appliesImmediately?: boolean;
 }
 
-export type AiProvider = 'openai' | 'openrouter' | 'gemini' | 'zai' | 'lmstudio';
-export type AiPresetName =
-  | 'gpt-max'
-  | 'gpt-balanced'
-  | 'gpt-lean'
-  | 'hybrid-openrouter-gpt'
-  | 'hybrid-gemini-gpt'
-  | 'gemini-full'
-  | 'glm-full'
-  | 'glm-balanced'
-  | 'lmstudio-local'
-  | 'hybrid-lmstudio-gpt';
+export type AiProvider = import('../../ai/modelPresets').AiProvider;
+export type AiPresetName = import('../../ai/modelPresets').AiPresetName;
 
 export interface AiModelRef {
   provider: AiProvider;
@@ -133,9 +123,11 @@ export interface AiPresetResponse {
 
 export type { ModelPreferences } from '../../ai/modelPreferences';
 export interface ModelPreferencesResponse {
+  serviceWarnings?: string[];
   mode: 'automatic' | 'manual' | 'custom';
   providers: typeof import('../../ai/modelPreferences').API_PROVIDERS;
   providerPlans: ModelPreferencesResponse['plans'];
+  poolPlans: ModelPreferencesResponse['plans'];
   catalog: Array<Pick<AiModelRef, 'provider'|'model'>>;
   localRoutes: import('../../ai/localModelRouting').LocalModelRoutes;
   preferences: import('../../ai/modelPreferences').ModelPreferences;

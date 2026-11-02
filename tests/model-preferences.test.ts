@@ -20,7 +20,7 @@ const messages = [{ role: 'user' as const, content: 'Synthetic request' }];
 test('three quality levels increase model capacity and ceilings while keeping the fast path light', () => {
     const plans = ['standard', 'high', 'maximum'].map(quality => buildModelPlan({ quality }, resources()));
     for (const [index, plan] of plans.entries()) {
-        assert.equal(plan.version, 2);
+        assert.equal(plan.version, 4);
         assert.equal(plan.models.complexReasoning.model, index === 0 ? 'gpt-6-luna' : 'gpt-6.1-sol');
         assert.equal(plan.models.complexReasoning.generation?.reasoningEffort, ['low', 'medium', 'high'][index]);
         assert.equal(plan.models.fastDialogue.model, 'gpt-6-luna');
@@ -34,6 +34,7 @@ test('three quality levels increase model capacity and ceilings while keeping th
 
 function legacyPlan(local = true) {
     const plan = buildModelPlan(preferences, resources());
+    delete plan.routing;
     const raw = { ...plan, version: 1, preferences: { cost: 'medium', quality: 'high', censorship: 'off' }, source: local ? 'local' : 'service-free' };
     for (const task of TEXT_TASKS) raw.models[task] = local
         ? { provider: 'lmstudio', model: 'synthetic/local-pinned', localRole: 'fast', allowFallback: false }
@@ -62,6 +63,7 @@ test('saved version-1 policies retain pinned local and API routes while exposing
         assert.throws(() => parseModelPolicy({ ...legacy, preferences: { ...legacy.preferences, accountId: 'other' } }));
     }
     const on = { ...buildModelPlan(preferences, resources()), version: 1 as const };
+    delete on.routing;
     assert.deepEqual(parseModelPolicy({ ...on, preferences: { cost: 'medium', quality: 'high', censorship: 'on' } }), on);
     for (const [cost, quality] of [['low', 'standard'], ['medium', 'high'], ['high', 'maximum']]) {
         for (const oldQuality of ['standard', 'high']) {
@@ -227,7 +229,7 @@ test('Custom persistence is atomic; invalid or unavailable drafts never overwrit
         reads.push(sql); return { rows: sql.includes('key IN') ? [{ key: 'AI_MODEL_POLICY', value: JSON.stringify(saved.activePlan) }] : [] };
     } }, resources().vars, 'stable-1536');
     assert.equal(result.mode, 'custom'); assert.deepEqual(result.activePlan, saved.activePlan);
-    assert.equal(result.providerPlans.length, 12);
+    assert.equal(result.providerPlans.length, 15);
     assert.ok(reads.every(sql => sql.startsWith('SELECT')));
 });
 
@@ -268,6 +270,7 @@ test('Custom uses exactly one declared provider and rejects models from other pr
     const altered = structuredClone(plan); altered.models.conversation.provider = 'openai';
     assert.throws(() => parseModelPolicy(altered), /провайдер Custom/);
     const legacy = { ...buildModelPlan(preferences, context), source: 'custom', version: 3 };
+    delete legacy.routing;
     for (const task of TEXT_TASKS) legacy.models[task].allowFallback = false;
     legacy.models.conversation = { provider: 'gemini', model: 'gemini-3.6-flash', allowFallback: false };
     assert.deepEqual(parseModelPolicy(legacy), legacy);

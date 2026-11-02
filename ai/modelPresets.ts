@@ -6,7 +6,7 @@ import modelPresetRegistry from '../admin-panel/src/ai-model-presets.json';
  * Значение используется в task-aware резолвере, чтобы выбрать нужный клиент
  * и понять, требуется ли OpenAI fallback для API, которые пока не абстрагированы.
  */
-export type AiProvider = 'openai' | 'openrouter' | 'gemini' | 'zai' | 'lmstudio';
+export type AiProvider = 'openai' | 'openrouter' | 'gemini' | 'zai' | 'kimi' | 'lmstudio';
 
 /**
  * Ключ задачи, для которой подбирается модель из preset registry.
@@ -46,7 +46,7 @@ export interface AiModelRef {
     model: string;
     modelEnvKey?: string;
     localRole?: import('./localModelRouting').LocalModelRole;
-    /** A selected free/local dialogue route must never silently fall back to a different content policy. */
+    /** A pinned route prohibits implicit substitution; automatic pools own their bounded replacement policy. */
     allowFallback?: boolean;
     generation?: { maxTokens?: number; reasoningEffort: 'none' | 'low' | 'medium' | 'high'; temperature?: number };
 }
@@ -67,7 +67,9 @@ export type AiPresetName =
     | 'glm-full'
     | 'glm-balanced'
     | 'lmstudio-local'
-    | 'hybrid-lmstudio-gpt';
+    | 'hybrid-lmstudio-gpt'
+    | 'kimi-full'
+    | 'openrouter-balanced';
 
 /**
  * Полная конфигурация одного AI preset-а.
@@ -79,6 +81,8 @@ export interface AiPresetConfig {
     name: AiPresetName;
     title: string;
     description: string;
+    /** Text is usable without credentials for independent search/audio/embedding services. */
+    textOnlyAvailability?: boolean;
     /** Per-request output ceilings; lower caller limits and configured local roles still apply. */
     outputTokenLimits?: Partial<Record<AiTaskKey, number>>;
     characteristics?: {
@@ -121,6 +125,8 @@ const TRUE_FULL_AI_PRESETS = new Set<AiPresetName>([
     'gemini-full',
     'glm-full',
     'lmstudio-local',
+    'kimi-full',
+    'openrouter-balanced',
 ]);
 
 /** Готовый shortcut к preset-у `gpt-max`. */

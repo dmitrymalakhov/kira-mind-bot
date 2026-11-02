@@ -9,7 +9,9 @@
     "glm-full",
     "glm-balanced",
     "lmstudio-local",
-    "hybrid-lmstudio-gpt"
+    "hybrid-lmstudio-gpt",
+    "kimi-full",
+    "openrouter-balanced"
   ],
   "presets": {
     "gpt-max": {
@@ -260,6 +262,296 @@
         "embedding": { "provider": "openai", "model": "text-embedding-3-small" },
         "transcription": { "provider": "openai", "model": "whisper-1" }
       }
+    },
+    "kimi-full": {
+      "name": "kimi-full",
+      "title": "Kimi · Текст через Moonshot API",
+      "description": "Текстовые задачи работают с одним ключом. Поиск, голос и векторы памяти требуют отдельных подключений.",
+      "characteristics": {
+        "quality": "По роли задачи",
+        "cost": "Зависит от модели",
+        "stability": "Резерв внутри автоматического пула",
+        "gptDependency": "Отдельный ключ OpenAI не нужен для текста"
+      },
+      "outputTokenLimits": {
+        "defaultText": 8192,
+        "fastDialogue": 1536,
+        "runtimePlanning": 8192,
+        "conversation": 8192,
+        "complexReasoning": 16384
+      },
+      "models": {
+        "defaultText": {
+          "provider": "kimi",
+          "model": "kimi-k3.1-pro",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "low",
+            "maxTokens": 4096
+          }
+        },
+        "lightweightText": {
+          "provider": "kimi",
+          "model": "kimi-k3.1-pro-highspeed",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "low"
+          }
+        },
+        "fastDialogue": {
+          "provider": "kimi",
+          "model": "kimi-k3.1-pro-highspeed",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "low",
+            "maxTokens": 1536
+          }
+        },
+        "complexReasoning": {
+          "provider": "kimi",
+          "model": "kimi-k3.1-pro",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "low",
+            "maxTokens": 8192
+          }
+        },
+        "runtimePlanning": {
+          "provider": "kimi",
+          "model": "kimi-k3.1-pro",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "low",
+            "maxTokens": 4096
+          }
+        },
+        "intentClassification": {
+          "provider": "kimi",
+          "model": "kimi-k3.1-pro-highspeed",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "low"
+          }
+        },
+        "intentDedup": {
+          "provider": "kimi",
+          "model": "kimi-k3.1-pro-highspeed",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "low"
+          }
+        },
+        "conversation": {
+          "provider": "kimi",
+          "model": "kimi-k3.1-pro",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "low",
+            "maxTokens": 3072
+          }
+        },
+        "memoryExtraction": {
+          "provider": "kimi",
+          "model": "kimi-k3.1-pro-highspeed",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "low"
+          }
+        },
+        "memoryConsolidation": {
+          "provider": "kimi",
+          "model": "kimi-k3.1-pro",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "low"
+          }
+        },
+        "messageAnalysis": {
+          "provider": "kimi",
+          "model": "kimi-k3.1-pro-highspeed",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "low"
+          }
+        },
+        "webSearchReasoning": {
+          "provider": "openai",
+          "model": "gpt-6-luna",
+          "generation": {
+            "reasoningEffort": "none"
+          }
+        },
+        "browserPlanning": {
+          "provider": "kimi",
+          "model": "kimi-k3.1-pro-highspeed",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "low"
+          }
+        },
+        "browserVision": {
+          "provider": "kimi",
+          "model": "kimi-k3.1-pro",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "low"
+          }
+        },
+        "embedding": {
+          "provider": "openai",
+          "model": "text-embedding-3-small"
+        },
+        "transcription": {
+          "provider": "openai",
+          "model": "whisper-1"
+        }
+      },
+      "textOnlyAvailability": true
+    },
+    "openrouter-balanced": {
+      "name": "openrouter-balanced",
+      "title": "OpenRouter · Модели по ролям",
+      "description": "Текстовые задачи работают с одним ключом. Поиск, голос и векторы памяти требуют отдельных подключений.",
+      "characteristics": {
+        "quality": "По роли задачи",
+        "cost": "Зависит от модели",
+        "stability": "Резерв внутри автоматического пула",
+        "gptDependency": "Отдельный ключ OpenAI не нужен для текста"
+      },
+      "outputTokenLimits": {
+        "defaultText": 8192,
+        "fastDialogue": 1536,
+        "runtimePlanning": 8192,
+        "conversation": 8192,
+        "complexReasoning": 16384
+      },
+      "models": {
+        "defaultText": {
+          "provider": "openrouter",
+          "model": "moonshotai/kimi-k3.1-pro",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "none",
+            "maxTokens": 4096
+          }
+        },
+        "lightweightText": {
+          "provider": "openrouter",
+          "model": "google/gemini-2.5-flash-lite",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "none"
+          }
+        },
+        "fastDialogue": {
+          "provider": "openrouter",
+          "model": "google/gemini-2.5-flash-lite",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "none",
+            "maxTokens": 1536
+          }
+        },
+        "complexReasoning": {
+          "provider": "openrouter",
+          "model": "openai/gpt-5.4",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "none",
+            "maxTokens": 8192
+          }
+        },
+        "runtimePlanning": {
+          "provider": "openrouter",
+          "model": "z-ai/glm-5.2",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "none",
+            "maxTokens": 4096
+          }
+        },
+        "intentClassification": {
+          "provider": "openrouter",
+          "model": "google/gemini-2.5-flash-lite",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "none"
+          }
+        },
+        "intentDedup": {
+          "provider": "openrouter",
+          "model": "google/gemini-2.5-flash-lite",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "none"
+          }
+        },
+        "conversation": {
+          "provider": "openrouter",
+          "model": "moonshotai/kimi-k3.1-pro",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "none",
+            "maxTokens": 3072
+          }
+        },
+        "memoryExtraction": {
+          "provider": "openrouter",
+          "model": "google/gemini-2.5-flash-lite",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "none"
+          }
+        },
+        "memoryConsolidation": {
+          "provider": "openrouter",
+          "model": "openai/gpt-5.4",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "none"
+          }
+        },
+        "messageAnalysis": {
+          "provider": "openrouter",
+          "model": "google/gemini-2.5-flash-lite",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "none"
+          }
+        },
+        "webSearchReasoning": {
+          "provider": "openai",
+          "model": "gpt-6-luna",
+          "generation": {
+            "reasoningEffort": "none"
+          }
+        },
+        "browserPlanning": {
+          "provider": "openrouter",
+          "model": "google/gemini-2.5-flash-lite",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "none"
+          }
+        },
+        "browserVision": {
+          "provider": "openrouter",
+          "model": "google/gemini-2.5-flash",
+          "allowFallback": false,
+          "generation": {
+            "reasoningEffort": "none"
+          }
+        },
+        "embedding": {
+          "provider": "openai",
+          "model": "text-embedding-3-small"
+        },
+        "transcription": {
+          "provider": "openai",
+          "model": "whisper-1"
+        }
+      },
+      "textOnlyAvailability": true
     }
   }
 }

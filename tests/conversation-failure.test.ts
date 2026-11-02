@@ -8,6 +8,7 @@ import * as residence from '../services/kiraResidenceService';
 import * as groupSettings from '../services/groupChatFeatureSettings';
 import type { BotContext } from '../types';
 import { buildConversationFailureReply } from '../utils/conversationFailureReply';
+import { AI_CONTENT_SAFETY_REPLY, AiContentSafetyError } from '../ai/contentSafety';
 
 test('conversation reports context overflow safely and recovers on the next turn', async t => {
     t.mock.method(groupSettings, 'isGroupChatContextEnabled', async () => false);
@@ -52,6 +53,7 @@ test('other conversation failures do not masquerade as a successful answer or ex
     assert.match(reply, /технической ошибки/iu);
     assert.doesNotMatch(reply, /давай обсудим|synthetic-private-provider-payload|увеличь окно/iu);
     assert.equal(buildConversationFailureReply(null), reply);
+    assert.equal(buildConversationFailureReply(new AiContentSafetyError()), AI_CONTENT_SAFETY_REPLY);
 });
 
 test('structured provider errors and escaped LM Studio engine errors identify context overflow', () => {

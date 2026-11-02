@@ -12,6 +12,7 @@ async function listLocalModels(vars, fetchImpl = globalThis.fetch) {
   if (!Array.isArray(data.models)) throw new Error('LM Studio не вернула каталог моделей');
   return data.models.filter(m => m.type === 'llm' && typeof m.key === 'string').map(m => ({
     id: m.key, label: m.display_name || m.key, sizeBytes: m.size_bytes,
+    supportsVision: m.capabilities?.vision === true,
     loaded: Boolean(m.loaded_instances?.length),
     loadedIds: (m.loaded_instances || []).map(instance => instance.id),
     contextLength: m.loaded_instances?.[0]?.config?.context_length ?? null,

@@ -1,5 +1,6 @@
 import { OpenAI } from 'openai';
 import { aiRequestOptions } from '../executionScope';
+import { assertAiResponseAllowed } from '../contentSafety';
 import { getAiProviderDescriptor } from '../providerMetadata';
 import type { AiProviderAdapter, AiProviderCapabilities, ResponseResult } from './types';
 import providerCapabilityOverrides from '../provider-capability-overrides.json';
@@ -77,6 +78,7 @@ export const zaiProviderAdapter: AiProviderAdapter = {
             max_tokens: typeof params.max_output_tokens === 'number' ? params.max_output_tokens : undefined,
         });
 
+        assertAiResponseAllowed(result);
         return {
             id: result.id,
             object: 'response',

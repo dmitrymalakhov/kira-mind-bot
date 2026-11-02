@@ -1,5 +1,5 @@
 import { ApiError } from './contracts';
-import { resolveModelForTaskAsync } from '../ai/modelResolver';
+import { resolveImageRecognitionRoute } from '../ai/imageRecognitionRouting';
 import { getAiProviderAdapter } from '../ai/providers/registry';
 import type { VisionRoute } from './scene';
 
@@ -36,11 +36,13 @@ export function parsePhotoTurn(value: unknown): PhotoTurn {
 export async function photoVisionRoute(env: NodeJS.ProcessEnv = process.env): Promise<VisionRoute> {
     try {
         // Resolve the same policy, app scope, local role and model env override as the actual inference call.
-        const { modelRef } = await resolveModelForTaskAsync('conversation');
+        const resolved = await resolveImageRecognitionRoute();
+        const modelRef = resolved.candidates?.find(ref => getAiProviderAdapter(ref.provider).getModelCapabilities(ref.model).supportsVision
+            && (getAiProviderAdapter(ref.provider).descriptor.optionalApiKey || env[getAiProviderAdapter(ref.provider).descriptor.envKey]?.trim())) ?? resolved.modelRef;
         const adapter = getAiProviderAdapter(modelRef.provider);
         const route: VisionRoute = { available: true, provider: modelRef.provider, providerLabel: adapter.descriptor.label,
             model: modelRef.model, location: modelRef.provider === 'lmstudio' ? 'server-local' : 'cloud' };
-        if (!adapter.getModelCapabilities(modelRef.model).supportsVision) {
+        if (!resolved.imageRecognitionOverride && !adapter.getModelCapabilities(modelRef.model).supportsVision) {
             return { ...route, available: false, reason: `Модель ${modelRef.model} не поддерживает изображения.` };
         }
         if (!adapter.descriptor.optionalApiKey && !env[adapter.descriptor.envKey]?.trim()) {

@@ -1,3 +1,5 @@
+import { AI_CONTENT_SAFETY_REPLY, isAiContentSafetyError } from '../ai/contentSafety';
+
 const CONTEXT_WINDOW_ERROR_RE = /exceed_context_size_error|context_length_exceeded|exceeds the available context size|maximum context length|context window (?:is |was )?exceeded/iu;
 
 export function isConversationContextOverflow(error: unknown): boolean {
@@ -15,6 +17,7 @@ export function isConversationContextOverflow(error: unknown): boolean {
 }
 
 export function buildConversationFailureReply(error: unknown): string {
+    if (isAiContentSafetyError(error)) return AI_CONTENT_SAFETY_REPLY;
     if (isConversationContextOverflow(error)) {
         return 'Не удалось ответить: контекст диалога не помещается в окно модели. Увеличь окно контекста в настройках модели и повтори запрос.';
     }

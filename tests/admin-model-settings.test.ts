@@ -4,6 +4,16 @@ import { KEY_SECTIONS, CONFIG_SCHEMA, LOCAL_MODEL_CONNECTION_SECTION, VOICE_MODE
 const { mergeEditableDefaults, maskConfigValues, isValidProxyUrl } = require('../admin-panel/configValues');
 const { registerMemoryDetailRoute } = require('../admin-panel/memoryDetail');
 
+test('Kimi key has one masked editor and OpenAI is optional for standalone text providers', () => {
+    const fields = KEY_SECTIONS.flatMap(section => section.fields);
+    const kimi = fields.filter(field => field.key === 'KIMI_API_KEY');
+    assert.equal(kimi.length, 1); assert.equal(kimi[0].type, 'password');
+    assert.equal(fields.find(field => field.key === 'OPENAI_API_KEY')?.required, false);
+    const masked = maskConfigValues({ KIMI_API_KEY: 'synthetic-kimi-provider-secret' });
+    assert.equal(masked.KIMI_API_KEY.masked, true);
+    assert.doesNotMatch(JSON.stringify(masked), /synthetic-kimi-provider-secret/);
+});
+
 test('credentials, model choices and system parameters each have a single editor', () => {
     const sections = [...KEY_SECTIONS, ...CONFIG_SCHEMA, LOCAL_MODEL_CONNECTION_SECTION, VOICE_MODEL_SECTION, IMAGE_CONNECTION_SECTION];
     const keys = sections.flatMap(section => section.fields.map(field => field.key));

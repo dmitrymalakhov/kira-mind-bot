@@ -1,6 +1,7 @@
 import path from 'path';
 import { readFile, stat } from 'fs/promises';
 import { OpenAI } from 'openai';
+import { assertAiResponseAllowed } from '../contentSafety';
 import { aiRequestOptions } from '../executionScope';
 import { getAiProviderDescriptor } from '../providerMetadata';
 import type { AiModelRef } from '../modelPresets';
@@ -630,6 +631,7 @@ export const geminiProviderAdapter: AiProviderAdapter = {
             }
 
             const payload = await response.json() as Record<string, any>;
+            assertAiResponseAllowed(payload);
             const interactionUsage = payload.usage as Record<string, any> | undefined;
             const legacyUsage = payload.usage_metadata as Record<string, any> | undefined;
 

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'crypto';
+import { AI_CONTENT_SAFETY_REPLY, isAiContentSafetyError } from '../../ai/contentSafety';
 import { looksLikeIndependentRequest } from '../../utils/continuationInput';
 import { continueTelegramProfileLookup, telegramProfileCandidates } from '../../services/telegramProfileService';
 import { createJsonChatCompletionForTask } from '../../ai/chatCompletion';
@@ -467,7 +468,7 @@ export async function runKiraRuntime(input: KiraRuntimeInput, dependencies: Runt
         done.operationStatus = state.receipts.some(receipt => receipt.status === 'running' || receipt.status === 'unknown') ? 'unknown' : 'failed';
         done.responseText = [done.responseText, state.receipts.some(receipt => receipt.status === 'running' || receipt.status === 'unknown')
             ? 'Выполнение остановилось. Результат части действий неизвестен; я не повторяла их автоматически.'
-            : 'Не удалось завершить задачу. Уже выполненные действия сохранены.'].filter(Boolean).join('\n\n');
+            : isAiContentSafetyError(error) ? AI_CONTENT_SAFETY_REPLY : 'Не удалось завершить задачу. Уже выполненные действия сохранены.'].filter(Boolean).join('\n\n');
         done.skipOptionalFollowups = true;
         return done;
     } finally {

@@ -6,6 +6,7 @@ import { AgentMemoryContext } from "../utils/agentMemoryContext";
 import { getBotPersona, getCommunicationStyle, getBotBiography } from "../persona";
 import { config } from "../config";
 import { createChatCompletionForTask } from "../ai/chatCompletion";
+import { isAiContentSafetyError } from '../ai/contentSafety';
 import { selectConversationTask } from "../ai/taskRouting";
 import {
     getKiraSelfMemoryState,
@@ -406,6 +407,7 @@ ${historyContext}
         };
 
     } catch (error) {
+        if (isAiContentSafetyError(error)) throw error;
         console.error("Error in conversation agent:", {
             ...buildSafeAiErrorLog(error),
             contextOverflow: isConversationContextOverflow(error),

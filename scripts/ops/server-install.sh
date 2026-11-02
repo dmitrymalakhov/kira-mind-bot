@@ -116,6 +116,7 @@ write_env_production() {
 OPENAI_API_KEY=${OPENAI_API_KEY}
 
 OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+KIMI_API_KEY=${KIMI_API_KEY:-}
 GEMINI_API_KEY=${GEMINI_API_KEY}
 ZAI_API_KEY=${ZAI_API_KEY}
 
@@ -247,10 +248,11 @@ collect_config() {
     echo ""
 
     echo -e "\n${BOLD}OpenAI${NC}"
-    prompt_required_default OPENAI_API_KEY "OpenAI API Key" "${OPENAI_API_KEY:-}" "https://platform.openai.com/api-keys"
+    prompt_optional_default OPENAI_API_KEY "OpenAI API Key" "${OPENAI_API_KEY:-}" "https://platform.openai.com/api-keys"
 
     echo -e "\n${BOLD}Дополнительные AI-провайдеры${NC}"
     prompt_optional_default OPENROUTER_API_KEY "OpenRouter API Key" "${OPENROUTER_API_KEY:-}" "https://openrouter.ai/keys"
+    prompt_optional_default KIMI_API_KEY "Kimi API Key (Moonshot)" "${KIMI_API_KEY:-}" "https://platform.moonshot.ai/console/api-keys"
     prompt_optional_default GEMINI_API_KEY "Gemini API Key" "${GEMINI_API_KEY:-}" "https://aistudio.google.com/app/apikey"
     prompt_optional_default ZAI_API_KEY "Z.ai API Key" "${ZAI_API_KEY:-}" "https://z.ai/manage-apikey/apikey-list"
 
@@ -306,7 +308,7 @@ collect_config() {
 validate_existing_config() {
     [ -f "$ENV_FILE" ] || error "Флаг --skip-config требует существующий $ENV_FILE"
     load_env_if_present
-    [ -n "${OPENAI_API_KEY:-}" ] || error "В $ENV_FILE отсутствует OPENAI_API_KEY"
+    [ -n "${OPENAI_API_KEY:-}${OPENROUTER_API_KEY:-}${KIMI_API_KEY:-}${GEMINI_API_KEY:-}${ZAI_API_KEY:-}" ] || error "В $ENV_FILE отсутствует ключ текстового AI-провайдера"
     [ -n "${KIRA_BOT_TOKEN:-}" ] || error "В $ENV_FILE отсутствует KIRA_BOT_TOKEN"
     [ -n "${KIRA_ALLOWED_USER_ID:-}" ] || error "В $ENV_FILE отсутствует KIRA_ALLOWED_USER_ID"
     [ -n "${DB_PASSWORD:-}" ] || error "В $ENV_FILE отсутствует DB_PASSWORD"

@@ -46,6 +46,8 @@ export interface AiModelCapabilities extends AiCapabilityMap {
 
 export interface AiProviderCapabilities {
     supportsOpenAiCompatibleTransport: boolean;
+    /** Native Responses items/tools; compatibility adapters may flatten input and support only web search. */
+    supportsNativeResponses?: boolean;
     defaultModelCapabilities: AiModelCapabilities;
     modelCapabilityOverrides?: Readonly<Record<string, Partial<AiModelCapabilities>>>;
     allowedChatParams?: ReadonlySet<string>;

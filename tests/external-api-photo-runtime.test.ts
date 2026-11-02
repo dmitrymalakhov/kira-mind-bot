@@ -17,12 +17,82 @@ import { resolveModelForTaskAsync } from '../ai/modelResolver';
 import { runWithChannelPreset } from '../services/aiRuntimeConfigService';
 import { DialogueJobRepository } from '../services/DialogueJobRepository';
 import { registerPhotoMessageHandler } from '../handlers/photoMessages';
+import * as imageSettings from '../services/imageRecognitionConfigService';
+import { lmstudioProviderAdapter } from '../ai/providers/lmstudio';
+import * as aiUsage from '../services/aiUsageLogService';
+import { HealthLogRepository } from '../services/HealthLogRepository';
 
 const owner = 730001;
 const botToken = '1234567890:abcdefghijklmnopqrstuvwxyzABCDE';
 const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64, 7)]);
 const botInfo = { id: 1234567890, is_bot: true, first_name: 'Test', username: 'synthetic_bot' } as any;
 const emptySession = (): SessionData => ({ reminders: [], messageHistory: [], dialogueSummary: '', lastSummarizedIndex: -1, domains: {} });
+
+test('image albums and health photos use the independent local recipient for every image', async t => {
+    t.mock.method(imageSettings, 'getImageRecognitionSettings', async () => ({ provider: 'lmstudio', model: 'synthetic/album-vision', maxTokens: 4096, reasoningEffort: 'none' }));
+    t.mock.method(aiUsage, 'logAiUsage', async () => {});
+    const other = Buffer.concat([jpeg, Buffer.from('synthetic-second-image')]), sent: any[] = [];
+    t.mock.method(lmstudioProviderAdapter.client.chat.completions, 'create', async (body: any) => {
+        sent.push(body);
+        const medical = body.messages[0].content.includes('дневника здоровья');
+        return { choices: [{ message: { content: JSON.stringify(medical
+            ? { action: 'log', kind: 'food', summary: 'Синтетическая тарелка еды.', confidence: 1 }
+            : { responseText: 'На фото фигуры.', description: 'Синтетические фигуры.', potentialReminder: null }) } }] } as any;
+    });
+    const saved = t.mock.method(HealthLogRepository, 'save', async (record: import('../services/HealthLogRepository').HealthLogRecord) => record);
+    const album = await image.imageAgent(jpeg, '', [], [other], '', { readOnly: true });
+    assert.equal(album.description, 'Синтетические фигуры.');
+    const ctx = { session: emptySession(), from: { id: owner }, chat: { id: owner } } as BotContext;
+    const diary = await health.healthPhotoAgent(ctx, jpeg, 'Вот что я съел', 'synthetic-food', [], [other]);
+    assert.match(diary.responseText, /Синтетическая тарелка/); assert.equal(saved.mock.callCount(), 1);
+    assert.equal(sent.length, 2);
+    for (const body of sent) {
+        assert.equal(body.model, 'synthetic/album-vision');
+        assert.deepEqual(body.messages.at(-1).content.filter((part: any) => part.type === 'image_url').map((part: any) => part.image_url.url),
+            [jpeg, other].map(data => `data:image/jpeg;base64,${data.toString('base64')}`));
+    }
+    assert.ok(!JSON.stringify(saved.mock.calls[0].arguments).includes(jpeg.toString('base64')));
+});
+
+test('API and Telegram photo pipelines deliver the selected local model result and preserve text-only history', async t => {
+    const previous = process.env.KIRA_ORCHESTRATION_MODE;
+    process.env.KIRA_ORCHESTRATION_MODE = 'skills';
+    t.after(() => { if (previous === undefined) delete process.env.KIRA_ORCHESTRATION_MODE; else process.env.KIRA_ORCHESTRATION_MODE = previous; });
+    t.mock.method(imageSettings, 'getImageRecognitionSettings', async () => ({ provider: 'lmstudio', model: 'synthetic/local-vision', maxTokens: 4096, reasoningEffort: 'none' }));
+    t.mock.method(aiUsage, 'logAiUsage', async () => {});
+    t.mock.method(memory, 'fetchAgentMemoryContext', async () => ({ context: '', recalledMemories: [] }) as any);
+    t.mock.method(storage, 'persistAgentRuntime', async () => {});
+    const calls: any[] = [];
+    t.mock.method(lmstudioProviderAdapter.client.chat.completions, 'create', async (body: any) => {
+        calls.push(body);
+        assert.equal(body.model, 'synthetic/local-vision');
+        assert.equal(body.messages.at(-1).content.filter((part: any) => part.type === 'image_url').length, 1);
+        return { choices: [{ message: { content: JSON.stringify({ responseText: 'Вижу синий квадрат.', description: 'Синий квадрат на белом фоне.', detectedText: '', potentialReminder: null }) } }] } as any;
+    });
+    const f = fixture(t);
+    const route = (await f.backend.capabilities() as any).photo.vision;
+    assert.deepEqual([route.provider, route.model, route.available], ['lmstudio', 'synthetic/local-vision', true]);
+    const reply = await f.backend.photo(jpeg);
+    assert.ok(reply.messages.some(message => message.text?.includes('синий квадрат')));
+    assert.ok(!JSON.stringify(f.saved()).includes(jpeg.toString('base64')));
+
+    const bot = new Bot<BotContext>(botToken, { botInfo });
+    const session = emptySession(), texts: string[] = [];
+    bot.use(async (ctx, next) => { ctx.session = session; await next(); });
+    bot.api.config.use(async (_prev, method) => method === 'getFile'
+        ? { ok: true, result: { file_id: 'synthetic-photo', file_unique_id: 'synthetic-photo', file_path: 'synthetic.jpg' } } as any
+        : { ok: true, result: { message_id: 21 } } as any);
+    t.mock.method(history, 'addToHistory', async (ctx: BotContext, role: string, content: string) => { ctx.session.messageHistory.unshift({ role, content, timestamp: new Date() }); });
+    t.mock.method(reminder, 'getBotRef', () => bot);
+    bot.api.config.use(async (prev, method, payload: any, signal) => { if (method === 'sendMessage') texts.push(payload.text); return prev(method, payload, signal); });
+    registerPhotoMessageHandler(bot, (async () => ({ arrayBuffer: async () => jpeg })) as any);
+    await bot.handleUpdate({ update_id: 1, message: { message_id: 1, date: 1, from: { id: owner, first_name: 'Synthetic', is_bot: false },
+        chat: { id: owner, type: 'private', first_name: 'Synthetic' }, photo: [{ file_id: 'synthetic-photo', file_unique_id: 'synthetic-photo', width: 16, height: 16 }] } });
+    assert.ok(texts.some(text => text.includes('синий квадрат')));
+    assert.equal(calls.length, 2);
+    assert.ok(session.messageHistory.some(message => message.content.includes('синий квадрат')));
+    assert.ok(!JSON.stringify(session).includes(jpeg.toString('base64')));
+});
 
 function fixture(t: TestContext) {
     let saved: SessionData | undefined;

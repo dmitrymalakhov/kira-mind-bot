@@ -5,6 +5,7 @@ import type { ConfigResponse } from '../types';
 import { ConfigSection, type ConfigSectionHandle } from './ConfigSection';
 import { LOCAL_MODEL_CONNECTION_SECTION, VOICE_MODEL_SECTION, IMAGE_CONNECTION_SECTION } from '../schema';
 import { ImageGenerationSettings } from './ImageGenerationSettings';
+import { ImageRecognitionSettings } from './ImageRecognitionSettings';
 import { ModelPreferencesSettings } from './ModelPreferencesSettings';
 import { SettingsTile } from './SettingsTile';
 
@@ -29,7 +30,8 @@ export const ModelSettingsSection = forwardRef<ConfigSectionHandle, Props>(
       onDirtyChange={onDirtyChange} config={config} onUpdate={onUpdate} onToast={onToast} section={section} />;
     return <>
       <ModelPreferencesSettings onToast={onToast} localConnection={editor(LOCAL_MODEL_CONNECTION_SECTION, connectionRef)} />
-      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2.5, mt: 2.5 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' }, gap: 2.5, mt: 2.5 }}>
+        <ImageRecognitionSettings onToast={onToast} />
         <ImageGenerationSettings compact onToast={onToast} connectionEditor={editor(IMAGE_CONNECTION_SECTION, imageRef)} />
         <SettingsTile title="Голос" description="Озвучивание ответов, тембр и модель речи." icon={<MicNoneOutlinedIcon />} tint="#EEE7F1"
           value={config.ELEVENLABS_MODEL_ID?.value || 'Выберите голос и модель'} onClick={() => setVoiceOpen(true)} />

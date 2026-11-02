@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { aiPresets, type AiPresetName } from '../ai/modelPresets';
 import { createJsonChatCompletionForTask } from '../ai/chatCompletion';
 import { resolveModelForTaskFreshAsync } from '../ai/modelResolver';
+import { resolveImageRecognitionRoute, runWithImageRecognitionRoute } from '../ai/imageRecognitionRouting';
 import { getActiveAiPresetName, runWithChannelPreset } from '../services/aiRuntimeConfigService';
 import { TypeORMSessionStorage } from '../services/SessionStorage';
 import type { MessageHistory, SessionData } from '../types';
@@ -226,6 +227,7 @@ const sha = (value: string) => createHash('sha256').update(value).digest('hex');
 async function modelScope(preset: AiPresetName | null): Promise<string> {
     return runWithChannelPreset(preset, async () => JSON.stringify(await Promise.all([
         resolveModelForTaskFreshAsync('intentClassification'), resolveModelForTaskFreshAsync('conversation'),
+        resolveImageRecognitionRoute(true),
     ])));
 }
 /** The model's decision made consistent: a known intent, a frame only when it is needed, nothing moves on a cancel,
@@ -537,14 +539,17 @@ export class SceneService {
 
     /** The answer comes from the dialogue's own handlers; the body's actions are chosen alongside, from the room. */
     async turn(turn: SceneTurn, appPreset: AiPresetName | null): Promise<ApiReply & Record<string, unknown>> {
-        // a prepared turn brings its decision (checked before anything is answered); an older phone's turn is decided here
-        const decided = turn.plan ? await this.take(turn, appPreset) : undefined;
-        try { return await this.execute(turn, appPreset, decided); }
-        catch (error) {
-            // No handler error may release a receipt once the shared pipeline/localization has started.
-            if (error instanceof ApiError && error.released) throw new ApiError(error.status, error.code, error.message);
-            throw error;
-        }
+        const execute = async () => {
+            // a prepared turn brings its decision (checked before anything is answered); an older phone's turn is decided here
+            const decided = turn.plan ? await this.take(turn, appPreset) : undefined;
+            try { return await this.execute(turn, appPreset, decided); }
+            catch (error) {
+                // No handler error may release a receipt once the shared pipeline/localization has started.
+                if (error instanceof ApiError && error.released) throw new ApiError(error.status, error.code, error.message);
+                throw error;
+            }
+        };
+        return turn.frame ? runWithChannelPreset(appPreset, () => runWithImageRecognitionRoute(execute)) : execute();
     }
 
     private async execute(turn: SceneTurn, appPreset: AiPresetName | null, decided?: SceneDecision): Promise<ApiReply & Record<string, unknown>> {

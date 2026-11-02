@@ -11,6 +11,10 @@ import * as completion from '../ai/chatCompletion';
 import * as reconsolidation from '../services/MemoryReconsolidationService';
 import { getActiveAiPresetName } from '../services/aiRuntimeConfigService';
 import { DialogueJobRepository } from '../services/DialogueJobRepository';
+import * as imageSettings from '../services/imageRecognitionConfigService';
+import { lmstudioProviderAdapter } from '../ai/providers/lmstudio';
+import * as aiUsage from '../services/aiUsageLogService';
+import { imageAgent } from '../agents/imageAgent';
 
 const owner = 730001;
 const botToken = '1234567890:abcdefghijklmnopqrstuvwxyzABCDE';
@@ -103,4 +107,32 @@ test('the phone\'s report of an action joins the same dialogue', async t => {
     await f.backend.sceneActionResult({ actionId: reply.actions[0].id, status: 'completed', targetId: chair, detail: 'выбрано место: Синтетический стул; села' });
     assert.equal(f.rows.get(`api:${owner}`)!.messageHistory[0].content,
         '[Результат действия «сесть» в AR — выполнено: ты смогла сесть (выбрано место: Синтетический стул; села)]');
+});
+
+test('AR localization sends pixels to the separate local photo model and discloses the same recipient', async t => {
+    const complete = completion.createJsonChatCompletionForTask;
+    const f = fixture(t);
+    const settings = t.mock.method(imageSettings, 'getImageRecognitionSettings', async () => ({ provider: 'lmstudio', model: 'synthetic/scene-vision', maxTokens: 2048, reasoningEffort: 'none' }));
+    t.mock.method(aiUsage, 'logAiUsage', async () => {});
+    t.mock.method(completion, 'createJsonChatCompletionForTask', (async (task: string, params: any) => task === 'conversation'
+        ? complete('conversation', params) : { actions: [{ kind: 'point', label: 'кружка' }] }) as any);
+    const local = t.mock.method(lmstudioProviderAdapter.client.chat.completions, 'create', async (body: any) => {
+        assert.equal(body.model, 'synthetic/scene-vision');
+        assert.ok(body.messages[1].content.some((part: any) => part.image_url?.url === `data:image/jpeg;base64,${jpeg.toString('base64')}`));
+        settings.mock.mockImplementation((async () => null) as any); // a reset between the two pixel-reading calls cannot change this frame's recipient
+        const locate = body.messages[0].content.includes('Ты находишь вещи');
+        return { choices: [{ message: { content: JSON.stringify(locate
+            ? { target: { found: true, count: 1, confidence: 'high', point: [400, 600], box: [360, 560, 440, 640] }, others: [] }
+            : { responseText: 'Кружка здесь.', description: 'Синтетическая кружка.', potentialReminder: null }) } }] } as any;
+    });
+    t.mock.method(orchestrator, 'processImage', async (_ctx: BotContext, buffer: Buffer, caption: string) => imageAgent(buffer, caption, [], [], '', { readOnly: true }));
+    const turn = parseSceneTurn({ text: 'Покажи кружку', scene: scene(),
+        frame: { mime: 'image/jpeg', data: jpeg.toString('base64'), capturedAt: new Date().toISOString(), width: 1024, height: 768 } });
+    const capabilities = await f.backend.sceneCapabilities() as any;
+    assert.equal(capabilities.vision.model, 'synthetic/scene-vision');
+    const reply = await f.backend.sceneTurn(turn, await f.backend.sceneReady(turn)) as any;
+    assert.equal(local.mock.callCount(), 2);
+    assert.deepEqual([reply.vision.provider, reply.vision.model, reply.vision.location], ['lmstudio', 'synthetic/scene-vision', 'server-local']);
+    assert.equal(reply.actions[0].kind, 'point'); assert.equal(reply.actions[0].at.x, 0.4);
+    assert.notEqual((await f.backend.sceneCapabilities() as any).vision.model, 'synthetic/scene-vision');
 });

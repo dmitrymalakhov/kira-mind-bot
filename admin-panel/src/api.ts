@@ -73,6 +73,24 @@ export function uploadCharacterReference(file: File) {
 export function removeCharacterReference() { return imageApi('/reference', { method: 'DELETE' }); }
 export function checkImageConnection(): Promise<{ success: boolean; models: string[] }> { return imageApi('/connection'); }
 
+export interface ImageRecognitionConfig {
+  settings: import('../../ai/imageRecognition').ImageRecognitionSettings;
+  models: Array<{ id: string; label: string; loaded: boolean; loadedIds: string[] }>;
+  connectionError: string | null;
+}
+export async function fetchImageRecognition(): Promise<ImageRecognitionConfig> {
+  const response = await apiFetch('/api/image-recognition');
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Не удалось загрузить настройки распознавания');
+  return data;
+}
+export async function saveImageRecognition(settings: ImageRecognitionConfig['settings']): Promise<{ settings: ImageRecognitionConfig['settings'] }> {
+  const response = await apiFetch('/api/image-recognition', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings }) });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Не удалось сохранить настройки распознавания');
+  return data;
+}
+
 export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const response = await fetch(input, init);
   if (response.status === 401) {

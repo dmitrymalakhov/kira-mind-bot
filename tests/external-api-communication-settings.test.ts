@@ -108,7 +108,7 @@ test('profile reads and patches share the REST window and reject over-budget wor
 
 function account(t: TestContext) {
     const oldEnv = { ...process.env };
-    for (const key of Object.keys(process.env)) if (/^(OPENAI|GEMINI|ZAI|OPENROUTER|LM_STUDIO)_/.test(key)) delete process.env[key];
+    for (const key of Object.keys(process.env)) if (/^(OPENAI|GEMINI|ZAI|OPENROUTER|KIMI|LM_STUDIO)_/.test(key)) delete process.env[key];
     process.env.OPENAI_API_KEY = 'synthetic-account-key';
     t.after(() => { for (const key of Object.keys(process.env)) if (!(key in oldEnv)) delete process.env[key]; Object.assign(process.env, oldEnv); });
     const oldInitialized = AppDataSource.isInitialized; (AppDataSource as any).isInitialized = true; t.after(() => { (AppDataSource as any).isInitialized = oldInitialized; });
@@ -174,16 +174,50 @@ test('model failures roll back both settings; unavailable output and errors neve
     db.readsFail(); await assert.rejects(readModelPreferences(), (e: any) => e.status === 503);
 });
 
+test('HTTP saves and rereads the selected automatic provider pool atomically without changing memory or accepting model injection', async t => {
+    const db = account(t); process.env.ZAI_API_KEY = 'synthetic'; process.env.OPENROUTER_API_KEY = 'synthetic';
+    const request = await http(t, { modelPreferences: readModelPreferences, updateModelPreferences: saveModelPreferences });
+    const saved = await request('/model-preferences', 'PUT', { quality: 'high', providers: ['zai', 'openrouter'] });
+    assert.equal(saved.status, 200); assert.equal(saved.body.activePlan.version, 4);
+    assert.deepEqual(saved.body.preferences.providers, ['openrouter', 'zai']);
+    for (const task of TEXT_TASKS) assert.deepEqual(new Set(saved.body.activePlan.routing[task].map((ref: any) => ref.provider)), new Set(['zai', 'openrouter']));
+    assert.equal(saved.body.effectivePlan.memoryEmbedding.provider, 'openai');
+    assert.equal(saved.body.appOverride.preset, null); assert.equal(db.transactions(), 1);
+    const reread = await request('/model-preferences'); assert.deepEqual(reread.body.activePlan, saved.body.activePlan);
+    assert.deepEqual((await getModelPolicy(true))?.routing, saved.body.activePlan.routing);
+    for (const body of [{ quality: 'high', providers: [] }, { quality: 'high', providers: ['unknown'] },
+        { quality: 'high', providers: ['zai'], models: { conversation: 'injected' } }]) {
+        assert.equal((await request('/model-preferences', 'PUT', body)).status, 400);
+    }
+    assert.equal(db.transactions(), 1);
+});
+
 test('Custom GET retains exact task settings, provider and fallback restrictions; explicit pins cannot degrade to another model', async t => {
     const db = account(t);
     const plan = buildModelPlan({ quality: 'high' }, { vars: { OPENAI_API_KEY: 'synthetic' }, localRoutes: defaultLocalRoutes(), localModels: [], memoryProfileName: 'stable-1536' });
     const custom = { ...plan, version: 3, source: 'custom', customProvider: 'openai' };
+    delete custom.routing;
     for (const task of TEXT_TASKS) custom.models[task].allowFallback = false;
     db.state.set('AI_MODEL_POLICY', JSON.stringify(custom)); const snapshot = new Map(db.state);
     const result = await readModelPreferences() as any;
     assert.equal(result.mode, 'custom'); assert.deepEqual(result.activePlan, custom); assert.deepEqual(db.state, snapshot); assert.equal(db.transactions(), 0);
     for (const task of TEXT_TASKS) { assert.equal(result.effectivePlan.account.routes[task].crossProviderFallback, false); assert.deepEqual(result.effectivePlan.account.routes[task].fallbacks, []); }
     assert.equal(getSameProviderDegradedModel('gemini-full', { provider: 'gemini', model: 'gemini-3.6-flash', allowFallback: false }, true), null);
+});
+
+for (const provider of ['kimi', 'openrouter'] as const) test(`HTTP preferences save ${provider} alone and disclose unavailable independent services`, async t => {
+    const db = account(t); delete process.env.OPENAI_API_KEY;
+    process.env[provider === 'kimi' ? 'KIMI_API_KEY' : 'OPENROUTER_API_KEY'] = 'synthetic-only-key';
+    const request = await http(t, { modelPreferences: readModelPreferences, updateModelPreferences: saveModelPreferences });
+    const result = await request('/model-preferences', 'PUT', { quality: 'high', providers: [provider] });
+    assert.equal(result.status, 200); assert.equal(result.body.activePlan.version, 4); assert.equal(result.body.appOverride.preset, null);
+    assert.equal(result.body.effectivePlan.account.routes.conversation.provider, provider);
+    assert.equal(result.body.effectivePlan.memoryEmbedding.available, false);
+    assert.ok(result.body.serviceWarnings.some((warning: string) => warning.includes('Векторная память')));
+    for (const task of TEXT_TASKS) assert.ok(result.body.activePlan.routing[task].every((ref: any) => ref.provider === provider));
+    assert.equal(db.state.get('MEMORY_EMBEDDING_PROFILE'), 'stable-1536');
+    assert.equal((await request('/model-preferences')).status, 200);
+    assert.equal((await getModelPolicy(true))?.models.conversation.provider, provider);
 });
 
 test('an old policy read finishing after a successful save cannot replace the next-turn policy cache', async t => {

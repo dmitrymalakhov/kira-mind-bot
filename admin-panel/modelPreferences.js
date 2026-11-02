@@ -1,6 +1,9 @@
 'use strict';
 const { SETTING_KEY, QUALITY_LEVELS, buildModelPlan, parseModelPolicy, parseStrategyRequest, buildCustomPlan, getStrategyCatalog, API_PROVIDERS } = require('../ai/modelPreferences');
 const { readLocalRoutes, listLocalModels } = require('./localModels');
+const registry = require('./src/ai-model-presets.json');
+const { providers } = require('../ai/provider-registry.json');
+const { getMemoryEmbeddingProfile } = require('./memoryEmbeddingProfileRegistry');
 
 async function resources(pool, vars, memoryProfileName) {
   const localRoutes = await readLocalRoutes(pool, vars);
@@ -15,7 +18,9 @@ async function readModelPreferences(pool, vars, memoryProfileName) {
   const { rows } = await pool.query('SELECT key,value FROM bot_settings WHERE key IN ($1,$2)', [SETTING_KEY, 'AI_MODEL_PRESET']);
   const policy = parseModelPolicy(rows.find(row => row.key === SETTING_KEY)?.value);
   const context = await resources(pool, vars, memoryProfileName);
-  const manualPreset = rows.find(row => row.key === 'AI_MODEL_PRESET')?.value || vars.AI_MODEL_PRESET || 'gpt-balanced';
+  const manualPreset = rows.find(row => row.key === 'AI_MODEL_PRESET')?.value || vars.AI_MODEL_PRESET
+    || (!vars.OPENAI_API_KEY?.trim() && vars.OPENROUTER_API_KEY?.trim() ? 'openrouter-balanced'
+      : !vars.OPENAI_API_KEY?.trim() && vars.KIMI_API_KEY?.trim() ? 'kimi-full' : 'gpt-balanced');
   const inferred = { quality: ['gpt-lean','lmstudio-local'].includes(manualPreset) ? 'standard' : manualPreset === 'gpt-max' ? 'maximum' : 'high' };
   const plans = [];
   for (const { id: quality } of QUALITY_LEVELS) {
@@ -28,12 +33,24 @@ async function readModelPreferences(pool, vars, memoryProfileName) {
     try { return { ...buildModelPlan(preferences, context), available: true }; }
     catch (error) { return { preferences, available: false, unavailableReason: error.message }; }
   }));
-  return { providers: API_PROVIDERS, providerPlans, catalog: getStrategyCatalog(context), localRoutes: context.localRoutes,
+  const catalog = getStrategyCatalog(context);
+  const connectedProviders = [...new Set(catalog.map(ref => ref.provider))];
+  const poolPlans = QUALITY_LEVELS.map(({ id: quality }) => {
+    const preferences = { quality, providers: connectedProviders };
+    try { return { ...buildModelPlan(preferences, context), available: true }; }
+    catch { return { preferences, available: false }; }
+  });
+  const models = policy?.models || registry.presets[manualPreset].models;
+  const services = { 'Поиск в интернете': models.webSearchReasoning, 'Чтение изображений браузера': models.browserVision,
+    'Распознавание голоса': models.transcription, 'Векторная память': getMemoryEmbeddingProfile(memoryProfileName) };
+  const serviceWarnings = Object.entries(services).filter(([, ref]) => ref && !providers[ref.provider].optionalApiKey
+    && !vars[providers[ref.provider].envKey]?.trim()).map(([label]) => `${label}: требуется отдельное API-подключение.`);
+  return { providers: API_PROVIDERS, providerPlans, poolPlans, catalog, serviceWarnings, localRoutes: context.localRoutes,
     scope: 'account', scopeNote: 'Общие настройки Киры. Явный режим отдельного приложения имеет приоритет только в его диалоге.',
     mode: policy?.source === 'custom' ? 'custom' : policy ? 'automatic' : 'manual', preferences: policy?.preferences || inferred,
     activePlan: policy, manualPreset,
     plans, localConnected: context.localModels.length > 0, localError: context.localError,
-    serviceConnected: Boolean(vars.OPENAI_API_KEY || vars.GEMINI_API_KEY || vars.ZAI_API_KEY || vars.OPENROUTER_API_KEY) };
+    serviceConnected: Boolean(vars.OPENAI_API_KEY || vars.GEMINI_API_KEY || vars.ZAI_API_KEY || vars.OPENROUTER_API_KEY || vars.KIMI_API_KEY) };
 }
 async function saveModelPreferences(pool, vars, memoryProfileName, body) {
   const request = parseStrategyRequest(body);

@@ -14,6 +14,9 @@ import { resolveRetryPolicy } from './providers/policyDefaults';
 import { runSameProviderDegradationChain } from './executionPolicy';
 import { limitChatGeneration } from './generationLimits';
 import { assertAiExecutionActive } from './executionScope';
+import { AiInvalidResponseError, AiRouteChangedError, assertAutomaticRouteCurrent, configuredCandidate, isVisionChat, runAutomaticModels, supportsAutomaticChat } from './automaticRouting';
+import { AiContentSafetyError, assertAiResponseAllowed, isAiContentSafetyError } from './contentSafety';
+import { resolveImageRecognitionRoute } from './imageRecognitionRouting';
 
 const MAX_PRESET_REFRESHES_PER_REQUEST = 3;
 
@@ -28,6 +31,8 @@ function sleep(ms: number): Promise<void> {
 interface AiTaskRoute {
     presetName: AiPresetName;
     modelRef: AiModelRef;
+    candidates?: AiModelRef[];
+    imageRecognitionOverride?: boolean;
 }
 
 interface AiExecutionResult {
@@ -49,7 +54,8 @@ function isSameRoute(left: AiTaskRoute, right: AiTaskRoute): boolean {
         && left.modelRef.provider === right.modelRef.provider
         && left.modelRef.model === right.modelRef.model
         && left.modelRef.allowFallback === right.modelRef.allowFallback
-        && JSON.stringify(left.modelRef.generation) === JSON.stringify(right.modelRef.generation);
+        && JSON.stringify(left.modelRef.generation) === JSON.stringify(right.modelRef.generation)
+        && JSON.stringify(left.candidates) === JSON.stringify(right.candidates);
 }
 
 async function maybeDelayRetry(
@@ -129,6 +135,7 @@ async function createChatCompletionWithModel(
     const startedAt = Date.now();
     const providerAdapter = getAiProviderAdapter(modelRef.provider);
     const fallbackUsed = stage === 'fallback';
+    let consumedUsage: ChatCompletion['usage'];
 
     try {
         assertAiExecutionActive();
@@ -136,6 +143,8 @@ async function createChatCompletionWithModel(
             limitChatGeneration(preset, taskKey, modelRef.provider, params, modelRef.generation?.maxTokens), modelRef.generation);
 
         assertAiExecutionActive();
+        consumedUsage = result.usage;
+        assertAiResponseAllowed(result);
         recordAiUsage({
             taskKey,
             provider: modelRef.provider,
@@ -158,6 +167,7 @@ async function createChatCompletionWithModel(
         assertAiExecutionActive();
         const parseErrorIdentities = providerAdapter.parseErrorIdentities?.bind(providerAdapter);
         const diagnostics = classifyAiErrorForProvider(error, parseErrorIdentities);
+        const refusalUsage = error instanceof AiContentSafetyError ? error.usage : undefined;
         recordAiUsage({
             taskKey,
             provider: modelRef.provider,
@@ -169,6 +179,9 @@ async function createChatCompletionWithModel(
             stage,
             success: false,
             fallbackUsed,
+            inputTokens: consumedUsage?.prompt_tokens ?? refusalUsage?.inputTokens,
+            outputTokens: consumedUsage?.completion_tokens ?? refusalUsage?.outputTokens,
+            totalTokens: consumedUsage?.total_tokens ?? refusalUsage?.totalTokens,
             errorMessage: errorToMessage(error),
             errorStatus: diagnostics.errorStatus,
             errorCode: diagnostics.errorCode,
@@ -197,11 +210,41 @@ async function createChatCompletionForTaskWithTrace(
     taskKey: AiTaskKey,
     params: ChatCompletionParamsWithoutModel,
     traceId: string,
+    requireJson = false,
+    automaticRefreshes = 0,
 ): Promise<AiExecutionResult> {
-    let route: AiTaskRoute = await resolveModelForTaskAsync(taskKey);
+    const imageInput = taskKey === 'conversation' && isVisionChat(params);
+    const resolveRoute = (fresh = false) => imageInput ? resolveImageRecognitionRoute(fresh)
+        : fresh ? resolveModelForTaskFreshAsync(taskKey) : resolveModelForTaskAsync(taskKey);
+    let route: AiTaskRoute = await resolveRoute();
+    if (route.candidates) {
+      try {
+        const candidates = route.candidates.filter(model => configuredCandidate(model) && supportsAutomaticChat(model, params));
+        // Media preparation discloses a single recipient. Keep that recipient fixed for the frame.
+        const execution = await runAutomaticModels({ ...route, candidates: isVisionChat(params) ? candidates.slice(0, 1) : candidates }, () => true, async (model, attempt) => {
+            if (attempt > 1) assertAutomaticRouteCurrent(route, await resolveRoute(true));
+            const response = await createChatCompletionWithModel(taskKey, params, route.presetName, model, traceId,
+                attempt, attempt === 1 ? 'primary' : 'fallback');
+            if (requireJson && !parseLLMJson(response.choices[0]?.message?.content || '')) {
+                const error = new AiInvalidResponseError();
+                recordJsonResolutionFailure(taskKey, route.presetName, model, traceId, attempt,
+                    attempt === 1 ? 'primary' : 'fallback', error, attempt > 1);
+                throw error;
+            }
+            return response;
+        });
+        return { response: execution.result, route: { presetName: route.presetName, modelRef: execution.model },
+            attempt: execution.attempt, stage: execution.attempt === 1 ? 'primary' : 'fallback' };
+      } catch (error) {
+        if (!imageInput && error instanceof AiRouteChangedError && automaticRefreshes < MAX_PRESET_REFRESHES_PER_REQUEST) {
+            return createChatCompletionForTaskWithTrace(taskKey, params, traceId, requireJson, automaticRefreshes + 1);
+        }
+        throw error;
+      }
+    }
     let attempt = 1;
     let stage: AiExecutionStage = 'primary';
-    let presetRefreshCount = 0;
+    let presetRefreshCount = automaticRefreshes;
     let primaryRetriesUsed = 0;
     // Модели, уже испробованные в same-provider degradation chain. Защищает от
     // зацикливания и позволяет дойти до следующего дна chain при отказе lite.
@@ -209,7 +252,9 @@ async function createChatCompletionForTaskWithTrace(
     let lastFailedModel = route.modelRef;
 
     const switchToCurrentRoute = async (): Promise<boolean> => {
-        const currentRoute: AiTaskRoute = await resolveModelForTaskFreshAsync(taskKey);
+        // A photo already sent to a pinned local model keeps that recipient, including during a concurrent settings edit.
+        if (route.imageRecognitionOverride) return false;
+        const currentRoute: AiTaskRoute = await resolveRoute(true);
         if (isSameRoute(route, currentRoute)) return false;
         if (presetRefreshCount >= MAX_PRESET_REFRESHES_PER_REQUEST) {
             throw new Error(`AI preset changed too many times during request: ${taskKey}`);
@@ -250,6 +295,7 @@ async function createChatCompletionForTaskWithTrace(
             return { response, route, attempt, stage };
         } catch (error) {
             assertAiExecutionActive();
+            if (isAiContentSafetyError(error)) throw error;
             const diagnostics = classifyAiErrorForProvider(error, getErrorIdentityParser(route.modelRef));
 
             if (!diagnostics.retryable) {
@@ -258,7 +304,10 @@ async function createChatCompletionForTaskWithTrace(
             }
 
             // Фоновая задача могла начаться до смены preset-а из админки.
-            if (await switchToCurrentRoute()) continue;
+            if (await switchToCurrentRoute()) {
+                if (route.candidates) return createChatCompletionForTaskWithTrace(taskKey, params, traceId, requireJson, presetRefreshCount);
+                continue;
+            }
 
             // Retry primary. Базовое поведение — 1 повтор для всех пресетов (legacy).
             // Провайдерная multi-retry-политика применяется только для true-full
@@ -316,7 +365,10 @@ async function createChatCompletionForTaskWithTrace(
             );
 
             // Preset мог измениться во время backoff-задержки.
-            if (await switchToCurrentRoute()) continue;
+            if (await switchToCurrentRoute()) {
+                if (route.candidates) return createChatCompletionForTaskWithTrace(taskKey, params, traceId, requireJson, presetRefreshCount);
+                continue;
+            }
 
             primaryRetriesUsed += 1;
             attempt += 1;
@@ -370,7 +422,7 @@ export async function createFallbackChatCompletion(
     attempt = 1,
     originalModelRef?: AiModelRef,
 ): Promise<ChatCompletion> {
-    if (originalModelRef?.allowFallback === false) throw originalError;
+    if (originalModelRef?.allowFallback === false || isAiContentSafetyError(originalError)) throw originalError;
     const fallbackModel = getTaskFallbackModel(taskKey);
     const originalErrorParser = originalModelRef
         ? getErrorIdentityParser(originalModelRef)
@@ -403,7 +455,9 @@ export async function createJsonChatCompletionForTask<T>(
     params: ChatCompletionParamsWithoutModel,
 ): Promise<T | null> {
     const trace = createAiExecutionTrace();
-    const execution = await createChatCompletionForTaskWithTrace(taskKey, params, trace.traceId);
+    let execution: AiExecutionResult;
+    try { execution = await createChatCompletionForTaskWithTrace(taskKey, params, trace.traceId, true); }
+    catch (error) { if (error instanceof AiInvalidResponseError) return null; throw error; }
     const content = execution.response.choices[0]?.message?.content || '';
     const parsed = parseLLMJson<T>(content);
     if (parsed) return parsed;

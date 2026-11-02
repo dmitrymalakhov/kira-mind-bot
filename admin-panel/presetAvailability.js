@@ -82,6 +82,7 @@ function getPresetAvailabilityWithRequirements(preset, vars, requiredProviders =
   const invalidTasks = [];
 
   for (const [taskKey, modelRef] of Object.entries(preset.models || {})) {
+    if (preset.textOnlyAvailability && getTaskCapabilityKey(taskKey) !== 'supportsChatCompletions') continue;
     if (modelRef.modelEnvKey && !hasConfiguredValue(vars, modelRef.modelEnvKey)) {
       invalidTasks.push(`${taskKey}: не задан ${modelRef.modelEnvKey}`);
     }
@@ -142,7 +143,7 @@ function getMemoryProfileRequiredProviders(memoryProfile) {
 
 function getPresetAvailabilityForMemoryProfile(preset, vars, memoryProfileName) {
   const memoryProfile = getMemoryEmbeddingProfile(memoryProfileName);
-  const requiredProviders = getMemoryProfileRequiredProviders(memoryProfile);
+  const requiredProviders = preset.textOnlyAvailability ? [] : getMemoryProfileRequiredProviders(memoryProfile);
   return getPresetAvailabilityWithRequirements(preset, vars, requiredProviders);
 }
 

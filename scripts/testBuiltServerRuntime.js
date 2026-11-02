@@ -16,6 +16,8 @@ assert.equal(require('../dist/utils/telegramAccess.js').readTelegramUserCredenti
 assert.equal(require('../dist/ai/backgroundFeatureState.js').requiresTelegramSession('reflection'), true);
 assert.equal(localModels.defaultLocalRoutes('synthetic/model').fast.reasoningEffort, 'none');
 assert.equal(require('../dist/ai/imageGeneration.js').defaultImageSettings({}).model, 'gpt-image-2.5-sunburst');
+assert.equal(require('../dist/ai/imageRecognition.js').parseImageRecognitionSettings('null'), null);
+assert.equal(typeof require('../dist/ai/imageRecognitionRouting.js').resolveImageRecognitionRoute, 'function');
 assert.equal(typeof require('../dist/utils/mcpConnection.js').connectMcp, 'function', 'Built MCP runtime must include the shared connector');
 assert.deepEqual(require('../dist/utils/mcpConfig.js').parseMcpConfig({ servers: {} }), {});
 assert.ok(require('node:fs').existsSync(require('../dist/ai/imageGeneration.js').DEFAULT_REFERENCE_PATH), 'Built runtime must include the default Kira reference');

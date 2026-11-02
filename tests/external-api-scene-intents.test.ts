@@ -11,6 +11,7 @@ import type { AiPresetName } from '../ai/modelPresets';
 import { getActiveAiPresetName } from '../services/aiRuntimeConfigService';
 import { TypeORMSessionStorage } from '../services/SessionStorage';
 import type { MessageHistory, SessionData } from '../types';
+import * as imageSettings from '../services/imageRecognitionConfigService';
 
 // Synthetic only: a fictional room, a fictional owner, a tiny fake JPEG.
 const token = 'synthetic-test-token-with-at-least-32-characters';
@@ -100,6 +101,19 @@ test('the decision is made consistent: a frame only to look, find or clarify; a 
     assert.equal(normalizeDecision({ intent: 'run_shell', actions: [] }).intent, 'chat');
     assert.deepEqual(normalizeDecision(null), { intent: 'chat', actions: [], frame: false });
     assert.equal(normalizeDecision({ intent: 'find', actions: Array.from({ length: 9 }, () => point[0]) }).actions.length, 3);
+});
+
+test('changing the separate image model parameters invalidates a prepared AR plan before pixels are delivered', async t => {
+    sessions(t);
+    let maxTokens = 2048;
+    t.mock.method(imageSettings, 'getImageRecognitionSettings', async () => ({ provider: 'lmstudio', model: 'synthetic/pinned-camera', maxTokens, reasoningEffort: 'none' }));
+    const channel = new Channel(), m = model({ intent: 'look', actions: [] });
+    const service = new SceneService(owner, new AppMode(), channel, m.complete);
+    const text = 'Опиши то, что видишь';
+    const prepared = await service.prepare(parseScenePreparation({ stage: 'prepare', text, scene: scene() })) as any;
+    maxTokens = 4096;
+    await assert.rejects(service.turn(parseSceneTurn({ text, scene: scene(), frame: frame(), plan: prepared.plan.id }), 'gpt-lean'), (error: any) => error.code === 'plan_stale');
+    assert.deepEqual(channel.looked, []);
 });
 
 test('execution reuses the prepared decision (no second classification) and runs the shared pipeline once', async t => {

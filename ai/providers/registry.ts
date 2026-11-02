@@ -4,6 +4,7 @@ import { openaiProviderAdapter } from './openai';
 import { openrouterProviderAdapter } from './openrouter';
 import { zaiProviderAdapter } from './zai';
 import { lmstudioProviderAdapter } from './lmstudio';
+import { kimiProviderAdapter } from './kimi';
 import type { AiProviderAdapter } from './types';
 
 const AI_PROVIDER_ADAPTERS: Record<AiProvider, AiProviderAdapter> = {
@@ -12,10 +13,11 @@ const AI_PROVIDER_ADAPTERS: Record<AiProvider, AiProviderAdapter> = {
     gemini: geminiProviderAdapter,
     zai: zaiProviderAdapter,
     lmstudio: lmstudioProviderAdapter,
+    kimi: kimiProviderAdapter,
 };
 
 export function getAiProviderAdapter(provider: AiProvider): AiProviderAdapter {
     return AI_PROVIDER_ADAPTERS[provider];
 }
 
-export { geminiProviderAdapter, openaiProviderAdapter, openrouterProviderAdapter, zaiProviderAdapter };
+export { geminiProviderAdapter, openaiProviderAdapter, openrouterProviderAdapter, zaiProviderAdapter, kimiProviderAdapter };

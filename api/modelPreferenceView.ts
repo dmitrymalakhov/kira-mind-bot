@@ -15,12 +15,14 @@ function recipient(ref: AiModelRef) {
     return { provider: ref.provider, providerLabel: descriptor.label, available,
         model: ref.model, location: ref.provider === 'lmstudio' ? 'server-local' : 'cloud', ...(available ? {} : unavailable) };
 }
-function describe(task: AiTaskKey, preset: AiPresetName, ref: AiModelRef, localRoutes: LocalModelRoutes) {
+function describe(task: AiTaskKey, preset: AiPresetName, ref: AiModelRef, localRoutes: LocalModelRoutes, candidates?: AiModelRef[]) {
     try {
         const primary = resolveConfiguredModelRef(ref, localRoutes);
         const fallbacks: ReturnType<typeof recipient>[] = [];
-        const crossProvider = allowsCrossProviderFallback(preset, primary);
-        if (crossProvider) {
+        const crossProvider = candidates ? new Set(candidates.map(ref => ref.provider)).size > 1 : allowsCrossProviderFallback(preset, primary);
+        if (candidates) {
+            fallbacks.push(...candidates.slice(1).map(recipient));
+        } else if (crossProvider) {
             const fallback = getTaskFallbackModel(task);
             if (fallback.provider !== primary.provider || fallback.model !== primary.model) fallbacks.push(recipient(fallback));
         } else {
@@ -32,7 +34,8 @@ function describe(task: AiTaskKey, preset: AiPresetName, ref: AiModelRef, localR
                 seen.add(next.model); fallbacks.push(recipient(next)); current = next;
             }
         }
-        return { ...recipient(primary), crossProviderFallback: crossProvider, fallbacks };
+        return { ...recipient(primary), crossProviderFallback: crossProvider, fallbacks,
+            ...(candidates ? { selection: 'automatic-pool', candidates: candidates.map(recipient) } : {}) };
     } catch { return { available: false, ...unavailable }; }
 }
 
@@ -44,14 +47,15 @@ export function publicModelPreferences(state: Record<string, any>, selection: Ap
     const appPreset = selection.preset ?? accountPreset;
     const accountModels = policy?.models ?? aiPresets[accountPreset].models;
     const appModels = selection.preset ? aiPresets[selection.preset].models : accountModels;
-    const routes = (models: typeof accountModels, preset: AiPresetName) => Object.fromEntries(TEXT_TASKS.map(task => [task, describe(task, preset, models[task], state.localRoutes)]));
+    const routes = (models: typeof accountModels, preset: AiPresetName, pool?: ModelPolicy['routing']) => Object.fromEntries(TEXT_TASKS.map(task => [task, describe(task, preset, models[task], state.localRoutes, pool?.[task])]));
     const safePlans = (plans: any[]) => plans.map(plan => plan.available === false ? { ...plan, ...unavailable } : plan);
     const embedding = getMemoryEmbeddingProfile(memoryProfile);
     return { ...state, qualityLevels: QUALITY_LEVELS, textTasks: TEXT_TASKS,
         plans: safePlans(state.plans), providerPlans: safePlans(state.providerPlans),
+        poolPlans: safePlans(state.poolPlans || []),
         appOverride: selection,
-        effectivePlan: { account: { preset: accountPreset, routes: routes(accountModels, accountPreset) },
-            app: { preset: appPreset, overridden: selection.preset !== null, routes: routes(appModels, appPreset) },
+        effectivePlan: { account: { preset: accountPreset, routes: routes(accountModels, accountPreset, policy?.routing) },
+            app: { preset: appPreset, overridden: selection.preset !== null, routes: routes(appModels, appPreset, selection.preset ? undefined : policy?.routing) },
             memoryEmbedding: { profile: memoryProfile, ...recipient(embedding) } },
         recipientDisclosure: { complete: false, scope: 'configured-text-routes-and-memory-embedding',
             missing: ['resolved-endpoint-identity', 'non-text-processing', 'provider-data-retention'] },

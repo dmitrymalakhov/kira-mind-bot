@@ -25,6 +25,7 @@ COPY ai/localModelRouting.js /app/ai/localModelRouting.js
 COPY ai/modelPreferences.js /app/ai/modelPreferences.js
 COPY ai/backgroundFeatureState.js /app/ai/backgroundFeatureState.js
 COPY ai/imageGeneration.js /app/ai/imageGeneration.js
+COPY ai/imageRecognition.js /app/ai/imageRecognition.js
 COPY assets/characters/kira /app/assets/characters/kira
 COPY ai/memoryEmbeddingProviderSupport.js /app/ai/memoryEmbeddingProviderSupport.js
 COPY utils/legacyPersonalitySanitizer.js /app/utils/legacyPersonalitySanitizer.js

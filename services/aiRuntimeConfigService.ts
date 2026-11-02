@@ -51,7 +51,13 @@ function getFreshCachedPresetName(requireDbBacked = false): AiPresetName | null 
 }
 
 export function getEnvAiPresetName(): AiPresetName {
-    return parseAiPresetName(process.env.AI_MODEL_PRESET) ?? DEFAULT_AI_MODEL_PRESET;
+    const selected = parseAiPresetName(process.env.AI_MODEL_PRESET);
+    if (selected) return selected;
+    if (!process.env.OPENAI_API_KEY?.trim()) {
+        if (process.env.OPENROUTER_API_KEY?.trim()) return 'openrouter-balanced';
+        if (process.env.KIMI_API_KEY?.trim()) return 'kimi-full';
+    }
+    return DEFAULT_AI_MODEL_PRESET;
 }
 
 async function loadPresetFromDb(fallback: AiPresetName): Promise<AiPresetName> {

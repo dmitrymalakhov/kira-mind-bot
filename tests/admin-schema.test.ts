@@ -34,12 +34,19 @@ describe("admin configuration schema", () => {
     });
 
     test("keeps critical credentials marked as required passwords", () => {
-        for (const key of ["OPENAI_API_KEY", "KIRA_BOT_TOKEN", "DB_PASSWORD"]) {
+        for (const key of ["KIRA_BOT_TOKEN", "DB_PASSWORD"]) {
             const field = fields.find((candidate) => candidate.key === key);
             assert.ok(field, key);
             assert.equal(field?.required, true, key);
             assert.equal(field?.type, "password", key);
         }
+    });
+
+    test("OpenAI credentials remain optional for independent local and alternative provider routes", () => {
+        const field = fields.find(candidate => candidate.key === "OPENAI_API_KEY");
+        assert.ok(field);
+        assert.equal(field.type, "password");
+        assert.equal(field.required, false);
     });
 
     test("keeps interval settings on the duration editor", () => {

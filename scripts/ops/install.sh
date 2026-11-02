@@ -164,12 +164,14 @@ prompt_instance_name() {
 
 # OpenAI
 echo -e "\n${BOLD}OpenAI${NC}"
-prompt_required OPENAI_API_KEY "OpenAI API Key" "https://platform.openai.com/api-keys"
+prompt_optional OPENAI_API_KEY "OpenAI API Key" "https://platform.openai.com/api-keys"
 
 echo -e "\n${BOLD}Дополнительные AI-провайдеры${NC}"
 prompt_optional OPENROUTER_API_KEY "OpenRouter API Key" "https://openrouter.ai/keys"
+prompt_optional KIMI_API_KEY "Kimi API Key (Moonshot)" "https://platform.moonshot.ai/console/api-keys"
 prompt_optional GEMINI_API_KEY "Gemini API Key" "https://aistudio.google.com/app/apikey"
 prompt_optional ZAI_API_KEY "Z.ai API Key" "https://z.ai/manage-apikey/apikey-list"
+[[ -n "${OPENAI_API_KEY:-}${OPENROUTER_API_KEY:-}${KIMI_API_KEY:-}${GEMINI_API_KEY:-}${ZAI_API_KEY:-}" ]] || error "Укажи хотя бы один ключ текстового AI-провайдера"
 
 # Telegram Bot
 echo -e "\n${BOLD}Telegram Bot${NC}"
@@ -230,6 +232,7 @@ cat > "$ENV_FILE" << EOF
 OPENAI_API_KEY=${OPENAI_API_KEY}
 
 OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+KIMI_API_KEY=${KIMI_API_KEY}
 GEMINI_API_KEY=${GEMINI_API_KEY}
 ZAI_API_KEY=${ZAI_API_KEY}
 

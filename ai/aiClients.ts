@@ -6,12 +6,14 @@ import {
     openaiProviderAdapter,
     openrouterProviderAdapter,
     zaiProviderAdapter,
+    kimiProviderAdapter,
 } from './providers/registry';
 
 export const openaiClient = openaiProviderAdapter.client;
 export const openrouterClient = openrouterProviderAdapter.client;
 export const geminiClient = geminiProviderAdapter.client;
 export const zaiClient = zaiProviderAdapter.client;
+export const kimiClient = kimiProviderAdapter.client;
 
 export function getAiClient(provider: AiProvider): OpenAI {
     return getAiProviderAdapter(provider).client;

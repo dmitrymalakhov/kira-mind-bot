@@ -14,6 +14,7 @@ const { registerBudgetModeRoutes } = require('./budgetMode');
 const { registerBackgroundFeatureRoutes } = require('./backgroundFeatures');
 const { registerLocalModelRoutes, readLocalRoutes, resolveLocalPreset } = require('./localModels');
 const { registerImageGenerationRoutes } = require('./imageGeneration');
+const { registerImageRecognitionRoutes } = require('./imageRecognition');
 const { registerMcpRoutes } = require('./mcp');
 const {
   DEFAULT_MEMORY_EMBEDDING_PROFILE,
@@ -81,7 +82,7 @@ const LOCKOUT_MS = 10 * 60 * 1000;
 const SENSITIVE_KEYS = new Set([
   'OPENAI_IMAGE_API_KEY',
   'LM_STUDIO_API_KEY',
-  'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN',
+  'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'KIMI_API_KEY', 'ELEVENLABS_API_KEY', 'KIRA_BOT_TOKEN',
   'KIRA_ALLOWED_USER_ID',
   'DB_PASSWORD', 'QDRANT_API_KEY', 'TELEGRAM_API_HASH',
   'TELEGRAM_SESSION_STRING', 'IDEOGRAM_API_KEY', 'GOOGLE_MAPS_API_KEY',
@@ -95,7 +96,7 @@ const MEMORY_EMBEDDING_PROFILE_SETTING_KEY = 'MEMORY_EMBEDDING_PROFILE';
 const EDITABLE_KEYS = new Set([
   'OPENAI_IMAGE_API_KEY', 'OPENAI_IMAGE_BASE_URL',
   'OPENAI_BASE_URL', 'LM_STUDIO_BASE_URL', 'LM_STUDIO_MODEL', 'LM_STUDIO_API_KEY',
-  'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'KIRA_BOT_TOKEN',
+  'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'KIMI_API_KEY', 'KIRA_BOT_TOKEN',
   'ELEVENLABS_API_KEY', 'ELEVENLABS_VOICE_ID', 'ELEVENLABS_VOICE_NAME',
   'ELEVENLABS_MODEL_ID', 'ELEVENLABS_OUTPUT_FORMAT',
   'ELEVENLABS_VOICE_STABILITY', 'ELEVENLABS_VOICE_SIMILARITY_BOOST',
@@ -406,6 +407,7 @@ registerBudgetModeRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTabl
 registerBackgroundFeatureRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
 registerLocalModelRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
 registerImageGenerationRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
+registerImageRecognitionRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
 registerMcpRoutes(app, { requireAuth, runtimeDir: process.env.KIRA_RUNTIME_DATA_DIR || path.join(__dirname, '..', 'data'),
   accountMode: process.env.KIRA_MCP_ACCOUNT_MODE === 'true' });
 

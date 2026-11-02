@@ -12,8 +12,8 @@ const BASE_CONFIG_SCHEMA: SectionDef[] = [
         key: 'OPENAI_API_KEY',
         label: 'OpenAI API Key',
         type: 'password',
-        required: true,
-        hint: 'Ключ OpenAI или вашего прокси. Адрес прокси задаётся отдельно ниже.',
+        required: false,
+        hint: 'Необязателен для текста через Kimi/OpenRouter. Ключ OpenAI или вашего прокси. Адрес прокси задаётся отдельно ниже.',
       },
       {
         key: 'OPENAI_BASE_URL',
@@ -45,13 +45,19 @@ const BASE_CONFIG_SCHEMA: SectionDef[] = [
         key: 'OPENROUTER_API_KEY',
         label: 'OpenRouter API Key',
         type: 'password',
-        hint: 'Нужен для пресета Hybrid OpenRouter + GPT. Применяется после рестарта процесса.',
+        hint: 'Один ключ для разных текстовых моделей. Применяется после пересоздания контейнеров.',
       },
       {
         key: 'GEMINI_API_KEY',
         label: 'Gemini API Key',
         type: 'password',
         hint: 'Нужен для пресетов Hybrid Gemini + GPT и Gemini Direct Balanced. Применяется после рестарта процесса.',
+      },
+      {
+        key: 'KIMI_API_KEY',
+        label: 'Kimi API Key (Moonshot)',
+        type: 'password',
+        hint: 'Ключ API платформы Moonshot, не подписки Kimi Code. Текст работает без OpenAI. Применяется после пересоздания контейнеров.',
       },
       {
         key: 'ZAI_API_KEY',
@@ -404,7 +410,7 @@ const backgroundEnvKeys = new Set<string>(Object.values(backgroundFeatures).map(
 const allFields = BASE_CONFIG_SCHEMA.flatMap(section => section.fields);
 const take = (keys: string[]) => allFields.filter(field => keys.includes(field.key));
 export const KEY_SECTIONS: SectionDef[] = [
-  { id: 'keys-ai', title: 'Ключи AI', icon: '🔑', fields: take(['OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'OPENAI_IMAGE_API_KEY', 'LM_STUDIO_API_KEY']) },
+  { id: 'keys-ai', title: 'Ключи AI', icon: '🔑', fields: take(['OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'ZAI_API_KEY', 'KIMI_API_KEY', 'OPENAI_IMAGE_API_KEY', 'LM_STUDIO_API_KEY']) },
   { id: 'keys-voice', title: 'Озвучивание', icon: '🎙️', fields: take(['ELEVENLABS_API_KEY']) },
   { id: 'keys-telegram', title: 'Telegram', icon: '✉️', fields: take(['KIRA_BOT_TOKEN', 'TELEGRAM_API_ID', 'TELEGRAM_API_HASH', 'TELEGRAM_SESSION_STRING']) },
   { id: 'keys-services', title: 'Другие сервисы', icon: '🔌', fields: take(['GOOGLE_MAPS_API_KEY', 'QDRANT_API_KEY']) },

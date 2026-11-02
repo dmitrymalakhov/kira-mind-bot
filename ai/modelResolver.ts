@@ -10,6 +10,7 @@ import {
 } from './modelPresets';
 
 export const DEFAULT_PRESET: AiPresetName = 'gpt-balanced';
+export interface AiResolvedTaskRoute { presetName: AiPresetName; modelRef: AiModelRef; candidates?: AiModelRef[] }
 
 export function resolveConfiguredModelRef(ref: AiModelRef, routes?: LocalModelRoutes): AiModelRef {
     const local = ref.localRole && routes?.[ref.localRole];
@@ -33,22 +34,24 @@ export async function getActivePresetNameAsync(): Promise<AiPresetName> {
     return getActiveAiPresetName();
 }
 
-export async function resolveModelForTaskAsync(taskKey: AiTaskKey): Promise<{ presetName: AiPresetName; modelRef: AiModelRef }> {
+export async function resolveModelForTaskAsync(taskKey: AiTaskKey): Promise<AiResolvedTaskRoute> {
     const policy = await getModelPolicy();
     const presetName = policy?.presetName ?? await getActivePresetNameAsync();
     const ref = policy?.models[taskKey] ?? aiPresets[presetName].models[taskKey];
     return {
         presetName,
         modelRef: resolveConfiguredModelRef(ref, ref.localRole ? await getLocalModelRoutes() : undefined),
+        ...(policy?.routing?.[taskKey] ? { candidates: policy.routing[taskKey] } : {}),
     };
 }
 
-export async function resolveModelForTaskFreshAsync(taskKey: AiTaskKey): Promise<{ presetName: AiPresetName; modelRef: AiModelRef }> {
+export async function resolveModelForTaskFreshAsync(taskKey: AiTaskKey): Promise<AiResolvedTaskRoute> {
     const policy = await getModelPolicy(true);
     const presetName = policy?.presetName ?? await refreshActiveAiPresetName();
     const ref = policy?.models[taskKey] ?? aiPresets[presetName].models[taskKey];
     return {
         presetName,
         modelRef: resolveConfiguredModelRef(ref, ref.localRole ? await getLocalModelRoutes(true) : undefined),
+        ...(policy?.routing?.[taskKey] ? { candidates: policy.routing[taskKey] } : {}),
     };
 }
