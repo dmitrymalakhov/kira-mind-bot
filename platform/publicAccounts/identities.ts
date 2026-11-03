@@ -24,6 +24,7 @@ export type IdentityAuthResult = { kind: 'login'; pair: TokenPair; accountId: st
     | { kind: 'link'; identity: IdentityView };
 const noChallenge = () => new ApiError(401, 'challenge_invalid', 'Начни вход заново.');
 const noCredentials = () => new ApiError(401, 'invalid_credentials', 'Не удалось подтвердить вход.');
+class IdentityOwnerChanged extends Error {}
 
 export async function consumeReauthentication(tx: EntityManager, accountId: string, sessionId: string, token: string, now: Date): Promise<void> {
     const rows = await tx.query(`UPDATE kira_public_reauthentication SET consumed_at=$4
@@ -151,10 +152,20 @@ export class PublicIdentities {
             let identity: VerifiedIdentity | { provider: 'password'; subject: string };
             if (provider === 'password') identity = await this.password(raw as unknown as PasswordLoginInput);
             else identity = await this.verifier.verify(provider, input, c);
-            return await this.db.transaction(async tx => {
+            const finish = () => this.db.transaction(async tx => {
+                // Account -> identity is shared with unlink and legacy password issuance.
+                // Looking up the immutable owner without a row lock avoids the inverse
+                // identity -> account wait that could deadlock with unlink.
+                const [known] = await tx.query('SELECT account_id FROM kira_public_identities WHERE provider=$1 AND subject=$2', [identity.provider, identity.subject]);
+                const lockedAccountId = c.purpose === 'login' ? known?.account_id : c.account_id;
+                if (lockedAccountId) await tx.query('SELECT id FROM kira_accounts WHERE id=$1 FOR UPDATE', [lockedAccountId]);
                 if (auth && c.purpose !== 'login') await this.checkSession(tx, auth);
                 await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`identity:${identity.provider}:${identity.subject}`]);
                 let [linked] = await tx.query('SELECT * FROM kira_public_identities WHERE provider=$1 AND subject=$2 FOR UPDATE', [identity.provider, identity.subject]);
+                // A concurrent first login may have created the identity after our lookup.
+                // Roll back and retry only this database phase with the newly known
+                // owner, without repeating provider exchange or application proof.
+                if (c.purpose === 'login' && linked && linked.account_id !== lockedAccountId) throw new IdentityOwnerChanged();
                 let result: IdentityAuthResult;
                 if (c.purpose === 'reauthenticate') {
                     if (!linked || linked.account_id !== c.account_id || linked.revoked_at) throw noCredentials();
@@ -198,6 +209,13 @@ export class PublicIdentities {
                     [c.id, this.secrets.seal({ result }, `challenge:${c.id}`),linked.account_id,result.kind==='login'?result.pair.sessionId:c.session_id]);
                 return result;
             });
+            for (let attempt = 0; ; attempt++) {
+                try { return await finish(); }
+                catch (error) {
+                    if (!(error instanceof IdentityOwnerChanged)) throw error;
+                    if (attempt >= 2) throw noChallenge();
+                }
+            }
         } catch (error) {
             const safe = error instanceof ApiError ? error : new ApiError(500, 'internal_error', 'Не удалось выполнить вход.');
             await this.db.query('UPDATE kira_public_challenges SET result_encrypted=$2 WHERE id=$1 AND result_encrypted IS NULL',

@@ -122,7 +122,7 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
                         account = existing;
                     }
                     const token = newToken();
-                    await store.session(digest(token), account.id);
+                    await store.session(digest(token), account.id, 'password');
                     return json(route.endsWith('/register') ? 201 : 200, {
                         account: publicAccount(account, runtimes), accessToken: token, tokenType: 'Bearer', expiresIn: 30 * 24 * 3600,
                     });

@@ -27,7 +27,7 @@ export interface AccountStore {
     create(username: string, hash: string): Promise<Account>;
     byUsername(username: string): Promise<Account | undefined>;
     byId(id: string): Promise<Account | undefined>;
-    session(hash: string, accountId: string): Promise<void>;
+    session(hash: string, accountId: string, method?: 'password'): Promise<void>;
     authenticate(hash: string): Promise<Account | undefined>;
     logout(hash: string): Promise<void>;
     connect(id: string, botId: string, username: string, encrypted: string, pairingHash: string): Promise<void>;
@@ -95,12 +95,23 @@ export class PostgresAccountStore implements AccountStore {
     }
     async byUsername(username: string) { return (await this.db.query('SELECT * FROM kira_accounts WHERE username=$1', [username]))[0]; }
     async byId(id: string) { return (await this.db.query('SELECT * FROM kira_accounts WHERE id=$1', [id]))[0]; }
-    async session(hash: string, accountId: string) {
+    async session(hash: string, accountId: string, method?: 'password') {
         await this.db.query('DELETE FROM kira_account_sessions WHERE expires_at <= now()');
         await this.db.transaction(async manager => {
             const permitted = await manager.query(`SELECT id FROM kira_accounts WHERE id=$1 AND account_state NOT IN ('deleting','deleted')
                 AND NOT EXISTS(SELECT 1 FROM kira_public_deletion_ledger l WHERE l.account_id=kira_accounts.id) FOR UPDATE`, [accountId]);
             if (!permitted.length) throw new ApiError(401, 'invalid_credentials', 'Неверный логин или пароль.');
+            if (method === 'password') {
+                // The account lock also serializes unlink. Check the method in a NEW
+                // statement after acquiring it, so a waiting login sees committed revocation.
+                // Trusted old password rows may not have been backfilled yet; never revive a removed identity.
+                await manager.query(`INSERT INTO kira_public_identities(id,account_id,provider,subject)
+                    SELECT id,id,'password',id::text FROM kira_accounts
+                    WHERE id=$1 AND password_hash NOT IN ('','disabled') ON CONFLICT(provider,subject) DO NOTHING`, [accountId]);
+                const active = await manager.query(`SELECT id FROM kira_public_identities
+                    WHERE account_id=$1 AND provider='password' AND subject=$1::text AND revoked_at IS NULL FOR SHARE`, [accountId]);
+                if (!active.length) throw new ApiError(401, 'invalid_credentials', 'Неверный логин или пароль.');
+            }
             await manager.query(`DELETE FROM kira_account_sessions WHERE token_hash IN (
                 SELECT token_hash FROM kira_account_sessions WHERE account_id=$1 ORDER BY expires_at DESC OFFSET 19
             )`, [accountId]);
