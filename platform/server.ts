@@ -10,6 +10,8 @@ import { checkPassword, digest, newToken, passwordHash, PlatformSecrets } from '
 import { Account, AccountStore } from './store';
 import { AccountRuntimes, TenantCredentials } from './runtime';
 import { TelegramGateway } from './telegram';
+import type { PublicAccountsHttp } from './publicAccounts/http';
+import { CaptchaRequiredError } from './publicAccounts/proof';
 
 export interface PlatformOptions {
     store: AccountStore;
@@ -17,6 +19,7 @@ export interface PlatformOptions {
     runtimes: AccountRuntimes;
     telegram: TelegramGateway;
     reservedBotIds?: string[];
+    publicAccounts?: PublicAccountsHttp;
 }
 
 function publicAccount(account: Account, runtimes: AccountRuntimes) {
@@ -90,9 +93,12 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
         try {
             const url = new URL(req.url || '/', 'http://localhost');
             const route = url.pathname;
+            if (route === '/api/v1/accounts/register') throw new ApiError(410, 'registration_closed', 'Регистрация логином и паролем закрыта.');
+            if (options.publicAccounts && await options.publicAccounts.publicRoute(req, res, route, json)) return;
             const authRoute = route === '/api/v1/accounts/register' || route === '/api/v1/accounts/login';
             if (authRoute) {
-                limits.take(`auth:${req.socket.remoteAddress}`, 20);
+                if (options.publicAccounts) await options.publicAccounts.authLimit(req);
+                else limits.take(`auth:${req.socket.remoteAddress}`, 20);
                 if (authenticating >= 8) throw new ApiError(429, 'rate_limited', 'Вход временно перегружен. Повтори позже.');
                 authenticating++;
                 try {
@@ -108,8 +114,11 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
                     if (route.endsWith('/register')) account = await store.create(username, await passwordHash(password));
                     else {
                         const existing = await store.byUsername(username);
-                        const matches = await checkPassword(password, existing?.password_hash || await dummyHash);
+                        const ticket = options.publicAccounts ? await options.publicAccounts.limits.reserve(`password-failure:${digest(username)}`, 5, 900) : undefined;
+                        const matches = await checkPassword(password, existing?.password_hash && existing.password_hash!=='disabled' ? existing.password_hash : await dummyHash);
                         if (!existing || !matches) throw new ApiError(401, 'invalid_credentials', 'Неверный логин или пароль.');
+                        if (ticket) await options.publicAccounts!.limits.refund(ticket);
+                        if (existing.account_state === 'deleting' || existing.account_state === 'deleted') throw new ApiError(401, 'invalid_credentials', 'Неверный логин или пароль.');
                         account = existing;
                     }
                     const token = newToken();
@@ -121,13 +130,15 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
             }
             limits.take(`request:${req.socket.remoteAddress}`, 600);
             const bearer = req.headers.authorization?.match(/^Bearer ([A-Za-z0-9_-]{32,128})$/i)?.[1];
-            const account = bearer ? await store.authenticate(digest(bearer)) : undefined;
+            const native = bearer ? await options.publicAccounts?.sessions.authenticate(bearer) : undefined;
+            const account = native?.account || (bearer ? await store.authenticate(digest(bearer)) : undefined);
             if (!account) {
                 res.setHeader('WWW-Authenticate', 'Bearer');
                 throw new ApiError(401, 'unauthorized', 'Нужен токен аккаунта.');
             }
             const browserRoute = isBrowserApiRoute(route, req.method ?? '');
             limits.take(`${browserRoute ? 'browser' : 'account'}:${account.id}`, browserRoute ? 360 : 120);
+            if (options.publicAccounts && await options.publicAccounts.accountRoute(req, res, route, account, native?.session, json)) return;
             if (route === '/api/v1/account' && req.method === 'GET') return json(200, { account: publicAccount(account, runtimes) });
             if (route === '/api/v1/accounts/logout' && req.method === 'POST') {
                 await store.logout(digest(bearer!));
@@ -154,6 +165,7 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
                 } finally { connecting.delete(account.id); }
             }
             if (route === '/api/v1/account/bot' && req.method === 'PUT') {
+                if(account.runtime_mode==='api_only')throw new ApiError(409,'runtime_mode_fixed','Этот аккаунт работает без личного Telegram-бота.');
                 if (account.owner_id) throw new ApiError(409, 'bot_already_connected', 'Бот уже подключён.');
                 if (connecting.has(account.id)) throw new ApiError(409, 'connection_busy', 'Подключение уже выполняется.');
                 connecting.add(account.id);
@@ -197,14 +209,15 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
                 || (req.method === 'PUT' && ['/api/v1/model-settings', '/api/v1/model-preferences'].includes(route))
                 || (req.method === 'DELETE' && /^\/api\/v1\/dialogue-jobs\/[0-9a-f-]{36}$/.test(route));
             if (!readable && !writable && !browserRoute && !workoutRouteAllowed(req.method ?? '', route)) throw new ApiError(404, 'not_found', 'Ресурс не найден.');
-            if (!account.owner_id) throw new ApiError(409, 'telegram_pairing_required', 'Сначала подключи своего бота и открой ссылку подтверждения в Telegram.');
+            if (!account.owner_id && account.runtime_mode !== 'api_only') throw new ApiError(409, 'telegram_pairing_required', 'Сначала подключи своего бота и открой ссылку подтверждения в Telegram.');
             await proxy(req, res, runtimes.endpoint(account), route);
         } catch (error) {
             req.resume();
             const safe = error instanceof ApiError ? error : new ApiError(500, 'internal_error', 'Не удалось выполнить запрос.');
             if (!(error instanceof ApiError)) console.error(`[accounts] request=${requestId} failed`);
             if (safe.status === 429) res.setHeader('Retry-After', '60');
-            if (!res.headersSent && !res.destroyed) json(safe.status, { error: { code: safe.code, message: safe.message }, requestId });
+            if (!res.headersSent && !res.destroyed) json(safe.status, { error: { code: safe.code, message: safe.message,
+                ...(safe instanceof CaptchaRequiredError?{proofRequirement:safe.proofRequirement}:{}) }, requestId });
             else if (!res.writableEnded) res.destroy();
         }
     });

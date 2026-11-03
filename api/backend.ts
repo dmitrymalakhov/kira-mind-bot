@@ -36,6 +36,7 @@ import { WorkoutService } from '../services/workouts/service';
 import { PgWorkoutStore } from '../services/workouts/store';
 import { AppDataSource } from '../data-source';
 import { getActiveBotProfile } from '../utils/botIdentity';
+import { isApiOnlyRuntime } from '../utils/runtimeIdentity';
 
 /** Same handlers, orchestrator, identity and knowledge; only the delivery and session channel differ. */
 export class BotApiBackend implements ApiBackend {
@@ -77,7 +78,7 @@ export class BotApiBackend implements ApiBackend {
 
     async status() {
         return { ok: true, apiVersion: 'v1', characterName: config.characterName, channel: 'api',
-            sharedKnowledge: true, notificationsChannel: 'telegram' };
+            sharedKnowledge: true, notificationsChannel: isApiOnlyRuntime() ? 'inbox' : 'telegram' };
     }
 
     async capabilities() {

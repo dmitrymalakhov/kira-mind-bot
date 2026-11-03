@@ -1,3 +1,4 @@
+import {bindAccountAiOperation} from '../ai/accountPolicy';
 import { Bot, InlineKeyboard } from "grammy";
 import { Chat, User } from "grammy/types";
 import { Reminder, postponeReminderUntil } from "../reminder";
@@ -90,9 +91,8 @@ function initOrReuseForwardGroup(
         clearTimeout(ctx.session.forwardGroups[forwardKey].timerId);
     }
 
-    const timerId = setTimeout(() => {
-        processForwardedGroup(ctx, forwardKey);
-    }, 2000);
+    const processGroup=bindAccountAiOperation(()=>processForwardedGroup(ctx,forwardKey));
+    const timerId = setTimeout(() => {void processGroup();}, 2000);
 
     ctx.session.forwardGroups[forwardKey].timerId = timerId;
 }
@@ -419,7 +419,7 @@ export function registerTextMessageHandler(bot: Bot<BotContext>, options: { imme
             if (pendingGap) ctx.session.pendingMemoryGap = undefined;
 
             // Устанавливаем таймер для обработки одиночного сообщения
-            const processText = async () => {
+            const processText = bindAccountAiOperation(async () => {
                 try {
                 if (ctx.session.lastUserMessage &&
                     ctx.session.lastUserMessage.text === message &&
@@ -674,7 +674,7 @@ export function registerTextMessageHandler(bot: Bot<BotContext>, options: { imme
                 } finally {
                     await flushSessionAfterAsyncWork(ctx, 'message:text delayed processing');
                 }
-            };
+            });
             // HTTP callers must await the same complete flow, including its session flush.
             if (options.immediate) await processText();
             else if (fastDialogueEnabled()) await runTelegramBrowserResponsive(ctx, processText);

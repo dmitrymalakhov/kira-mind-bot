@@ -15,8 +15,10 @@ import { isBotMentioned, isMessageReplyToBot } from "./utils/groupChatContext";
 import { GroupChatMessageRepository } from "./services/GroupChatMessageRepository";
 import { isGroupChatContextEnabled, isGroupReplyToBotEnabled } from "./services/groupChatFeatureSettings";
 import { getForwardedMessageInfo } from "./utils/forwardedMessage";
-import { resolveRuntimeIdentity } from './utils/runtimeIdentity';
+import { resolveRuntimeIdentity, isApiOnlyRuntime } from './utils/runtimeIdentity';
 import { registerProductAnalytics } from './services/productAnalytics';
+import { API_ONLY_BOT_INFO, installApiOnlyTransport } from './services/apiOnlyTransport';
+import { withAccountAiOperation } from './ai/accountPolicy';
 
 const DISMISSAL_VARIANTS = [
   "занята важными делами",
@@ -128,6 +130,12 @@ function ensureSessionDefaults(data: SessionData): SessionData {
 export function createBot() {
   // Гарантированная загрузка конфигурации
   const config = ensureConfigLoaded();
+  if(isApiOnlyRuntime()){
+    const bot=new Bot<BotContext>(config.botToken,{botInfo:API_ONLY_BOT_INFO});
+    installApiOnlyTransport(bot,config.allowedUserId);
+    setupBot(bot,config);
+    return bot;
+  }
 
   // КРИТИЧЕСКАЯ ОТЛАДКА
   console.log("🔍 Bot.ts Debug:");
@@ -175,6 +183,7 @@ export function createBot() {
 }
 
 function setupBot(bot: Bot<BotContext>, config: any) {
+  bot.use((ctx,next)=>withAccountAiOperation({id:`telegram:${ctx.update.update_id}`,background:false},next));
   // Без собственного error handler grammY останавливает long polling после
   // первой непойманной ошибки middleware. Команды управления не должны делать
   // весь бот недоступным из-за сбоя БД или одного некорректного Telegram payload.

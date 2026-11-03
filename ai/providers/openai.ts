@@ -1,3 +1,4 @@
+import { accountOpenAiFetch } from '../accountPolicy';
 import { OpenAI } from 'openai';
 import { config } from '../../config';
 import { aiRequestOptions } from '../executionScope';
@@ -51,6 +52,7 @@ const OPENAI_CAPABILITIES: AiProviderCapabilities = {
 };
 
 const openaiClient = new OpenAI({
+    fetch:accountOpenAiFetch('openai'),
     apiKey: config.openAiApiKey || process.env.OPENAI_API_KEY || 'missing-openai-api-key',
     baseURL: process.env.OPENAI_BASE_URL || undefined,
     maxRetries: 0,

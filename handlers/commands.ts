@@ -1,3 +1,4 @@
+import { isValidRuntimeOwnerId } from '../utils/runtimeIdentity';
 import { Bot, InlineKeyboard } from "grammy";
 import { BotContext } from "../types";
 import { ContactsStore } from "../stores/ContactsStore";
@@ -56,7 +57,7 @@ function formatToggleState(enabled: boolean): string {
 
 export function registerCommandHandlers(bot: Bot<BotContext>) {
     bot.command('runtime', async ctx => {
-        if (config.allowedUserId <= 0 || ctx.from?.id !== config.allowedUserId || ctx.chat.type !== 'private') return;
+        if (!isValidRuntimeOwnerId(config.allowedUserId) || ctx.from?.id !== config.allowedUserId || ctx.chat.type !== 'private') return;
         const run = ctx.session.agentRuntime;
         await sendStructuredBlocks(ctx, ctx.chat.id, [
             heading('Выполнение задач', 2),

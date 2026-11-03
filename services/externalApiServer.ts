@@ -5,12 +5,13 @@ import { readExternalApiOptions } from '../api/options';
 import { createExternalApiServer } from '../api/server';
 import { BotApiBackend } from '../api/backend';
 import { PersistentApiOperations } from '../api/operations';
+import { isApiOnlyRuntime, resolveRuntimeIdentity } from '../utils/runtimeIdentity';
 
 export async function startExternalApiServer(bot: Bot<BotContext>): Promise<Server | undefined> {
     // API access always requires an explicit owner, including on legacy installations.
-    const options = readExternalApiOptions(process.env, Number(process.env.KIRA_ALLOWED_USER_ID));
+    const options = readExternalApiOptions(process.env, resolveRuntimeIdentity(process.env).allowedUserId);
     if (!options) return undefined;
-    await bot.init();
+    if(!isApiOnlyRuntime())await bot.init();
     const server = createExternalApiServer(options, new BotApiBackend(bot, options), new PersistentApiOperations());
     await new Promise<void>((resolve, reject) => {
         server.once('error', reject);

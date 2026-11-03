@@ -1,3 +1,4 @@
+import { accountOpenAiFetch } from '../accountPolicy';
 import { OpenAI } from 'openai';
 import { aiRequestOptions } from '../executionScope';
 import { assertAiResponseAllowed } from '../contentSafety';
@@ -34,6 +35,7 @@ const ZAI_CAPABILITIES: AiProviderCapabilities = {
 };
 
 const zaiClient = new OpenAI({
+    fetch:accountOpenAiFetch('zai'),
     apiKey: process.env.ZAI_API_KEY || 'missing-zai-api-key',
     baseURL: 'https://api.z.ai/api/paas/v4/',
     maxRetries: 0,

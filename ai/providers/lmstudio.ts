@@ -1,3 +1,4 @@
+import { accountOpenAiFetch } from '../accountPolicy';
 import { OpenAI } from 'openai';
 import { aiRequestOptions } from '../executionScope';
 import { getAiProviderDescriptor } from '../providerMetadata';
@@ -18,6 +19,7 @@ export const lmstudioProviderAdapter: AiProviderAdapter = {
     descriptor,
     capabilities,
     client: new OpenAI({
+    fetch:accountOpenAiFetch('lmstudio'),
         baseURL: process.env.LM_STUDIO_BASE_URL || descriptor.baseURL!,
         apiKey: process.env.LM_STUDIO_API_KEY || 'lm-studio',
         maxRetries: 0,

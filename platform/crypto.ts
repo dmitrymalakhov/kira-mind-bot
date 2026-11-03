@@ -12,10 +12,11 @@ export async function passwordHash(password: string): Promise<string> {
 }
 
 export async function checkPassword(password: string, stored: string): Promise<boolean> {
-    const [salt, hash] = stored.split(':');
+    const valid = /^[0-9a-f]{32}:[0-9a-f]{128}$/i.test(stored);
+    const [salt, hash] = (valid ? stored : `${'00'.repeat(16)}:${'00'.repeat(64)}`).split(':');
     const actual = await derive(password, salt, 64) as Buffer;
     const expected = Buffer.from(hash, 'hex');
-    return actual.length === expected.length && timingSafeEqual(actual, expected);
+    return valid && actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
 /** A stable operator key is required; changing it requires an explicit credential migration. */

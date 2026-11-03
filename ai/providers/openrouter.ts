@@ -1,3 +1,4 @@
+import { accountOpenAiFetch } from '../accountPolicy';
 import { OpenAI } from 'openai';
 import { aiRequestOptions } from '../executionScope';
 import { getAiProviderDescriptor } from '../providerMetadata';
@@ -28,6 +29,7 @@ const OPENROUTER_CAPABILITIES: AiProviderCapabilities = {
 };
 
 const openrouterClient = new OpenAI({
+    fetch:accountOpenAiFetch('openrouter'),
     apiKey: process.env.OPENROUTER_API_KEY || 'missing-openrouter-api-key',
     baseURL: 'https://openrouter.ai/api/v1',
     maxRetries: 0,

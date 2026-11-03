@@ -1,3 +1,4 @@
+import { currentAccountAiOperation } from '../ai/accountPolicy';
 import { randomUUID } from 'node:crypto';
 import { In, LessThan } from 'typeorm';
 import { AppDataSource } from '../data-source';
@@ -29,6 +30,7 @@ export const DialogueJobRepository = {
     },
 
     async stage(values: { channel: string; turnId: string; userId: number; chatId: number; messageId?: number; input: DialogueJobInput }): Promise<DialogueJob | undefined> {
+        values={...values,input:{...values.input,accountAiOperation:currentAccountAiOperation()}};
         return AppDataSource.transaction(async manager => {
             await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [marker(values.channel)]);
             const current = await manager.getRepository(BotSettingEntity).findOneBy({ key: marker(values.channel) });

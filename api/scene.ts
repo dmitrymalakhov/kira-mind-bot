@@ -1,3 +1,4 @@
+import {currentAccountAiOperation,withAccountAiOperation,type AccountAiOperation} from '../ai/accountPolicy';
 import { createHash, randomUUID } from 'node:crypto';
 import { aiPresets, type AiPresetName } from '../ai/modelPresets';
 import { createJsonChatCompletionForTask } from '../ai/chatCompletion';
@@ -216,6 +217,7 @@ interface SceneSession extends SessionData { sceneActions?: Record<string, { kin
 /** One decision of the body-and-intent classification, kept between stage "prepare" and the execution. */
 export interface SceneDecision { intent: SceneIntent; actions: unknown[] }
 interface StoredPlan extends SceneDecision {
+    accountAiOperation?:AccountAiOperation;
     id: string; ownerId: number; textHash: string; roomId: string; roomVersion: number; coordinateSpaceId: string;
     followUp: string; expiresAt: number; generation: number; frame: boolean; modelScope: string;
     /** The app's model mode and the frame's recipient when it was prepared: a change makes the plan stale. */
@@ -447,7 +449,7 @@ export class SceneService {
         this.plans.set(id, { id, ownerId: this.ownerId, textHash: sha(turn.text), roomId: turn.scene.roomId, roomVersion: turn.scene.roomVersion,
             coordinateSpaceId: turn.scene.coordinateSpaceId, followUp: JSON.stringify(turn.followUp ?? null), intent: decision.intent,
             actions: decision.actions, expiresAt: now + PLAN_TTL_MS, generation, frame: decision.frame,
-            preset: appPreset, modelScope: preparedScope, vision: recipient(route) });
+            preset: appPreset, modelScope: preparedScope, vision: recipient(route), accountAiOperation:currentAccountAiOperation() });
         const point = decision.actions.find((a: any) => a?.kind === 'point') as any;
         // the frame's recipient now: the phone asks again before sending a frame when it is not the one it was allowed to
         return { plan: { id, expiresAt: new Date(now + PLAN_TTL_MS).toISOString(), intent: decision.intent, frame: decision.frame, executable: true,
@@ -477,7 +479,7 @@ export class SceneService {
     /** The prepared decision for an execution: the same owner, words, room, follow-up, model mode and frame recipient,
      *  in time. Run once: the execution's durable receipt (owner + plan) replays a completed one and holds an uncertain
      *  one, so this only guards what reaches it. Refusals ran nothing (released). */
-    private async take(turn: SceneTurn, appPreset: AiPresetName | null): Promise<SceneDecision> {
+    private async take(turn: SceneTurn, appPreset: AiPresetName | null): Promise<SceneDecision & {accountAiOperation?:AccountAiOperation}> {
         const stale = (why: string) => new ApiError(409, 'plan_stale', `Подготовка реплики устарела: ${why}. Повтори реплику.`, true);
         /** Every check that a cancel, a newer preparation or the clock can change; run again after any wait. */
         const current = (): StoredPlan => {
@@ -512,7 +514,7 @@ export class SceneService {
         if (plan !== seen) throw stale('реплика изменилась');
         if (executionScope !== plan.modelScope) throw stale('настройки модели изменились');
         this.plans.delete(plan.id);
-        return { intent: plan.intent, actions: plan.actions };
+        return { intent: plan.intent, actions: plan.actions,accountAiOperation:plan.accountAiOperation };
     }
 
     async capabilities() {
@@ -542,7 +544,10 @@ export class SceneService {
         const execute = async () => {
             // a prepared turn brings its decision (checked before anything is answered); an older phone's turn is decided here
             const decided = turn.plan ? await this.take(turn, appPreset) : undefined;
-            try { return await this.execute(turn, appPreset, decided); }
+            try {
+                const run=()=>this.execute(turn,appPreset,decided);
+                return await (decided?.accountAiOperation?withAccountAiOperation(decided.accountAiOperation,run):run());
+            }
             catch (error) {
                 // No handler error may release a receipt once the shared pipeline/localization has started.
                 if (error instanceof ApiError && error.released) throw new ApiError(error.status, error.code, error.message);

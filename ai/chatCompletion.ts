@@ -1,3 +1,4 @@
+import { accountPolicyError } from './accountPolicy';
 import { resolveModelForTaskAsync, resolveModelForTaskFreshAsync } from './modelResolver';
 import type { AiModelRef, AiPresetName, AiTaskKey } from './modelPresets';
 import { logAiUsage } from '../services/aiUsageLogService';
@@ -295,6 +296,7 @@ async function createChatCompletionForTaskWithTrace(
             return { response, route, attempt, stage };
         } catch (error) {
             assertAiExecutionActive();
+            if (accountPolicyError(error)) throw accountPolicyError(error);
             if (isAiContentSafetyError(error)) throw error;
             const diagnostics = classifyAiErrorForProvider(error, getErrorIdentityParser(route.modelRef));
 
@@ -422,6 +424,7 @@ export async function createFallbackChatCompletion(
     attempt = 1,
     originalModelRef?: AiModelRef,
 ): Promise<ChatCompletion> {
+    if (accountPolicyError(originalError)) throw accountPolicyError(originalError);
     if (originalModelRef?.allowFallback === false || isAiContentSafetyError(originalError)) throw originalError;
     const fallbackModel = getTaskFallbackModel(taskKey);
     const originalErrorParser = originalModelRef

@@ -112,6 +112,10 @@ function assertRuntimeDataIsolation() {
   }
   assert.match(fs.readFileSync(path.join(repoRoot, '.gitignore'), 'utf8'), /^runtime-data\/$/m);
   assert.match(fs.readFileSync(path.join(repoRoot, '.dockerignore'), 'utf8'), /^runtime-data$/m);
+  const accounts=fs.readFileSync(path.join(repoRoot,'docker-compose.accounts.yml'),'utf8');
+  assert.match(accounts,/\.\/runtime-data\/public-accounts\/config:\/run\/kira-public:ro/);
+  assert.match(accounts,/\.\/runtime-data\/public-accounts\/deletion-ledger:\/var\/lib\/kira-public\/deletion-ledger/);
+  assert.doesNotMatch(accounts,/\.\/runtime-data\/public-accounts:\//,'Protected operator env backups must not be mounted into the runtime');
 }
 
 try {

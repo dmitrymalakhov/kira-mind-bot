@@ -8,6 +8,7 @@ import type { BotContext, SearchResult } from '../types';
 import { getVectorService } from './VectorServiceFactory';
 import { collectMemoryReads } from '../utils/memoryReadCoverage';
 import { isEligibleForUserSynthesis } from '../utils/userSynthesisFilter';
+import { isValidRuntimeOwnerId } from '../utils/runtimeIdentity';
 
 export interface CommunicationValues { name: string | null; address: 'informal' | 'formal' | null; replyLength: 'short' | 'detailed' | null }
 type Field = keyof CommunicationValues;
@@ -116,7 +117,7 @@ export class CommunicationProfileService {
     constructor(ownerId: number, private readonly store: CommunicationProfileStore = new BotSettingsCommunicationStore(),
                 private readonly migrate: () => Promise<Partial<CommunicationProfile>> = () => initialPreferences(ownerId),
                 private readonly now: () => Date = () => new Date()) {
-        if (!Number.isSafeInteger(ownerId) || ownerId <= 0) throw unavailable();
+        if (!isValidRuntimeOwnerId(ownerId)) throw unavailable();
         this.key = scopedBotKey(`communication-profile:${ownerId}`);
     }
     private async saved(): Promise<{ raw: string; profile: CommunicationProfile }> {
@@ -151,7 +152,7 @@ export class CommunicationProfileService {
 }
 
 export async function communicationProfileContext(ctx: BotContext): Promise<string> {
-    if (ctx.chat?.type !== 'private' || ctx.from?.id !== config.allowedUserId || !Number.isSafeInteger(config.allowedUserId) || config.allowedUserId <= 0) return '';
+    if (ctx.chat?.type !== 'private' || ctx.from?.id !== config.allowedUserId || !isValidRuntimeOwnerId(config.allowedUserId)) return '';
     // Offline callers do not initialize memory just to format a prompt.
     if (!AppDataSource.isInitialized) return '';
     try {

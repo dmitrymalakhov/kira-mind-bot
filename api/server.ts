@@ -7,6 +7,7 @@ import { parseSettingsPatch } from './settings';
 import { MAX_SCENE_BODY_BYTES, parseScenePlanCancel, parseScenePreparation, parseSceneTurn } from './scene';
 import { MAX_PHOTO_BODY_BYTES, parsePhotoTurn } from './photos';
 import { workoutRouteAllowed } from './workouts/http';
+import { accountAuthority, accountHttpOperation } from '../ai/accountPolicy';
 
 const PREFIX = '/api/v1';
 const MAX_BODY_BYTES = 64 * 1024;
@@ -54,7 +55,7 @@ export function createExternalApiServer(
     let browserRequests = 0;
     let windowStarted = Date.now();
     let busy = false;
-    const server = http.createServer(async (req, res) => {
+    const server = http.createServer(accountHttpOperation(async (req, res) => {
         const requestId = randomUUID();
         res.setHeader('X-Request-Id', requestId);
         res.setHeader('Cache-Control', 'no-store');
@@ -70,6 +71,7 @@ export function createExternalApiServer(
                 req.resume();
                 throw new ApiError(401, 'unauthorized', 'Нужен действующий токен доступа.');
             }
+            await accountAuthority('admission',{});
             const url = new URL(req.url ?? '/', 'http://localhost');
             const path = url.pathname;
             if (Date.now() - windowStarted >= 60_000) { windowStarted = Date.now(); requests = 0; browserRequests = 0; }
@@ -281,7 +283,7 @@ export function createExternalApiServer(
                     ...(error instanceof CommunicationProfileConflict ? { profile: error.profile } : {}) });
             }
         }
-    });
+    }));
     server.requestTimeout = 30_000; // Limits upload time, not the duration of AI execution.
     server.headersTimeout = 15_000;
     server.timeout = 0;

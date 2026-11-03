@@ -5,6 +5,7 @@ import { AppDataSource } from '../data-source';
 import { BotSettingEntity } from '../entity/BotSettingEntity';
 import { RUNTIME_DATA_DIR } from '../utils/runtimeData';
 import { SETTING_KEY, defaultImageSettings, parseImageSettings, readReference, requestImage, type ImageSettings } from '../ai/imageGeneration';
+import { accountPolicyFetch,withAccountImageOperation } from '../ai/accountPolicy';
 
 let cached: ImageSettings | undefined;
 let refreshedAt = 0;
@@ -19,10 +20,13 @@ export async function getImageSettings(): Promise<ImageSettings> {
 
 export class CharacterReferenceRequiredError extends Error {}
 export async function generateOpenAiImage(prompt: string, includesCharacter: boolean): Promise<string> {
+    return withAccountImageOperation(`image:${randomUUID()}`,()=>generateImage(prompt,includesCharacter));
+}
+async function generateImage(prompt:string,includesCharacter:boolean):Promise<string>{
     const settings = await getImageSettings();
     const reference = includesCharacter ? await readReference(RUNTIME_DATA_DIR) : null;
     if (includesCharacter && !reference) throw new CharacterReferenceRequiredError('Добавьте эталон внешности в админке: «Настройки → Генерация изображений → Референс Киры».');
-    const image = await requestImage({ settings, prompt, reference });
+    const image = await requestImage({ settings, prompt, reference,fetchImpl:accountPolicyFetch('openai') });
     const directory = path.join(RUNTIME_DATA_DIR, 'image-generation', 'generated');
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
     const filename = path.join(directory, `${randomUUID()}.${image.mime === 'image/jpeg' ? 'jpg' : image.mime === 'image/png' ? 'png' : 'webp'}`);

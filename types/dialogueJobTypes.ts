@@ -7,6 +7,7 @@ export interface FastReplyDecision {
     answer?: string;
 }
 export interface DialogueJobInput {
+    accountAiOperation?: import('../ai/accountPolicy').AccountAiOperation;
     analyticsTaskId?: string;
     message: string;
     initialAnswer: string;

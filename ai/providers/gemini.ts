@@ -1,3 +1,4 @@
+import { accountOpenAiFetch, accountPolicyFetch } from '../accountPolicy';
 import path from 'path';
 import { readFile, stat } from 'fs/promises';
 import { OpenAI } from 'openai';
@@ -93,7 +94,10 @@ function getGeminiAbortSignal(timeoutMs = getGeminiRequestTimeoutMs()): AbortSig
     return AbortSignal.timeout(timeoutMs);
 }
 
+const fetch=accountPolicyFetch('gemini');
+
 const geminiClient = new OpenAI({
+    fetch:accountOpenAiFetch('gemini'),
     apiKey: process.env.GEMINI_API_KEY || 'missing-gemini-api-key',
     baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
     maxRetries: 0,

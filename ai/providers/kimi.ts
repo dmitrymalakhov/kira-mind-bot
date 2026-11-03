@@ -1,3 +1,4 @@
+import { accountOpenAiFetch } from '../accountPolicy';
 import { OpenAI } from 'openai';
 import { aiRequestOptions } from '../executionScope';
 import { getAiProviderDescriptor } from '../providerMetadata';
@@ -11,7 +12,8 @@ const capabilities: AiProviderCapabilities = {
 /** K3 always reasons; none/medium from the shared UI map to the supported low/high levels. */
 export const kimiProviderAdapter: AiProviderAdapter = {
     provider: 'kimi', descriptor: getAiProviderDescriptor('kimi'), capabilities,
-    client: new OpenAI({ apiKey: process.env.KIMI_API_KEY || 'missing-kimi-api-key',
+    client: new OpenAI({
+    fetch:accountOpenAiFetch('kimi'), apiKey: process.env.KIMI_API_KEY || 'missing-kimi-api-key',
         baseURL: 'https://api.moonshot.ai/v1', maxRetries: 0 }),
     getModelCapabilities(model) { return resolveModelCapabilities(capabilities, model); },
     normalizeChatParams(model, params) {

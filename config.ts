@@ -2,7 +2,7 @@ import * as dotenv from "dotenv";
 import * as fs from "fs";
 import { parseAiPresetName } from "./ai/modelPresets";
 import { normalizeKiraResidenceCity } from "./utils/kiraResidence";
-import { resolveRuntimeIdentity } from './utils/runtimeIdentity';
+import { resolveRuntimeIdentity, isApiOnlyRuntime, API_ONLY_TRANSPORT_TOKEN } from './utils/runtimeIdentity';
 const { hasLegacyDigitalBiography } = require("./utils/legacyPersonalitySanitizer");
 
 // ── Загрузка personality.json (редактируется через admin panel) ───────────────
@@ -239,7 +239,7 @@ function assistants(activeAssistant: string): AssistantConfig {
 
   const assistantsObj: Record<"KiraMindBot", AssistantConfig> = {
     KiraMindBot: {
-      botToken: process.env.KIRA_BOT_TOKEN || "",
+      botToken: isApiOnlyRuntime() ? API_ONLY_TRANSPORT_TOKEN : process.env.KIRA_BOT_TOKEN || "",
       ownerName: kiraP.ownerName || identity.ownerName,
       ownerUsername: kiraP.ownerUsername || identity.ownerUsername,
       characterName: kiraP.characterName || "Кира",

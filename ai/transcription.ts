@@ -1,3 +1,4 @@
+import { accountPolicyError } from './accountPolicy';
 import fs from 'fs';
 import { resolveModelForTaskAsync, resolveModelForTaskFreshAsync } from './modelResolver';
 import type { AiModelRef } from './modelPresets';
@@ -139,6 +140,7 @@ export async function createTranscriptionForTask(audioFilePath: string): Promise
                 attempt === 1 ? 'primary' : 'retry',
             );
         } catch (error) {
+            if (accountPolicyError(error)) throw accountPolicyError(error);
             const parseErrorIdentities = getErrorIdentityParser(route.modelRef);
             const diagnostics = classifyAiErrorForProvider(error, parseErrorIdentities);
 

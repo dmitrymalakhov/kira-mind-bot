@@ -1,3 +1,4 @@
+import { isApiOnlyRuntime } from './utils/runtimeIdentity';
 import { Bot, InlineKeyboard } from "grammy";
 import { BotContext } from "./types";
 import { devLog } from "./utils";
@@ -267,7 +268,7 @@ async function sendReminder(bot: Bot<BotContext>, reminder: Reminder): Promise<v
 
         // В групповых чатах (chatId < 0) не добавляем кнопки —
         // посторонние могут нажимать их и вызывать спам-ответы бота
-        const isGroupReminder = reminder.chatId < 0;
+        const isGroupReminder = reminder.chatId < 0 && !(isApiOnlyRuntime() && reminder.chatId===Number(process.env.KIRA_RUNTIME_PRINCIPAL));
 
         const keyboard = isGroupReminder
             ? undefined

@@ -1,3 +1,4 @@
+import { accountPolicyFetch } from '../ai/accountPolicy';
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
@@ -76,6 +77,7 @@ function getElevenLabsClient(): ElevenLabsClient {
     if (!elevenLabsClient) {
         elevenLabsClient = new ElevenLabsClient({
             apiKey: config.elevenLabsApiKey,
+            fetch:accountPolicyFetch('elevenlabs'),
         });
     }
     return elevenLabsClient;

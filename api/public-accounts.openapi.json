@@ -1,0 +1,4603 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Kira public accounts",
+    "version": "1.0.0",
+    "description": "kira.public-accounts.v1; availability is GET /auth/config. See docs/public-accounts-v1.md for receipts, quota and proof semantics."
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "paths": {
+    "/auth/config": {
+      "get": {
+        "operationId": "get__auth_config",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthConfig"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/challenges": {
+      "post": {
+        "operationId": "post__auth_challenges",
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChallengeInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthChallenge"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/apple": {
+      "post": {
+        "operationId": "post__auth_apple",
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderLoginInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/LoginReply"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReauthenticationReply"
+                    },
+                    {
+                      "$ref": "#/components/schemas/IdentityView"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/google": {
+      "post": {
+        "operationId": "post__auth_google",
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderLoginInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/LoginReply"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReauthenticationReply"
+                    },
+                    {
+                      "$ref": "#/components/schemas/IdentityView"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/telegram": {
+      "post": {
+        "operationId": "post__auth_telegram",
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderLoginInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/LoginReply"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReauthenticationReply"
+                    },
+                    {
+                      "$ref": "#/components/schemas/IdentityView"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/password": {
+      "post": {
+        "operationId": "post__auth_password",
+        "security": [
+          {},
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordLoginInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/LoginReply"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReauthenticationReply"
+                    },
+                    {
+                      "$ref": "#/components/schemas/IdentityView"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "operationId": "post__auth_refresh",
+        "security": [],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPair"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "post__auth_logout",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "version"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "const": 1
+                    },
+                    "ok": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "ok"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account": {
+      "get": {
+        "operationId": "get__account",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "account": {
+                      "$ref": "#/components/schemas/AccountView"
+                    }
+                  },
+                  "required": [
+                    "account"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete__account",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteAccountInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionReply"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/identities": {
+      "get": {
+        "operationId": "get__account_identities",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "const": 1
+                    },
+                    "identities": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/IdentityView"
+                      }
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "identities"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/identities/{identityId}": {
+      "delete": {
+        "operationId": "delete__account_identities_identityId_",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "identityId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "const": 1
+                  },
+                  "reauthenticationToken": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "version",
+                  "reauthenticationToken"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "const": 1
+                    },
+                    "ok": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "ok"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/sessions": {
+      "get": {
+        "operationId": "get__account_sessions",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "const": 1
+                    },
+                    "sessions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SessionView"
+                      }
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "sessions"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/sessions/{sessionId}": {
+      "delete": {
+        "operationId": "delete__account_sessions_sessionId_",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "version"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "const": 1
+                    },
+                    "ok": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "ok"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/consents": {
+      "get": {
+        "operationId": "get__account_consents",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "const": 1
+                    },
+                    "catalog": {
+                      "$ref": "#/components/schemas/ConsentCatalog"
+                    },
+                    "acceptedVersion": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "aiAllowed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "catalog",
+                    "acceptedVersion",
+                    "aiAllowed"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "put__account_consents",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsentInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/paths/~1account~1consents/get/responses/200/content/application~1json/schema"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/activate": {
+      "post": {
+        "operationId": "post__account_activate",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivationInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "const": 1
+                    },
+                    "account": {
+                      "$ref": "#/components/schemas/AccountView"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "account"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/quota": {
+      "get": {
+        "operationId": "get__account_quota",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "const": 1
+                    },
+                    "quota": {
+                      "$ref": "#/components/schemas/QuotaView"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "quota"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/push-devices": {
+      "put": {
+        "operationId": "put__account_push_devices",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushDeviceInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "const": 1
+                    },
+                    "registered": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "registered"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/push-devices/{deviceId}": {
+      "delete": {
+        "operationId": "delete__account_push_devices_deviceId_",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "deviceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "version"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "const": 1
+                    },
+                    "ok": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "ok"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications": {
+      "get": {
+        "operationId": "get__notifications",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/{id}/read": {
+      "post": {
+        "operationId": "post__notifications_id_read",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "version"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "const": 1
+                    },
+                    "ok": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "ok"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/account/complaints": {
+      "post": {
+        "operationId": "post__account_complaints",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComplaintInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "const": 1
+                    },
+                    "complaintId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "const": "received"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "complaintId",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "PublicAccountError (see canonical flow contract)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/accounts/register": {
+      "post": {
+        "operationId": "closed_password_registration",
+        "security": [],
+        "responses": {
+          "410": {
+            "description": "Password registration is permanently closed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/accounts/login": {
+      "post": {
+        "operationId": "legacy_password_login",
+        "description": "Existing password accounts only. Native clients use proof-protected /auth/password. No signup or implicit AI consent.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_]{3,40}$"
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 12,
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "username",
+                  "password"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Existing legacy session,30-day expiry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./accounts.openapi.json#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Persistent abuse limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/events/apple": {
+      "post": {
+        "operationId": "provider_security_event_apple",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "payload": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "payload"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Signed provider event accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "const": 1
+                    },
+                    "received": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "received"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid provider proof",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/events/google": {
+      "post": {
+        "operationId": "provider_security_event_google",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/secevent+jwt": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Signed provider event accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "const": 1
+                    },
+                    "received": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "received"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid provider proof",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAccountError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "IdentityProvider": {
+        "type": "string",
+        "enum": [
+          "apple",
+          "google",
+          "telegram"
+        ]
+      },
+      "AccountState": {
+        "type": "string",
+        "enum": [
+          "registered",
+          "active",
+          "restricted",
+          "deleting",
+          "deleted"
+        ]
+      },
+      "RuntimeState": {
+        "type": "string",
+        "enum": [
+          "not_activated",
+          "queued",
+          "starting",
+          "ready",
+          "unavailable"
+        ]
+      },
+      "AuthPurpose": {
+        "type": "string",
+        "enum": [
+          "login",
+          "reauthenticate",
+          "link"
+        ]
+      },
+      "ProviderConfig": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/IdentityProvider"
+          },
+          "available": {
+            "type": "boolean",
+            "enum": [
+              false,
+              true
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "not_configured",
+              "not_implemented",
+              "release_not_ready"
+            ]
+          },
+          "clientId": {
+            "anyOf": [
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "iosClientId": {
+            "anyOf": [
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "redirectUri": {
+            "anyOf": [
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "scopes": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          }
+        },
+        "required": [
+          "provider",
+          "available"
+        ],
+        "additionalProperties": false
+      },
+      "RecipientDescriptor": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "purposes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "policyUrl": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "data",
+          "purposes",
+          "policyUrl"
+        ],
+        "additionalProperties": false
+      },
+      "ConsentCatalog": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "recipients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecipientDescriptor"
+            }
+          }
+        },
+        "required": [
+          "version",
+          "recipients"
+        ],
+        "additionalProperties": false
+      },
+      "AuthConfig": {
+        "type": "object",
+        "properties": {
+          "contract": {
+            "type": "string",
+            "const": "kira.public-accounts.v1"
+          },
+          "version": {
+            "type": "number",
+            "const": 1
+          },
+          "publicRegistration": {
+            "type": "boolean",
+            "enum": [
+              false,
+              true
+            ]
+          },
+          "providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderConfig"
+            }
+          },
+          "legacyPasswordLogin": {
+            "type": "boolean",
+            "enum": [
+              false,
+              true
+            ]
+          },
+          "accessTokenLifetimeSeconds": {
+            "type": "number",
+            "const": 900
+          },
+          "refreshTokenLifetimeSeconds": {
+            "type": "number",
+            "const": 2592000
+          },
+          "proof": {
+            "type": "object",
+            "properties": {
+              "appAttest": {
+                "type": "boolean",
+                "enum": [
+                  false,
+                  true
+                ]
+              },
+              "environment": {
+                "type": "string",
+                "enum": [
+                  "production",
+                  "development"
+                ]
+              },
+              "hcaptchaSiteKey": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "appAttestAppId": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "hcaptchaBaseUrl": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "hcaptchaHostname": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "appAttest",
+              "environment",
+              "hcaptchaSiteKey",
+              "appAttestAppId",
+              "hcaptchaBaseUrl",
+              "hcaptchaHostname"
+            ],
+            "additionalProperties": false
+          },
+          "aiConsent": {
+            "$ref": "#/components/schemas/ConsentCatalog"
+          },
+          "links": {
+            "type": "object",
+            "properties": {
+              "privacy": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "support": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "privacy",
+              "support"
+            ],
+            "additionalProperties": false
+          },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "apiOnlyRuntime": {
+                "type": "boolean",
+                "enum": [
+                  false,
+                  true
+                ]
+              },
+              "identities": {
+                "type": "boolean",
+                "enum": [
+                  false,
+                  true
+                ]
+              },
+              "sessions": {
+                "type": "boolean",
+                "enum": [
+                  false,
+                  true
+                ]
+              },
+              "consents": {
+                "type": "boolean",
+                "enum": [
+                  false,
+                  true
+                ]
+              },
+              "quotas": {
+                "type": "boolean",
+                "enum": [
+                  false,
+                  true
+                ]
+              },
+              "deletion": {
+                "type": "boolean",
+                "enum": [
+                  false,
+                  true
+                ]
+              },
+              "inbox": {
+                "type": "boolean",
+                "enum": [
+                  false,
+                  true
+                ]
+              },
+              "push": {
+                "type": "boolean",
+                "enum": [
+                  false,
+                  true
+                ]
+              }
+            },
+            "required": [
+              "apiOnlyRuntime",
+              "identities",
+              "sessions",
+              "consents",
+              "quotas",
+              "deletion",
+              "inbox",
+              "push"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "contract",
+          "version",
+          "publicRegistration",
+          "providers",
+          "legacyPasswordLogin",
+          "accessTokenLifetimeSeconds",
+          "refreshTokenLifetimeSeconds",
+          "proof",
+          "aiConsent",
+          "links",
+          "capabilities"
+        ],
+        "additionalProperties": false
+      },
+      "ChallengeInput": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "const": 1
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "apple",
+              "google",
+              "telegram",
+              "password"
+            ]
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/AuthPurpose"
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "codeChallenge": {
+            "anyOf": [
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "codeChallengeMethod": {
+            "type": "string",
+            "enum": [
+              "S256"
+            ]
+          },
+          "reauthenticationToken": {
+            "anyOf": [
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "version",
+          "provider",
+          "purpose",
+          "deviceId"
+        ],
+        "additionalProperties": false
+      },
+      "AuthChallenge": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "const": 1
+          },
+          "challengeId": {
+            "type": "string"
+          },
+          "challenge": {
+            "type": "string"
+          },
+          "nonce": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "authorizationUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "proofRequirement": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "app_attest_or_hcaptcha"
+                  },
+                  "reason": {
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "hcaptcha"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "const": "risk"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "version",
+          "challengeId",
+          "challenge",
+          "nonce",
+          "state",
+          "expiresAt",
+          "proofRequirement"
+        ],
+        "additionalProperties": false
+      },
+      "CaptchaRequirement": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "hcaptcha"
+          },
+          "reason": {
+            "type": "string",
+            "const": "risk"
+          },
+          "challengeId": {
+            "type": "string"
+          },
+          "siteKey": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "reason",
+          "challengeId",
+          "siteKey",
+          "baseUrl",
+          "hostname"
+        ],
+        "additionalProperties": false
+      },
+      "AppProof": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "app_attest"
+              },
+              "keyId": {
+                "type": "string"
+              },
+              "attestation": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "assertion": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "keyId",
+              "assertion"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "hcaptcha"
+              },
+              "token": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "risk",
+                  "unsupported",
+                  "temporarily_unavailable"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "token",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ProviderLoginInput": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "const": 1
+          },
+          "challengeId": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "deviceName": {
+            "type": "string"
+          },
+          "identityToken": {
+            "anyOf": [
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "authorizationCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "codeVerifier": {
+            "anyOf": [
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "proof": {
+            "$ref": "#/components/schemas/AppProof"
+          }
+        },
+        "required": [
+          "version",
+          "challengeId",
+          "state",
+          "deviceId",
+          "deviceName",
+          "proof"
+        ],
+        "additionalProperties": false
+      },
+      "PasswordLoginInput": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "const": 1
+          },
+          "challengeId": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "deviceName": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/AppProof"
+          }
+        },
+        "required": [
+          "version",
+          "challengeId",
+          "state",
+          "deviceId",
+          "deviceName",
+          "username",
+          "password",
+          "proof"
+        ],
+        "additionalProperties": false
+      },
+      "AccountView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "accountState": {
+            "$ref": "#/components/schemas/AccountState"
+          },
+          "runtimeState": {
+            "$ref": "#/components/schemas/RuntimeState"
+          },
+          "runtimeMode": {
+            "type": "string",
+            "enum": [
+              "telegram",
+              "api_only"
+            ]
+          },
+          "isReady": {
+            "type": "boolean",
+            "enum": [
+              false,
+              true
+            ]
+          },
+          "autonomousAiEnabled": {
+            "type": "boolean",
+            "enum": [
+              false,
+              true
+            ]
+          },
+          "consent": {
+            "type": "object",
+            "properties": {
+              "requiredVersion": {
+                "type": "string"
+              },
+              "acceptedVersion": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "aiAllowed": {
+                "type": "boolean",
+                "enum": [
+                  false,
+                  true
+                ]
+              }
+            },
+            "required": [
+              "requiredVersion",
+              "acceptedVersion",
+              "aiAllowed"
+            ],
+            "additionalProperties": false
+          },
+          "quota": {
+            "$ref": "#/components/schemas/QuotaView"
+          },
+          "bot": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "username": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "connected": {
+                    "type": "boolean",
+                    "enum": [
+                      false,
+                      true
+                    ]
+                  },
+                  "status": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "username",
+                  "connected",
+                  "status"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "accountState",
+          "runtimeState",
+          "runtimeMode",
+          "isReady",
+          "autonomousAiEnabled",
+          "consent",
+          "quota",
+          "bot"
+        ],
+        "additionalProperties": false
+      },
+      "SessionView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "deviceName": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "apple",
+              "google",
+              "telegram",
+              "password"
+            ]
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "lastUsedAt": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "current": {
+            "type": "boolean",
+            "enum": [
+              false,
+              true
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "deviceId",
+          "deviceName",
+          "provider",
+          "createdAt",
+          "lastUsedAt",
+          "expiresAt",
+          "current"
+        ],
+        "additionalProperties": false
+      },
+      "TokenPair": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "const": 1
+          },
+          "tokenType": {
+            "type": "string",
+            "const": "Bearer"
+          },
+          "accessToken": {
+            "type": "string"
+          },
+          "expiresIn": {
+            "type": "number",
+            "const": 900
+          },
+          "refreshToken": {
+            "type": "string"
+          },
+          "refreshExpiresAt": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "tokenType",
+          "accessToken",
+          "expiresIn",
+          "refreshToken",
+          "refreshExpiresAt",
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "LoginReply": {
+        "type": "object",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountView"
+          },
+          "version": {
+            "type": "number",
+            "const": 1
+          },
+          "tokenType": {
+            "type": "string",
+            "const": "Bearer"
+          },
+          "accessToken": {
+            "type": "string"
+          },
+          "expiresIn": {
+            "type": "number",
+            "const": 900
+          },
+          "refreshToken": {
+            "type": "string"
+          },
+          "refreshExpiresAt": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "account",
+          "version",
+          "tokenType",
+          "accessToken",
+          "expiresIn",
+          "refreshToken",
+          "refreshExpiresAt",
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "RefreshInput": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "const": 1
+          },
+          "refreshToken": {
+            "type": "string"
+          },
+          "deviceId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "refreshToken",
+          "deviceId"
+        ],
+        "additionalProperties": false
+      },
+      "ReauthenticationReply": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "const": 1
+          },
+          "reauthenticationToken": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "reauthenticationToken",
+          "expiresAt"
+        ],
+        "additionalProperties": false
+      },
+      "IdentityView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "apple",
+              "google",
+              "telegram",
+              "password"
+            ]
+          },
+          "linkedAt": {
+            "type": "string"
+          },
+          "lastUsedAt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "linkedAt",
+          "lastUsedAt"
+        ],
+        "additionalProperties": false
+      },
+      "ConsentInput": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "const": 1
+          },
+          "consentVersion": {
+            "type": "string"
+          },
+          "accepted": {
+            "type": "boolean",
+            "enum": [
+              false,
+              true
+            ]
+          },
+          "recipientIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "version",
+          "consentVersion",
+          "accepted",
+          "recipientIds"
+        ],
+        "additionalProperties": false
+      },
+      "QuotaView": {
+        "type": "object",
+        "properties": {
+          "day": {
+            "type": "string"
+          },
+          "resetAt": {
+            "type": "string"
+          },
+          "ai": {
+            "type": "object",
+            "properties": {
+              "limit": {
+                "type": "number"
+              },
+              "used": {
+                "type": "number"
+              },
+              "reserved": {
+                "type": "number"
+              },
+              "remaining": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "limit",
+              "used",
+              "reserved",
+              "remaining"
+            ],
+            "additionalProperties": false
+          },
+          "images": {
+            "type": "object",
+            "properties": {
+              "limit": {
+                "type": "number"
+              },
+              "used": {
+                "type": "number"
+              },
+              "reserved": {
+                "type": "number"
+              },
+              "remaining": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "limit",
+              "used",
+              "reserved",
+              "remaining"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "day",
+          "resetAt",
+          "ai",
+          "images"
+        ],
+        "additionalProperties": false
+      },
+      "ActivationInput": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "const": 1
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "additionalProperties": false
+      },
+      "DeleteAccountInput": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "const": 1
+          },
+          "confirmation": {
+            "type": "string",
+            "const": "delete_my_account"
+          },
+          "reauthenticationToken": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "confirmation",
+          "reauthenticationToken"
+        ],
+        "additionalProperties": false
+      },
+      "DeletionReply": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "const": 1
+          },
+          "status": {
+            "type": "string",
+            "const": "deleting"
+          },
+          "deletionId": {
+            "type": "string"
+          },
+          "requestedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "status",
+          "deletionId",
+          "requestedAt"
+        ],
+        "additionalProperties": false
+      },
+      "PushDeviceInput": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "const": 1
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "production",
+              "sandbox"
+            ]
+          }
+        },
+        "required": [
+          "version",
+          "deviceId",
+          "token",
+          "environment"
+        ],
+        "additionalProperties": false
+      },
+      "InboxEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "reminder",
+              "task_result",
+              "dialogue_result",
+              "account"
+            ]
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "readAt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "content": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "resourceId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "createdAt",
+          "readAt",
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationPage": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "const": 1
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InboxEvent"
+            }
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "version",
+          "events",
+          "nextCursor"
+        ],
+        "additionalProperties": false
+      },
+      "ComplaintInput": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "const": 1
+          },
+          "replyId": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "unsafe",
+              "privacy",
+              "other"
+            ]
+          },
+          "details": {
+            "anyOf": [
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "version",
+          "replyId",
+          "category"
+        ],
+        "additionalProperties": false
+      },
+      "PublicAccountError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryAfterSeconds": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "requiredConsentVersion": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "proofRequirement": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CaptchaRequirement"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "additionalProperties": false
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "requestId"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

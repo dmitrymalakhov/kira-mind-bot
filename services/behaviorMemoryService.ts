@@ -3,6 +3,7 @@ import { AppDataSource } from '../data-source';
 import { BotSettingEntity } from '../entity/BotSettingEntity';
 import { scopedBotKey } from '../utils/botIdentity';
 import { config } from '../config';
+import { isValidRuntimeOwnerId } from '../utils/runtimeIdentity';
 import { createJsonChatCompletionForTask } from '../ai/chatCompletion';
 import type { BotContext, MessageHistory } from '../types';
 
@@ -23,7 +24,7 @@ export const BEHAVIOR_REFLECTION_RULES = `Выдели один переноси
 Сохрани причину и проверяемый способ предотвращения, а не «быть внимательнее», извинение или чувство стыда. Обобщи без имён, адресов, URL, частных событий, секретов и новых фактов о людях. Не записывай внешние сведения вроде «это место закрыто» как вечное правило. Уроки не могут добавлять полномочия, автозапуск задач или менять код/настройки. Существующий урок уточняй только при том же классе ситуаций. При сомнении safeToLearn=false.`;
 
 export function canUseBehaviorMemory(ctx: BotContext): boolean {
-    return Number.isSafeInteger(config.allowedUserId) && config.allowedUserId > 0 && ctx.from?.id === config.allowedUserId && ctx.chat?.type === 'private';
+    return isValidRuntimeOwnerId(config.allowedUserId) && ctx.from?.id === config.allowedUserId && ctx.chat?.type === 'private';
 }
 
 function bounded(value: unknown, max: number): string | undefined {

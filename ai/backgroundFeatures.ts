@@ -16,6 +16,7 @@ export function backgroundFeatureSettingKey(feature: BackgroundFeature): string 
     return `background:${feature}`;
 }
 export function defaultBackgroundFeatureEnabled(feature: BackgroundFeature, env: Record<string, string | undefined> = {}): boolean {
+    if(env.KIRA_PUBLIC_ACCOUNT==='true')return false;
     const value = env[registry[feature].envKey];
     if (feature === 'telegramReading' && env.KIRA_TENANT_ID && (value == null || value === '')) return false;
     return value == null || value === '' ? true : ['true', '1', 'yes', 'on'].includes(value.trim().toLowerCase());

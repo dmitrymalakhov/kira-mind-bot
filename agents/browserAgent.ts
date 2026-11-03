@@ -1,3 +1,4 @@
+import {bindAccountAiOperation} from '../ai/accountPolicy';
 import { chromium, Browser, BrowserContext, Frame, Locator, Page } from 'playwright';
 import { randomUUID } from 'crypto';
 import * as fs from 'fs';
@@ -14588,8 +14589,8 @@ export async function browserAgent(
         session.task = message;
         ctx.releaseBrowserUpdate?.();
         if (!session.requiresObserver) notifyLiveBrowserState(ctx, session);
-        const execute = (task: string) => session.runAgent(() => enqueueBrowserAgentLane(ctx,
-            () => runBrowserAgent(ctx, task, isForwarded, forwardFrom, messageHistory, classification, injectedMemoryContext)));
+        const execute = bindAccountAiOperation((task: string) => session.runAgent(() => enqueueBrowserAgentLane(ctx,
+            () => runBrowserAgent(ctx, task, isForwarded, forwardFrom, messageHistory, classification, injectedMemoryContext))));
         session.resume = async answer => {
             session.backgroundDelivery = true;
             const paused = pausedBrowserSessions.get(session.id);

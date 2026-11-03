@@ -8,9 +8,13 @@ import { ApiError } from '../api/contracts';
 import { PlatformSecrets } from './crypto';
 import { Account, AccountStore, provisionTenantDatabase, tenantName } from './store';
 import { pairingOwner, TelegramGateway, TelegramSession } from './telegram';
+import { attachAccountAuthority } from './publicAccounts/runtimeBridge';
+import type { PublicAccountPolicy } from './publicAccounts/policy';
+import type { PublicInbox } from './publicAccounts/inbox';
 
 export interface TenantCredentials {
-    botToken: string;
+    botToken?: string;
+    runtimeMode?: 'api_only';
     telegram?: TelegramSession;
     apiToken?: string;
     /** Trusted local import preserves an existing account's storage without copying or resetting it. */
@@ -28,9 +32,11 @@ export function tenantEnvironment(env: NodeJS.ProcessEnv, account: Account, cred
     directory: string, secrets: PlatformSecrets): NodeJS.ProcessEnv {
     const child: NodeJS.ProcessEnv = {};
     for (const [key, value] of Object.entries(env)) {
-        if (/^(?:PATH|LANG|TZ|NODE_EXTRA_CA_CERTS|PLAYWRIGHT_[A-Z_]+|CHROMIUM_[A-Z_]+|OPENAI_[A-Z_]+|GEMINI_[A-Z_]+|GOOGLE_API_KEY|GOOGLE_MAPS_API_KEY|ELEVENLABS_[A-Z_]+|OPENROUTER_[A-Z_]+|KIMI_[A-Z_]+|ZAI_[A-Z_]+|LM_STUDIO_[A-Z_]+|AI_MODEL_PRESET|KIRA_ORCHESTRATION_MODE|KIRA_DECISIONS_ENABLED|KIRA_REFLECTION_TRIAGE_DECISIONS_ENABLED|KIRA_FAST_DIALOGUE_ENABLED|DIALOGUE_DEEP_REVIEW_ENABLED|MEMORY_EMBEDDING_[A-Z_]+|DB_HOST|DB_PORT|QDRANT_URL|QDRANT_API_KEY)$/.test(key)) child[key] = value;
+        if (/^(?:PATH|LANG|TZ|NODE_EXTRA_CA_CERTS|PLAYWRIGHT_[A-Z_]+|CHROMIUM_[A-Z_]+|OPENAI_[A-Z_]+|GEMINI_[A-Z_]+|GOOGLE_API_KEY|GOOGLE_MAPS_API_KEY|ELEVENLABS_[A-Z_]+|OPENROUTER_[A-Z_]+|KIMI_[A-Z_]+|ZAI_[A-Z_]+|LM_STUDIO_[A-Z_]+|AI_MODEL_PRESET|KIRA_PUBLIC_MODERATION_BASE_URL|KIRA_PUBLIC_MODERATION_API_KEY|KIRA_ORCHESTRATION_MODE|KIRA_DECISIONS_ENABLED|KIRA_REFLECTION_TRIAGE_DECISIONS_ENABLED|KIRA_FAST_DIALOGUE_ENABLED|DIALOGUE_DEEP_REVIEW_ENABLED|MEMORY_EMBEDDING_[A-Z_]+|DB_HOST|DB_PORT|QDRANT_URL|QDRANT_API_KEY)$/.test(key)) child[key] = value;
     }
     const name = tenantName(account.id);
+    const apiOnly=account.runtime_mode==='api_only';
+    if(apiOnly && (!Number.isSafeInteger(Number(account.runtime_principal)) || Number(account.runtime_principal)>=0))throw new Error('Invalid API-only principal');
     const existing = credentials.existingStorage;
     if (existing && (!/^[A-Za-z0-9_-]{1,63}$/.test(existing.database) || !/^[a-z0-9_-]{1,100}$/.test(existing.memoryNamespace)
         || !/^[a-z0-9_-]{1,100}$/.test(existing.memoryBotId))) throw new Error('Invalid imported storage binding');
@@ -41,8 +47,11 @@ export function tenantEnvironment(env: NodeJS.ProcessEnv, account: Account, cred
         KIRA_DATABASE_SYNC: existing ? 'false' : 'true',
         VECTOR_PROVIDER: 'qdrant', KIRA_MEMORY_NAMESPACE: existing?.memoryNamespace || name,
         KIRA_MEMORY_BOT_ID: existing?.memoryBotId || name,
-        KIRA_BOT_TOKEN: credentials.botToken, KIRA_BOT_USERNAME: account.bot_username!,
-        KIRA_ALLOWED_USER_ID: account.owner_id!, KIRA_ADMIN_USER_ID: account.owner_id!,
+        KIRA_RUNTIME_MODE: apiOnly ? 'api_only' : 'telegram',
+        KIRA_RUNTIME_PRINCIPAL: apiOnly ? account.runtime_principal! : '',
+        KIRA_PUBLIC_ACCOUNT: account.public_origin ? 'true' : 'false',
+        KIRA_BOT_TOKEN: apiOnly ? '' : credentials.botToken, KIRA_BOT_USERNAME: apiOnly ? '' : account.bot_username!,
+        KIRA_ALLOWED_USER_ID: apiOnly ? '' : account.owner_id!, KIRA_ADMIN_USER_ID: apiOnly ? '' : account.owner_id!,
         PERSONALITY_FILE: path.join(directory, 'personality.json'), KIRA_RUNTIME_DATA_DIR: path.join(directory, 'data'),
         KIRA_API_ENABLED: 'true', KIRA_API_TOKEN: credentials.apiToken || secrets.derive(account.id, 'api'),
         KIRA_API_HOST: '127.0.0.1', KIRA_API_PORT: '0', KIRA_RUNTIME_HEALTH_DISABLED: existing?.healthPort ? 'false' : 'true',
@@ -61,6 +70,8 @@ export function tenantEnvironment(env: NodeJS.ProcessEnv, account: Account, cred
 type Worker = { child: ChildProcess; port?: number; token: string; state: string; startedAt: number };
 
 export class TenantRuntimeManager implements AccountRuntimes {
+    private authority?: {policy:PublicAccountPolicy;inbox:PublicInbox};
+    setAccountAuthority(authority:{policy:PublicAccountPolicy;inbox:PublicInbox}){this.authority=authority;}
     private workers = new Map<string, Worker>();
     private retryAt = new Map<string, number>();
     private pairingErrors = new Map<string, string>();
@@ -87,6 +98,8 @@ export class TenantRuntimeManager implements AccountRuntimes {
         this.ticking = true;
         try {
             const accounts = await this.store.configured();
+            const configured=new Set(accounts.map(account=>account.id));
+            for(const id of this.workers.keys())if(!configured.has(id))await this.restart(id);
             // One unavailable Telegram bot must not block all other accounts.
             await Promise.allSettled(accounts.map(account => this.reconcile(account)));
         } catch {
@@ -101,12 +114,12 @@ export class TenantRuntimeManager implements AccountRuntimes {
         const revision = this.revisions.get(account.id);
         try {
             const credentials = this.secrets.open<TenantCredentials>(account.secrets!, account.id);
-            if (!account.owner_id) {
+            if (account.runtime_mode !== 'api_only' && !account.owner_id) {
                 if (!account.pairing_hash || !account.pairing_expires || new Date(account.pairing_expires).getTime() <= Date.now()) {
                     this.pairingErrors.set(account.id, 'pairing_expired'); return;
                 }
                 this.pairingErrors.set(account.id, 'awaiting_telegram');
-                const updates = await this.telegram.updates(credentials.botToken, Number(account.update_offset));
+                const updates = await this.telegram.updates(credentials.botToken!, Number(account.update_offset));
                 for (const update of updates) {
                     const owner = pairingOwner(update, account.pairing_hash);
                     if (owner) {
@@ -133,11 +146,13 @@ export class TenantRuntimeManager implements AccountRuntimes {
             await provisionTenantWorkouts(this.admin, account.id, analyticsDatabase);
             if (this.stopped || revision !== this.revisions.get(account.id)) return;
             const workerEnv = tenantEnvironment(this.env, account, credentials, directory, this.secrets);
+            if(!this.authority && account.public_origin)throw new Error('Account policy authority missing');
             const child = fork(path.resolve(__dirname, '..', 'index.js'), [], {
                 cwd: directory, env: workerEnv,
                 execArgv: [], stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
             });
             const worker: Worker = { child, token: workerEnv.KIRA_API_TOKEN!, state: 'starting', startedAt: Date.now() };
+            if(this.authority)attachAccountAuthority(child,account.id,this.admin,this.authority.policy,this.authority.inbox);
             this.workers.set(account.id, worker);
             const timeout = setTimeout(() => { child.kill('SIGKILL'); }, 120_000);
             child.on('message', (message: unknown) => {

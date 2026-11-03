@@ -1,9 +1,9 @@
 {
-  "openapi": "3.0.3",
+  "openapi": "3.1.0",
   "info": {
     "title": "Kira accounts API",
     "version": "1.0.0",
-    "description": "Регистрация, вход и отдельная Кира для каждого аккаунта. Общие runtime routes используют bearer аккаунта."
+    "description": "Управление аккаунтом и runtime. Канонические native auth/account контракты и доступность: public-accounts.openapi.json и GET /auth/config. Парольная регистрация закрыта."
   },
   "servers": [
     {
@@ -41,102 +41,10 @@
       "$ref": "./openapi.json#/paths/~1files~1{id}"
     },
     "/accounts/register": {
-      "post": {
-        "operationId": "registerAccount",
-        "summary": "Создать отдельный аккаунт",
-        "responses": {
-          "201": {
-            "description": "Создать отдельный аккаунт",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AuthResponse"
-                }
-              }
-            }
-          },
-          "default": {
-            "$ref": "./openapi.json#/components/responses/Error"
-          }
-        },
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "username": {
-                    "type": "string",
-                    "pattern": "^[A-Za-z0-9_]{3,40}$"
-                  },
-                  "password": {
-                    "type": "string",
-                    "format": "password",
-                    "minLength": 12,
-                    "maxLength": 256
-                  }
-                },
-                "required": [
-                  "username",
-                  "password"
-                ]
-              }
-            }
-          }
-        }
-      }
+      "$ref": "./public-accounts.openapi.json#/paths/~1accounts~1register"
     },
     "/accounts/login": {
-      "post": {
-        "operationId": "loginAccount",
-        "summary": "Войти и получить токен на 30 дней",
-        "responses": {
-          "200": {
-            "description": "Войти и получить токен на 30 дней",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AuthResponse"
-                }
-              }
-            }
-          },
-          "default": {
-            "$ref": "./openapi.json#/components/responses/Error"
-          }
-        },
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "username": {
-                    "type": "string",
-                    "pattern": "^[A-Za-z0-9_]{3,40}$"
-                  },
-                  "password": {
-                    "type": "string",
-                    "format": "password",
-                    "minLength": 12,
-                    "maxLength": 256
-                  }
-                },
-                "required": [
-                  "username",
-                  "password"
-                ]
-              }
-            }
-          }
-        }
-      }
+      "$ref": "./public-accounts.openapi.json#/paths/~1accounts~1login"
     },
     "/accounts/logout": {
       "post": {
@@ -166,31 +74,7 @@
       }
     },
     "/account": {
-      "get": {
-        "operationId": "getAccount",
-        "summary": "Получить свой аккаунт и статус Киры",
-        "responses": {
-          "200": {
-            "description": "Получить свой аккаунт и статус Киры",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "account": {
-                      "$ref": "#/components/schemas/Account"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "default": {
-            "$ref": "./openapi.json#/components/responses/Error"
-          }
-        }
-      }
+      "$ref": "./public-accounts.openapi.json#/paths/~1account"
     },
     "/account/bot": {
       "put": {
@@ -411,6 +295,72 @@
     },
     "/photos": {
       "$ref": "./openapi.json#/paths/~1photos"
+    },
+    "/auth/config": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1auth~1config"
+    },
+    "/auth/challenges": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1auth~1challenges"
+    },
+    "/auth/apple": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1auth~1apple"
+    },
+    "/auth/google": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1auth~1google"
+    },
+    "/auth/telegram": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1auth~1telegram"
+    },
+    "/auth/password": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1auth~1password"
+    },
+    "/auth/refresh": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1auth~1refresh"
+    },
+    "/auth/logout": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1auth~1logout"
+    },
+    "/auth/events/apple": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1auth~1events~1apple"
+    },
+    "/auth/events/google": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1auth~1events~1google"
+    },
+    "/account/identities": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1account~1identities"
+    },
+    "/account/identities/{identityId}": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1account~1identities~1{identityId}"
+    },
+    "/account/sessions": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1account~1sessions"
+    },
+    "/account/sessions/{sessionId}": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1account~1sessions~1{sessionId}"
+    },
+    "/account/consents": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1account~1consents"
+    },
+    "/account/activate": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1account~1activate"
+    },
+    "/account/quota": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1account~1quota"
+    },
+    "/account/push-devices": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1account~1push-devices"
+    },
+    "/account/push-devices/{deviceId}": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1account~1push-devices~1{deviceId}"
+    },
+    "/account/complaints": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1account~1complaints"
+    },
+    "/notifications": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1notifications"
+    },
+    "/notifications/{id}/read": {
+      "$ref": "./public-accounts.openapi.json#/paths/~1notifications~1{id}~1read"
     }
   },
   "components": {

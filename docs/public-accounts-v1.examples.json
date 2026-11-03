@@ -1,0 +1,107 @@
+{
+  "synthetic": true,
+  "contract": "kira.public-accounts.v1",
+  "hashFixture": {
+    "provider": "google",
+    "challenge": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+    "input": {
+      "version": 1,
+      "challengeId": "11111111-1111-4111-8111-111111111111",
+      "state": "synthetic-state-00000000000000000000",
+      "deviceId": "22222222-2222-4222-8222-222222222222",
+      "deviceName": "Synthetic phone",
+      "identityToken": "synthetic-google-id-token"
+    },
+    "attestationClientDataHashHex": "ea866a757e4c38babfa8127cbe9a409d3e1f93a00ff1488ff735fcf917afffd0",
+    "proofPayloadUtf8": "kira.public-accounts.v1\nPOST\n/api/v1/auth/google\n11111111-1111-4111-8111-111111111111\nAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\n22222222-2222-4222-8222-222222222222\nsynthetic-state-00000000000000000000\n346c80b6496e8d8dbfdbf9f9e9fe330e7ec0bf3c24bc27544df70c50c2adc62f\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "assertionClientDataHashHex": "a1df3c46bbd950ee51f0feb5ba77355074eb5cdc68fa81f52583e16ff2950163"
+  },
+  "wire": {
+    "normalChallenge": {
+      "version": 1,
+      "challengeId": "11111111-1111-4111-8111-111111111111",
+      "challenge": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "nonce": "synthetic-nonce-00000000000000000000",
+      "state": "synthetic-state-00000000000000000000",
+      "expiresAt": "2035-04-01T00:05:00.000Z",
+      "proofRequirement": {
+        "mode": "app_attest_or_hcaptcha",
+        "reason": null
+      }
+    },
+    "riskChallenge": {
+      "version": 1,
+      "challengeId": "11111111-1111-4111-8111-111111111111",
+      "challenge": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "nonce": "synthetic-nonce-00000000000000000000",
+      "state": "synthetic-state-00000000000000000000",
+      "expiresAt": "2035-04-01T00:05:00.000Z",
+      "proofRequirement": {
+        "mode": "hcaptcha",
+        "reason": "risk"
+      }
+    },
+    "captchaRequired": {
+      "error": {
+        "code": "captcha_required",
+        "message": "Нужна проверка hCaptcha.",
+        "proofRequirement": {
+          "type": "hcaptcha",
+          "reason": "risk",
+          "challengeId": "11111111-1111-4111-8111-111111111111",
+          "siteKey": "synthetic-sitekey",
+          "baseUrl": "https://synthetic.example.invalid",
+          "hostname": "synthetic.example.invalid"
+        }
+      },
+      "requestId": "33333333-3333-4333-8333-333333333333"
+    },
+    "unknownKey": {
+      "error": {
+        "code": "app_attest_key_unknown",
+        "message": "Начни вход заново с новым ключом App Attest."
+      },
+      "requestId": "33333333-3333-4333-8333-333333333333"
+    },
+    "passwordReauthenticationChallenge": {
+      "version": 1,
+      "provider": "password",
+      "purpose": "reauthenticate",
+      "deviceId": "22222222-2222-4222-8222-222222222222"
+    },
+    "passwordReauthenticationReply": {
+      "version": 1,
+      "reauthenticationToken": "synthetic-reauthentication-token-0000000000",
+      "expiresAt": "2035-04-01T00:05:00.000Z"
+    },
+    "linkReply": {
+      "id": "44444444-4444-4444-8444-444444444444",
+      "provider": "google",
+      "linkedAt": "2035-04-01T00:00:00.000Z",
+      "lastUsedAt": null
+    },
+    "complaint": {
+      "version": 1,
+      "replyId": "-12",
+      "category": "other",
+      "details": "Synthetic report"
+    }
+  },
+  "terminalRetryRules": {
+    "refresh_R_D2_same_K_after_R_D_K": {
+      "status": 401,
+      "code": "refresh_invalid",
+      "familyRevoked": true
+    },
+    "logout_same_bearer_and_key": {
+      "status": 401,
+      "localAction": "clear_session"
+    },
+    "delete_response_lost_then_401": {
+      "status": 401,
+      "outcome": "unconfirmed",
+      "deletionCompleted": false,
+      "automaticNewKeyOrSignup": false
+    }
+  }
+}

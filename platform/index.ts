@@ -7,6 +7,17 @@ import { TenantRuntimeManager } from './runtime';
 import { TelegramBotGateway } from './telegram';
 import { createPlatformServer } from './server';
 import { createBrowserProxy } from './browserProxy';
+import { PublicAccountsHttp } from './publicAccounts/http';
+import { loadPublicAccountConfig } from './publicAccounts/config';
+import { ApplePushTransport, loadApnsConfig } from './publicAccounts/apns';
+import { PublicPushWorker } from './publicAccounts/pushWorker';
+import { AccountDeletion } from './publicAccounts/deletion';
+import { DeletionLedger } from './publicAccounts/deletionLedger';
+import { OwnedAccountEraser } from './publicAccounts/eraser';
+import { OfficialIdentityVerifier } from './publicAccounts/providers';
+import { QdrantClient } from '@qdrant/js-client-rest';
+import { tenantName } from './store';
+import { PublicAccountMaintenance } from './publicAccounts/maintenance';
 
 async function main() {
     dotenv.config({ path: `.env.${process.env.NODE_ENV || 'production'}` });
@@ -36,12 +47,29 @@ async function main() {
     }, () => process.exit(1));
     const reservedBotIds = [process.env.KIRA_BOT_TOKEN?.split(':')[0] || '',
         ...(process.env.KIRA_PLATFORM_RESERVED_BOT_IDS || '').split(',').map(id => id.trim())];
-    const server = createPlatformServer({ store, secrets, telegram, runtimes, reservedBotIds });
+    const publicAccounts = new PublicAccountsHttp(db, store, secrets, runtimes, loadPublicAccountConfig(process.env));
+    const publicMaintenance=new PublicAccountMaintenance(db);
+    runtimes.setAccountAuthority({policy:publicAccounts.policy,inbox:publicAccounts.inbox});
+    const apns=loadApnsConfig(process.env);
+    const pushWorker=apns ? new PublicPushWorker(db,secrets,new ApplePushTransport(apns)) : undefined;
+    const ledgerDirectory=process.env.KIRA_PUBLIC_DELETION_LEDGER_DIR;
+    if(ledgerDirectory){
+        const ledger=new DeletionLedger(path.resolve(ledgerDirectory),secrets.derive('deletion-ledger','api'));
+        await ledger.restoreBarrier(db);
+        const eraser=new OwnedAccountEraser(db,secrets,root,new QdrantClient({url:process.env.QDRANT_URL || 'http://qdrant:6333',apiKey:process.env.QDRANT_API_KEY}),process.env.KIRA_PUBLIC_DELETION_MANIFEST_FILE);
+        publicAccounts.deletion=new AccountDeletion(db,store,secrets,runtimes,new OfficialIdentityVerifier(publicAccounts.config),ledger,eraser,id=>path.join(root,tenantName(id)));
+    }
+    publicAccounts.config.readyCapabilities={apiOnlyRuntime:true,identities:true,sessions:true,consents:true,quotas:true,
+        deletion:Boolean(publicAccounts.deletion),inbox:true,push:Boolean(pushWorker)};
+    const server = createPlatformServer({ store, secrets, telegram, runtimes, reservedBotIds, publicAccounts });
     await new Promise<void>((resolve, reject) => {
         server.once('error', reject);
         server.listen(port, process.env.KIRA_PLATFORM_HOST || '127.0.0.1', resolve);
     });
     runtimes.start();
+    pushWorker?.start();
+    publicAccounts.deletion?.start();
+    publicMaintenance.start();
     console.log(`[accounts] listening port=${port}`);
     let stopping = false;
     const stop = async () => {
@@ -50,6 +78,9 @@ async function main() {
         const timeout = setTimeout(() => process.exit(1), 10_000);
         server.close();
         await runtimes.close();
+        await pushWorker?.close();
+        await publicAccounts.deletion?.close();
+        await publicMaintenance.close();
         browserProxy.close();
         await store.close();
         clearTimeout(timeout);

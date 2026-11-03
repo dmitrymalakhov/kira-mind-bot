@@ -134,7 +134,7 @@ test('pairing accepts only a private message from the real sender with the curre
     assert.equal(pairingOwner({ ...message, message: { ...message.message, from: { ...message.message.from, id: 10002 } } }, digest(code)), undefined);
 });
 
-test('two API accounts register/login, pair separate bots, and route history, files and actions only to their own runtime', async () => {
+test('existing API accounts login, public password signup is closed, and paired runtimes remain isolated', async () => {
     const store = new MemoryAccounts();
     const endpoints = new Map<string, { port: number; token: string }>();
     const runtimes: AccountRuntimes = { status: id => endpoints.has(id) ? 'ready' : 'waiting',
@@ -153,9 +153,13 @@ test('two API accounts register/login, pair separate bots, and route history, fi
             return { status: response.status, data: await response.json() as any };
         };
         assert.equal((await call('/api/v1/account')).status, 401);
-        const first = await call('/api/v1/accounts/register', 'POST', undefined, { username: 'synthetic_first', password: 'synthetic-password-123' });
-        const second = await call('/api/v1/accounts/register', 'POST', undefined, { username: 'synthetic_second', password: 'synthetic-password-456' });
-        assert.equal(first.status, 201); assert.equal(second.status, 201);
+        assert.equal((await call('/api/v1/accounts/register', 'POST', undefined, {username:'synthetic_closed',password:'synthetic-password-123'})).status,410);
+        // Only a trusted local seed/import may create password accounts now.
+        await store.create('synthetic_first',await passwordHash('synthetic-password-123'));
+        await store.create('synthetic_second',await passwordHash('synthetic-password-456'));
+        const first = await call('/api/v1/accounts/login', 'POST', undefined, { username: 'synthetic_first', password: 'synthetic-password-123' });
+        const second = await call('/api/v1/accounts/login', 'POST', undefined, { username: 'synthetic_second', password: 'synthetic-password-456' });
+        assert.equal(first.status, 200); assert.equal(second.status, 200);
         const a = first.data.accessToken, b = second.data.accessToken;
         assert.deepEqual((await call('/api/v1/account/telegram', 'GET', a)).data, { personalSessionConfigured: false });
         assert.notEqual(a, b);

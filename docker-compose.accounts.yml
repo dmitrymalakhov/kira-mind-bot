@@ -27,6 +27,8 @@ services:
       - "127.0.0.1:${ACCOUNTS_PORT:-8330}:3300"
     volumes:
       - ./runtime-data/accounts:/app/accounts
+      - ./runtime-data/public-accounts/config:/run/kira-public:ro
+      - ./runtime-data/public-accounts/deletion-ledger:/var/lib/kira-public/deletion-ledger
     depends_on:
       postgres:
         condition: service_healthy

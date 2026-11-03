@@ -10,6 +10,7 @@ import type { AiPresetName } from '../ai/modelPresets';
 import { getActiveAiPresetName } from '../services/aiRuntimeConfigService';
 import { TypeORMSessionStorage } from '../services/SessionStorage';
 import type { MessageHistory, SessionData } from '../types';
+import {currentAccountAiOperation,withAccountAiOperation} from '../ai/accountPolicy';
 
 const token = 'synthetic-test-token-with-at-least-32-characters';
 const owner = 730001;
@@ -62,6 +63,17 @@ function sessions(t: TestContext) {
     t.mock.method(TypeORMSessionStorage.prototype, 'write', async (key: string, value: SessionData) => { rows.set(key, structuredClone(value)); });
     return rows;
 }
+
+test('prepared AR execution retains one private user quota operation across independent HTTP scopes',async t=>{
+    sessions(t);const channel=new Channel(),seen:unknown[]=[];
+    t.mock.method(channel,'say',async()=>{seen.push(currentAccountAiOperation());return channel.reply;});
+    const service=new SceneService(owner,new AppMode({preset:'gpt-lean',revision:'r'}),channel,chooser([]));
+    const turn=parseSceneTurn({text:'Синтетический вопрос о комнате',scene:scene()});
+    const prepared=await withAccountAiOperation({id:'synthetic-prepared-user-turn',background:false},()=>service.prepare(turn));
+    assert.equal(JSON.stringify(prepared).includes('synthetic-prepared-user-turn'),false,'private quota identity never enters wire plan');
+    await withAccountAiOperation({id:'synthetic-execution-http-request',background:false},()=>service.turn({...turn,plan:prepared.plan.id},'gpt-lean'));
+    assert.deepEqual(seen,[{id:'synthetic-prepared-user-turn',background:false}]);assert.equal(currentAccountAiOperation(),undefined);
+});
 
 test('scene turns are strict: unknown fields, stale snapshots, non-JPEG, oversized or mismatched frames are refused', () => {
     assert.equal(parseSceneTurn({ text: 'Что ты видишь?', scene: scene(), frame: frame() }).frame!.data.length, jpeg.length);

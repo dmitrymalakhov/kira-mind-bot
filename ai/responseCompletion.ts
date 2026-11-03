@@ -1,3 +1,4 @@
+import { accountPolicyError } from './accountPolicy';
 import { resolveModelForTaskAsync, resolveModelForTaskFreshAsync } from './modelResolver';
 import type { AiModelRef, AiTaskKey } from './modelPresets';
 import { getAiProviderAdapter } from './providers/registry';
@@ -200,6 +201,7 @@ export async function createResponseForTask(
             );
         } catch (error) {
             assertAiExecutionActive();
+            if (accountPolicyError(error)) throw accountPolicyError(error);
             if (isAiContentSafetyError(error)) throw error;
             const parseErrorIdentities = getErrorIdentityParser(route.modelRef);
             const diagnostics = classifyAiErrorForProvider(error, parseErrorIdentities);

@@ -2,6 +2,8 @@ import 'reflect-metadata';
 import { randomUUID } from 'node:crypto';
 import { DataSource, QueryRunner } from 'typeorm';
 import { ApiError } from '../api/contracts';
+import { initializePublicAccounts } from './publicAccounts/schema';
+import type { AccountState } from './publicAccounts/contracts';
 
 export interface Account {
     id: string;
@@ -14,6 +16,11 @@ export interface Account {
     pairing_hash: string | null;
     pairing_expires: Date | null;
     update_offset: number;
+    account_state?: AccountState;
+    runtime_mode?: 'api_only' | 'telegram';
+    runtime_principal?: string | null;
+    public_origin?: boolean;
+    autonomous_ai_enabled?: boolean;
 }
 
 export interface AccountStore {
@@ -70,6 +77,7 @@ export class PostgresAccountStore implements AccountStore {
         )`);
         await this.db.query(`CREATE TABLE IF NOT EXISTS kira_analytics_meta (id int PRIMARY KEY CHECK(id=1), started_at timestamptz NOT NULL DEFAULT now())`);
         await this.db.query('INSERT INTO kira_analytics_meta(id) VALUES(1) ON CONFLICT DO NOTHING');
+        await initializePublicAccounts(this.db);
     }
     async create(username: string, hash: string): Promise<Account> {
         try {
@@ -90,7 +98,9 @@ export class PostgresAccountStore implements AccountStore {
     async session(hash: string, accountId: string) {
         await this.db.query('DELETE FROM kira_account_sessions WHERE expires_at <= now()');
         await this.db.transaction(async manager => {
-            await manager.query('SELECT id FROM kira_accounts WHERE id=$1 FOR UPDATE', [accountId]);
+            const permitted = await manager.query(`SELECT id FROM kira_accounts WHERE id=$1 AND account_state NOT IN ('deleting','deleted')
+                AND NOT EXISTS(SELECT 1 FROM kira_public_deletion_ledger l WHERE l.account_id=kira_accounts.id) FOR UPDATE`, [accountId]);
+            if (!permitted.length) throw new ApiError(401, 'invalid_credentials', 'Неверный логин или пароль.');
             await manager.query(`DELETE FROM kira_account_sessions WHERE token_hash IN (
                 SELECT token_hash FROM kira_account_sessions WHERE account_id=$1 ORDER BY expires_at DESC OFFSET 19
             )`, [accountId]);
@@ -99,7 +109,8 @@ export class PostgresAccountStore implements AccountStore {
     }
     async authenticate(hash: string) {
         return (await this.db.query(`SELECT a.* FROM kira_accounts a JOIN kira_account_sessions s ON s.account_id=a.id
-            WHERE s.token_hash=$1 AND s.expires_at>now()`, [hash]))[0];
+            WHERE s.token_hash=$1 AND s.expires_at>now() AND a.account_state NOT IN ('deleting','deleted')
+            AND NOT EXISTS(SELECT 1 FROM kira_public_deletion_ledger l WHERE l.account_id=a.id)`, [hash]))[0];
     }
     async logout(hash: string) { await this.db.query('DELETE FROM kira_account_sessions WHERE token_hash=$1', [hash]); }
     async connect(id: string, botId: string, username: string, encrypted: string, pairingHash: string) {
@@ -124,7 +135,7 @@ export class PostgresAccountStore implements AccountStore {
     async configured(): Promise<Account[]> {
         // Reading through the lease connection detects a lost PostgreSQL session before polling bots again.
         if (!this.lock) throw new Error('Account manager lease unavailable');
-        return this.lock.query('SELECT * FROM kira_accounts WHERE secrets IS NOT NULL');
+        return this.lock.query("SELECT * FROM kira_accounts WHERE secrets IS NOT NULL AND account_state IN ('active','restricted') AND NOT EXISTS(SELECT 1 FROM kira_public_deletion_ledger l WHERE l.account_id=kira_accounts.id)");
     }
     async updateSecrets(id: string, previous: string, encrypted: string): Promise<void> {
         const [rows] = await this.db.query('UPDATE kira_accounts SET secrets=$3 WHERE id=$1 AND secrets=$2 RETURNING id', [id, previous, encrypted]);

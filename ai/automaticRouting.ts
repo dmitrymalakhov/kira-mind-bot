@@ -1,3 +1,4 @@
+import { accountPolicyError } from './accountPolicy';
 import type { AiModelRef } from './modelPresets';
 import type { AiResolvedTaskRoute } from './modelResolver';
 import { getAiProviderAdapter } from './providers/registry';
@@ -24,7 +25,7 @@ export function configuredCandidate(ref: AiModelRef, env: NodeJS.ProcessEnv = pr
 
 function recoverable(error: unknown): boolean {
     const diagnostics = classifyAiError(error);
-    return !isAiContentSafetyError(error) && (diagnostics.retryable || error instanceof AiInvalidResponseError
+    return !accountPolicyError(error) && !isAiContentSafetyError(error) && (diagnostics.retryable || error instanceof AiInvalidResponseError
         || [401, 403, 404].includes(diagnostics.errorStatus || 0));
 }
 

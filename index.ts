@@ -33,6 +33,7 @@ import { startRecurringTaskScheduler } from "./services/recurringTaskScheduler";
 import { registerDialogueLifecycle, startDialogueJobScheduler } from './services/dialogueJobs';
 import { initReflectionMode } from "./services/reflectionModeService";
 import { REACTIONS_ENABLED, ALLOWED_REACTIONS } from "./handlers/shared";
+import { isApiOnlyRuntime } from './utils/runtimeIdentity';
 
 
 // Загрузка переменных окружения
@@ -138,8 +139,12 @@ async function startBot() {
         startDialogueJobScheduler(bot);
         startChatGroupTracker(bot);
         startChatPromptWatchPolling(bot.api);
-        await bot.api.setMyCommands(getTelegramMenuCommands());
-        if (process.env.KIRA_TENANT_ID) {
+        if(isApiOnlyRuntime()){
+            const address=apiServer?.address();
+            if(!address || typeof address==='string')throw new Error('API-only runtime needs its API');
+            process.send?.({type:'kira-ready',port:address.port});
+        }else if (process.env.KIRA_TENANT_ID) {
+            await bot.api.setMyCommands(getTelegramMenuCommands());
             const offset = Number(process.env.KIRA_TELEGRAM_UPDATE_OFFSET);
             if (Number.isSafeInteger(offset) && offset > 0) {
                 await bot.api.getUpdates({ offset, timeout: 0, limit: 1 });
@@ -152,6 +157,7 @@ async function startBot() {
                 },
             });
         } else {
+            await bot.api.setMyCommands(getTelegramMenuCommands());
             await bot.start();
         }
 

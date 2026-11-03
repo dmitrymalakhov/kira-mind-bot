@@ -1,3 +1,4 @@
+import { isApiOnlyRuntime, isValidRuntimeOwnerId } from '../utils/runtimeIdentity';
 export interface ExternalApiOptions {
     token: string;
     ownerId: number;
@@ -11,7 +12,7 @@ export function readExternalApiOptions(env: NodeJS.ProcessEnv, ownerId: number):
     if (token.length < 32 || /\s/.test(token)) {
         throw new Error('KIRA_API_TOKEN must contain at least 32 characters without whitespace');
     }
-    if (!Number.isSafeInteger(ownerId) || ownerId <= 0) {
+    if (!isValidRuntimeOwnerId(ownerId,env) || isApiOnlyRuntime(env) && ownerId!==Number(env.KIRA_RUNTIME_PRINCIPAL)) {
         throw new Error('External API requires a valid KIRA_ALLOWED_USER_ID');
     }
     const port = Number(env.KIRA_API_PORT || 3200);
