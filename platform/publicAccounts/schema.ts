@@ -143,5 +143,26 @@ export async function initializePublicAccounts(db: DataSource): Promise<void> {
             reply_id text NOT NULL, category text NOT NULL, details_encrypted text,
             status text NOT NULL DEFAULT 'received', created_at timestamptz NOT NULL DEFAULT now()
         )`);
+        // Browser state contains device/CSRF binding and encrypted short-lived OAuth
+        // code/PKCE only. Authentication remains in kira_public_sessions.
+        await tx.query(`CREATE TABLE IF NOT EXISTS kira_public_web_browsers (
+            cookie_hash text PRIMARY KEY, device_id uuid NOT NULL, account_id uuid REFERENCES kira_accounts(id) ON DELETE CASCADE,
+            session_id uuid REFERENCES kira_public_sessions(id) ON DELETE SET NULL,
+            created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL
+        )`);
+        await tx.query('ALTER TABLE kira_public_web_browsers ADD COLUMN IF NOT EXISTS session_id uuid REFERENCES kira_public_sessions(id) ON DELETE SET NULL');
+        await tx.query(`CREATE TABLE IF NOT EXISTS kira_public_web_flows (
+            challenge_id uuid PRIMARY KEY REFERENCES kira_public_challenges(id) ON DELETE CASCADE,
+            browser_hash text NOT NULL REFERENCES kira_public_web_browsers(cookie_hash) ON DELETE CASCADE,
+            provider text NOT NULL CHECK(provider IN ('google','telegram','password')),
+            purpose text NOT NULL CHECK(purpose IN ('login','reauthenticate','link')),
+            private_encrypted text NOT NULL, callback_received boolean NOT NULL DEFAULT false,
+            expires_at timestamptz NOT NULL
+        )`);
+        await tx.query(`CREATE TABLE IF NOT EXISTS kira_public_operator_grants (
+            account_id uuid PRIMARY KEY REFERENCES kira_accounts(id) ON DELETE CASCADE,
+            granted_by_session uuid REFERENCES kira_public_sessions(id) ON DELETE SET NULL,
+            granted_at timestamptz NOT NULL DEFAULT now(), revoked_at timestamptz
+        )`);
     });
 }

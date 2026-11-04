@@ -92,7 +92,7 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
         const json = (status: number, body: unknown) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(body)); };
         try {
             const url = new URL(req.url || '/', 'http://localhost');
-            const route = url.pathname;
+            let route = url.pathname;
             if (route === '/api/v1/accounts/register') throw new ApiError(410, 'registration_closed', 'Регистрация логином и паролем закрыта.');
             if (options.publicAccounts && await options.publicAccounts.publicRoute(req, res, route, json)) return;
             const authRoute = route === '/api/v1/accounts/register' || route === '/api/v1/accounts/login';
@@ -129,8 +129,10 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
                 } finally { authenticating--; }
             }
             limits.take(`request:${req.socket.remoteAddress}`, 600);
+            const webRequest = await options.publicAccounts?.web?.resolveApi(req, url);
+            if (webRequest) { route = webRequest.path; req.url = route + url.search; }
             const bearer = req.headers.authorization?.match(/^Bearer ([A-Za-z0-9_-]{32,128})$/i)?.[1];
-            const native = bearer ? await options.publicAccounts?.sessions.authenticate(bearer) : undefined;
+            const native = webRequest?.auth || (bearer ? await options.publicAccounts?.sessions.authenticate(bearer) : undefined);
             const account = native?.account || (bearer ? await store.authenticate(digest(bearer)) : undefined);
             if (!account) {
                 res.setHeader('WWW-Authenticate', 'Bearer');

@@ -1,4 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { PublicWebHttp } from './webHttp';
+import { loadPublicWebConfig, PublicWebConfig } from './webConfig';
+import type { WebAuthDependencies } from './webAuth';
 import type { DataSource } from 'typeorm';
 import { ApiError } from '../../api/contracts';
 import { readBody } from '../../api/server';
@@ -23,6 +26,7 @@ import { PublicComplaints,ownedReplyResolver } from './complaints';
 type Json = (status: number, body: unknown) => void;
 export class PublicAccountsHttp {
     readonly sessions: PublicSessions;
+    readonly web?: PublicWebHttp;
     readonly identities: PublicIdentities;
     readonly policy: PublicAccountPolicy;
     readonly limits: PublicLimits;
@@ -33,7 +37,7 @@ export class PublicAccountsHttp {
     readonly complaints:PublicComplaints;
     constructor(readonly db: DataSource, private store: AccountStore, private secrets: PlatformSecrets,
         private runtimes: AccountRuntimes, readonly config: PublicAccountConfig,
-        dependencies:{identityVerifier?:IdentityVerifier;proofVerifier?:AppProofVerifier}={}) {
+        dependencies:{identityVerifier?:IdentityVerifier;proofVerifier?:AppProofVerifier;webConfig?:PublicWebConfig;webDependencies?:WebAuthDependencies}={}) {
         this.sessions = new PublicSessions(db, secrets);
         this.limits = new PublicLimits(db, secrets.derive('public-accounts', 'api'));
         this.receipts = new PublicReceipts(db);
@@ -44,6 +48,8 @@ export class PublicAccountsHttp {
             ...(process.env.KIRA_PUBLIC_AI_CATALOG_FILE ? loadConsentCatalog(process.env.KIRA_PUBLIC_AI_CATALOG_FILE) : {}) }));
         this.identities = new PublicIdentities(db, store, secrets, this.sessions, config,
             dependencies.identityVerifier || new OfficialIdentityVerifier(config), dependencies.proofVerifier || new OfficialAppProof(db, config), this.limits);
+        const webConfig = dependencies.webConfig || loadPublicWebConfig();
+        if (webConfig) this.web = new PublicWebHttp(this, db, store, secrets, webConfig, dependencies.webDependencies);
     }
 
     async authLimit(req: IncomingMessage): Promise<string> {
@@ -53,6 +59,7 @@ export class PublicAccountsHttp {
     }
 
     async publicRoute(req: IncomingMessage, res: ServerResponse, path: string, json: Json): Promise<boolean> {
+        if (this.web && await this.web.route(req, res, path, json)) return true;
         const event=path.match(/^\/api\/v1\/auth\/events\/(apple|google)$/);
         if(event){await this.authLimit(req);await this.securityEvents.request(req,event[1] as 'apple'|'google');json(202,{version:1,received:true});return true;}
         if (path === '/api/v1/accounts/register') throw new ApiError(410, 'registration_closed', 'Регистрация логином и паролем закрыта.');

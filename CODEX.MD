@@ -1,5 +1,7 @@
 # CODEX
 
+- Веб-кабинет использует канонические PublicSessions access/rotating-refresh в HttpOnly cookies, без второго auth-store и продления срока access. Browser metadata привязывает точную семью; только logout допускает отзыв этой семьи при утрате credentials. Operator transport secret не является ролью: coherent snapshot проверки канонической session/identity/account/browser/grant на каждом derived-запросе, account-before-session locking при role mutation, отдельные Express stores для public Secure и private recovery cookie policy. Контракты и фиксированные gateway/CSP/logging границы: docs/public-account-web.md.
+
 ## Назначение файла
 - `AGENTS.md` в корне — кросс-платформенная точка входа для coding agents; он должен отправлять агент к `CODEX-RULES.MD` и `CODEX.MD`.
 - `CODEX-RULES.MD` в корне хранит обязательные правила репозитория и имеет более высокий приоритет, чем остальные локальные markdown-файлы.

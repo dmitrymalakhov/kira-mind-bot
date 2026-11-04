@@ -91,26 +91,62 @@ export async function saveImageRecognition(settings: ImageRecognitionConfig['set
   return data;
 }
 
+const operatorBase = typeof window !== 'undefined' && window.location.pathname.startsWith('/operator/') ? '/operator' : '';
+export interface OperatorAuthContext {
+  csrfToken: string; csrfEnabled: boolean; accountLoginEnabled: boolean;
+  accountAuthorized: boolean; legacyAuthenticated: boolean; accountConsoleUrl: string;
+}
+export async function fetchOperatorAuthContext(): Promise<OperatorAuthContext> {
+  const response = await fetch(operatorBase + '/api/auth/context', { credentials: 'same-origin', cache: 'no-store' });
+  if (!response.ok) throw new Error('Не удалось проверить вход');
+  return response.json();
+}
+let refreshingAccount: Promise<boolean> | undefined;
+function refreshAccountSession(): Promise<boolean> {
+  if (refreshingAccount) return refreshingAccount;
+  refreshingAccount = (async () => {
+    try {
+      const context = await fetchOperatorAuthContext();
+      if (!context.accountLoginEnabled) return false;
+      const configResponse = await fetch('/api/v1/web/config', { credentials: 'same-origin', cache: 'no-store' });
+      if (!configResponse.ok) return false;
+      const config = await configResponse.json();
+      const result = await fetch('/api/v1/web/auth/refresh', { method: 'POST', credentials: 'same-origin',
+        headers: { 'content-type': 'application/json', 'x-csrf-token': config.csrfToken }, body: JSON.stringify({ version: 1 }) });
+      return result.ok;
+    } catch { return false; }
+  })().finally(() => { refreshingAccount = undefined; });
+  return refreshingAccount;
+}
+
 export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const response = await fetch(input, init);
-  if (response.status === 401) {
-    window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
+  const ownApi = typeof input === 'string' && input.startsWith('/api/');
+  const target = ownApi ? operatorBase + input : input;
+  const method = (init?.method || 'GET').toUpperCase();
+  const headers = new Headers(init?.headers);
+  if (ownApi && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    const context = await fetchOperatorAuthContext();
+    if (context.csrfEnabled) headers.set('x-csrf-token', context.csrfToken);
   }
+  const options = { ...init, headers };
+  let response = await fetch(target, options);
+  // A 401 is an authorization refusal before the handler. Keep the original
+  // action/body/idempotency key when retrying after canonical account refresh.
+  if (response.status === 401 && ownApi && input !== '/api/login' && !String(input).includes('/operator/link-account')
+    && !String(input).includes('/operator/unlink-account') && await refreshAccountSession()) response = await fetch(target, options);
+  if (response.status === 401) window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
   return response;
 }
 
 export async function login(username: string, password: string) {
-  const r = await fetch('/api/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
-  });
-  return r.json() as Promise<{ success: boolean; error?: string }>;
+  const response = await apiFetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
+  return response.json() as Promise<{ success: boolean; error?: string }>;
 }
-
-export async function logout() {
-  await fetch('/api/logout', { method: 'POST' });
+export async function loginWithAccount() {
+  const response = await apiFetch('/api/operator/login-account', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  return response.json() as Promise<{ success: boolean; error?: string }>;
 }
+export async function logout() { await apiFetch('/api/logout', { method: 'POST' }); }
 
 export async function fetchConfig(): Promise<ConfigResponse> {
   const r = await apiFetch('/api/config');

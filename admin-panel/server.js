@@ -2,7 +2,7 @@
 
 const express = require('express');
 const compression = require('compression');
-const session = require('express-session');
+const { createOperatorAuth } = require('./operatorAuth');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -73,11 +73,7 @@ const SESSION_COOKIE_INSTANCE = String(KIRA_INSTANCE_NAME)
   .trim()
   .replace(/[^A-Za-z0-9._-]/g, '_') || 'kira-mind-bot';
 const SESSION_COOKIE_NAME = `kira.sid.${SESSION_COOKIE_INSTANCE}`;
-
-// Rate limiting
-const loginAttempts = new Map();
-const MAX_ATTEMPTS = 5;
-const LOCKOUT_MS = 10 * 60 * 1000;
+const operatorAuth = createOperatorAuth({ username: ADMIN_USERNAME, password: ADMIN_PASSWORD, sessionSecret: SESSION_SECRET, cookieName: SESSION_COOKIE_NAME });
 
 const SENSITIVE_KEYS = new Set([
   'OPENAI_IMAGE_API_KEY',
@@ -294,50 +290,17 @@ function dockerRequest(method, path) {
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 
+app.use(operatorAuth.prepare);
 app.use(compression({ threshold: 1024 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
-app.use(session({
-  name: SESSION_COOKIE_NAME,
-  secret: SESSION_SECRET,
-  resave: false,
-  saveUninitialized: false,
-  cookie: { maxAge: 8 * 3600 * 1000, httpOnly: true, sameSite: 'strict' },
-}));
+app.use(operatorAuth.session);
+app.use(operatorAuth.csrfGuard);
+const requireAuth = operatorAuth.requireAuth;
+operatorAuth.register(app);
 
-function requireAuth(req, res, next) {
-  if (req.session.authenticated) return next();
-  res.status(401).json({ error: 'Не авторизован' });
-}
-
-function rateLimit(req, res, next) {
-  const ip = req.ip || req.socket.remoteAddress;
-  const entry = loginAttempts.get(ip) || { count: 0, lockedUntil: 0 };
-  if (entry.lockedUntil > Date.now()) {
-    const mins = Math.ceil((entry.lockedUntil - Date.now()) / 60000);
-    return res.status(429).json({ error: `Слишком много попыток. Попробуйте через ${mins} мин.` });
-  }
-  next();
-}
-
-// ── API routes ────────────────────────────────────────────────────────────────
-
-app.post('/api/login', rateLimit, (req, res) => {
-  const { username, password } = req.body;
-  const ip = req.ip || req.socket.remoteAddress;
-
-  if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
-    req.session.authenticated = true;
-    loginAttempts.delete(ip);
-    return res.json({ success: true });
-  }
-
-  const entry = loginAttempts.get(ip) || { count: 0, lockedUntil: 0 };
-  entry.count++;
-  if (entry.count >= MAX_ATTEMPTS) entry.lockedUntil = Date.now() + LOCKOUT_MS;
-  loginAttempts.set(ip, entry);
-  res.status(401).json({ error: 'Неверный логин или пароль' });
-});
+// Existing operator-password recovery stays separate from account SSO.
+app.post('/api/login', operatorAuth.rateLimit, operatorAuth.login);
 
 app.post('/api/logout', (req, res) => {
   req.session.destroy(() => res.json({ success: true }));

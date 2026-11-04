@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Box, TextField, Button, Typography, Alert, CircularProgress, Stack } from '@mui/material';
 import { BrandMark } from '../components/BrandMark';
-import { login, fetchConfig } from '../api';
+import { login, fetchConfig, fetchOperatorAuthContext, loginWithAccount } from '../api';
 import type { ConfigResponse } from '../types';
 interface Props { onLogin: (config: ConfigResponse) => void }
 export function LoginPage({ onLogin }: Props) {
@@ -9,6 +9,14 @@ export function LoginPage({ onLogin }: Props) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [accountLogin, setAccountLogin] = useState({ enabled: false, authorized: false });
+  useEffect(() => { void fetchOperatorAuthContext().then(context => setAccountLogin({ enabled: context.accountLoginEnabled, authorized: context.accountAuthorized })).catch(() => {}); }, []);
+  const handleAccount = async () => {
+    if (!accountLogin.authorized) { window.location.assign('/account/?destination=operator'); return; }
+    setLoading(true); setError('');
+    try { const result = await loginWithAccount(); if (result.success) onLogin(await fetchConfig()); else setError(result.error || 'Не удалось подтвердить доступ оператора'); }
+    catch { setError('Ошибка соединения'); } finally { setLoading(false); }
+  };
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault(); setLoading(true); setError('');
     try {
@@ -31,6 +39,10 @@ export function LoginPage({ onLogin }: Props) {
         <Typography variant="overline" color="text.secondary">Kira Mind</Typography><Typography variant="h4" component="h1" sx={{ mt: 1, mb: 1 }}>Добро пожаловать</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 4 }}>Войдите, чтобы настроить свою Киру.</Typography>
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+        {accountLogin.enabled && <Button fullWidth variant="outlined" disabled={loading} onClick={handleAccount} sx={{ minHeight: 44, mb: 3 }}>
+          {accountLogin.authorized ? 'Продолжить через аккаунт Киры' : 'Войти в аккаунт Киры'}
+        </Button>}
+
         <Box component="form" onSubmit={handleSubmit}><Stack spacing={2.5}>
           <TextField label="Логин" value={username} onChange={event => setUsername(event.target.value)} fullWidth required autoFocus autoComplete="username" />
           <TextField label="Пароль" type="password" value={password} onChange={event => setPassword(event.target.value)} fullWidth required autoComplete="current-password" />

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f5f2ec">
+  <title>Моя Кира — Kira Mind</title>
+  <link rel="stylesheet" href="/account/account.css">
+  <script defer src="/account/account.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">К содержимому</a>
+  <header class="topbar"><a class="brand" href="/">Kira Mind<span>Моя Кира</span></a><button id="logout" class="quiet" hidden>Выйти</button></header>
+  <main id="main" tabindex="-1">
+    <div id="notice" role="status" aria-live="polite" hidden></div>
+    <section id="loading" class="card loading">Подключаемся к Кире…</section>
+    <section id="login" class="card login" hidden>
+      <p class="eyebrow">Личное пространство</p><h1>Войти в свою Киру</h1>
+      <p class="secondary">Используй уже подключённый способ входа. Память, история и настройки останутся у твоей Киры.</p>
+      <div id="login-methods" class="stack"></div>
+      <form id="password-login" class="stack" hidden>
+        <label>Имя пользователя<input name="username" autocomplete="username" minlength="3" maxlength="40" required></label>
+        <label>Пароль<input name="password" type="password" autocomplete="current-password" minlength="12" maxlength="256" required></label>
+        <button type="submit">Продолжить</button>
+      </form>
+    </section>
+    <section id="workspace" hidden>
+      <div class="page-heading"><div><p class="eyebrow">Личное пространство</p><h1 id="account-name">Моя Кира</h1><p id="account-state" class="secondary"></p></div><a id="operator-entry" class="button secondary-button" href="/operator/" hidden>Панель оператора</a></div>
+      <nav id="navigation" aria-label="Настройки Киры"></nav>
+      <section id="content" aria-live="polite"></section>
+    </section>
+    <footer><a id="privacy" href="/privacy/">Конфиденциальность</a><a id="support" href="/support/">Поддержка</a></footer>
+  </main>
+  <dialog id="proof-dialog" aria-labelledby="proof-title">
+    <div class="dialog-heading"><h2 id="proof-title">Подтверди вход</h2><button id="proof-cancel" class="quiet" type="button">Отмена</button></div>
+    <p id="proof-description" class="secondary"></p><div id="proof-content" class="stack"></div>
+    <p id="proof-status" class="secondary" role="status" aria-live="polite"></p>
+  </dialog>
+  <dialog id="operator-dialog" aria-labelledby="operator-title">
+    <div class="dialog-heading"><h2 id="operator-title">Доступ оператора</h2><button id="operator-cancel" class="quiet" type="button">Отмена</button></div>
+    <p>Пароль оператора и подтверждение текущей Киры нужны, чтобы связать доступ к общим настройкам установки.</p>
+    <p class="secondary">Выбранная Кира: <strong id="operator-target-name"></strong></p><code id="operator-target-id"></code>
+    <form id="operator-form" class="stack">
+      <label>Имя оператора<input name="username" autocomplete="username" maxlength="100" required></label>
+      <label>Пароль оператора<input name="password" type="password" autocomplete="current-password" maxlength="256" required></label>
+      <button id="operator-submit" type="submit">Подтвердить привязку</button>
+    </form><p id="operator-status" class="secondary" role="status"></p>
+  </dialog>
+</body>
+</html>

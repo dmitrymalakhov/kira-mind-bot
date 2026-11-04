@@ -37,7 +37,7 @@ export class PublicIdentities {
     private dummyHash = passwordHash(newToken());
     constructor(private db: DataSource, private store: AccountStore, private secrets: PlatformSecrets,
         private sessions: PublicSessions, private config: PublicAccountConfig, private verifier: IdentityVerifier,
-        private proof: AppProofVerifier, private limits: PublicLimits, private now = () => new Date()) {}
+        private proof: AppProofVerifier, private limits: PublicLimits, private now = () => new Date(), private allowAccountCreation = true) {}
 
     async challenge(raw: Record<string, unknown>, auth?: AuthenticatedAccount,risk=false): Promise<AuthChallenge> {
         v.fields(raw, ['version', 'provider', 'purpose', 'deviceId', 'codeChallenge', 'codeChallengeMethod', 'reauthenticationToken'], ['version','provider','purpose','deviceId']);
@@ -188,6 +188,7 @@ export class PublicIdentities {
                         await tx.query('UPDATE kira_public_identities SET revoked_at=NULL,revocation_reason=NULL WHERE id=$1',[linked.id]);
                     }
                     if (!linked) {
+                        if (!this.allowAccountCreation) throw new ApiError(409, 'identity_not_linked', 'Сначала войди существующим способом и добавь этот способ входа в настройках аккаунта.');
                         if (identity.provider === 'password' || !publicAuthConfig(this.config).publicRegistration) throw noCredentials();
                         await tx.query('SELECT pg_advisory_xact_lock(706283005)');
                         const [{ count }] = await tx.query("SELECT count(*) FROM kira_accounts WHERE account_state <> 'deleted'");

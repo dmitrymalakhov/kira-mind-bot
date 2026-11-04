@@ -40,8 +40,8 @@ export class PublicSessions {
         return this.pair(id, access, refresh, expiry);
     }
 
-    async authenticate(access: string): Promise<{ account: Account; session: NativeSession } | undefined> {
-        const [row] = await this.db.query(`SELECT row_to_json(a) AS account,row_to_json(s) AS session
+    async authenticate(access: string, scope: Pick<EntityManager, 'query'> = this.db): Promise<{ account: Account; session: NativeSession } | undefined> {
+        const [row] = await scope.query(`SELECT row_to_json(a) AS account,row_to_json(s) AS session
             FROM kira_public_sessions s JOIN kira_accounts a ON a.id=s.account_id
             JOIN kira_public_identities i ON i.id=s.identity_id
             WHERE s.access_hash=$1 AND s.access_expires_at>$2 AND s.refresh_expires_at>$2 AND s.revoked_at IS NULL

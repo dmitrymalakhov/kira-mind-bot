@@ -21,6 +21,8 @@ export class PublicAccountMaintenance {
             await tx.query('DELETE FROM kira_public_challenges WHERE expires_at<=$1',[history]);
             await tx.query('DELETE FROM kira_public_reauthentication WHERE expires_at<=$1',[now]);
             await tx.query('DELETE FROM kira_public_proof_tokens WHERE expires_at<=$1',[now]);
+            await tx.query('DELETE FROM kira_public_web_flows WHERE expires_at<=$1',[now]);
+            await tx.query('DELETE FROM kira_public_web_browsers WHERE expires_at<=$1',[now]);
             await tx.query('DELETE FROM kira_public_limits WHERE expires_at<=$1',[now]);
             await tx.query(`UPDATE kira_public_deletions d SET inventory_encrypted='' WHERE d.state='completed'
                 AND d.inventory_expires_at<=$1 AND d.inventory_encrypted<>''
