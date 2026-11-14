@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useAccountDraft } from '../accountEdits';
 import {
   Alert,
   Box,
@@ -89,6 +90,7 @@ export function RecurringTasksSection() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditState | null>(null);
+  useAccountDraft(Boolean(editing && (editing.title !== editing.task.title || editing.prompt !== editing.task.prompt || JSON.stringify(editing.schedule) !== JSON.stringify(editing.task.schedule))));
 
   const activeCount = useMemo(() => tasks.filter((task) => task.status === 'active').length, [tasks]);
 

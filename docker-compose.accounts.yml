@@ -27,6 +27,8 @@ services:
       KIRA_PLATFORM_HOST: 0.0.0.0
       KIRA_PLATFORM_PORT: 3300
       KIRA_PLATFORM_DATA_DIR: /app/accounts
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme}
     ports:
       - "127.0.0.1:${ACCOUNTS_PORT:-8330}:3300"
     volumes:

@@ -31,12 +31,12 @@ function resolveLocalPreset(preset, settings) {
   })) };
 }
 
-function registerLocalModelRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile }) {
+function registerLocalModelRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile, getEnvironment = () => process.env }) {
   app.get('/api/local-models', requireAuth, async (_req, res) => {
     const pool = createDbPool();
     try {
       await ensureBotSettingsTable(pool);
-      const vars = { ...process.env, ...readEnvFile() };
+      const vars = { ...getEnvironment(), ...readEnvFile() };
       const settings = await readLocalRoutes(pool, vars);
       let models = [], connectionError = null;
       try { models = await listLocalModels(vars); }
@@ -51,7 +51,7 @@ function registerLocalModelRoutes(app, { requireAuth, createDbPool, ensureBotSet
     catch (error) { return res.status(400).json({ error: error.message }); }
     const pool = createDbPool();
     try {
-      const models = await listLocalModels({ ...process.env, ...readEnvFile() });
+      const models = await listLocalModels({ ...getEnvironment(), ...readEnvFile() });
       const known = new Set(models.flatMap(m => [m.id, ...m.loadedIds]));
       if (Object.values(settings).some(route => !known.has(route.model))) return res.status(400).json({ error: 'Выберите текстовую модель из каталога LM Studio' });
       await ensureBotSettingsTable(pool);

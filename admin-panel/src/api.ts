@@ -24,8 +24,27 @@ import type {
 import type { BudgetMode } from '../../ai/budgetMode';
 import type { ActivityMode, ActivityModeDescriptor, ActivityPreset } from '../../ai/activityModes';
 import type { BackgroundFeature, BackgroundFeatureState } from '../../ai/backgroundFeatures';
+import { globalAdminRoute } from '../accountRoutes';
 
 export const AUTH_REQUIRED_EVENT = 'kira:auth-required';
+export const ACCOUNT_REQUESTS_EVENT = 'kira:account-requests';
+let selectedAdminAccount: string | undefined;
+let accountGeneration = 0, pendingMutations = 0;
+let accountAbort = new AbortController();
+export function activeAdminAccount() { return selectedAdminAccount; }
+export function adminMutationPending() { return pendingMutations > 0; }
+export function setAdminAccount(id: string | undefined, force = false) {
+  if (selectedAdminAccount === id) return;
+  if (pendingMutations && !force) throw new Error('Дождитесь завершения сохранения перед переключением аккаунта.');
+  if (id !== undefined && id !== 'instance' && !/^[0-9a-f-]{36}$/i.test(id)) throw new Error('Некорректный аккаунт.');
+  accountAbort.abort(); accountAbort = new AbortController(); accountGeneration++; selectedAdminAccount = id;
+}
+export function adminResourceUrl(path: string, account = selectedAdminAccount) {
+  return operatorBase + (account && !globalAdminRoute(path) ? `/api/account-scopes/${account}/${path.slice('/api/'.length)}` : path);
+}
+function operationKey() { return Array.from(crypto.getRandomValues(new Uint8Array(16)),byte=>byte.toString(16).padStart(2,'0')).join(''); }
+export function configRevision(config: ConfigResponse) { return Object.values(config).find(entry=>entry.revision)?.revision; }
+export class AdminApiError extends Error { constructor(message: string, readonly status: number) { super(message); } }
 
 export type McpEffect = 'read' | 'external';
 export interface McpServerSettings {
@@ -122,21 +141,35 @@ function refreshAccountSession(): Promise<boolean> {
 
 export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const ownApi = typeof input === 'string' && input.startsWith('/api/');
-  const target = ownApi ? operatorBase + input : input;
+  const scoped = ownApi && !globalAdminRoute(input);
+  const account = selectedAdminAccount, generation = accountGeneration, controller = accountAbort;
+  const target = ownApi ? adminResourceUrl(input,account) : input;
   const method = (init?.method || 'GET').toUpperCase();
   const headers = new Headers(init?.headers);
-  if (ownApi && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+  const mutation = ownApi && !['GET','HEAD','OPTIONS'].includes(method);
+  if(scoped && account)headers.set('x-kira-account-id',account);
+  const signal=scoped ? AbortSignal.any([controller.signal,...(init?.signal?[init.signal]:[])]) : init?.signal;
+  if(mutation){pendingMutations++;window.dispatchEvent(new Event(ACCOUNT_REQUESTS_EVENT));if(!headers.has('idempotency-key'))headers.set('idempotency-key',operationKey());}
+  try {
+  if (mutation) {
     const context = await fetchOperatorAuthContext();
     if (context.csrfEnabled) headers.set('x-csrf-token', context.csrfToken);
   }
-  const options = { ...init, headers };
+  if(scoped && generation!==accountGeneration)throw new DOMException('Аккаунт изменился','AbortError');
+  const options = { ...init, headers,signal };
   let response = await fetch(target, options);
   // A 401 is an authorization refusal before the handler. Keep the original
   // action/body/idempotency key when retrying after canonical account refresh.
   if (response.status === 401 && ownApi && input !== '/api/login' && !String(input).includes('/operator/link-account')
     && !String(input).includes('/operator/unlink-account') && await refreshAccountSession()) response = await fetch(target, options);
   if (response.status === 401) window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
+  if(scoped){
+    if(generation!==accountGeneration)throw new DOMException('Аккаунт изменился','AbortError');
+    if(response.ok && account && response.headers.get('x-kira-account-id')!==account)throw new Error('Сервер не подтвердил область выбранной Киры. Обновите админку.');
+  }
+  if(mutation)await response.clone().arrayBuffer();
   return response;
+  } finally { if(mutation){pendingMutations--;window.dispatchEvent(new Event(ACCOUNT_REQUESTS_EVENT));} }
 }
 
 export async function login(username: string, password: string) {
@@ -151,14 +184,15 @@ export async function logout() { await apiFetch('/api/logout', { method: 'POST' 
 
 export async function fetchConfig(): Promise<ConfigResponse> {
   const r = await apiFetch('/api/config');
-  if (!r.ok) throw new Error('Unauthorized');
-  return r.json();
+  const data=await r.json();
+  if (!r.ok) throw new AdminApiError(data.error || 'Не удалось загрузить настройки',r.status);
+  return data;
 }
 
-export async function saveConfig(data: Record<string, string | null>) {
+export async function saveConfig(data: Record<string, string | null>, revision?: string) {
   const r = await apiFetch('/api/config', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json',...(revision?{'If-Match':revision}:{}) },
     body: JSON.stringify(data),
   });
   return r.json() as Promise<{ success: boolean; message?: string; error?: string }>;
@@ -195,6 +229,42 @@ export async function fetchAccountQuota(): Promise<{ available: boolean; quota?:
   const body = await response.json();
   if (!response.ok) throw new Error(body.error || 'Не удалось загрузить квоты');
   return body;
+}
+
+export interface ManagedAccount {
+  displayName?: string; revision?: string; canDelete?: boolean; canReplaceBot?: boolean;
+  id: string; username: string; accountState: string; runtimeMode: 'telegram' | 'api_only'; status: string;
+  bot: { username: string; connected: boolean } | null; canConnectBot: boolean;
+}
+export interface AccountPairing { pairingUrl: string; expiresAt: string }
+export interface ManagedAccountsResponse { version: 1; available: boolean; capacity?: number; accounts: ManagedAccount[] }
+async function accountsApi(path: string, init?: RequestInit) {
+  const response = await apiFetch('/api/accounts' + path, init);
+  const body = await response.json();
+  if (!response.ok) throw new AdminApiError(body.error || 'Не удалось выполнить действие с аккаунтом',response.status);
+  return body;
+}
+export function fetchManagedAccounts(signal?: AbortSignal): Promise<ManagedAccountsResponse> { return accountsApi('', { signal }); }
+export function createManagedAccount(username: string, password: string, requestKey: string): Promise<{ account: ManagedAccount }> {
+  return accountsApi('', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': requestKey }, body: JSON.stringify({ username, password }) });
+}
+export function connectManagedBot(id: string, botToken: string, requestKey: string): Promise<{ account: ManagedAccount; pairing: AccountPairing | null }> {
+  return accountsApi(`/${encodeURIComponent(id)}/bot`, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': requestKey }, body: JSON.stringify({ botToken }) });
+}
+export function fetchManagedPairing(id: string): Promise<{ account: ManagedAccount; pairing: AccountPairing | null }> {
+  return accountsApi(`/${encodeURIComponent(id)}/pairing`);
+}
+function managedMutation(id:string,method:string,body:object,requestKey:string,suffix='') {
+  return accountsApi(`/${encodeURIComponent(id)}${suffix}`,{method,headers:{'Content-Type':'application/json','Idempotency-Key':requestKey},body:JSON.stringify(body)});
+}
+export function renameManagedAccount(id:string,displayName:string,revision:string,requestKey:string):Promise<{account:ManagedAccount}> {
+  return managedMutation(id,'PATCH',{displayName,revision},requestKey);
+}
+export function deleteManagedAccount(id:string,confirmation:string,revision:string,requestKey:string):Promise<{status:'deleting';deletionId:string;requestedAt:string}> {
+  return managedMutation(id,'DELETE',{confirmation,revision},requestKey);
+}
+export function replaceManagedBot(id:string,botToken:string,confirmation:string,revision:string,requestKey:string):Promise<{account:ManagedAccount}> {
+  return managedMutation(id,'POST',{botToken,confirmation,revision},requestKey,'/bot/replacement');
 }
 
 export async function fetchBackgroundFeatures(): Promise<{ mode: BudgetMode; features: BackgroundFeatureState[]; activityMode: ActivityMode; activityModes: ActivityModeDescriptor[] }> {
@@ -348,7 +418,7 @@ export async function fetchHealthLogs(query: HealthLogQuery = {}): Promise<Healt
 export function buildHealthExportUrl(format: HealthExportFormat, query: HealthLogQuery = {}) {
   const params = toSearchParams({ ...query, offset: undefined });
   params.set('format', format);
-  return `/api/health/export?${params}`;
+  return adminResourceUrl(`/api/health/export?${params}`);
 }
 
 export async function fetchMemories(query: MemoryQuery = {}, signal?: AbortSignal): Promise<MemoryResponse> {

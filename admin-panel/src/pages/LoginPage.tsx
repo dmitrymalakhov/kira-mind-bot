@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Box, TextField, Button, Typography, Alert, CircularProgress, Stack } from '@mui/material';
 import { BrandMark } from '../components/BrandMark';
-import { login, fetchConfig, fetchOperatorAuthContext, loginWithAccount } from '../api';
-import type { ConfigResponse } from '../types';
-interface Props { onLogin: (config: ConfigResponse) => void }
+import { login, fetchOperatorAuthContext, loginWithAccount } from '../api';
+interface Props { onLogin: () => void }
 export function LoginPage({ onLogin }: Props) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -14,14 +13,14 @@ export function LoginPage({ onLogin }: Props) {
   const handleAccount = async () => {
     if (!accountLogin.authorized) { window.location.assign('/account/?destination=operator'); return; }
     setLoading(true); setError('');
-    try { const result = await loginWithAccount(); if (result.success) onLogin(await fetchConfig()); else setError(result.error || 'Не удалось подтвердить доступ оператора'); }
+    try { const result = await loginWithAccount(); if (result.success) onLogin(); else setError(result.error || 'Не удалось подтвердить доступ оператора'); }
     catch { setError('Ошибка соединения'); } finally { setLoading(false); }
   };
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault(); setLoading(true); setError('');
     try {
       const result = await login(username, password);
-      if (result.success) onLogin(await fetchConfig()); else setError(result.error || 'Неверный логин или пароль');
+      if (result.success) onLogin(); else setError(result.error || 'Неверный логин или пароль');
     } catch { setError('Ошибка соединения'); } finally { setLoading(false); }
   };
   return <Box sx={{ minHeight: '100dvh', display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' } }}>

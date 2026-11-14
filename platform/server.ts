@@ -13,6 +13,8 @@ import { AccountRuntimes, TenantCredentials } from './runtime';
 import { TelegramGateway } from './telegram';
 import type { PublicAccountsHttp } from './publicAccounts/http';
 import { CaptchaRequiredError } from './publicAccounts/proof';
+import { BotConnections } from './botConnection';
+import type { OperatorAccountsHttp } from './operatorAccounts';
 
 export interface PlatformOptions {
     store: AccountStore;
@@ -21,6 +23,8 @@ export interface PlatformOptions {
     telegram: TelegramGateway;
     reservedBotIds?: string[];
     publicAccounts?: PublicAccountsHttp;
+    botConnections?: BotConnections;
+    operatorAccounts?: OperatorAccountsHttp;
 }
 
 function publicAccount(account: Account, runtimes: AccountRuntimes) {
@@ -81,6 +85,7 @@ async function proxy(req: http.IncomingMessage, res: http.ServerResponse, endpoi
 export function createPlatformServer(options: PlatformOptions): http.Server {
     const { store, secrets, runtimes, telegram } = options;
     const limits = new RequestLimits();
+    const bots = options.botConnections || new BotConnections(store, secrets, telegram, options.reservedBotIds);
     const connecting = new Set<string>();
     let authenticating = 0;
     // A missing username pays the same password derivation cost as an existing one.
@@ -94,6 +99,10 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
         try {
             const url = new URL(req.url || '/', 'http://localhost');
             let route = url.pathname;
+            if (route === '/internal/operator/accounts' && options.operatorAccounts) {
+                limits.take(`operator-accounts:${req.socket.remoteAddress}`, 60);
+                if (await options.operatorAccounts.route(req, route, json)) return;
+            }
             if (route === '/api/v1/accounts/register') throw new ApiError(410, 'registration_closed', 'Регистрация логином и паролем закрыта.');
             if (options.publicAccounts && await options.publicAccounts.publicRoute(req, res, route, json)) return;
             const authRoute = route === '/api/v1/accounts/register' || route === '/api/v1/accounts/login';
@@ -168,21 +177,9 @@ export function createPlatformServer(options: PlatformOptions): http.Server {
                 } finally { connecting.delete(account.id); }
             }
             if (route === '/api/v1/account/bot' && req.method === 'PUT') {
-                if(account.runtime_mode==='api_only')throw new ApiError(409,'runtime_mode_fixed','Этот аккаунт работает без личного Telegram-бота.');
-                if (account.owner_id) throw new ApiError(409, 'bot_already_connected', 'Бот уже подключён.');
-                if (connecting.has(account.id)) throw new ApiError(409, 'connection_busy', 'Подключение уже выполняется.');
-                connecting.add(account.id);
-                try {
-                    const body = await readBody(req);
-                    fields(body, ['botToken']);
-                    const token = body.botToken as string;
-                    const bot = await telegram.verify(token);
-                    if (options.reservedBotIds?.includes(String(bot.id))) throw new ApiError(409, 'bot_unavailable', 'Этот бот зарезервирован администратором.');
-                    const pairingCode = newToken();
-                    await store.connect(account.id, String(bot.id), bot.username,
-                        secrets.seal({ botToken: token }, account.id), digest(pairingCode));
-                    return json(202, { status: 'awaiting_telegram', pairingUrl: `https://t.me/${bot.username}?start=${pairingCode}`, expiresIn: 900 });
-                } finally { connecting.delete(account.id); }
+                const body = await readBody(req);
+                fields(body, ['botToken']);
+                return json(202, await bots.connect(account.id, body.botToken as string));
             }
             if (route === '/api/v1/account/telegram' && req.method === 'PUT') {
                 if (!account.owner_id || !account.secrets) throw new ApiError(409, 'telegram_pairing_required', 'Сначала подключи бота.');

@@ -18,6 +18,8 @@ test('delete blocks access immediately, retries a crash after an effect, revokes
         const directory=await fs.mkdtemp(path.join(process.env.KIRA_PUBLIC_TEST_SCRATCH || os.tmpdir(),'kira-public-delete-'));
         try{
             const a=await store.create('synthetic_delete_a','disabled'),b=await store.create('synthetic_delete_b','disabled');
+            await db.query('INSERT INTO kira_operator_account_requests(key_hash,fingerprint,account_id) VALUES($1,$2,$3),($4,$5,$6)',
+                ['synthetic-deleted-create-key','synthetic-credential-fingerprint',a.id,'synthetic-surviving-create-key','synthetic-surviving-fingerprint',b.id]);
             for(const row of [a,b])await db.query("INSERT INTO kira_public_identities(id,account_id,provider,subject) VALUES($1,$1,'apple',$2)",[row.id,row.id]);
             await db.query('UPDATE kira_public_identities SET credential_encrypted=$2 WHERE id=$1',[a.id,publicTestSecrets.seal({token:'synthetic-apple-revoke-token',clientId:'org.example.synthetic'},`identity:${a.id}`)]);
             const runtime=(id:string)=>path.join(directory,tenantName(id));
@@ -42,6 +44,9 @@ test('delete blocks access immediately, retries a crash after an effect, revokes
             await deletion.drain();assert.equal((await db.query('SELECT state FROM kira_public_deletions WHERE account_id=$1',[a.id]))[0].state,'pending');
             await db.query('UPDATE kira_public_deletions SET next_attempt_at=now() WHERE account_id=$1',[a.id]);await make().drain();
             assert.equal(await store.byId(a.id),undefined);assert.ok(await store.byId(b.id));assert.equal(revoke,1);assert.equal(stops,1);
+            assert.equal((await db.query('SELECT fingerprint FROM kira_operator_account_requests WHERE account_id=$1',[a.id]))[0].fingerprint,'deleted');
+            assert.equal((await db.query('SELECT fingerprint FROM kira_operator_account_requests WHERE account_id=$1',[b.id]))[0].fingerprint,'synthetic-surviving-fingerprint');
+            await assert.rejects(()=>store.createManaged('synthetic_deleted_retry','unused','synthetic-deleted-create-key','synthetic-credential-fingerprint'),(e:any)=>e.code==='account_deleted');
             assert.deepEqual([...vectors],[b.id]);assert.deepEqual([...databases],[b.id]);assert.equal(await fs.readFile(path.join(runtime(b.id),'owned.txt'),'utf8'),b.id);
             const [finished]=await db.query('SELECT * FROM kira_public_deletions WHERE account_id=$1',[a.id]);assert.equal(finished.state,'completed');
             assert.deepEqual(publicTestSecrets.open<any>(finished.inventory_encrypted,`deletion:${finished.id}:${a.id}`).providerTokens,[]);

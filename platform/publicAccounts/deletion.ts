@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { DataSource } from 'typeorm';
+import type { DataSource, EntityManager } from 'typeorm';
 import { ApiError } from '../../api/contracts';
 import { PlatformSecrets } from '../crypto';
 import type { AccountStore } from '../store';
@@ -12,6 +12,8 @@ import { revokeSession } from './sessions';
 import type { IdentityVerifier } from './providers';
 import { DeletionLedger } from './deletionLedger';
 import * as v from './validation';
+import { checkAccountRevision } from '../accountMetadata';
+import type { Account } from '../store';
 
 export interface OwnedDeletionInventory {
     version:1;accountId:string;database:string;imported:boolean;memoryNamespace:string;memoryBotId:string;
@@ -29,6 +31,46 @@ export class AccountDeletion {
     constructor(private db:DataSource,private store:AccountStore,private secrets:PlatformSecrets,private runtimes:AccountRuntimes,
         private verifier:IdentityVerifier,private ledger:DeletionLedger,private eraser:AccountEraser,private runtimeDirectory:(accountId:string)=>string){}
 
+    /** Only called after the independent operator authorization at the private HTTP boundary. */
+    async requestByOperator(accountId:string,confirmation:string,revision:string):Promise<DeletionReply>{
+        const result=await this.db.transaction(async tx=>{
+            const [account]=await tx.query('SELECT * FROM kira_accounts WHERE id=$1 FOR UPDATE',[accountId]);
+            const [old]=await tx.query('SELECT * FROM kira_public_deletions WHERE account_id=$1',[accountId]);
+            if(old)return {version:1 as const,status:'deleting' as const,deletionId:old.id,requestedAt:new Date(old.requested_at).toISOString()};
+            if(!account || account.account_state==='deleted')throw new ApiError(404,'account_not_found','Аккаунт недоступен.');
+            checkAccountRevision(account,revision);
+            if(confirmation!==account.username)throw new ApiError(400,'confirmation_required','Введи логин выбранного аккаунта.');
+            const inventory=await this.inventory(tx,account);
+            // Fail before blocking an imported account if its exclusive stores are unverified.
+            try { await this.eraser.validate(inventory); }
+            catch { throw new ApiError(409,'deletion_not_ready','Не подтверждены отдельные хранилища аккаунта. Проверь настройки удаления на сервере.'); }
+            return this.enqueue(tx,account,inventory);
+        });
+        await this.ledger.record({version:1,accountId,deletionId:result.deletionId,blockedAt:result.requestedAt});
+        return result;
+    }
+
+    private async inventory(tx:EntityManager,a:Account):Promise<OwnedDeletionInventory>{
+        const credentials=a.secrets?this.secrets.open<TenantCredentials>(a.secrets,a.id):undefined,name=tenantName(a.id);
+        const providerTokens:OwnedDeletionInventory['providerTokens']=[];
+        for(const identity of await tx.query("SELECT * FROM kira_public_identities WHERE account_id=$1 AND provider='apple' AND credential_encrypted IS NOT NULL",[a.id])){
+            providerTokens.push({provider:'apple',...this.secrets.open<{token:string;clientId:string}>(identity.credential_encrypted,`identity:${identity.id}`)});
+        }
+        return {version:1,accountId:a.id,database:credentials?.existingStorage?.database || name,imported:Boolean(credentials?.existingStorage),
+            memoryNamespace:credentials?.existingStorage?.memoryNamespace || name,memoryBotId:credentials?.existingStorage?.memoryBotId || name,
+            runtimeDirectory:this.runtimeDirectory(a.id),providerTokens};
+    }
+    private async enqueue(tx:EntityManager,a:Account,inventory:OwnedDeletionInventory):Promise<DeletionReply>{
+        const id=randomUUID(),requestedAt=new Date().toISOString();
+        await tx.query("UPDATE kira_accounts SET account_state='deleting',autonomous_ai_enabled=false,pairing_hash=NULL,pairing_expires=NULL WHERE id=$1",[a.id]);
+        await tx.query('INSERT INTO kira_public_deletion_ledger(account_id,deletion_id,blocked_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',[a.id,id,requestedAt]);
+        for(const s of await tx.query('SELECT id FROM kira_public_sessions WHERE account_id=$1',[a.id]))await revokeSession(tx,s.id);
+        await tx.query('DELETE FROM kira_account_sessions WHERE account_id=$1',[a.id]);
+        await tx.query('DELETE FROM kira_public_push_devices WHERE account_id=$1',[a.id]);
+        await tx.query('INSERT INTO kira_public_deletions(id,account_id,inventory_encrypted,requested_at) VALUES($1,$2,$3,$4)',[id,a.id,this.secrets.seal(inventory,`deletion:${id}:${a.id}`),requestedAt]);
+        return {version:1,status:'deleting',deletionId:id,requestedAt};
+    }
+
     async request(auth:AuthenticatedAccount,raw:Record<string,unknown>):Promise<DeletionReply>{
         v.fields(raw,['version','confirmation','reauthenticationToken'],['version','confirmation','reauthenticationToken']);v.version(raw);
         if(raw.confirmation!=='delete_my_account')v.invalid();v.text(raw.reauthenticationToken,32,128);
@@ -40,24 +82,7 @@ export class AccountDeletion {
             const [session]=await tx.query(`SELECT id FROM kira_public_sessions WHERE id=$1 AND account_id=$2 AND revoked_at IS NULL AND access_expires_at>now()`,[auth.session.id,a.id]);
             if(!session)throw new ApiError(401,'unauthorized','Подтверди вход заново.');
             await consumeReauthentication(tx,a.id,auth.session.id,String(raw.reauthenticationToken),new Date());
-            const credentials=a.secrets?this.secrets.open<TenantCredentials>(a.secrets,a.id):undefined;
-            const name=tenantName(a.id),id=randomUUID(),requestedAt=new Date().toISOString();
-            const providerTokens:OwnedDeletionInventory['providerTokens']=[];
-            for(const identity of await tx.query("SELECT * FROM kira_public_identities WHERE account_id=$1 AND provider='apple' AND credential_encrypted IS NOT NULL",[a.id])){
-                const credential=this.secrets.open<{token:string;clientId:string}>(identity.credential_encrypted,`identity:${identity.id}`);
-                providerTokens.push({provider:'apple',...credential});
-            }
-            const inventory:OwnedDeletionInventory={version:1,accountId:a.id,database:credentials?.existingStorage?.database || name,
-                imported:Boolean(credentials?.existingStorage),memoryNamespace:credentials?.existingStorage?.memoryNamespace || name,
-                memoryBotId:credentials?.existingStorage?.memoryBotId || name,runtimeDirectory:this.runtimeDirectory(a.id),providerTokens};
-            await tx.query("UPDATE kira_accounts SET account_state='deleting',autonomous_ai_enabled=false,pairing_hash=NULL,pairing_expires=NULL WHERE id=$1",[a.id]);
-            await tx.query('INSERT INTO kira_public_deletion_ledger(account_id,deletion_id,blocked_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',[a.id,id,requestedAt]);
-            for(const s of await tx.query('SELECT id FROM kira_public_sessions WHERE account_id=$1',[a.id]))await revokeSession(tx,s.id);
-            await tx.query('DELETE FROM kira_account_sessions WHERE account_id=$1',[a.id]);
-            await tx.query('DELETE FROM kira_public_push_devices WHERE account_id=$1',[a.id]);
-            await tx.query(`INSERT INTO kira_public_deletions(id,account_id,inventory_encrypted,requested_at) VALUES($1,$2,$3,$4)`,
-                [id,a.id,this.secrets.seal(inventory,`deletion:${id}:${a.id}`),requestedAt]);
-            return {version:1 as const,status:'deleting' as const,deletionId:id,requestedAt};
+            return this.enqueue(tx,a,await this.inventory(tx,a));
         });
         // Successful acceptance includes a durable external tombstone before destructive cleanup starts.
         await this.ledger.record({version:1,accountId:auth.account.id,deletionId:result.deletionId,blockedAt:result.requestedAt});
@@ -118,6 +143,7 @@ export class AccountDeletion {
             await tx.query(`DELETE FROM kira_public_app_keys k WHERE device_id IN (SELECT device_id FROM kira_public_sessions WHERE account_id=$1)
                 AND NOT EXISTS(SELECT 1 FROM kira_public_sessions s WHERE s.device_id=k.device_id AND s.account_id<>$1 AND s.revoked_at IS NULL AND s.refresh_expires_at>now())`,[accountId]);
             await tx.query('DELETE FROM kira_public_sessions WHERE account_id=$1',[accountId]);
+            await tx.query("UPDATE kira_operator_account_requests SET fingerprint='deleted' WHERE account_id=$1",[accountId]);
             await tx.query('DELETE FROM kira_accounts WHERE id=$1',[accountId]);
         });
     }

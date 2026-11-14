@@ -18,7 +18,8 @@ import { getForwardedMessageInfo } from "./utils/forwardedMessage";
 import { resolveRuntimeIdentity, isApiOnlyRuntime } from './utils/runtimeIdentity';
 import { registerProductAnalytics } from './services/productAnalytics';
 import { API_ONLY_BOT_INFO, installApiOnlyTransport } from './services/apiOnlyTransport';
-import { withAccountAiOperation } from './ai/accountPolicy';
+import { withAccountAiOperation, accountAuthority } from './ai/accountPolicy';
+import { registerAccountConsentHandlers } from './handlers/accountConsent';
 import { registerTelegramWidgetBridge } from './generative-ui/telegram';
 import { registerTelegramChatMigration } from './services/telegramChatMigration';
 
@@ -322,5 +323,8 @@ function setupBot(bot: Bot<BotContext>, config: any) {
   });
 
   registerProductAnalytics(bot);
+  if (process.env.KIRA_TENANT_ID && !isApiOnlyRuntime()) registerAccountConsentHandlers(bot, {
+    ownerId: config.allowedUserId, key: process.env.KIRA_API_TOKEN || '', authority: accountAuthority,
+  });
   registerCallback(bot);
 }

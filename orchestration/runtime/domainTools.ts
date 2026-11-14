@@ -29,6 +29,7 @@ import { listSchema, listPage } from './listing';
 import type { ProcessingResult } from '../../orchestrator';
 import type { ToolContext, ToolDefinition, ToolOutput } from './types';
 import { workoutTools } from './workoutTools';
+import { telegramTools } from './telegramTools';
 
 export function processingOutput(result: ProcessingResult, awaitingInput = false): ToolOutput {
     const waiting = Boolean(result.keyboard || result.messageDraft || awaitingInput);
@@ -44,6 +45,7 @@ function readTool(name: string, skill: string, description: string, schema: Tool
 export function domainTools(): ToolDefinition[] {
     return [
         ...workoutTools(),
+        ...telegramTools(),
         readTool('web.search', 'web-research', 'Найти актуальную информацию и прямые источники. Ошибка поиска не является доказательством отсутствия события.', objectSchema({ query: textSchema('Поисковый запрос, покрывающий нужные аспекты') }), async (args, context) => {
             const result = await performWebSearch(String(args.query), { verifyAvailability: context.classification.details.externalVerification === 'availability',
                 context: JSON.stringify({ request: context.message, history: context.messageHistory.slice(-6).map(({ role, content }) => ({ role, content: content.slice(0, 1400) })), behavior: context.classification.details.behaviorContext }) });

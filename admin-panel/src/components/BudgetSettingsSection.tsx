@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useAccountDraft } from '../accountEdits';
 import {
   Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Card,
   CardContent, CircularProgress, IconButton, Radio, Stack, Switch, Tooltip, Typography,
@@ -33,6 +34,7 @@ export function BudgetSettingsSection({ onToast }: Props) {
   const [draft, setDraft] = useState<ActivityMode | null>(null);
   const [catalog, setCatalog] = useState<ActivityModeDescriptor[]>([]);
   const [advanced, setAdvanced] = useState(false);
+  useAccountDraft(Boolean(draft && activity && draft !== activity));
   function accept(result: Awaited<ReturnType<typeof fetchBackgroundFeatures>>) {
     setMode(result.mode); setFeatures(result.features); setActivity(result.activityMode);
     setDraft(result.activityMode); setCatalog(result.activityModes);

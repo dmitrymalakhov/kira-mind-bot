@@ -8,19 +8,31 @@ import type { PublicLimits } from './limits';
 
 const GET = new Set(['auth/context','config','ai-preset','chats','recurring-tasks','memory','memory/graph','health/logs','health/export',
     'status','monitoring/health','ai-usage/summary','ai-usage/traces','personality','local-models','mcp/servers','image-recognition',
-    'image-generation','image-generation/connection','image-generation/reference','budget-mode','background-features','account-quota','product-analytics','model-preferences']);
+    'image-generation','image-generation/connection','image-generation/reference','budget-mode','background-features','account-quota','accounts','product-analytics','model-preferences']);
 const POST = new Set(['login','logout','config','ai-preset','personality','local-models','image-recognition','image-generation',
-    'image-generation/reference','budget-mode','background-features','product-analytics/review','memory','operator/link-account','operator/unlink-account','operator/login-account']);
+    'image-generation/reference','budget-mode','background-features','accounts','product-analytics/review','memory','operator/link-account','operator/unlink-account','operator/login-account']);
 const PUT = new Set(['model-preferences','product-analytics/targets']);
 const SEGMENT = '[A-Za-z0-9_.-]{1,128}';
+const ACCOUNT_ID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
 
 /** Fixed method/path inventory. Neither decoded nor rewritten internal paths are proxied. */
 export function operatorRouteAllowed(method: string, path: string): boolean {
+    if (path.includes('%') || path.includes('\\') || path.includes('//') || path.split('/').some(part => part === '.' || part === '..')) return false;
+    const scoped=new RegExp(`^/api/account-scopes/(instance|${ACCOUNT_ID})/(.+)$`).exec(path);
+    if(scoped){
+        const nested='/api/'+scoped[2];
+        if(/^\/api\/(?:account-scopes|accounts|auth|login|logout|operator)(?:\/|$)/.test(nested))return false;
+        return operatorRouteAllowed(method,nested);
+    }
     if (method === 'GET' && (path === '/' || /^\/(assets\/[A-Za-z0-9_.-]+\.(js|css)|brand\/[A-Za-z0-9_.-]+\.(png|svg|webp|ico)|site\.webmanifest)$/.test(path))) return true;
     if (!path.startsWith('/api/')) return false;
     const api = path.slice(5);
     if (method === 'GET' && GET.has(api) || method === 'POST' && POST.has(api) || method === 'PUT' && PUT.has(api)) return true;
     if (method === 'GET' && new RegExp(`^memory/${SEGMENT}/${SEGMENT}$`).test(api)) return true;
+    if (method === 'GET' && new RegExp(`^accounts/${ACCOUNT_ID}/pairing$`).test(api)) return true;
+    if (method === 'PUT' && new RegExp(`^accounts/${ACCOUNT_ID}/bot$`).test(api)) return true;
+    if ((method==='PATCH'||method==='DELETE')&&new RegExp(`^accounts/${ACCOUNT_ID}$`).test(api))return true;
+    if(method==='POST'&&new RegExp(`^accounts/${ACCOUNT_ID}/bot/replacement$`).test(api))return true;
     if (method === 'POST' && new RegExp(`^(restart/${SEGMENT}|recurring-tasks/${SEGMENT}/run|mcp/servers/${SEGMENT}(/check)?)$`).test(api)) return true;
     if (method === 'PUT' && new RegExp(`^mcp/servers/${SEGMENT}$`).test(api)) return true;
     if (method === 'PATCH' && new RegExp(`^(chats/-?[0-9]{1,20}/(forbidden-topics|allowed-domains|public-mode)|recurring-tasks/${SEGMENT}|memory/${SEGMENT}/${SEGMENT})$`).test(api)) return true;
@@ -53,7 +65,7 @@ export async function proxyOperator(req: IncomingMessage, res: ServerResponse, c
     if (length !== undefined && (!/^[0-9]+$/.test(length) || Number(length) > maxBytes)) throw new ApiError(413, 'body_too_large', 'Слишком большой запрос.');
     if (req.method === 'GET' && (Number(length || 0) !== 0 || req.headers['transfer-encoding'])) throw new ApiError(400, 'invalid_body', 'Некорректный запрос.');
     const headers: http.OutgoingHttpHeaders = {};
-    for (const name of ['cookie','content-type','content-length','accept','origin','x-csrf-token','idempotency-key']) {
+    for (const name of ['cookie','content-type','content-length','accept','origin','x-csrf-token','idempotency-key','x-kira-account-id','if-match']) {
         if (typeof req.headers[name] === 'string') headers[name] = req.headers[name];
     }
     headers.host = target.host;
@@ -67,7 +79,7 @@ export async function proxyOperator(req: IncomingMessage, res: ServerResponse, c
         let received = 0;
         const upstream = http.request({ hostname: target.hostname, port: target.port || 80, path: path + query, method: req.method, headers }, response => {
             res.statusCode = response.statusCode || 502;
-            for (const name of ['content-type','set-cookie','content-disposition','vary','content-security-policy','referrer-policy','x-content-type-options']) {
+            for (const name of ['content-type','set-cookie','content-disposition','vary','content-security-policy','referrer-policy','x-content-type-options','x-kira-account-id','x-kira-settings-revision']) {
                 if (response.headers[name]) res.setHeader(name, response.headers[name]!);
             }
             res.setHeader('Cache-Control', 'no-store');

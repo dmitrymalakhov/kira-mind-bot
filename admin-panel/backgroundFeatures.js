@@ -19,7 +19,7 @@ function resolvePreferences(rows, vars) {
   }));
 }
 
-function registerBackgroundFeatureRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile }) {
+function registerBackgroundFeatureRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile, getEnvironment = () => process.env }) {
   app.get('/api/background-features', requireAuth, async (_req, res) => {
     const pool = createDbPool();
     try {
@@ -27,7 +27,7 @@ function registerBackgroundFeatureRoutes(app, { requireAuth, createDbPool, ensur
       const keys = [...Object.keys(registry).map(settingKey), 'KiraMindBot:reflection_mode_enabled', 'BUDGET_MODE'];
       const { rows } = await pool.query('SELECT key, value FROM bot_settings WHERE key = ANY($1::text[])', [keys]);
       const mode = resolveBudgetMode(rows.find(row => row.key === 'BUDGET_MODE')?.value);
-      const vars = { ...process.env, ...readEnvFile() };
+      const vars = { ...getEnvironment(), ...readEnvFile() };
       const preferences = resolvePreferences(rows, vars);
       res.json({ mode, activityMode: inferActivityMode(preferences), activityModes: activityModes(),
         features: buildFeatureStates(preferences, mode, Boolean(readTelegramUserCredentials(vars))) });
@@ -60,7 +60,7 @@ function registerBackgroundFeatureRoutes(app, { requireAuth, createDbPool, ensur
     try {
       await ensureBotSettingsTable(pool);
       const previousRows = await pool.query('SELECT key,value FROM bot_settings WHERE key=$1', [settingKey(feature)]);
-      const previous = resolvePreferences(previousRows.rows, { ...process.env, ...readEnvFile() })[feature];
+      const previous = resolvePreferences(previousRows.rows, { ...getEnvironment(), ...readEnvFile() })[feature];
       await pool.query('INSERT INTO bot_settings (key, value, "updatedAt") VALUES ($1, $2, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = now()', [settingKey(feature), String(enabled)]);
       if (previous !== enabled) {
         try {

@@ -4,10 +4,12 @@ import { DataSource, QueryRunner } from 'typeorm';
 import { ApiError } from '../api/contracts';
 import { initializePublicAccounts } from './publicAccounts/schema';
 import type { AccountState } from './publicAccounts/contracts';
+import { accountDisplayName, checkAccountRevision } from './accountMetadata';
 
 export interface Account {
     id: string;
     username: string;
+    display_name?: string | null;
     password_hash: string;
     bot_id: string | null;
     bot_username: string | null;
@@ -35,6 +37,7 @@ export interface AccountStore {
     offset(id: string, hash: string, offset: number): Promise<void>;
     configured(): Promise<Account[]>;
     updateSecrets(id: string, previous: string, encrypted: string): Promise<void>;
+    replaceBot?(account: Account, botId: string, username: string, encrypted: string): Promise<void>;
 }
 
 export function tenantName(id: string): string {
@@ -94,6 +97,62 @@ export class PostgresAccountStore implements AccountStore {
         }
     }
     async byUsername(username: string) { return (await this.db.query('SELECT * FROM kira_accounts WHERE username=$1', [username]))[0]; }
+    async listManaged(): Promise<Account[]> {
+        return this.db.query(`SELECT a.* FROM kira_accounts a WHERE a.account_state NOT IN ('deleting','deleted')
+            AND NOT EXISTS(SELECT 1 FROM kira_public_deletion_ledger l WHERE l.account_id=a.id) ORDER BY a.created_at,a.id LIMIT 1000`);
+    }
+    async renameManaged(id: string, displayName: string, revision: string): Promise<Account> {
+        const name=accountDisplayName(displayName);
+        return this.db.transaction(async tx=>{
+            const [account]=await tx.query(`SELECT * FROM kira_accounts WHERE id=$1 AND account_state NOT IN ('deleting','deleted')
+                AND NOT EXISTS(SELECT 1 FROM kira_public_deletion_ledger l WHERE l.account_id=kira_accounts.id) FOR UPDATE`,[id]);
+            if(!account)throw new ApiError(404,'account_not_found','Аккаунт недоступен.');
+            checkAccountRevision(account,revision);
+            return (await tx.query('UPDATE kira_accounts SET display_name=$2 WHERE id=$1 RETURNING *',[id,name]))[0];
+        });
+    }
+    async replaceBot(account: Account, botId: string, username: string, encrypted: string): Promise<void> {
+        try {
+            const [rows]=await this.db.query(`UPDATE kira_accounts SET bot_id=$2,bot_username=$3,secrets=$4,
+                pairing_hash=NULL,pairing_expires=NULL,update_offset=CASE WHEN bot_id=$2 THEN update_offset ELSE 0 END
+                WHERE id=$1 AND secrets=$5 AND owner_id=$6 AND bot_id=$7 AND display_name IS NOT DISTINCT FROM $8
+                AND runtime_mode='telegram' AND account_state='active'
+                AND NOT EXISTS(SELECT 1 FROM kira_public_deletion_ledger l WHERE l.account_id=kira_accounts.id) RETURNING id`,
+                [account.id,botId,username,encrypted,account.secrets,account.owner_id,account.bot_id,account.display_name || null]);
+            if(!rows.length)throw new ApiError(409,'account_changed','Аккаунт изменился. Обнови список.');
+        } catch(error) {
+            if((error as {code?:string}).code==='23505')throw new ApiError(409,'bot_unavailable','Этот бот уже подключён к другому аккаунту.');
+            throw error;
+        }
+    }
+    /** Trusted operator creation only. Account, password identity and retry binding commit together. */
+    async createManaged(username: string, hash: string, keyHash: string, fingerprint: string): Promise<Account> {
+        try {
+            return await this.db.transaction(async tx => {
+                await tx.query('SELECT pg_advisory_xact_lock(706283005)');
+                const [previous] = await tx.query('SELECT * FROM kira_operator_account_requests WHERE key_hash=$1', [keyHash]);
+                if (previous) {
+                    if (previous.fingerprint === 'deleted') throw new ApiError(409, 'account_deleted', 'Созданный аккаунт уже удалён.');
+                    if (previous.fingerprint !== fingerprint) throw new ApiError(409, 'idempotency_conflict', 'Этот ключ уже использован для другого запроса.');
+                    const [account] = await tx.query(`SELECT * FROM kira_accounts WHERE id=$1 AND account_state NOT IN ('deleting','deleted')
+                        AND NOT EXISTS(SELECT 1 FROM kira_public_deletion_ledger l WHERE l.account_id=kira_accounts.id)`, [previous.account_id]);
+                    if (!account) throw new ApiError(409, 'account_deleted', 'Созданный аккаунт уже удалён.');
+                    return account;
+                }
+                const [{ count }] = await tx.query('SELECT count(*) FROM kira_accounts');
+                if (Number(count) >= this.maxAccounts) throw new ApiError(503, 'capacity_reached', 'Достигнут лимит аккаунтов этого инстанса.');
+                const id = randomUUID();
+                const [account] = await tx.query(`INSERT INTO kira_accounts(id,username,password_hash,runtime_mode,account_state,public_origin,autonomous_ai_enabled)
+                    VALUES($1,$2,$3,'telegram','active',true,false) RETURNING *`, [id, username, hash]);
+                await tx.query(`INSERT INTO kira_public_identities(id,account_id,provider,subject) VALUES($1,$1,'password',$2)`, [id, id]);
+                await tx.query('INSERT INTO kira_operator_account_requests(key_hash,fingerprint,account_id) VALUES($1,$2,$3)', [keyHash, fingerprint, id]);
+                return account;
+            });
+        } catch (error) {
+            if ((error as { code?: string }).code === '23505') throw new ApiError(409, 'username_unavailable', 'Логин занят.');
+            throw error;
+        }
+    }
     async byId(id: string) { return (await this.db.query('SELECT * FROM kira_accounts WHERE id=$1', [id]))[0]; }
     async session(hash: string, accountId: string, method?: 'password') {
         await this.db.query('DELETE FROM kira_account_sessions WHERE expires_at <= now()');
@@ -128,7 +187,9 @@ export class PostgresAccountStore implements AccountStore {
         try {
             const rows = await this.db.query(`UPDATE kira_accounts SET bot_id=$2, bot_username=$3, secrets=$4,
                 pairing_hash=$5, pairing_expires=now()+interval '15 minutes', update_offset=0
-                WHERE id=$1 AND owner_id IS NULL RETURNING id`, [id, botId, username, encrypted, pairingHash]);
+                WHERE id=$1 AND owner_id IS NULL AND runtime_mode='telegram' AND account_state='active'
+                AND NOT EXISTS(SELECT 1 FROM kira_public_deletion_ledger l WHERE l.account_id=kira_accounts.id)
+                RETURNING id`, [id, botId, username, encrypted, pairingHash]);
             if (!rows[0]?.length) throw new ApiError(409, 'bot_already_connected', 'Бот уже подключён.');
         } catch (error) {
             if ((error as { code?: string }).code === '23505') throw new ApiError(409, 'bot_unavailable', 'Этот бот уже подключён к аккаунту.');
@@ -137,7 +198,8 @@ export class PostgresAccountStore implements AccountStore {
     }
     async pair(id: string, hash: string, ownerId: number, offset: number): Promise<boolean> {
         const [rows] = await this.db.query(`UPDATE kira_accounts SET owner_id=$3, pairing_hash=NULL, pairing_expires=NULL, update_offset=$4
-            WHERE id=$1 AND pairing_hash=$2 AND pairing_expires>now() AND owner_id IS NULL RETURNING id`, [id, hash, String(ownerId), offset]);
+            WHERE id=$1 AND pairing_hash=$2 AND pairing_expires>now() AND owner_id IS NULL AND runtime_mode='telegram' AND account_state='active'
+            AND NOT EXISTS(SELECT 1 FROM kira_public_deletion_ledger l WHERE l.account_id=kira_accounts.id) RETURNING id`, [id, hash, String(ownerId), offset]);
         return rows.length === 1;
     }
     async offset(id: string, hash: string, offset: number) {
@@ -149,7 +211,8 @@ export class PostgresAccountStore implements AccountStore {
         return this.lock.query("SELECT * FROM kira_accounts WHERE secrets IS NOT NULL AND account_state IN ('active','restricted') AND NOT EXISTS(SELECT 1 FROM kira_public_deletion_ledger l WHERE l.account_id=kira_accounts.id)");
     }
     async updateSecrets(id: string, previous: string, encrypted: string): Promise<void> {
-        const [rows] = await this.db.query('UPDATE kira_accounts SET secrets=$3 WHERE id=$1 AND secrets=$2 RETURNING id', [id, previous, encrypted]);
+        const [rows] = await this.db.query(`UPDATE kira_accounts SET secrets=$3 WHERE id=$1 AND secrets=$2 AND account_state IN ('active','restricted')
+            AND NOT EXISTS(SELECT 1 FROM kira_public_deletion_ledger l WHERE l.account_id=kira_accounts.id) RETURNING id`, [id, previous, encrypted]);
         if (!rows.length) throw new ApiError(409, 'account_changed', 'Настройки изменились. Повтори запрос.');
     }
     async close() { await this.lock?.release(); await this.db.destroy(); }

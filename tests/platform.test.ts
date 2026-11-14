@@ -96,6 +96,7 @@ test('each worker has independent storage/identity and never inherits operator p
         TELEGRAM_SESSION_STRING: 'operator-private-session', TELEGRAM_API_HASH: 'operator-private-hash',
         KIRA_SELF_MEMORY_PATH: '/operator/private.json', PERSONALITY_FILE: '/operator/personality.json',
         BROWSER_PROFILE_DIR: '/operator/browser', KIRA_PLATFORM_MASTER_KEY: 'operator-secret',
+        ADMIN_USERNAME: 'synthetic_operator', ADMIN_PASSWORD: 'synthetic-operator-password', KIRA_OPERATOR_BRIDGE_SECRET: 'synthetic-bridge-secret', KIRA_ACCOUNT_AUTH_URL: 'http://synthetic-authority.invalid',
         DB_PASSWORD: 'operator-db-password', OPENAI_API_KEY: 'shared-provider-key', KIMI_API_KEY: 'synthetic-shared-kimi-key', KIRA_BROWSER_PROXY_URL: 'http://127.0.0.1:1234',
         KIRA_REFLECTION_TRIAGE_DECISIONS_ENABLED: 'false', KIRA_TELEGRAM_WIDGETS_ENABLED: 'false' };
     first.owner_id = second.owner_id = '10001'; // Same human may own independent bots/accounts.
@@ -118,7 +119,8 @@ test('each worker has independent storage/identity and never inherits operator p
     } }, '/synthetic/one', secrets);
     assert.equal(own.TELEGRAM_SESSION_STRING, 'synthetic-own-session');
     assert.equal(own.TELEGRAM_API_HASH, 'synthetic-own-hash');
-    for (const key of ['OWNER_NAME', 'USER_BIRTH_DATE', 'BROWSER_PROFILE_DIR', 'KIRA_SELF_MEMORY_PATH', 'KIRA_PLATFORM_MASTER_KEY']) assert.equal(a[key], undefined);
+    for (const key of ['OWNER_NAME', 'USER_BIRTH_DATE', 'BROWSER_PROFILE_DIR', 'KIRA_SELF_MEMORY_PATH', 'KIRA_PLATFORM_MASTER_KEY',
+        'ADMIN_USERNAME', 'ADMIN_PASSWORD', 'KIRA_OPERATOR_BRIDGE_SECRET', 'KIRA_ACCOUNT_AUTH_URL']) assert.equal(a[key], undefined);
     assert.doesNotMatch(JSON.stringify(a), /operator-private|operator-secret|operator-db-password/);
     assert.throws(() => tenantName('../escape'));
     const imported = tenantEnvironment(operator, first, { botToken: 'first-bot', apiToken: 'ab'.repeat(32),
@@ -353,7 +355,9 @@ test('manager restores paired accounts, waits for readiness, restarts workers an
     t.mock.method(Date, 'now', () => now);
     const provisions: string[] = [];
     const workoutProvisions: string[] = [];
-    t.mock.method(require('../platform/analytics'), 'provisionTenantAnalytics', async (_db: unknown, id: string) => { provisions.push(id); });
+    let duringProvision:(()=>Promise<void>)|undefined;
+    t.mock.method(require('../platform/analytics'), 'provisionTenantAnalytics', async (_db: unknown, id: string) => { provisions.push(id);
+        if(duringProvision){const effect=duringProvision;duringProvision=undefined;await effect();} });
     t.mock.method(require('../platform/workouts'), 'provisionTenantWorkouts', async (_db: unknown, id: string) => { workoutProvisions.push(id); });
     const store = new MemoryAccounts();
     const account = await store.create('synthetic_restored', 'unused');
@@ -371,9 +375,10 @@ test('manager restores paired accounts, waits for readiness, restarts workers an
     t.mock.method(DataSource.prototype, 'destroy', async () => {});
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kira-worker-test-'));
     const children: EventEmitter[] = [];
+    let expectedToken='synthetic-worker-token';
     t.mock.method(require('node:child_process'), 'fork', (_file: string, _args: unknown, options: any) => {
         assert.equal(options.env.DB_NAME, name);
-        assert.equal(options.env.KIRA_BOT_TOKEN, 'synthetic-worker-token');
+        assert.equal(options.env.KIRA_BOT_TOKEN, expectedToken);
         const child = new EventEmitter() as any;
         child.kill = () => { queueMicrotask(() => child.emit('exit', 0)); return true; };
         children.push(child); return child;
@@ -406,6 +411,16 @@ test('manager restores paired accounts, waits for readiness, restarts workers an
         await manager.tick(); assert.equal(children.length, 3);
         children[2].emit('message', { type: 'kira-ready', port: 12347 });
         assert.equal(manager.endpoint(account).port, 12347);
+        account.secrets=secrets.seal({botToken:expectedToken,adminSettings:{USER_TIMEZONE:'UTC'}},account.id);
+        await manager.tick();assert.equal(children.length,3,'saving preferences never silently restarts a worker');
+        expectedToken='synthetic-replacement-token';account.secrets=secrets.seal({botToken:expectedToken},account.id);
+        await manager.tick();await manager.tick();assert.equal(children.length,4,'committed bot replacement is reconciled even after a lost HTTP restart reply');
+        children[3].emit('message',{type:'kira-ready',port:12348});assert.equal(manager.endpoint(account).port,12348);
+        await manager.restart(account.id);
+        duringProvision=async()=>{expectedToken='synthetic-latest-token';account.secrets=secrets.seal({botToken:expectedToken},account.id);await manager.restart(account.id);};
+        await manager.tick();assert.equal(children.length,4,'in-flight provisioning never forks a stale bot after replacement');
+        await manager.tick();assert.equal(children.length,5);children[4].emit('message',{type:'kira-ready',port:12349});
+        assert.equal(manager.endpoint(account).port,12349);
         t.mock.method(store, 'configured', async () => { throw new Error('synthetic database lease lost'); });
         await manager.tick();
         assert.equal(fatal, true);

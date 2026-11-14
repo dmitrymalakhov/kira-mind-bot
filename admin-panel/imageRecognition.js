@@ -7,14 +7,14 @@ async function readImageRecognitionSettings(pool) {
   return rows[0] ? parseImageRecognitionSettings(rows[0].value) : null;
 }
 
-function registerImageRecognitionRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile }) {
+function registerImageRecognitionRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile, getEnvironment = () => process.env }) {
   app.get('/api/image-recognition', requireAuth, async (_req, res) => {
     const pool = createDbPool();
     try {
       await ensureBotSettingsTable(pool);
       const settings = await readImageRecognitionSettings(pool);
       let models = [], connectionError = null;
-      try { models = (await listLocalModels({ ...process.env, ...readEnvFile() })).filter(model => model.supportsVision); }
+      try { models = (await listLocalModels({ ...getEnvironment(), ...readEnvFile() })).filter(model => model.supportsVision); }
       catch { connectionError = 'LM Studio недоступна. Запустите локальный сервер и обновите каталог.'; }
       res.set('Cache-Control', 'no-store').json({ settings, models, connectionError });
     } catch { res.status(500).json({ error: 'Не удалось прочитать настройки распознавания изображений.' }); }
@@ -30,7 +30,7 @@ function registerImageRecognitionRoutes(app, { requireAuth, createDbPool, ensure
     try {
       if (settings) {
         let models;
-        try { models = await listLocalModels({ ...process.env, ...readEnvFile() }); }
+        try { models = await listLocalModels({ ...getEnvironment(), ...readEnvFile() }); }
         catch { return res.status(503).json({ error: 'Не удалось проверить каталог LM Studio. Настройки не сохранены.' }); }
         const model = models.find(model => model.id === settings.model || model.loadedIds.includes(settings.model));
         if (!model?.supportsVision) return res.status(400).json({ error: 'Выберите модель с поддержкой изображений из каталога LM Studio.' });

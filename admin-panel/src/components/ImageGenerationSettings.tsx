@@ -4,6 +4,7 @@ import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { SettingsTile } from './SettingsTile';
 import { checkImageConnection, fetchImageGeneration, saveImageGeneration, type ImageGenerationConfig } from '../api';
+import { useAccountDraft } from '../accountEdits';
 
 export function ImageGenerationSettings({ onToast, compact = false, connectionEditor }: { onToast: (message: string, severity: 'success' | 'error') => void; compact?: boolean; connectionEditor?: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -12,6 +13,7 @@ export function ImageGenerationSettings({ onToast, compact = false, connectionEd
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [connection, setConnection] = useState('');
+  useAccountDraft(Boolean(data) && JSON.stringify(settings) !== JSON.stringify(data?.settings));
   async function load() {
     const next = await fetchImageGeneration();
     setData(next);

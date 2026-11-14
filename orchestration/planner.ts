@@ -165,7 +165,7 @@ export async function createPlan(input: PlanningInput): Promise<Plan> {
         return postProcessPlan({ steps: [{ agentId: 'health' }] }, classification);
     }
 
-    if (isTodayImportanceRequest(message)) {
+    if (isTodayImportanceRequest(message, classification)) {
         return { steps: [{ agentId: 'conversation' }] };
     }
 

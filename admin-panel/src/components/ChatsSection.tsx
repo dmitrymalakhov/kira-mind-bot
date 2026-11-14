@@ -28,6 +28,7 @@ import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import { fetchChats, setChatPublicMode, setChatAllowedDomains, setChatForbiddenTopics } from '../api';
 import type { ChatInfo } from '../types';
+import { useAccountDraft } from '../accountEdits';
 
 const CHAT_TYPE_LABEL: Record<string, string> = {
   private: 'Личный',
@@ -72,6 +73,7 @@ function DomainRow({ chat, onUpdate }: { chat: ChatInfo; onUpdate: (updated: Cha
   const [saving, setSaving] = useState(false);
   const [topicsText, setTopicsText] = useState(chat.forbiddenTopics ?? '');
   const [topicsSaving, setTopicsSaving] = useState(false);
+  useAccountDraft(topicsText !== (chat.forbiddenTopics ?? ''));
 
   const isGroup = chat.chatType === 'group' || chat.chatType === 'supergroup';
   const showDomains = isGroup && chat.publicMode;

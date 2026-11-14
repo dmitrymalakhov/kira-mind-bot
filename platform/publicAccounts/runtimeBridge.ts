@@ -25,6 +25,15 @@ export function attachAccountAuthority(child:ChildProcess,accountId:string,db:Da
                 }else if(message.operation==='quota'){
                     v.fields(data,[]);
                     result=await policy.quota(accountId);
+                }else if(message.operation==='consent-read' || message.operation==='consent-write'){
+                    const write=message.operation==='consent-write';
+                    v.fields(data,write?['ownerId','consent']:['ownerId'],write?['ownerId','consent']:['ownerId']);
+                    if(!Number.isSafeInteger(data.ownerId) || Number(data.ownerId)<=0)v.invalid();
+                    const [owner]=await db.query(`SELECT id FROM kira_accounts WHERE id=$1 AND owner_id=$2
+                        AND account_state NOT IN ('deleting','deleted') AND NOT EXISTS(
+                            SELECT 1 FROM kira_public_deletion_ledger l WHERE l.account_id=kira_accounts.id)`,[accountId,String(data.ownerId)]);
+                    if(!owner)throw new ApiError(403,'forbidden','Согласие доступно только владельцу.');
+                    result=write?await policy.setConsent(accountId,v.object(data.consent)):await policy.consent(accountId);
                 }else if(message.operation==='release'){
                     v.fields(data,['operationId','imageOperationId'],['operationId']);
                     const image=data.imageOperationId===false?false:data.imageOperationId===undefined?undefined:v.text(data.imageOperationId,1,512);

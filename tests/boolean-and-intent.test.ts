@@ -154,13 +154,27 @@ describe("today importance intent", () => {
             "Прочитай сегодняшнюю переписку",
             "Посмотри сегодня сообщения в группе",
             "Проанализируй сегодня чат и важные события",
+            "Какие сегодня были важные темы в чатах?",
+            "Что важного сегодня в переписках?",
+            "В сегодняшних сообщениях были важные договорённости?",
+            "Какие важные темы сегодня в группах?",
         ];
         for (const value of cases) assert.equal(isTodayImportanceRequest(value), false, value);
+    });
+
+    test('agenda fallback never replaces classified history, external sources, lookup or secondary actions', () => {
+        for (const classification of [
+            { intent: 'ПРОВЕРКА_СООБЩЕНИЙ', details: { messagesCheckType: 'ANALYZE_CONVERSATION' } },
+            { intent: 'ВЕБ_ПОИСК' }, { intent: 'РАЗГОВОР', details: { memoryTask: 'lookup' } },
+            { intent: 'РАЗГОВОР', subIntents: [{ intent: 'ПРОВЕРКА_СООБЩЕНИЙ' }] },
+        ]) assert.equal(isTodayImportanceRequest('Что важного сегодня?', classification), false);
+        assert.equal(isTodayImportanceRequest('Что важного у меня сегодня?', { intent: 'РАЗГОВОР' }), true);
     });
 
     test("uses word boundaries for today markers", () => {
         assert.equal(isTodayImportanceRequest("сегодняшние важные дела"), true);
         assert.equal(isTodayImportanceRequest("несегодняшние важные дела"), false);
         assert.equal(isTodayImportanceRequest("todayish important plans"), false);
+        assert.equal(isTodayImportanceRequest("Напечатай сегодняшние планы"), true);
     });
 });

@@ -62,10 +62,10 @@ async function saveModelPreferences(pool, vars, memoryProfileName, body) {
     ['AI_MODEL_PRESET', plan.presetName, SETTING_KEY, JSON.stringify(plan)]);
   return { success: true, preferences, activePlan: plan };
 }
-function registerModelPreferenceRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile, memoryProfile }) {
+function registerModelPreferenceRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile, memoryProfile, getEnvironment = () => process.env }) {
   app.get('/api/model-preferences', requireAuth, async (_req,res) => {
     const pool = createDbPool();
-    try { await ensureBotSettingsTable(pool); const vars = { ...process.env, ...readEnvFile() };
+    try { await ensureBotSettingsTable(pool); const vars = { ...getEnvironment(), ...readEnvFile() };
       res.json(await readModelPreferences(pool, vars, await memoryProfile(pool, vars))); }
     catch { res.status(500).json({ error: 'Не удалось загрузить настройки моделей.' }); }
     finally { await pool.end(); }
@@ -73,7 +73,7 @@ function registerModelPreferenceRoutes(app, { requireAuth, createDbPool, ensureB
   app.put('/api/model-preferences', requireAuth, async (req,res) => {
     try { parseStrategyRequest(req.body); } catch (error) { return res.status(400).json({ error: error.message }); }
     const pool = createDbPool();
-    try { await ensureBotSettingsTable(pool); const vars = { ...process.env, ...readEnvFile() };
+    try { await ensureBotSettingsTable(pool); const vars = { ...getEnvironment(), ...readEnvFile() };
       res.json(await saveModelPreferences(pool, vars, await memoryProfile(pool, vars), req.body)); }
     catch (error) { const known = /^Для свободного|^Нет доступного|^Недоступен/.test(error.message);
       res.status(known ? 400 : 500).json({ error: known ? error.message : 'Не удалось сохранить настройки моделей.' }); }

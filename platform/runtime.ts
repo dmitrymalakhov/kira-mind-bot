@@ -5,15 +5,20 @@ import type { DataSource } from 'typeorm';
 import { provisionTenantAnalytics } from './analytics';
 import { provisionTenantWorkouts } from './workouts';
 import { ApiError } from '../api/contracts';
-import { PlatformSecrets } from './crypto';
+import { PlatformSecrets, digest } from './crypto';
 import { Account, AccountStore, provisionTenantDatabase, tenantName } from './store';
 import { pairingOwner, TelegramGateway, TelegramSession } from './telegram';
 import { attachAccountAuthority } from './publicAccounts/runtimeBridge';
 import type { PublicAccountPolicy } from './publicAccounts/policy';
 import type { PublicInbox } from './publicAccounts/inbox';
+import { parseAccountSettings } from '../utils/accountSettings';
 
 export interface TenantCredentials {
+    legacyTelegramBotId?: string;
+    adminSettings?: Record<string, string>;
     botToken?: string;
+    /** Encrypted with the bot token; only the dedicated operator pairing view can recover it. */
+    pairingCode?: string;
     runtimeMode?: 'api_only';
     telegram?: TelegramSession;
     apiToken?: string;
@@ -36,6 +41,7 @@ export function tenantEnvironment(env: NodeJS.ProcessEnv, account: Account, cred
         if (/^(?:PATH|LANG|TZ|NODE_EXTRA_CA_CERTS|PLAYWRIGHT_[A-Z_]+|CHROMIUM_[A-Z_]+|OPENAI_[A-Z_]+|GEMINI_[A-Z_]+|GOOGLE_API_KEY|GOOGLE_MAPS_API_KEY|ELEVENLABS_[A-Z_]+|OPENROUTER_[A-Z_]+|KIMI_[A-Z_]+|ZAI_[A-Z_]+|LM_STUDIO_[A-Z_]+|AI_MODEL_PRESET|KIRA_PUBLIC_MODERATION_BASE_URL|KIRA_PUBLIC_MODERATION_API_KEY|KIRA_ORCHESTRATION_MODE|KIRA_DECISIONS_ENABLED|KIRA_REFLECTION_TRIAGE_DECISIONS_ENABLED|KIRA_FAST_DIALOGUE_ENABLED|DIALOGUE_DEEP_REVIEW_ENABLED|MEMORY_EMBEDDING_[A-Z_]+|DB_HOST|DB_PORT|QDRANT_URL|QDRANT_API_KEY)$/.test(key)) child[key] = value;
     }
     const name = tenantName(account.id);
+    Object.assign(child, parseAccountSettings(credentials.adminSettings || {}));
     const apiOnly=account.runtime_mode==='api_only';
     if(apiOnly && (!Number.isSafeInteger(Number(account.runtime_principal)) || Number(account.runtime_principal)>=0))throw new Error('Invalid API-only principal');
     const existing = credentials.existingStorage;
@@ -60,6 +66,7 @@ export function tenantEnvironment(env: NodeJS.ProcessEnv, account: Account, cred
         ...(existing?.healthPort ? { KIRA_RUNTIME_HEALTH_PORT: String(existing.healthPort) } : {}),
         // Pairing consumes all updates up to this cursor before the worker starts polling.
         KIRA_TELEGRAM_UPDATE_OFFSET: String(account.update_offset),
+        KIRA_SESSION_LEGACY_TELEGRAM_BOT_ID: credentials.legacyTelegramBotId || '',
         KIRA_BROWSER_PROXY_URL: env.KIRA_BROWSER_PROXY_URL,
     });
     if (credentials.telegram) Object.assign(child, {
@@ -70,7 +77,7 @@ export function tenantEnvironment(env: NodeJS.ProcessEnv, account: Account, cred
 }
 
 const HEARTBEAT_TIMEOUT_MS = 45_000;
-type Worker = { child: ChildProcess; port?: number; token: string; state: string; startedAt: number; lastHeartbeatAt: number };
+type Worker = { child: ChildProcess; port?: number; token: string; state: string; startedAt: number; lastHeartbeatAt: number; botFingerprint: string };
 
 export class TenantRuntimeManager implements AccountRuntimes {
     private authority?: {policy:PublicAccountPolicy;inbox:PublicInbox};
@@ -119,16 +126,18 @@ export class TenantRuntimeManager implements AccountRuntimes {
         finally { this.ticking = false; }
     }
     private async reconcile(account: Account) {
+        let revision = this.revisions.get(account.id);
         const current = this.workers.get(account.id);
         if (current && this.unresponsive(current)) {
             current.state = 'restarting';
             console.error('[accounts] worker heartbeat timed out; restarting runtime');
             await this.restart(account.id);
+            revision = this.revisions.get(account.id);
         }
-        if (this.workers.has(account.id) || (this.retryAt.get(account.id) || 0) > Date.now()) return;
-        const revision = this.revisions.get(account.id);
         try {
             const credentials = this.secrets.open<TenantCredentials>(account.secrets!, account.id);
+            if(current && current.botFingerprint!==digest(credentials.botToken || '')) { await this.restart(account.id); return; }
+            if (this.workers.has(account.id) || (this.retryAt.get(account.id) || 0) > Date.now()) return;
             if (account.runtime_mode !== 'api_only' && !account.owner_id) {
                 if (!account.pairing_hash || !account.pairing_expires || new Date(account.pairing_expires).getTime() <= Date.now()) {
                     this.pairingErrors.set(account.id, 'pairing_expired'); return;
@@ -159,14 +168,16 @@ export class TenantRuntimeManager implements AccountRuntimes {
             const analyticsDatabase = credentials.existingStorage?.database || tenantName(account.id);
             await provisionTenantAnalytics(this.admin, account.id, analyticsDatabase, Boolean(credentials.existingStorage));
             await provisionTenantWorkouts(this.admin, account.id, analyticsDatabase);
-            if (this.stopped || revision !== this.revisions.get(account.id)) return;
+            const latest=await this.store.byId(account.id);
+            if (this.stopped || revision !== this.revisions.get(account.id) || !latest || !['active','restricted'].includes(latest.account_state || 'active')
+                || latest.secrets!==account.secrets || latest.owner_id!==account.owner_id) return;
             const workerEnv = tenantEnvironment(this.env, account, credentials, directory, this.secrets);
             if(!this.authority && account.public_origin)throw new Error('Account policy authority missing');
             const child = fork(path.resolve(__dirname, '..', 'index.js'), [], {
                 cwd: directory, env: workerEnv,
                 execArgv: [], stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
             });
-            const worker: Worker = { child, token: workerEnv.KIRA_API_TOKEN!, state: 'starting', startedAt: Date.now(), lastHeartbeatAt: Date.now() };
+            const worker: Worker = { child, token: workerEnv.KIRA_API_TOKEN!, state: 'starting', startedAt: Date.now(), lastHeartbeatAt: Date.now(), botFingerprint:digest(credentials.botToken || '') };
             if(this.authority)attachAccountAuthority(child,account.id,this.admin,this.authority.policy,this.authority.inbox);
             this.workers.set(account.id, worker);
             const timeout = setTimeout(() => { child.kill('SIGKILL'); }, 120_000);

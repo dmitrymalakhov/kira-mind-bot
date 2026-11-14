@@ -87,13 +87,14 @@ function createOperatorAuth({ username, password, sessionSecret, cookieName, env
     next();
   };
   const csrfGuard = (req, res, next) => {
-    if (!publicRequested || ['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+    const accountsRequest = /^\/api\/accounts(?:\/|$)/.test(req.path);
+    if ((!publicRequested && !accountsRequest && !env.KIRA_ACCOUNT_AUTH_URL) || ['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
     let expected = origin;
     if (!trusted(req)) {
       // The original loopback recovery surface remains usable. Untrusted Host
       // names never establish an alternate public origin.
       const host = String(req.headers.host || '');
-      if (!/^(127\.0\.0\.1|localhost|\[::1\])(?::[0-9]+)?$/.test(host)) return res.status(403).json({ error: 'Недопустимый источник запроса.' });
+      if (!/^(127\.0\.0\.1|localhost|\[::1\])(?::[0-9]+)?$/.test(host) && publicRequested) return res.status(403).json({ error: 'Недопустимый источник запроса.' });
       expected = `${req.socket.encrypted ? 'https' : 'http'}://${host}`;
     }
     if (req.headers.origin !== expected || (req.headers['sec-fetch-site'] && req.headers['sec-fetch-site'] !== 'same-origin') || !equal(req.headers['x-csrf-token'], csrf(req))) {
@@ -127,7 +128,7 @@ function createOperatorAuth({ username, password, sessionSecret, cookieName, env
     app.get('/api/auth/context', safe(async (req, res) => {
       req.session.csrfIssued = true;
       const current = await account(req);
-      res.json({ csrfToken: csrf(req), csrfEnabled: publicRequested, accountLoginEnabled: enabled,
+      res.json({ csrfToken: csrf(req), csrfEnabled: publicRequested || Boolean(env.KIRA_ACCOUNT_AUTH_URL), accountLoginEnabled: enabled,
         accountAuthorized: current.authorized === true, legacyAuthenticated: req.session.authenticated === true, accountConsoleUrl: '/account/' });
     }));
     app.post('/api/operator/login-account', rateLimit, safe(async (req, res) => {
@@ -165,7 +166,27 @@ function createOperatorAuth({ username, password, sessionSecret, cookieName, env
     if (!accessToken || !browserCookie) return { ok: false, status: 401, body: {} };
     return internal('/internal/operator/quota', { accessToken, browserCookie });
   };
-  return { prepare, csrfGuard, requireAuth: safe(requireAuth), rateLimit, login: safe(login), register, csrf, accountQuota,
+  const manageAccounts = async (req, operation, input, requestKey) => {
+    if (!env.KIRA_ACCOUNT_AUTH_URL) return undefined;
+    let authority;
+    if (req.operatorAuthentication === 'password') authority = { kind: 'password', username, password };
+    else if (req.operatorAuthentication === 'account') {
+      const accessToken = cookie(req, ACCESS_COOKIE), browserCookie = cookie(req, BROWSER_COOKIE);
+      if (!accessToken || !browserCookie) return { ok: false, status: 401, body: {} };
+      authority = { kind: 'account', accessToken, browserCookie };
+    } else return { ok: false, status: 401, body: {} };
+    try {
+      const response = await fetcher(new URL('/internal/operator/accounts', central), {
+        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(35_000),
+        headers: { 'content-type': 'application/json', ...(enabled ? { 'x-kira-operator-bridge': bridgeSecret } : {}) },
+        body: JSON.stringify({ version: 1, operator: authority, operation, input, ...(requestKey ? { requestKey } : {}) }),
+      });
+      const text = await response.text();
+      if (text.length > 1024 * 1024) throw Error('Oversized account response');
+      return { ok: response.ok, status: response.status, body: JSON.parse(text) };
+    } catch { return { ok: false, status: 503, body: {} }; }
+  };
+  return { prepare, csrfGuard, requireAuth: safe(requireAuth), rateLimit, login: safe(login), register, csrf, accountQuota, manageAccounts,
     session: (req, res, next) => trusted(req) ? publicSession(req, res, next) : privateSession(req, res, next) };
 }
 module.exports = { createOperatorAuth, OPERATOR_CSP };

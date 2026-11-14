@@ -28,7 +28,7 @@ export function bindAccountAiOperation<T extends (...args:any[])=>Promise<any>>(
 }
 
 /** No registry credential in a tenant process. Account authority is the process's parent binding. */
-export async function accountAuthority(operation:'outbound'|'admission'|'inbox'|'release'|'task'|'quota',data:Record<string,unknown>):Promise<any>{
+export async function accountAuthority(operation:'outbound'|'admission'|'inbox'|'release'|'task'|'quota'|'consent-read'|'consent-write',data:Record<string,unknown>):Promise<any>{
     if(!process.env.KIRA_TENANT_ID)return undefined;
     if(!process.send || !process.connected)throw new ApiError(503,'policy_unavailable','Политика аккаунта временно недоступна.');
     if(!listening){
@@ -143,7 +143,7 @@ export function accountPolicyReply(error: unknown): string | undefined {
         case 'background_quota_exhausted': return 'Дневной лимит фоновой работы исчерпан. Фон приостановлен до обновления квоты; он не расходует лимит общения.';
         case 'operation_limit_exceeded': return 'Задача достигла предела AI-вызовов и остановлена. Проверь уже выполненные действия перед продолжением.';
         case 'operation_scope_mismatch': return 'Не удалось подтвердить бюджет продолжения задачи. Отправь новый запрос.';
-        case 'consent_required': return 'Для этого запроса нужно согласие на обработку данных выбранными AI-сервисами. Проверь согласие в настройках аккаунта.';
+        case 'consent_required': return 'Для этого запроса нужно согласие на обработку данных выбранными AI-сервисами. Проверь согласие в настройках аккаунта или командой /ai_consent в личном чате с ботом.';
         case 'activation_required': return 'Для AI-запросов сначала нужно активировать аккаунт.';
         case 'account_restricted': return 'AI-запросы для этого аккаунта ограничены. Проверь состояние аккаунта.';
         case 'account_deleting': return 'Аккаунт удаляется, поэтому новые AI-запросы недоступны.';

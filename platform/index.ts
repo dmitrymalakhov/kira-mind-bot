@@ -18,6 +18,9 @@ import { OfficialIdentityVerifier } from './publicAccounts/providers';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { tenantName } from './store';
 import { PublicAccountMaintenance } from './publicAccounts/maintenance';
+import { BotConnections } from './botConnection';
+import { OperatorAccountsHttp } from './operatorAccounts';
+import { TenantAdministration } from './administration';
 
 async function main() {
     dotenv.config({ path: `.env.${process.env.NODE_ENV || 'production'}` });
@@ -61,7 +64,14 @@ async function main() {
     }
     publicAccounts.config.readyCapabilities={apiOnlyRuntime:true,identities:true,sessions:true,consents:true,quotas:true,
         deletion:Boolean(publicAccounts.deletion),inbox:true,push:Boolean(pushWorker)};
-    const server = createPlatformServer({ store, secrets, telegram, runtimes, reservedBotIds, publicAccounts });
+    const botConnections = new BotConnections(store, secrets, telegram, reservedBotIds);
+    const operatorAccounts = new OperatorAccountsHttp(store, secrets, runtimes, botConnections, publicAccounts.receipts, {
+        username: process.env.ADMIN_USERNAME || '', password: process.env.ADMIN_PASSWORD || '', capacity,
+        operator: publicAccounts.web?.operator, bridgeSecret: publicAccounts.web?.settings.operatorBridgeSecret,
+        administration: new TenantAdministration(db, store, secrets, runtimes, root, process.env, publicAccounts.policy),
+        deletion:publicAccounts.deletion,
+    });
+    const server = createPlatformServer({ store, secrets, telegram, runtimes, reservedBotIds, publicAccounts, botConnections, operatorAccounts });
     await new Promise<void>((resolve, reject) => {
         server.once('error', reject);
         server.listen(port, process.env.KIRA_PLATFORM_HOST || '127.0.0.1', resolve);

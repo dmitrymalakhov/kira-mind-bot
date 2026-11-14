@@ -556,7 +556,7 @@ export async function executePlan(params: ExecutePlanParams): Promise<Processing
             case 'conversation': {
                 console.log("[ORCH] invoking conversationAgent");
                 await notifyProgress('conversation');
-                if (isTodayImportanceRequest(message)) {
+                if (isTodayImportanceRequest(message, classification)) {
                     const snapshot = await buildTodayImportanceSnapshot(ctx, message);
                     if (snapshot) {
                         const summaryResult: ProcessingResult = {

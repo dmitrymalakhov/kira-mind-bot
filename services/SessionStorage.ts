@@ -6,6 +6,7 @@ import type { BotContext, SentMessageContext, SessionData } from '../types';
 import { scopedBotKey } from '../utils/botIdentity';
 import { PENDING_CONTACT_MEMORY_TTL_MS } from '../utils/contactMemoryConstants';
 import { availableBrowserWorkspace, type BrowserWorkspace } from './browserWorkspace';
+import { telegramSessionTransport } from './telegramSessionTransport';
 
 const MAX_HISTORY = 20;
 export const MAX_SENT_MESSAGE_CONTEXTS = 50;
@@ -17,6 +18,7 @@ const SESSION_SNAPSHOT = Symbol('persistedSessionSnapshot');
 
 /** Подмножество SessionData, которое мы сохраняем в БД. */
 interface PersistedSession {
+    telegramBotId?:string;
     agentRuntime?: SessionData['agentRuntime'];
     agentRuntimePending?: SessionData['agentRuntimePending'];
     apiActionVersion?: string;
@@ -429,7 +431,7 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
             const scopedKey = scopedBotKey(key);
             const row = await this.repo.findOne({ where: { key: scopedKey } });
             if (!row) return undefined;
-            const persisted = parsePersistedSession(row.data) as PersistedSession;
+            const persisted = telegramSessionTransport(parsePersistedSession(row.data),key) as PersistedSession;
             attachSessionSnapshot(persisted as unknown as SessionData, persisted);
             const now = Date.now();
             // Восстанавливаем Date-объекты в messageHistory
@@ -490,7 +492,7 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
     async write(key: string, value: SessionData): Promise<void> {
         try {
             const scopedKey = scopedBotKey(key);
-            const current = extract(value, key);
+            const current = telegramSessionTransport(extract(value, key),key,process.env,true);
             const base = (value as SessionWithSnapshot)[SESSION_SNAPSHOT] ?? {};
             const manager = this.repo.manager;
 
@@ -506,14 +508,14 @@ export class TypeORMSessionStorage implements StorageAdapter<SessionData> {
                         where: { key: scopedKey },
                         lock: { mode: 'pessimistic_write' },
                     });
-                    const latest = row ? parsePersistedSession(row.data) : {};
+                    const latest = telegramSessionTransport(row ? parsePersistedSession(row.data) : {},key);
                     const next = applyPersistedSessionDelta(base, current, latest);
                     await repo.upsert({ key: scopedKey, data: next as unknown as Record<string, any> }, ['key']);
                 });
             } else {
                 // Упрощённый путь используется unit-тестами без TypeORM EntityManager.
                 const row = await this.repo.findOne({ where: { key: scopedKey } });
-                const latest = row ? parsePersistedSession(row.data) : {};
+                const latest = telegramSessionTransport(row ? parsePersistedSession(row.data) : {},key);
                 const next = applyPersistedSessionDelta(base, current, latest);
                 await this.repo.upsert({ key: scopedKey, data: next as unknown as Record<string, any> }, ['key']);
             }

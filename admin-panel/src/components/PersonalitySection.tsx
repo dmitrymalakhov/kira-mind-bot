@@ -18,6 +18,7 @@ import {
 import SaveIcon from '@mui/icons-material/Save';
 import { CharacterReferenceSection } from './CharacterReferenceSection';
 import { fetchPersonality, savePersonality } from '../api';
+import { useAccountDraft } from '../accountEdits';
 import type { PersonalityConfig, PersonalityProfile } from '../types';
 
 const EMPTY_PROFILE: PersonalityProfile = {
@@ -250,10 +251,12 @@ export function PersonalitySection({ onToast }: Props) {
   const [savingKira, setSavingKira] = useState(false);
   const [tab, setTab] = useState<'character' | 'appearance'>('character');
   const [appearanceVisited, setAppearanceVisited] = useState(false);
+  const [baseline, setBaseline] = useState('');
+  useAccountDraft(Boolean(baseline) && JSON.stringify(data) !== baseline);
 
   useEffect(() => {
     fetchPersonality()
-      .then(setData)
+      .then(next => { setData(next); setBaseline(JSON.stringify(next)); })
       .catch(() => onToast('Не удалось загрузить настройки личности', 'error'))
       .finally(() => setLoading(false));
   }, []);
@@ -274,6 +277,7 @@ export function PersonalitySection({ onToast }: Props) {
     try {
       const result = await savePersonality(data);
       if (result.success) {
+        setBaseline(JSON.stringify(data));
         onToast(result.message || '✅ Личность сохранена. Перезапустите бота.', 'success');
       } else {
         onToast(result.error || 'Ошибка сохранения', 'error');

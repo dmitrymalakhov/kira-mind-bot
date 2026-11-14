@@ -13,6 +13,7 @@ import CloudOutlinedIcon from '@mui/icons-material/CloudOutlined';
 import TuneRoundedIcon from '@mui/icons-material/TuneRounded';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { fetchModelPreferences, saveModelPreferences } from '../api';
+import { useAccountDraft } from '../accountEdits';
 import { getAiProviderDescriptor } from '../../../ai/providerMetadata';
 import type { AiPresetName, ModelPreferences, ModelPreferencesResponse } from '../types';
 
@@ -37,6 +38,9 @@ export function ModelPreferencesSettings({ onToast, localConnection }: {
   const [dialog, setDialog] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [draftBaseline, setDraftBaseline] = useState('');
+  useAccountDraft(data !== null && (mode !== (data.mode === 'automatic' ? 'automatic' : 'custom')
+    || !equal(preferences, data.preferences) || dialog && JSON.stringify(draft) !== draftBaseline));
   async function load() {
     try {
       const next = await fetchModelPreferences(); setData(next); setPreferences(next.preferences); setError('');
@@ -80,7 +84,7 @@ export function ModelPreferencesSettings({ onToast, localConnection }: {
       const cloud = data.plans.find(plan => plan.preferences.quality === preferences.quality && plan.available);
       next = cloud?.models ? customDraftFromModels(cloud.models, preferences.quality, data.localRoutes, cloud.outputTokenLimits) : null;
     }
-    setDraft(next); setDialog(true);
+    setDraft(next); setDraftBaseline(JSON.stringify(next)); setDialog(true);
   }
   function selectProvider(provider: AiProvider) {
     if (!data || provider === draft?.provider) return;

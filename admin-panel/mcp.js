@@ -141,7 +141,7 @@ async function probeMcp(server, connector = connectMcp) {
 }
 
 function registerMcpRoutes(app, { requireAuth, runtimeDir, accountMode = false, probe = probeMcp }) {
-  const store = createMcpSettingsStore(() => mcpSettingsFile(runtimeDir, accountMode));
+  const store = createMcpSettingsStore(() => mcpSettingsFile(typeof runtimeDir === 'function' ? runtimeDir() : runtimeDir, typeof accountMode === 'function' ? accountMode() : accountMode));
   const route = handler => async (req, res) => {
     res.set('Cache-Control', 'no-store');
     try { res.json(await handler(req)); }

@@ -4,6 +4,9 @@ const express = require('express');
 const compression = require('compression');
 const { createOperatorAuth } = require('./operatorAuth');
 const { registerAccountQuotaRoutes } = require('./accountQuota');
+const { registerAccountsRoutes } = require('./accounts');
+const { createAccountScope, currentEnvironment: runtimeEnvironment } = require('./accountScope');
+const { ACCOUNT_SETTING_KEYS, INSTANCE_SETTING_KEYS } = require('../utils/accountSettings');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -75,6 +78,7 @@ const SESSION_COOKIE_INSTANCE = String(KIRA_INSTANCE_NAME)
   .replace(/[^A-Za-z0-9._-]/g, '_') || 'kira-mind-bot';
 const SESSION_COOKIE_NAME = `kira.sid.${SESSION_COOKIE_INSTANCE}`;
 const operatorAuth = createOperatorAuth({ username: ADMIN_USERNAME, password: ADMIN_PASSWORD, sessionSecret: SESSION_SECRET, cookieName: SESSION_COOKIE_NAME });
+const accountScope = createAccountScope({ operatorAuth });
 
 const SENSITIVE_KEYS = new Set([
   'OPENAI_IMAGE_API_KEY',
@@ -124,6 +128,7 @@ const SYSTEM_DEFAULT_CONFIG = {
 // ── Env file helpers ──────────────────────────────────────────────────────────
 
 function readEnvFile() {
+  if (accountScope.current()) return { ...accountScope.current().env };
   if (!fs.existsSync(BOT_ENV_FILE)) return {};
   const result = {};
   for (const line of fs.readFileSync(BOT_ENV_FILE, 'utf8').split('\n')) {
@@ -177,7 +182,7 @@ function buildAiPresetResponseEntry(name, vars, memoryProfileName, localRoutes) 
     ...preset,
     models: Object.fromEntries(Object.entries(preset.models).map(([task, ref]) => [task, {
       ...ref,
-      model: localRoutes?.[ref.localRole]?.model || (ref.modelEnvKey && (vars[ref.modelEnvKey] || process.env[ref.modelEnvKey])) || ref.model,
+      model: localRoutes?.[ref.localRole]?.model || (ref.modelEnvKey && (vars[ref.modelEnvKey] || runtimeEnvironment()[ref.modelEnvKey])) || ref.model,
     }])),
     ...availability,
   };
@@ -249,6 +254,7 @@ async function readRuntimeGroupSettings(vars) {
     }
     return result;
   } catch (err) {
+    if(accountScope.current())throw err;
     console.error('[admin] Failed to read runtime group settings:', err.message);
     return defaults;
   } finally {
@@ -291,13 +297,14 @@ function dockerRequest(method, path) {
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 
+app.use(accountScope.rewrite);
 app.use(operatorAuth.prepare);
 app.use(compression({ threshold: 1024 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(operatorAuth.session);
 app.use(operatorAuth.csrfGuard);
-const requireAuth = operatorAuth.requireAuth;
+const requireAuth = (req,res,next) => operatorAuth.requireAuth(req,res,()=>accountScope.resolve(req,res,next));
 operatorAuth.register(app);
 
 // Existing operator-password recovery stays separate from account SSO.
@@ -308,22 +315,39 @@ app.post('/api/logout', (req, res) => {
 });
 
 app.get('/api/config', requireAuth, async (req, res) => {
-  const vars = require('./configValues').mergeEditableDefaults(readEnvFile(), process.env, EDITABLE_KEYS);
-  const result = require('./configValues').maskConfigValues(vars, SENSITIVE_KEYS);
+  try {
+  const vars = require('./configValues').mergeEditableDefaults(readEnvFile(), runtimeEnvironment(), EDITABLE_KEYS);
+  const result = require('./configValues').maskConfigValues(Object.fromEntries([...EDITABLE_KEYS].map(key=>[key,vars[key]??''])), SENSITIVE_KEYS);
+  const scope = accountScope.current();
+  if (scope) {
+    res.setHeader('X-Kira-Settings-Revision',scope.settingsRevision);
+    for (const [key,value] of Object.entries(result)) Object.assign(value,{readOnly:!ACCOUNT_SETTING_KEYS.includes(key)&&!GROUP_RUNTIME_SETTING_KEYS.has(key),revision:scope.settingsRevision});
+  }
+  else if(accountScope.enabled)for(const [key,value]of Object.entries(result))value.readOnly=!INSTANCE_SETTING_KEYS.includes(key);
   for (const [key, value] of Object.entries(SYSTEM_DEFAULT_CONFIG)) {
     if (!(key in result)) {
       result[key] = { value, masked: false, source: 'system_default' };
     }
   }
 
-  const runtimeSettings = await readRuntimeGroupSettings(vars);
+  const runtimeSettings = accountScope.enabled&&!scope?{}:await readRuntimeGroupSettings(vars);
   for (const [key, value] of Object.entries(runtimeSettings)) {
     result[key] = { value, masked: false, source: 'bot_settings' };
   }
+  if (accountScope.enabled) for (const [key,value] of Object.entries(result)) {
+    value.readOnly = scope ? !ACCOUNT_SETTING_KEYS.includes(key) && !GROUP_RUNTIME_SETTING_KEYS.has(key) : !INSTANCE_SETTING_KEYS.includes(key);
+    if (scope) value.revision = scope.settingsRevision;
+  }
   res.json(result);
+  } catch { res.status(503).json({error:'Не удалось загрузить настройки выбранной Киры.'}); }
 });
 
 async function ensureBotSettingsTable(pool) {
+  if (accountScope.current()) {
+    const result = await pool.query("SELECT to_regclass('public.bot_settings') AS name");
+    if (!result.rows[0]?.name) throw new Error('Хранилище выбранной Киры ещё не подготовлено.');
+    return;
+  }
   await pool.query(`
     CREATE TABLE IF NOT EXISTS bot_settings (
       key text PRIMARY KEY,
@@ -334,7 +358,7 @@ async function ensureBotSettingsTable(pool) {
 }
 
 function getEnvMemoryEmbeddingProfileName(vars) {
-  return parseMemoryEmbeddingProfileName(vars.MEMORY_EMBEDDING_PROFILE || process.env.MEMORY_EMBEDDING_PROFILE)
+  return parseMemoryEmbeddingProfileName(vars.MEMORY_EMBEDDING_PROFILE || runtimeEnvironment().MEMORY_EMBEDDING_PROFILE)
     || DEFAULT_MEMORY_EMBEDDING_PROFILE;
 }
 
@@ -365,27 +389,29 @@ async function readMemoryEmbeddingProfileState(pool, vars) {
 }
 
 registerModelPreferenceRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile,
+  getEnvironment: runtimeEnvironment,
   memoryProfile: async (pool, vars) => (await readMemoryEmbeddingProfileState(pool, vars)).profile.name });
 
 registerBudgetModeRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable });
-registerBackgroundFeatureRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
-registerAccountQuotaRoutes(app, { requireAuth, operatorAuth, readEnvFile });
-registerLocalModelRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
-registerImageGenerationRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
-registerImageRecognitionRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile });
-registerMcpRoutes(app, { requireAuth, runtimeDir: process.env.KIRA_RUNTIME_DATA_DIR || path.join(__dirname, '..', 'data'),
-  accountMode: process.env.KIRA_MCP_ACCOUNT_MODE === 'true' });
+registerBackgroundFeatureRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile, getEnvironment: runtimeEnvironment });
+registerAccountQuotaRoutes(app, { requireAuth, operatorAuth, readEnvFile, getAccountId:()=>accountScope.current()?.id });
+registerAccountsRoutes(app, { requireAuth, operatorAuth });
+registerLocalModelRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile, getEnvironment: runtimeEnvironment });
+registerImageGenerationRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile, getEnvironment: runtimeEnvironment });
+registerImageRecognitionRoutes(app, { requireAuth, createDbPool, ensureBotSettingsTable, readEnvFile, getEnvironment: runtimeEnvironment });
+registerMcpRoutes(app, { requireAuth, runtimeDir: ()=>runtimeEnvironment().KIRA_RUNTIME_DATA_DIR || path.join(__dirname, '..', 'data'),
+  accountMode: ()=>!accountScope.current() && process.env.KIRA_MCP_ACCOUNT_MODE === 'true' });
 
 app.get('/api/ai-preset', requireAuth, async (_req, res) => {
   const vars = readEnvFile();
-  const envDefaultPreset = parseAiPresetName(vars.AI_MODEL_PRESET || process.env.AI_MODEL_PRESET) || 'gpt-balanced';
+  const envDefaultPreset = parseAiPresetName(vars.AI_MODEL_PRESET || runtimeEnvironment().AI_MODEL_PRESET) || 'gpt-balanced';
   const pool = createDbPool();
   try {
     await ensureBotSettingsTable(pool);
     const result = await pool.query('SELECT value FROM bot_settings WHERE key = $1', ['AI_MODEL_PRESET']);
     const storedPreset = parseAiPresetName(result.rows[0]?.value);
     const memoryEmbeddingProfile = await buildMemoryEmbeddingProfileStatus(pool, vars);
-    const localRoutes = await readLocalRoutes(pool, { ...process.env, ...vars });
+    const localRoutes = await readLocalRoutes(pool, { ...runtimeEnvironment(), ...vars });
     const availablePresets = AI_PRESET_NAMES.map((name) => buildAiPresetResponseEntry(name, vars, memoryEmbeddingProfile.name, localRoutes));
     const hasRuntimeOverride = Boolean(storedPreset);
     const configuredPresetName = storedPreset || envDefaultPreset;
@@ -427,7 +453,7 @@ app.post('/api/ai-preset', requireAuth, async (req, res) => {
   try {
     await ensureBotSettingsTable(pool);
     const memoryProfileState = await readMemoryEmbeddingProfileState(pool, vars);
-    const localRoutes = await readLocalRoutes(pool, { ...process.env, ...vars });
+    const localRoutes = await readLocalRoutes(pool, { ...runtimeEnvironment(), ...vars });
     const availability = getPresetAvailabilityForMemoryProfile(resolveLocalPreset(AI_PRESETS[preset], localRoutes), vars, memoryProfileState.profile.name);
     if (!availability.enabled) {
       return res.status(400).json({ error: availability.unavailableReason || 'AI preset недоступен без обязательных API ключей' });
@@ -445,6 +471,11 @@ app.post('/api/ai-preset', requireAuth, async (req, res) => {
 });
 
 app.post('/api/config', requireAuth, async (req, res) => {
+  const scope = accountScope.current();
+  if (scope && (!req.body || Array.isArray(req.body) || Object.keys(req.body).some(key=>!ACCOUNT_SETTING_KEYS.includes(key)&&!GROUP_RUNTIME_SETTING_KEYS.has(key)))) {
+    return res.status(400).json({error:'Общие подключения и идентификация задаются для инстанса или через подключение аккаунта.'});
+  }
+  if(accountScope.enabled&&!scope&&Object.keys(req.body||{}).some(key=>!INSTANCE_SETTING_KEYS.includes(key)))return res.status(400).json({error:'Выберите аккаунт для настройки параметров Киры.'});
   for (const key of ['OPENAI_BASE_URL', 'OPENAI_IMAGE_BASE_URL']) {
     if (Object.hasOwn(req.body, key) && !require('./configValues').isValidProxyUrl(req.body[key])) {
       return res.status(400).json({ error: 'Введите URL прокси с http:// или https:// без логина, пароля и параметров запроса.' });
@@ -471,11 +502,16 @@ app.post('/api/config', requireAuth, async (req, res) => {
   }
 
   const hasEnvUpdates = Object.keys(envUpdates).length > 0;
-  const envOk = !hasEnvUpdates || writeEnvFile(envUpdates);
+  let envOk = !hasEnvUpdates;
+  if (hasEnvUpdates && scope) {
+    const result = await operatorAuth.manageAccounts(req,'settings',{accountId:scope.id,updates:envUpdates,revision:req.headers['if-match']});
+    if (!result?.ok) return res.status([400,401,403,409].includes(result?.status)?result.status:503).json({error:'Не удалось сохранить настройки выбранной Киры. Обновите их перед повтором.'});
+    envOk = true;
+  } else if (hasEnvUpdates) envOk = writeEnvFile(envUpdates);
   const runtimeOk = await writeRuntimeGroupSettings(runtimeUpdates);
 
   if (envOk && runtimeOk) {
-    const message = hasEnvUpdates
+    const message = hasEnvUpdates && scope ? 'Настройки выбранной Киры сохранены. Перезапустите её для применения параметров окружения.' : hasEnvUpdates
       ? '✅ Сохранено. Перезапустите боты для применения env-настроек; настройки групп применяются без рестарта.'
       : '✅ Сохранено. Настройки групп применяются без рестарта.';
     res.json({ success: true, message });
@@ -490,6 +526,10 @@ app.post('/api/restart/:service', requireAuth, async (req, res) => {
   const { service } = req.params;
   if (!['kira-mind-bot'].includes(service)) {
     return res.status(400).json({ error: 'Недопустимый сервис' });
+  }
+  if (accountScope.current()) {
+    const result=await operatorAuth.manageAccounts(req,'restart',{accountId:accountScope.current().id});
+    return res.status(result?.ok?200:503).json(result?.ok?{success:true,message:'Перезапускается только выбранная Кира.'}:{error:'Не удалось перезапустить выбранную Киру.'});
   }
   try {
     const containerName = service === 'kira-mind-bot' ? KIRA_BOT_CONTAINER_NAME : service;
@@ -510,6 +550,7 @@ app.post('/api/restart/:service', requireAuth, async (req, res) => {
 
 function createDbPool(database) {
   const vars = readEnvFile();
+  if (accountScope.current() && database && database !== vars.DB_NAME) throw new Error('Database outside selected account');
   return new Pool({
     host: vars.DB_HOST || 'postgres',
     port: Number(vars.DB_PORT || 5432),
@@ -522,6 +563,7 @@ function createDbPool(database) {
 }
 
 async function analyticsSources() {
+  if (accountScope.current()) return [{id:accountScope.current().id,registeredAt:null,pool:createDbPool()}];
   const vars = readEnvFile();
   const platform = createDbPool(vars.KIRA_PLATFORM_DB_NAME || 'KiraPlatform');
   try {
@@ -637,7 +679,7 @@ app.patch('/api/chats/:chatId/public-mode', requireAuth, async (req, res) => {
 
 // ── Recurring tasks ───────────────────────────────────────────────────────────
 
-const RECURRING_TASK_PROFILE = process.env.ASSISTANT_PROFILE || 'KiraMindBot';
+const recurringTaskProfile = () => accountScope.current()?.profile || process.env.ASSISTANT_PROFILE || 'KiraMindBot';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 app.get('/api/recurring-tasks', requireAuth, async (_req, res) => {
@@ -650,7 +692,7 @@ app.get('/api/recurring-tasks', requireAuth, async (_req, res) => {
        FROM recurring_tasks
        WHERE profile = $1
        ORDER BY "createdAt" DESC`,
-      [RECURRING_TASK_PROFILE]
+      [recurringTaskProfile()]
     );
     res.json(result.rows);
   } catch (err) {
@@ -667,7 +709,7 @@ app.patch('/api/recurring-tasks/:id', requireAuth, async (req, res) => {
   try {
     const existing = await pool.query(
       'SELECT * FROM recurring_tasks WHERE id = $1 AND profile = $2',
-      [id, RECURRING_TASK_PROFILE]
+      [id, recurringTaskProfile()]
     );
     if (existing.rowCount === 0) return res.status(404).json({ error: 'Задача не найдена' });
     const task = existing.rows[0];
@@ -700,7 +742,7 @@ app.patch('/api/recurring-tasks/:id', requireAuth, async (req, res) => {
        WHERE id = $8 AND profile = $9
          AND ("lockedAt" IS NULL OR "lockedAt" <= NOW() - INTERVAL '30 minutes')
        RETURNING *`,
-      [title, prompt, JSON.stringify(schedule), timezone, status, nextRunAt, JSON.stringify(contextHistory || []), id, RECURRING_TASK_PROFILE]
+      [title, prompt, JSON.stringify(schedule), timezone, status, nextRunAt, JSON.stringify(contextHistory || []), id, recurringTaskProfile()]
     );
     if (updated.rowCount === 0) {
       return res.status(409).json({ error: 'Задача начала выполняться до сохранения изменений. Повторите после завершения.' });
@@ -724,12 +766,12 @@ app.post('/api/recurring-tasks/:id/run', requireAuth, async (req, res) => {
        WHERE id = $1 AND profile = $2
          AND ("lockedAt" IS NULL OR "lockedAt" <= NOW() - INTERVAL '30 minutes')
        RETURNING id`,
-      [id, RECURRING_TASK_PROFILE]
+      [id, recurringTaskProfile()]
     );
     if (result.rowCount === 0) {
       const exists = await pool.query(
         'SELECT 1 FROM recurring_tasks WHERE id = $1 AND profile = $2',
-        [id, RECURRING_TASK_PROFILE]
+        [id, recurringTaskProfile()]
       );
       return res.status(exists.rowCount ? 409 : 404).json({
         error: exists.rowCount ? 'Задача уже выполняется' : 'Задача не найдена',
@@ -752,12 +794,12 @@ app.delete('/api/recurring-tasks/:id', requireAuth, async (req, res) => {
       `DELETE FROM recurring_tasks
        WHERE id = $1 AND profile = $2
          AND ("lockedAt" IS NULL OR "lockedAt" <= NOW() - INTERVAL '30 minutes')`,
-      [id, RECURRING_TASK_PROFILE]
+      [id, recurringTaskProfile()]
     );
     if (result.rowCount === 0) {
       const exists = await pool.query(
         'SELECT 1 FROM recurring_tasks WHERE id = $1 AND profile = $2',
-        [id, RECURRING_TASK_PROFILE]
+        [id, recurringTaskProfile()]
       );
       return res.status(exists.rowCount ? 409 : 404).json({
         error: exists.rowCount ? 'Задача сейчас выполняется. Удалите её после завершения.' : 'Задача не найдена',
@@ -877,6 +919,10 @@ function getMemoryProfile(value) {
 
 function getMemoryUserId(profile, explicitUserId) {
   const raw = firstQueryValue(explicitUserId);
+  if (accountScope.current()) {
+    if (raw && String(raw).trim() !== accountScope.current().ownerId) throw httpInputError('userId не соответствует выбранному аккаунту.');
+    return accountScope.current().ownerId;
+  }
   if (typeof raw === 'string' && raw.trim()) {
     if (!/^-?\d+$/.test(raw.trim())) throw httpInputError('userId должен быть числом');
     return raw.trim();
@@ -884,14 +930,16 @@ function getMemoryUserId(profile, explicitUserId) {
 
   const vars = readEnvFile();
   const envKey = 'KIRA_ALLOWED_USER_ID';
-  return String(vars[envKey] || process.env[envKey] || '').trim();
+  return String(vars[envKey] || runtimeEnvironment()[envKey] || '').trim();
 }
 
 function getMemoryBotId(profile) {
+  if (accountScope.current()) return accountScope.current().memoryBotId;
   return MEMORY_PROFILE_TO_BOT_ID[profile];
 }
 
 function memoryCollection(profile, domain) {
+  if (accountScope.current()) return `${accountScope.current().memoryNamespace}_memories_${domain}`;
   return `${getMemoryBotId(profile)}_memories_${domain}`;
 }
 
@@ -906,12 +954,13 @@ function normalizeMemoryDomain(value, fallback = 'general') {
 function getQdrantConfig() {
   const vars = readEnvFile();
   return {
-    url: String(vars.QDRANT_URL || process.env.QDRANT_URL || 'http://qdrant:6333').replace(/\/+$/, ''),
-    apiKey: vars.QDRANT_API_KEY || process.env.QDRANT_API_KEY || '',
+    url: String(vars.QDRANT_URL || runtimeEnvironment().QDRANT_URL || 'http://qdrant:6333').replace(/\/+$/, ''),
+    apiKey: vars.QDRANT_API_KEY || runtimeEnvironment().QDRANT_API_KEY || '',
   };
 }
 
 async function qdrantRequest(pathname, options = {}) {
+  if (accountScope.current() && (['PUT','DELETE','PATCH'].includes(options.method) || /\/points\/delete(?:\?|$)/.test(pathname))) await accountScope.current().assertActive();
   const { url, apiKey } = getQdrantConfig();
   const headers = { ...(options.headers || {}) };
   if (apiKey) headers['api-key'] = apiKey;
@@ -1010,14 +1059,25 @@ async function ensureMemoryCollection(profile, domain, memoryProfile) {
 function getMemoryEmbeddingProviderKey(provider, vars) {
   const descriptor = getProviderDescriptor(provider);
   if (!descriptor?.envKey) return '';
-  return vars[descriptor.envKey] || process.env[descriptor.envKey] || '';
+  return vars[descriptor.envKey] || runtimeEnvironment()[descriptor.envKey] || '';
 }
 
 async function createMemoryEmbedding(text, memoryProfile) {
+  const scope=accountScope.current();
+  if(scope){
+    const requestKey=scope.request.headers['idempotency-key'];
+    if(typeof requestKey!=='string' || !/^[A-Za-z0-9_-]{8,128}$/.test(requestKey))throw httpInputError('Обновите страницу перед сохранением памяти.');
+    const result=await operatorAuth.manageAccounts(scope.request,'embedding',{accountId:scope.id,text,profile:memoryProfile.name},requestKey);
+    if(!result?.ok || !Array.isArray(result.body?.vector) || result.body.vector.length!==memoryProfile.outputDimension) {
+      const error=new Error(result?.body?.error?.code==='consent_required'?'Владелец должен подтвердить получателей AI командой /ai_consent или в кабинете.':'Не удалось подготовить память выбранного аккаунта. Проверьте согласие и квоты.');
+      error.statusCode=[400,403,409,429].includes(result?.status)?result.status:502;throw error;
+    }
+    return result.body.vector;
+  }
   const vars = readEnvFile();
   return createMemoryEmbeddingHttp(text, memoryProfile, {
     fetchImpl: fetch,
-    env: { ...process.env, ...vars },
+    env: { ...runtimeEnvironment(), ...vars },
     resolveApiKey(provider) {
       return getMemoryEmbeddingProviderKey(provider, vars);
     },
@@ -1428,7 +1488,7 @@ function buildMemoryStats(records) {
 async function fetchMemoryRecords(profile, userId, domainFilter) {
   const botId = getMemoryBotId(profile);
   const domains = domainFilter ? [domainFilter] : MEMORY_DOMAINS;
-  const maxPerDomain = Number(process.env.MEMORY_PANEL_MAX_POINTS_PER_DOMAIN || 2000);
+  const maxPerDomain = Number(runtimeEnvironment().MEMORY_PANEL_MAX_POINTS_PER_DOMAIN || 2000);
   const records = [];
 
   await Promise.all(domains.map(async (domain) => {
@@ -1643,7 +1703,7 @@ app.get('/api/memory/graph', requireAuth, async (req, res) => {
       ? normalizeMemoryDomain(firstQueryValue(req.query.domain))
       : '';
     const vars = readEnvFile();
-    const rawConfiguredMax = Number(vars.MEMORY_GRAPH_MAX_POINTS || process.env.MEMORY_GRAPH_MAX_POINTS || 20000);
+    const rawConfiguredMax = Number(vars.MEMORY_GRAPH_MAX_POINTS || runtimeEnvironment().MEMORY_GRAPH_MAX_POINTS || 20000);
     const configuredMax = Number.isFinite(rawConfiguredMax) && rawConfiguredMax > 0
       ? Math.min(50000, Math.max(1000, Math.round(rawConfiguredMax)))
       : 20000;
@@ -1736,6 +1796,18 @@ app.get('/api/memory', requireAuth, async (req, res) => {
   }
 });
 
+app.get('/api/memory/:domain/:id', requireAuth, async (req, res) => {
+  try {
+    const profile = getMemoryProfile(req.query.profile), userId = getMemoryUserId(profile, req.query.userId);
+    const domain = normalizeMemoryDomain(req.params.domain), id = String(req.params.id || '').trim();
+    const payload = await fetchExistingMemoryPayload(profile, domain, id);
+    if (!payload || userId && String(payload.userId || '') !== userId || accountScope.current() && payload.botId !== getMemoryBotId(profile)) {
+      return res.status(404).json({error:'Воспоминание не найдено.'});
+    }
+    res.json({record:normalizeMemoryPoint({id,payload},domain)});
+  } catch (error) { res.status(error.statusCode || 500).json({error:'Не удалось загрузить воспоминание.'}); }
+});
+
 app.post('/api/memory', requireAuth, async (req, res) => {
   try {
     const profile = getMemoryProfile(req.body.profile);
@@ -1774,7 +1846,7 @@ app.patch('/api/memory/:domain/:id', requireAuth, async (req, res) => {
 
     const existingPayload = await fetchExistingMemoryPayload(profile, domain, id);
     if (!existingPayload) return res.status(404).json({ error: 'Воспоминание не найдено' });
-    if (userId && String(existingPayload.userId || '') !== userId) {
+    if (userId && String(existingPayload.userId || '') !== userId || accountScope.current() && existingPayload.botId !== getMemoryBotId(profile)) {
       return res.status(404).json({ error: 'Воспоминание не найдено для выбранного userId' });
     }
 
@@ -1816,7 +1888,7 @@ app.delete('/api/memory/:domain/:id', requireAuth, async (req, res) => {
 
     const existingPayload = await fetchExistingMemoryPayload(profile, domain, id);
     if (!existingPayload) return res.status(404).json({ error: 'Воспоминание не найдено' });
-    if (userId && String(existingPayload.userId || '') !== userId) {
+    if (userId && String(existingPayload.userId || '') !== userId || accountScope.current() && existingPayload.botId !== getMemoryBotId(profile)) {
       return res.status(404).json({ error: 'Воспоминание не найдено для выбранного userId' });
     }
 
@@ -1852,7 +1924,7 @@ function normalizeIntegerQuery(value, fallback, max) {
 function getUserTimeZone() {
   const vars = readEnvFile();
   return parseAllowedTimeZone(vars.USER_TIMEZONE)
-    || parseAllowedTimeZone(process.env.USER_TIMEZONE)
+    || parseAllowedTimeZone(runtimeEnvironment().USER_TIMEZONE)
     || getDefaultTimeZone();
 }
 
@@ -2317,13 +2389,26 @@ const monitoringService = createMonitoringService({
 });
 
 app.get('/api/status', requireAuth, async (_, res) => {
+  const scope=accountScope.current();
+  if(scope)return res.json({containers:[buildContainerStatus(scope.username,scope.status==='ready'?'running':'restarting',scope.status==='ready',null,'Состояние процесса выбранной Киры.')],serverTime:new Date().toISOString()});
   const kira = await getContainerStatus(KIRA_BOT_CONTAINER_NAME);
   res.json({ containers: [kira], serverTime: new Date().toISOString() });
 });
 
 app.get('/api/monitoring/health', requireAuth, async (_, res) => {
   try {
-    const snapshot = await monitoringService.getMonitoringSnapshot();
+    const scope=accountScope.current();
+    const service=scope?createMonitoringService({readEnvFile,createDbPool,env:runtimeEnvironment(),
+      getContainerStatus:async()=>buildContainerStatus(scope.username,scope.status==='ready'?'running':'restarting',scope.status==='ready',null,'Процесс выбранной Киры.'),
+      getTelegramHealth:async()=>{
+        if(scope.env.KIRA_RUNTIME_HEALTH_DISABLED==='false' && /^\d{1,5}$/.test(scope.env.KIRA_RUNTIME_HEALTH_PORT||'')) {
+          const target=new URL(process.env.KIRA_ACCOUNT_AUTH_URL);target.port=scope.env.KIRA_RUNTIME_HEALTH_PORT;target.pathname='/internal/health/telegram-user';
+          const response=await fetch(target,{signal:AbortSignal.timeout(5000),redirect:'error'});return {ok:response.ok,status:response.status,data:await response.json()};
+        }
+        return {ok:true,status:200,data:{status:'warn',summary:'Личная Telegram-сессия подключена. Сведения о соединении этого процесса пока недоступны.',connected:null,authorized:null}};
+      },
+    }):monitoringService;
+    const snapshot = await service.getMonitoringSnapshot();
     res.json(snapshot);
   } catch (err) {
     res.status(500).json({ error: `Не удалось собрать monitoring health: ${err.message}` });
@@ -2356,9 +2441,10 @@ app.get('/api/ai-usage/traces', requireAuth, async (req, res) => {
 // ── Personality helpers ───────────────────────────────────────────────────────
 
 function readPersonality() {
-  if (!fs.existsSync(PERSONALITY_FILE)) return DEFAULT_PERSONALITY;
+  const file=runtimeEnvironment().PERSONALITY_FILE || PERSONALITY_FILE;
+  if (!fs.existsSync(file)) return structuredClone(DEFAULT_PERSONALITY);
   try {
-    const raw = JSON.parse(fs.readFileSync(PERSONALITY_FILE, 'utf8'));
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
     const gender = raw.KiraMindBot?.characterGender === 'мужской' ? 'мужской' : 'женский';
     const defaults = getDefaultPersonalityProfile(gender);
     // Merge with defaults so missing keys always have a value
@@ -2366,14 +2452,17 @@ function readPersonality() {
       KiraMindBot: sanitizeLegacyPersonality({ ...defaults, ...raw.KiraMindBot }),
     };
   } catch {
-    return DEFAULT_PERSONALITY;
+    return structuredClone(DEFAULT_PERSONALITY);
   }
 }
 
 function writePersonality(data) {
-  const dir = path.dirname(PERSONALITY_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(PERSONALITY_FILE, JSON.stringify(data, null, 2));
+  const file=runtimeEnvironment().PERSONALITY_FILE || PERSONALITY_FILE;
+  const dir = path.dirname(file);
+  if (!fs.existsSync(dir)) { if(accountScope.current())throw new Error('Runtime выбранной Киры недоступен');fs.mkdirSync(dir, { recursive: true }); }
+  const temporary=file+'.'+crypto.randomBytes(8).toString('hex')+'.tmp';
+  try { fs.writeFileSync(temporary, JSON.stringify(data, null, 2),{mode:0o600,flag:'wx'});fs.renameSync(temporary,file); }
+  finally { if(fs.existsSync(temporary))fs.unlinkSync(temporary); }
 }
 
 async function readKiraResidenceFromDb(pool, fallbackCity) {
@@ -2427,6 +2516,7 @@ app.post('/api/personality', requireAuth, async (req, res) => {
     const currentCity = requestedCity || currentResidence.city;
     const sanitized = sanitizeLegacyPersonality({ ...KiraMindBot, currentCity });
     await writeKiraResidenceToDb(pool, currentResidence, currentCity);
+    if(accountScope.current())await accountScope.current().assertActive();
     writePersonality({ KiraMindBot: sanitized });
     res.json({ success: true, message: '✅ Личность сохранена. Текущий город применится сразу, остальные поля — после перезапуска.' });
   } catch (err) {
@@ -2444,7 +2534,8 @@ app.get('/{*path}', (_, res) => res.sendFile(path.join(DIST, 'index.html')));
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
-app.listen(PORT, '0.0.0.0', () => {
+if(require.main===module)app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Admin panel: http://0.0.0.0:${PORT}`);
   console.log(`📁 Bot env: ${BOT_ENV_FILE} (exists: ${fs.existsSync(BOT_ENV_FILE)})`);
 });
+module.exports={app,accountScope};

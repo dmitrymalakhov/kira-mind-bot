@@ -1007,6 +1007,10 @@ async function processMessageInternal(
 
         if (
             !deterministicOverrideApplied &&
+            classification.intent === 'РАЗГОВОР' &&
+            !classification.subIntents?.length &&
+            !classification.details.messagesCheckType &&
+            classification.details.memoryTask !== 'lookup' &&
             isTodayImportanceRequest(message) &&
             !explicitRemember
         ) {
@@ -1070,10 +1074,12 @@ async function processMessageInternal(
             devLog("Self-study keyword override: forcing САМОИЗУЧЕНИЕ");
         }
 
-        // ПРОВЕРКА_СООБЩЕНИЙ с низкой уверенностью (СРЕДНИЙ/НИЗКИЙ) без явного contactQuery — скорее всего ложное срабатывание, переключаем на РАЗГОВОР
+        // A typed history/unread request can cover all conversations without a
+        // contact. Only an untyped uncertain classification loses this route.
         if (
             classification.intent === "ПРОВЕРКА_СООБЩЕНИЙ" &&
             classification.confidenceLevel !== "ВЫСОКИЙ" &&
+            !classification.details.messagesCheckType &&
             !classification.details.contactQuery &&
             !classification.details.groupChatQuery &&
             !classification.details.groupChatQueries?.length

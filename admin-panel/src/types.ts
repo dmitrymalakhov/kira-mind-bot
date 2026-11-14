@@ -1,4 +1,6 @@
 export interface ConfigEntry {
+  readOnly?: boolean;
+  revision?: string;
   value: string;
   masked: boolean;
   rawValue?: string | null;

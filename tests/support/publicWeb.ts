@@ -9,6 +9,8 @@ import { OfficialIdentityVerifier } from '../../platform/publicAccounts/provider
 import { OfficialAppProof } from '../../platform/publicAccounts/proof';
 import { PublicAccountsHttp } from '../../platform/publicAccounts/http';
 import { createPlatformServer } from '../../platform/server';
+import { BotConnections } from '../../platform/botConnection';
+import { OperatorAccountsHttp } from '../../platform/operatorAccounts';
 import { newToken, passwordHash } from '../../platform/crypto';
 import { WEB_ACCESS_COOKIE, WEB_BROWSER_COOKIE, WEB_REFRESH_COOKIE } from '../../platform/publicAccounts/webCookies';
 import { publicTestConfig, publicTestSecrets } from './publicAccounts';
@@ -17,6 +19,7 @@ const adminRequire = createRequire(path.resolve(process.cwd(), 'admin-panel/pack
 const express = adminRequire('express');
 const { createOperatorAuth } = adminRequire('./operatorAuth.js');
 const { registerAccountQuotaRoutes } = adminRequire('./accountQuota.js');
+const { registerAccountsRoutes } = adminRequire('./accounts.js');
 export const webSyntheticOrigin = 'https://synthetic.example.invalid';
 export const webSyntheticPassword = 'synthetic-existing-password-123';
 export const webOperatorPassword = 'synthetic-operator-password-123';
@@ -85,7 +88,11 @@ export async function publicWebHarness(db: any, store: any) {
     const runtimes = { status: () => 'ready', endpoint: (account: any) => { const value = workers.get(account.id); if (!value) throw Error('Synthetic worker missing'); return { port:value.port,token:value.token }; }, restart: async (_id: string) => {} };
     const accounts = new PublicAccountsHttp(db,store,publicTestSecrets,runtimes,config,{ identityVerifier:verifier(config),proofVerifier:proof,
         webConfig:settings,webDependencies:{identityVerifierFactory:verifier,proofVerifier:proof} });
-    const server = createPlatformServer({store,secrets:publicTestSecrets,runtimes,telegram:{} as any,publicAccounts:accounts});
+    const botConnections = new BotConnections(store, publicTestSecrets, { verify: async () => { throw Error('No Telegram network in web fixture'); } });
+    const operatorAccounts = new OperatorAccountsHttp(store, publicTestSecrets, runtimes, botConnections, accounts.receipts, {
+        username: 'synthetic_operator', password: webOperatorPassword, capacity: 100, bridgeSecret: webBridgeSecret, operator: accounts.web!.operator,
+    });
+    const server = createPlatformServer({store,secrets:publicTestSecrets,runtimes,telegram:{} as any,publicAccounts:accounts,botConnections,operatorAccounts});
     const base = await listen(server);
     const app = express(), operator = createOperatorAuth({ username:'synthetic_operator',password:webOperatorPassword,sessionSecret:'synthetic-operator-session-secret',cookieName:'synthetic.private.sid',env:{
         KIRA_PUBLIC_OPERATOR_ENABLED:'true',KIRA_PUBLIC_WEB_ORIGIN:webSyntheticOrigin,KIRA_OPERATOR_BRIDGE_SECRET:webBridgeSecret,KIRA_ACCOUNT_AUTH_URL:base } });
@@ -97,6 +104,7 @@ export async function publicWebHarness(db: any, store: any) {
     app.get('/api/config',operator.requireAuth,(_req:any,res:any)=>res.json({globalOperatorOnly:true}));
     app.post('/api/config',operator.requireAuth,(_req:any,res:any)=>res.json({saved:true}));
     registerAccountQuotaRoutes(app,{requireAuth:operator.requireAuth,operatorAuth:operator,readEnvFile:()=>({}),env:{}});
+    registerAccountsRoutes(app,{requireAuth:operator.requireAuth,operatorAuth:operator});
     const opServer=http.createServer(app),operatorBase=await listen(opServer);settings.operatorTarget=operatorBase;
     let clients=1,existing=0;
     const client=()=>new WebTestClient(base,`192.0.2.${clients++}`);

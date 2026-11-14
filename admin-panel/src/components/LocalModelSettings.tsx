@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useAccountDraft } from '../accountEdits';
 import {
   Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, CircularProgress,
   MenuItem, Stack, TextField, Tooltip, Typography,
@@ -19,6 +20,7 @@ export function LocalModelSettings({ onToast, onSaved }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useAccountDraft(!loading && JSON.stringify(settings) !== saved);
   async function load() {
     setLoading(true);
     try {

@@ -12,6 +12,8 @@ Existing password credentials and issued bearer endpoints remain supported. Lega
 
 ## Transport, receipts and errors
 
+Trusted operator provisioning of password accounts in `telegram` mode is a separate private surface, documented in [admin accounts](admin-accounts.md). It requires operator authorization, preserves the closed public signup routes, and never supplies AI consent or autonomous AI implicitly. Telegram owners can review, accept or revoke the same canonical consent catalog with `/ai_consent`.
+
 All paths below start `/api/v1`. HTTPS only outside loopback. JSON mutation bodies carry `version:1`; unknown identity/account/chat/user fields are rejected. Account is derived from the server session. Dates are UTC RFC3339; IDs are UUID unless stated; token secrets travel only in JSON bodies/Authorization headers, never query parameters or logs. Responses have `Cache-Control:no-store`. Bodies are bounded to 64 KiB except existing photo/scene/workout limits.
 
 Every native mutation except initial challenge needs `Idempotency-Key` (8–128 `[A-Za-z0-9_-]` characters). Receipt is account/session/challenge-scoped, fingerprint includes method/path/body. An authorized same-key/body retry replays the original outcome; changed request is `409 idempotency_conflict`. Persist intent before effects; interrupted unknown external outcome is `409 operation_uncertain`, not automatic re-execution. Auth token results may be held account-bound AES-GCM encrypted for 120 seconds; refresh hashes remain the primary credential store. A maintenance pass every 60 seconds clears expired encrypted replay bodies and expired proof/rate windows; their authorization deadline remains 120 seconds even between cleanup passes.

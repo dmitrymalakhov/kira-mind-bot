@@ -10,6 +10,7 @@ export function isMcpRequest(context: Pick<ToolContext, 'classification' | 'mess
 
 const DIALOGUE_READ_TOOLS = new Set([
     'workouts.context', 'workouts.history', 'workouts.get', 'workouts.analysis', 'workouts.health',
+    'telegram.listConversations', 'telegram.getHistory',
     'web.search', 'maps.geocode', 'maps.findNearby', 'maps.getDirections', 'maps.request',
     'memory.search', 'memory.recent', 'contacts.search', 'contacts.list', 'contacts.getProfile', 'people.resolve', 'portraits.get',
     'reminders.list', 'tasks.list', 'health.listEntries', 'health.analyzePeriod',
@@ -88,7 +89,9 @@ export function canExecuteRuntimeCall(definition: ToolDefinition, call: RuntimeT
 export function availableRuntimeTools(tools: ToolDefinition[], context: ToolContext): ToolDefinition[] {
     const skills = authorizedStateSkills(context);
     const mcpOnly = isMcpRequest(context) && context.classification.details.mcpAllowWeb !== true;
+    const liveHistory = [context.classification, ...(context.classification.subIntents ?? [])].some(item => item.intent === 'ПРОВЕРКА_СООБЩЕНИЙ' && item.details?.messagesCheckType === 'ANALYZE_CONVERSATION' && !item.details.saveFactsAboutUser);
     return tools.filter(tool => !(mcpOnly && tool.name === 'web.search'))
+        .filter(tool => !(liveHistory && tool.name === 'telegram.readMessages'))
         .filter(tool => context.readOnly ? isDialogueReadTool(tool) && !(mcpOnly && tool.name === 'agents.start') : tool.effect === 'read' || tool.name === 'agents.start' || skills.has(tool.skill))
         .map(tool => mcpOnly && tool.name === 'agents.start' ? { ...tool,
             description: 'Явно порученное интерактивное действие. Веб и браузер не заменяют запрошенный MCP-источник.',

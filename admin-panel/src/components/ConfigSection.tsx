@@ -18,7 +18,8 @@ import SaveIcon from '@mui/icons-material/Save';
 import CloseIcon from '@mui/icons-material/Close';
 import { isValidProxyUrl } from '../../configValues';
 import { FieldInput } from './FieldInput';
-import { saveConfig, fetchConfig } from '../api';
+import { saveConfig, fetchConfig, configRevision, activeAdminAccount } from '../api';
+import { useAccountDraft } from '../accountEdits';
 import type { SectionDef, ConfigResponse } from '../types';
 
 interface Props {
@@ -64,9 +65,11 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
     }, [config, section.fields]);
 
     const dirty = section.fields.some(field => {
+      if (config[field.key]?.readOnly) return false;
       const value = localValues[field.key] ?? '';
       return !value.includes('••••') && value !== getEntryValue(config[field.key]);
     });
+    useAccountDraft(dirty);
     useEffect(() => { onDirtyChange?.(section.id, dirty); }, [section.id, dirty, onDirtyChange]);
 
     const acceptSaved = (saved: ConfigResponse, submitted: Record<string, string | null>) => {
@@ -83,6 +86,7 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
       getUpdates() {
         const updates: Record<string, string | null> = {};
         for (const field of section.fields) {
+          if (config[field.key]?.readOnly) continue;
           const value = localValues[field.key] ?? '';
           if (value.includes('••••')) continue;
           if (value === getEntryValue(config[field.key])) continue;
@@ -92,7 +96,7 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
       },
     }));
 
-    const invalid = section.fields.some(field => field.type === 'proxy' && !isValidProxyUrl(localValues[field.key] ?? ''));
+    const invalid = section.fields.some(field => !config[field.key]?.readOnly && field.type === 'proxy' && !isValidProxyUrl(localValues[field.key] ?? ''));
 
     const handleChange = (key: string, value: string) => {
       setLocalValues((prev) => ({ ...prev, [key]: value }));
@@ -103,15 +107,16 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
       try {
         const updates: Record<string, string | null> = {};
         for (const field of section.fields) {
+          if (config[field.key]?.readOnly) continue;
           const value = localValues[field.key] ?? '';
           if (value.includes('••••')) continue;
           if (value === getEntryValue(config[field.key])) continue;
           updates[field.key] = value;
         }
 
-        const result = await saveConfig(updates);
+        const result = await saveConfig(updates, configRevision(config));
         if (result.success) {
-          onToast('Сохранено. Для применения параметров подключения пересоздайте контейнеры.', 'success');
+          onToast(activeAdminAccount() && activeAdminAccount() !== 'instance' ? 'Сохранено. Параметры окружения применятся после перезапуска выбранной Киры.' : 'Сохранено. Для применения параметров подключения пересоздайте контейнеры.', 'success');
           const newCfg = await fetchConfig();
           acceptSaved(newCfg, updates);
           onUpdate(newCfg);
@@ -126,8 +131,8 @@ export const ConfigSection = forwardRef<ConfigSectionHandle, Props>(
       }
     };
 
-    const toggleFields = section.fields.filter((field) => field.type === 'toggle');
-    const regularFields = section.fields.filter((field) => field.type !== 'toggle');
+    const toggleFields = section.fields.filter((field) => field.type === 'toggle' && !config[field.key]?.readOnly);
+    const regularFields = section.fields.filter((field) => field.type !== 'toggle' && !config[field.key]?.readOnly);
 
     const content = <>
       {inline && <Typography variant="subtitle1" component="h2" fontWeight={600} sx={{ mb: 2 }}>{section.title}</Typography>}

@@ -4,7 +4,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import type { MonitoringCheck, MonitoringCheckCategory, MonitoringHealthResponse } from '../types';
-import { fetchMonitoringHealth } from '../api';
+import { fetchMonitoringHealth, activeAdminAccount } from '../api';
 import { AiUsageSection } from './AiUsageSection';
 import { getStatusAppearance } from './monitoring/statusPalette';
 
@@ -96,7 +96,7 @@ export const MonitoringSection = memo(function MonitoringSection() {
           })}
         </Stack>
       </Box>
-      <AiUsageSection />
+      {activeAdminAccount() !== 'instance' && <AiUsageSection />}
     </Box>
   );
 });

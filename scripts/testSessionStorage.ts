@@ -529,7 +529,32 @@ async function testRawStructuredContextIsBoundedAndExpires() {
     assert.equal(typeof update.parameters?.[4], 'number');
 }
 
+async function testBotReplacementKeepsDialogueAndFreshReferences() {
+    const priorToken=process.env.KIRA_BOT_TOKEN,priorLegacy=process.env.KIRA_SESSION_LEGACY_TELEGRAM_BOT_ID;
+    process.env.KIRA_BOT_TOKEN='200002:synthetic-current-token';process.env.KIRA_SESSION_LEGACY_TELEGRAM_BOT_ID='100001';
+    try {
+        await withMockedRepo(async repo=>{
+            const key='910000013',storage=new TypeORMSessionStorage();
+            await repo.upsert({key:scopedBotKey(key),data:{telegramBotId:'100001',messageHistory:[{role:'user',content:'Synthetic preserved dialogue',sourceMessageId:'11',timestamp:new Date().toISOString()}],
+                dialogueSummary:'Synthetic summary',domains:{general:['Synthetic fact']},sentMessages:{11:'Synthetic old reply'},sentMessageContexts:{}}},['key']);
+            const restored=await storage.read(key);assert(restored);assert.equal(restored.dialogueSummary,'Synthetic summary');
+            assert.equal(restored.messageHistory[0].content,'Synthetic preserved dialogue');assert.equal(restored.messageHistory[0].sourceMessageId,undefined);
+            assert.deepStrictEqual(restored.sentMessages,{});
+            const current:SessionData={...createInitialSession(),...restored,sentMessages:{22:'Synthetic new reply'},sentMessageContexts:{22:{messageId:22,text:'Synthetic new reply',kind:'plain',createdAt:Date.now()}}};
+            await storage.write(key,current);
+            const after=await storage.read(key);assert.equal(after?.sentMessages?.[22],'Synthetic new reply');assert.equal(after?.sentMessages?.[11],undefined);
+            assert.equal(after?.sentMessageContexts?.[22].text,'Synthetic new reply');assert.equal(after?.messageHistory[0].content,'Synthetic preserved dialogue');
+            const freshKey='910000014';await storage.write(freshKey,{...createInitialSession(),sentMessages:{31:'Synthetic first message'}});
+            assert.equal((await storage.read(freshKey))?.sentMessages?.[31],'Synthetic first message','first write to a new chat keeps its own transport references');
+        });
+    } finally {
+        if(priorToken===undefined)delete process.env.KIRA_BOT_TOKEN;else process.env.KIRA_BOT_TOKEN=priorToken;
+        if(priorLegacy===undefined)delete process.env.KIRA_SESSION_LEGACY_TELEGRAM_BOT_ID;else process.env.KIRA_SESSION_LEGACY_TELEGRAM_BOT_ID=priorLegacy;
+    }
+}
+
 async function main() {
+    await testBotReplacementKeepsDialogueAndFreshReferences();
     await testPendingPostponeRoundTrip();
     await testPendingReminderEditRoundTrip();
     await testDialoguePendingContextsRoundTripAndExpire();

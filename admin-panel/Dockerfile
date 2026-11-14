@@ -32,6 +32,7 @@ COPY assets/characters/kira /app/assets/characters/kira
 COPY ai/memoryEmbeddingProviderSupport.js /app/ai/memoryEmbeddingProviderSupport.js
 COPY utils/legacyPersonalitySanitizer.js /app/utils/legacyPersonalitySanitizer.js
 COPY utils/telegramAccess.js /app/utils/telegramAccess.js
+COPY utils/accountSettings.js /app/utils/accountSettings.js
 COPY utils/mcpConfig.js utils/mcpConnection.js /app/utils/
 EXPOSE 3000
 CMD ["node", "server.js"]

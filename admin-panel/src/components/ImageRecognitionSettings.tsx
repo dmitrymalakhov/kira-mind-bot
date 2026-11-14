@@ -3,6 +3,7 @@ import { Alert, Button, CircularProgress, Dialog, DialogActions, DialogContent, 
 import PhotoCameraOutlinedIcon from '@mui/icons-material/PhotoCameraOutlined';
 import { fetchImageRecognition, saveImageRecognition, type ImageRecognitionConfig } from '../api';
 import { SettingsTile } from './SettingsTile';
+import { useAccountDraft } from '../accountEdits';
 
 export function ImageRecognitionSettings({ onToast }: { onToast: (message: string, severity: 'success' | 'error') => void }) {
   const [open, setOpen] = useState(false);
@@ -10,6 +11,7 @@ export function ImageRecognitionSettings({ onToast }: { onToast: (message: strin
   const [settings, setSettings] = useState<ImageRecognitionConfig['settings']>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  useAccountDraft(Boolean(data) && JSON.stringify(settings) !== JSON.stringify(data?.settings));
   async function load(reset = false) {
     setBusy(true); setError('');
     try {

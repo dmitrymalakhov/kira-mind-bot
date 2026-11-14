@@ -5,6 +5,7 @@ export async function initializePublicAccounts(db: DataSource): Promise<void> {
     await db.transaction(async tx => {
         await tx.query('SELECT pg_advisory_xact_lock(706283008)');
         await tx.query(`ALTER TABLE kira_accounts
+            ADD COLUMN IF NOT EXISTS display_name text,
             ADD COLUMN IF NOT EXISTS account_state text NOT NULL DEFAULT 'active',
             ADD COLUMN IF NOT EXISTS runtime_mode text NOT NULL DEFAULT 'telegram',
             ADD COLUMN IF NOT EXISTS runtime_principal bigint,
@@ -132,6 +133,10 @@ export async function initializePublicAccounts(db: DataSource): Promise<void> {
         await tx.query(`CREATE TABLE IF NOT EXISTS kira_public_receipts (
             account_id uuid NOT NULL REFERENCES kira_accounts(id) ON DELETE CASCADE, key_hash text NOT NULL,
             fingerprint text NOT NULL, status text NOT NULL, result jsonb, PRIMARY KEY(account_id,key_hash)
+        )`);
+        // Keep a nonsecret retry tombstone after deletion; its credential fingerprint is erased then.
+        await tx.query(`CREATE TABLE IF NOT EXISTS kira_operator_account_requests (
+            key_hash text PRIMARY KEY, fingerprint text NOT NULL, account_id uuid NOT NULL
         )`);
         await tx.query(`CREATE TABLE IF NOT EXISTS kira_public_deletions (
             id uuid PRIMARY KEY, account_id uuid UNIQUE NOT NULL, state text NOT NULL DEFAULT 'pending',

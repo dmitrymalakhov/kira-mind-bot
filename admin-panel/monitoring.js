@@ -210,6 +210,7 @@ function createMonitoringService({
   getContainerStatus,
   fetchImpl = fetch,
   env = process.env,
+  getTelegramHealth,
 }) {
   async function checkAiProviderHealth(providerId) {
     const vars = readEnvFile();
@@ -411,7 +412,7 @@ function createMonitoringService({
           serverVersion,
           clientVersion,
           collectionsCount: Array.isArray(collectionsResult.data?.result?.collections)
-            ? collectionsResult.data.result.collections.length
+            ? collectionsResult.data.result.collections.filter(item=>!env.KIRA_MEMORY_NAMESPACE || item.name.startsWith(env.KIRA_MEMORY_NAMESPACE+'_')).length
             : undefined,
         },
       });
@@ -517,7 +518,8 @@ function createMonitoringService({
 
     try {
       const runtimeBaseUrl = getRuntimeHealthBaseUrl(env);
-      const result = await fetchWithMeta(fetchImpl, `${runtimeBaseUrl}/internal/health/telegram-user`);
+      const result = getTelegramHealth ? await getTelegramHealth() : await fetchWithMeta(fetchImpl, `${runtimeBaseUrl}/internal/health/telegram-user`);
+      if(getTelegramHealth && !result.response)result.response={ok:result.ok,status:result.status};
       const payload = result.data || {};
       const status = payload.status === 'ok' || payload.status === 'warn' || payload.status === 'down' || payload.status === 'disabled'
         ? payload.status

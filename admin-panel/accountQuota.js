@@ -8,11 +8,17 @@ function validQuota(quota) {
         && value.remaining === Math.max(0, value.limit - value.used - value.reserved);
     });
 }
-function registerAccountQuotaRoutes(app, { requireAuth, operatorAuth, readEnvFile, env = process.env, fetcher = fetch }) {
+function registerAccountQuotaRoutes(app, { requireAuth, operatorAuth, readEnvFile, env = process.env, fetcher = fetch, getAccountId = () => undefined }) {
   app.get('/api/account-quota', requireAuth, async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     if (Object.keys(req.query || {}).length) return res.status(400).json({ error: 'Выбор другого аккаунта не поддерживается.' });
     try {
+      const selected=getAccountId();
+      if (selected) {
+        const result=await operatorAuth.manageAccounts(req,'quota',{accountId:selected});
+        if(!result?.ok || result.body?.version!==1 || !validQuota(result.body.quota)) throw Error('Unavailable account quota');
+        return res.json({available:true,version:1,quota:result.body.quota});
+      }
       let result = await operatorAuth.accountQuota(req);
       if (result === undefined) {
         if (!env.KIRA_ACCOUNT_AUTH_URL) return res.json({ available: false, reason: 'standalone' });
