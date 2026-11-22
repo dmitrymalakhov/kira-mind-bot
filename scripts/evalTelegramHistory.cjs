@@ -63,6 +63,10 @@ async function main() {
         ['outgoing', 'С кем я сегодня общался в Телеграме? Учти и мои сообщения.', true],
         ['yesterday', 'Посмотри мои вчерашние чаты и выдели решения.', true],
         ['named', 'Прочитай сегодняшнюю переписку с Мироном Учебным, выдели главное.', true],
+        ['named-recent-news', 'Какие последние новости и решения за неделю в чате «Учебная группа макета»?', true],
+        ['named-prices', 'Посмотри учебную группу в Telegram и подведи итог обсуждению цен и расписания за неделю.', true],
+        ['separate-public-search', 'Собери новости за неделю в учебной группе и отдельно проверь в интернете расписание городских выставок.', true, undefined, true],
+        ['public-news', 'Какие последние новости о городских выставках за неделю?', false, undefined, true],
         ['important-topics', 'Какие сегодня были важные темы в чатах?', true],
         ['frequency', 'С кем чаще всего сегодня общался?', true],
         ['frequency-followup', 'С кем чаще всего сегодня общался?', true, [{ role: 'user', content: 'Какие сегодня были важные темы в чатах?' }, { role: 'bot', content: 'Обсудили учебный макет и сборку.' }]],
@@ -76,11 +80,12 @@ async function main() {
     let failed = 0;
     const classified = new Map();
     for (const task of process.argv.includes('--agent-only') ? ['intentClassification'] : ['intentClassification', 'fastDialogue'])
-        for (const [id, message, expected, messageHistory] of process.argv.includes('--agent-only') ? fixtures.slice(0, 1) : fixtures) {
+        for (const [id, message, expected, messageHistory, expectedWeb = false] of process.argv.includes('--agent-only') ? fixtures.slice(0, 1) : fixtures) {
         const actual = await infer(task, { messages: [{ role: 'system', content: contract.INTENT_CLASSIFIER_INSTRUCTIONS + (task === 'fastDialogue' ? '\n' + fast.fastDialogueInstructions() : '') },
             { role: 'user', content: contract.buildIntentClassifierInput({ message, dateTime: '13 ноября 2026 года, 12:00 Europe/Amsterdam', mcpContext: '', messageHistory }) }] });
         const history = actual.intent === 'ПРОВЕРКА_СООБЩЕНИЙ' && actual.details?.messagesCheckType === 'ANALYZE_CONVERSATION';
-        const ok = history === expected && (!expected || actual.fastReply?.mode !== 'answer');
+        const hasWeb = [actual, ...(actual.subIntents ?? actual.details?.subIntents ?? [])].some(item => item.intent === 'ВЕБ_ПОИСК');
+        const ok = history === expected && hasWeb === expectedWeb && (!expected || actual.fastReply?.mode !== 'answer');
         if (!ok) failed++;
         if (task === 'intentClassification') classified.set(id, actual);
         console.log(JSON.stringify({ phase: 'classification', task, id, ok, intent: actual.intent, mode: actual.fastReply?.mode, type: actual.details?.messagesCheckType }));

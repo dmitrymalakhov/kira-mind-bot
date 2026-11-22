@@ -36,7 +36,7 @@ import { handlePendingContactLookupText, maybeStartContactMemoryLookup } from ".
 import { hasActiveBrowserRunForContext } from "./agents/browserAgent";
 import { shouldCancelBrowserTask } from "./utils/browserTaskCancellation";
 import { isTodayImportanceRequest } from "./utils/todayImportanceIntent";
-import { applyKnowledgeSourceDecision, buildKnowledgeSourcePrompt, decideKnowledgeSource, shouldInterruptPendingContactMemory } from "./utils/knowledgeSource";
+import { applyKnowledgeSourceDecision, buildKnowledgeSourcePrompt, decideKnowledgeSource, hasTelegramHistoryRequest, scopeTelegramHistoryKnowledge, shouldInterruptPendingContactMemory } from "./utils/knowledgeSource";
 import { decideContextualFollowUp } from "./utils/contextualFollowUp";
 import { getBotGenderedText } from "./persona";
 import { buildClassificationCacheKey } from "./utils/classificationCache";
@@ -405,8 +405,10 @@ function normalizeIntentScores(classification: MessageClassification): MessageCl
     const rawIntent = VALID_CLASSIFICATION_INTENTS.has(classification.intent)
         ? classification.intent
         : "НЕОПРЕДЕЛЕНО";
-    const intent = intentScores[0]?.intent && intentScores[0].intent !== "НЕОПРЕДЕЛЕНО"
-        ? intentScores[0].intent
+    const rankedIntent = intentScores[0]?.intent;
+    const typedHistory = rawIntent === 'ПРОВЕРКА_СООБЩЕНИЙ' && hasTelegramHistoryRequest(classification);
+    const intent = rankedIntent && rankedIntent !== 'НЕОПРЕДЕЛЕНО' && !(typedHistory && rankedIntent === 'ВЕБ_ПОИСК')
+        ? rankedIntent
         : rawIntent;
 
     return { ...classification, intent, details: classification.details ?? {}, intentScores };
@@ -423,7 +425,9 @@ function detectIntentAmbiguity(classification: MessageClassification): {
     // Abstention is uncertainty about the decision, not a competing user action.
     // Comparing it with a valid lookup intent used to divert a completed search
     // into a generic clarification despite an unambiguous factual question.
-    const scores = (classification.intentScores ?? []).filter(candidate => candidate.intent !== 'НЕОПРЕДЕЛЕНО');
+    const telegramOnlySource = hasTelegramHistoryRequest(classification) && classification.details.knowledgeSource === 'personal';
+    const scores = (classification.intentScores ?? []).filter(candidate =>
+        candidate.intent !== 'НЕОПРЕДЕЛЕНО' && !(telegramOnlySource && candidate.intent === 'ВЕБ_ПОИСК'));
     if (scores.length < 2) return null;
 
     const [top, runnerUp] = scores;
@@ -908,7 +912,10 @@ async function processMessageInternal(
                 assistantReply: replyContext ? ctx.session.sentMessageContexts?.[replyContext.messageId]?.text ?? ctx.session.sentMessages?.[replyContext.messageId] : undefined });
             if (classification.details.behaviorLearningStatus === 'saved') classification.details.behaviorContext = await getBehaviorMemoryContext(ctx);
         }
-        if (classification.details.externalVerification === 'availability' && !isMcpRequest({ classification, message: originalMessage })) {
+        classification = scopeTelegramHistoryKnowledge(classification);
+        if (hasTelegramHistoryRequest(classification) && classification.details.knowledgeSource === 'personal') {
+            knowledgeDecision = { source: 'personal', requiresWeb: false, requestedFacets: [], reason: 'live Telegram history' };
+        } else if (classification.details.externalVerification === 'availability' && !isMcpRequest({ classification, message: originalMessage })) {
             knowledgeDecision = { source: 'external_current', requiresWeb: true, requestedFacets: ['current_state', 'schedule', 'sources'], reason: 'availability requires current verification' };
         }
         if (!isForwarded && !forwardContext) {
@@ -1279,7 +1286,10 @@ async function processRuntimeImages(ctx: any, images: Buffer[], caption: string,
         let classification: MessageClassification = caption.trim()
             ? await classifyMessage(caption, false, '', messageHistory)
             : { intent: 'РАЗГОВОР', confidenceLevel: 'ВЫСОКИЙ', details: { memoryNeed: 'none', relationshipRole: null, responseComplexity: 'routine' } };
-        const source = decideKnowledgeSource(caption || 'Опиши изображение');
+        classification = scopeTelegramHistoryKnowledge(classification);
+        const source = hasTelegramHistoryRequest(classification) && classification.details.knowledgeSource === 'personal'
+            ? { source: 'personal' as const, requiresWeb: false, requestedFacets: [], reason: 'live Telegram history' }
+            : decideKnowledgeSource(caption || 'Опиши изображение');
         if (source.requiresWeb) classification = applyKnowledgeSourceDecision(classification, source).classification;
         const memory = await fetchAgentMemoryContext(ctx, caption || 'изображение', { memoryNeed: classification.details.memoryNeed });
         const result = await runKiraRuntime({ ctx, images, message: caption || 'Опиши присланное изображение', isForwarded: false, forwardFrom: '', messageHistory,

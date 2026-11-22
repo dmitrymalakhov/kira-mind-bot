@@ -1,6 +1,7 @@
 import { config } from '../../config';
 import { InlineKeyboard } from 'grammy';
 import { performWebSearch } from '../../agents/webSearchAgent';
+import { hasTelegramHistoryRequest } from '../../utils/knowledgeSource';
 import { GoogleMapsService } from '../../services/googleMaps';
 import { ContactsStore } from '../../stores/ContactsStore';
 import { lookupTelegramProfile, continueTelegramProfileLookup, TELEGRAM_PROFILE_FIELDS, type TelegramProfileField } from '../../services/telegramProfileService';
@@ -48,7 +49,8 @@ export function domainTools(): ToolDefinition[] {
         ...telegramTools(),
         readTool('web.search', 'web-research', 'Найти актуальную информацию и прямые источники. Ошибка поиска не является доказательством отсутствия события.', objectSchema({ query: textSchema('Поисковый запрос, покрывающий нужные аспекты') }), async (args, context) => {
             const result = await performWebSearch(String(args.query), { verifyAvailability: context.classification.details.externalVerification === 'availability',
-                context: JSON.stringify({ request: context.message, history: context.messageHistory.slice(-6).map(({ role, content }) => ({ role, content: content.slice(0, 1400) })), behavior: context.classification.details.behaviorContext }) });
+                context: hasTelegramHistoryRequest(context.classification) ? undefined :
+                    JSON.stringify({ request: context.message, history: context.messageHistory.slice(-6).map(({ role, content }) => ({ role, content: content.slice(0, 1400) })), behavior: context.classification.details.behaviorContext }) });
             return result.success && result.results
                 ? { status: 'ok', summary: result.results, context: result.results, data: { text: result.results } }
                 : { status: 'failed', summary: result.results || 'Веб-поиск недоступен; актуальные сведения не проверены.' };

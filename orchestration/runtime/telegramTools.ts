@@ -1,6 +1,22 @@
 import { listTelegramConversations, readTelegramConversation } from '../../services/telegramConversationHistory';
 import { objectSchema, textSchema } from './registry';
-import type { ToolDefinition, ToolObservation } from './types';
+import type { RuntimeToolCall, ToolDefinition, ToolObservation } from './types';
+
+/** Only actual successful pages consume cursors. Duplicate reads do not add work. */
+export function pendingTelegramPages(observations: readonly ToolObservation[]): RuntimeToolCall[] {
+    const pages = observations.filter(o => ['telegram.listConversations', 'telegram.getHistory'].includes(o.tool) && o.status === 'ok');
+    const key = (tool: string, cursor: unknown) => JSON.stringify([tool, cursor]);
+    const consumed = new Set(pages.map(o => key(o.tool, (o.data as any)?.cursor)));
+    const pending = new Map<string, RuntimeToolCall>();
+    for (const observation of pages) {
+        const data = observation.data as { nextCursor?: string; chatId?: string } | undefined;
+        if (!data?.nextCursor || consumed.has(key(observation.tool, data.nextCursor))) continue;
+        pending.set(key(observation.tool, data.nextCursor), { id: '', tool: observation.tool, args: {
+            cursor: data.nextCursor, ...(observation.tool === 'telegram.getHistory' ? { chatId: data.chatId } : {}),
+        } });
+    }
+    return [...pending.values()];
+}
 
 /** Counts come from unique source message IDs, not an estimate by the model. */
 export function telegramHistoryStatistics(observations: readonly ToolObservation[]) {
@@ -29,8 +45,7 @@ export function telegramHistoryCoverage(observations: readonly ToolObservation[]
     const pages = observations.filter(o => ['telegram.listConversations', 'telegram.getHistory'].includes(o.tool) && o.status === 'ok')
         .map(o => ({ tool: o.tool, data: o.data as { items?: Array<{ chatId?: string; textTruncated?: boolean }>; chatId?: string; cursor?: string; nextCursor?: string; scanLimitReached?: boolean } }));
     if (!pages.length) return undefined;
-    const consumed = new Set(pages.map(p => p.data?.cursor).filter(Boolean));
-    const pending = pages.filter(p => p.data?.nextCursor && !consumed.has(p.data.nextCursor));
+    const pending = pendingTelegramPages(observations);
     const found = new Set(pages.filter(p => p.tool === 'telegram.listConversations').flatMap(p => p.data?.items?.map(item => item.chatId) ?? []));
     const read = new Set(pages.filter(p => p.tool === 'telegram.getHistory').map(p => p.data?.chatId));
     const unread = [...found].filter(id => !read.has(id)).length;
@@ -39,7 +54,7 @@ export function telegramHistoryCoverage(observations: readonly ToolObservation[]
     if (!pending.length && !unread && !truncated && !capped) return undefined;
     return `Обзор частичный: ${[
         unread ? `не прочитано найденных чатов: ${unread}` : '',
-        pending.length ? `остались страницы: ${pending.length}` : '',
+        pending.length ? `есть продолжение чтения (источников: ${pending.length})` : '',
         truncated ? 'длинные сообщения показаны с сокращением' : '',
         capped ? 'достигнут предел поиска чатов' : '',
     ].filter(Boolean).join('; ')}.`;
