@@ -4,6 +4,22 @@ import { getZonedDateTimeParts, zonedDateTimeToDate } from '../utils/time';
 import { getGramJsForwardSource } from '../utils/forwardedMessage';
 
 export interface ConversationRange { since: string; until: string }
+type ConversationItem = { chatId: string; title: string; chatType: string; latestAt: string; username?: string };
+interface ConversationCatalogue extends ConversationRange {
+    timeZone: string;
+    items: ConversationItem[];
+    cursor: string | null;
+    complete: boolean;
+    nextCursor?: string;
+    scanLimitReached?: boolean;
+    resolvedChatId?: string;
+    ambiguousTitle?: boolean;
+}
+const CATALOG_LIMIT = 1000;
+
+export function normalizeTelegramChatTitle(value: string): string {
+    return value.normalize('NFKC').replace(/\p{Cf}/gu, '').trim().replace(/\s+/gu, ' ').toLocaleLowerCase();
+}
 type Cursor = ConversationRange & { kind: 'dialogs' | 'history'; peer: string; messageId: number; date: number; offset?: number; query?: string; chatType?: string };
 
 function encode(cursor: Cursor): string { return Buffer.from(JSON.stringify(cursor)).toString('base64url'); }
@@ -13,7 +29,7 @@ function decode(value: unknown, kind: Cursor['kind']): Cursor | undefined {
     const cursor = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Cursor;
     if (cursor.kind !== kind || !/^-?\d{1,16}$/.test(cursor.peer) || !Number.isSafeInteger(cursor.messageId) || cursor.messageId <= 0 ||
         !Number.isSafeInteger(cursor.date) || cursor.date <= 0) throw Error('Некорректный курсор');
-    if (kind === 'dialogs' && (!Number.isInteger(cursor.offset) || cursor.offset! < 0 || cursor.offset! >= 1000)) throw Error('Некорректное смещение');
+    if (kind === 'dialogs' && (!Number.isInteger(cursor.offset) || cursor.offset! < 0 || cursor.offset! >= CATALOG_LIMIT)) throw Error('Некорректное смещение');
     return cursor;
 }
 
@@ -42,7 +58,7 @@ function rangeWithCursor(args: Record<string, unknown>, cursor?: Cursor): Conver
 function checkSignal(signal?: AbortSignal): void { if (signal?.aborted) throw Error('Чтение отменено'); }
 
 /** Pages retain Telegram order, including outgoing-only conversations. No mark-as-read calls. */
-export async function listTelegramConversations(args: Record<string, unknown>, signal?: AbortSignal) {
+export async function listTelegramConversations(args: Record<string, unknown>, signal?: AbortSignal, namedTarget?: string): Promise<ConversationCatalogue> {
     const cursor = decode(args.cursor, 'dialogs');
     const range = rangeWithCursor(args, cursor);
     const query = String(args.query ?? cursor?.query ?? '').trim().toLocaleLowerCase();
@@ -58,16 +74,24 @@ export async function listTelegramConversations(args: Record<string, unknown>, s
     // GramJS ignorePinned excludes those conversations entirely. Keep them and
     // paginate the bounded catalogue before filtering, as with other resource lists.
     const offset = cursor?.offset ?? 0;
-    const dialogs = await client.getDialogs({ limit: Math.min(1001, offset + limit + 1), ignorePinned: false });
+    // A named search can have hundreds of nonmatching dialogs before its first hit.
+    // Read the bounded catalogue once inside the tool, independently of planner rounds.
+    const addressed = Boolean(query) && !cursor;
+    const end = addressed ? CATALOG_LIMIT : Math.min(CATALOG_LIMIT, offset + limit);
+    const dialogs = await client.getDialogs({ limit: end + 1, ignorePinned: false });
     checkSignal(signal);
-    const items: Array<{ chatId: string; title: string; chatType: string; latestAt: string; username?: string }> = [];
+    const items: ConversationItem[] = [];
+    const exact = new Map<string, ConversationItem>();
+    const search = normalizeTelegramChatTitle(query);
+    const named = normalizeTelegramChatTitle(namedTarget ?? '');
+    const since = Date.parse(range.since);
     let last: any; let reachedStart = false;
-    for (const dialog of Array.from(dialogs).slice(offset, Math.min(1000, offset + limit))) {
+    for (const dialog of Array.from(dialogs).slice(offset, end)) {
         const d = dialog as any;
         last = d;
         if (!d.message?.date || d.id == null) continue;
         const date = d.message.date * 1000;
-        if (date < Date.parse(range.since)) {
+        if (date < since) {
             if (d.pinned) continue;
             reachedStart = true; break;
         }
@@ -76,15 +100,27 @@ export async function listTelegramConversations(args: Record<string, unknown>, s
             !['all', 'conversations', type].includes(chatType)) continue;
         const title = String(d.title || d.name || d.entity?.title || [d.entity?.firstName, d.entity?.lastName].filter(Boolean).join(' ') || 'Без названия').slice(0, 200);
         const username = d.entity?.username ? String(d.entity.username).slice(0, 100) : undefined;
-        if (query && !`${title} ${username ? '@' + username : ''}`.toLocaleLowerCase().includes(query)) continue;
-        items.push({ chatId: String(d.id), title, chatType: type, latestAt: new Date(date).toISOString(), ...(username ? { username } : {}) });
+        const normalizedTitle = normalizeTelegramChatTitle(title);
+        if (search && !`${normalizedTitle} ${username ? '@' + username.toLocaleLowerCase() : ''}`.includes(search)) continue;
+        const item = { chatId: String(d.id), title, chatType: type, latestAt: new Date(date).toISOString(), ...(username ? { username } : {}) };
+        items.push(item);
+        if (named && normalizedTitle === named) exact.set(item.chatId, item);
     }
-    const more = !reachedStart && dialogs.length > offset + limit;
-    const scanLimitReached = more && offset + limit >= 1000;
+    const more = !reachedStart && dialogs.length > end;
+    const scanLimitReached = more && end >= CATALOG_LIMIT;
+    if (addressed) {
+        const matches = exact.size ? [...exact.values()] : items;
+        const capped = scanLimitReached || matches.length > limit;
+        const complete = !capped;
+        return { ...range, timeZone: USER_TIMEZONE, items: matches.slice(0, limit), cursor: null, complete,
+            ...(capped ? { scanLimitReached: true } : {}),
+            ...(complete && exact.size === 1 ? { resolvedChatId: matches[0].chatId } : {}),
+            ...(exact.size > 1 ? { ambiguousTitle: true } : {}) };
+    }
     const nextCursor = more && !scanLimitReached && last?.message?.id && last?.message?.date && last.id != null
-        ? encode({ ...range, kind: 'dialogs', peer: String(last.id), messageId: last.message.id, date: last.message.date, offset: offset + limit, query, chatType }) : undefined;
+        ? encode({ ...range, kind: 'dialogs', peer: String(last.id), messageId: last.message.id, date: last.message.date, offset: end, query, chatType }) : undefined;
     if (more && !scanLimitReached && !nextCursor) throw Error('Не удалось продолжить каталог');
-    return { ...range, timeZone: USER_TIMEZONE, items, cursor: args.cursor ?? null, complete: !more, ...(nextCursor ? { nextCursor } : {}), ...(scanLimitReached ? { scanLimitReached } : {}) };
+    return { ...range, timeZone: USER_TIMEZONE, items, cursor: typeof args.cursor === 'string' ? args.cursor : null, complete: !more, ...(nextCursor ? { nextCursor } : {}), ...(scanLimitReached ? { scanLimitReached } : {}) };
 }
 
 export async function readTelegramConversation(args: Record<string, unknown>, signal?: AbortSignal) {

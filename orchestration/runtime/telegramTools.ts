@@ -1,4 +1,4 @@
-import { listTelegramConversations, readTelegramConversation } from '../../services/telegramConversationHistory';
+import { listTelegramConversations, normalizeTelegramChatTitle, readTelegramConversation } from '../../services/telegramConversationHistory';
 import { objectSchema, textSchema } from './registry';
 import type { RuntimeToolCall, ToolDefinition, ToolObservation } from './types';
 
@@ -75,8 +75,15 @@ export function telegramTools(): ToolDefinition[] {
             inputSchema: objectSchema({ ...page, query: textSchema('Фильтр имени чата или username; роль сначала разреши через people.resolve.', 200),
                 chatType: { type: 'string', enum: ['conversations', 'private', 'group', 'channel', 'all'] } }, []),
             async execute(args, context) {
-                const data = await listTelegramConversations(args, context.signal);
-                return { status: 'ok', summary: `Найдены переписки: ${data.items.length}. ${data.complete ? 'Поиск завершён.' : 'Поиск неполный; продолжи nextCursor.'}`, data };
+                const details = context.classification.details;
+                const target = details.messagesCheckType === 'ANALYZE_CONVERSATION' && !details.saveFactsAboutUser && !details.groupChatQueries?.length
+                    ? details.groupChatQuery?.trim() : undefined;
+                const query = typeof args.query === 'string' ? args.query : undefined;
+                const namedTarget = !args.cursor && target && (!query || normalizeTelegramChatTitle(query) === normalizeTelegramChatTitle(target)) ? target : undefined;
+                const data = await listTelegramConversations(namedTarget ? { ...args, query: namedTarget } : args, context.signal, namedTarget);
+                const coverage = data.ambiguousTitle ? 'У нескольких чатов это название; уточни выбор у владельца.'
+                    : data.complete ? 'Поиск завершён.' : data.nextCursor ? 'Поиск неполный; продолжи nextCursor.' : 'Достигнут предел поиска.';
+                return { status: 'ok', summary: `Найдены переписки: ${data.items.length}. ${coverage}`, data };
             },
         },
         {
@@ -89,6 +96,10 @@ export function telegramTools(): ToolDefinition[] {
                     : o.tool === 'telegram.getHistory' ? [{ chatId: (o.data as { chatId?: string })?.chatId, title: (o.data as { chatTitle?: string })?.chatTitle, since: (o.data as { since?: string })?.since, until: (o.data as { until?: string })?.until }] : [])
                     .find(item => item.chatId === args.chatId);
                 if (!source) return { status: 'failed', summary: 'Сначала найди точный chatId через telegram.listConversations. Не угадывай ID или имя.' };
+                if (!context.continuationAnswer && context.observations.some(o => {
+                    const data = o.data as { ambiguousTitle?: boolean; items?: Array<{ chatId: string }> } | undefined;
+                    return o.tool === 'telegram.listConversations' && o.status === 'ok' && data?.ambiguousTitle && data.items?.some(item => item.chatId === args.chatId);
+                })) return { status: 'failed', summary: 'У нескольких чатов это название. Сначала уточни, какой чат нужен.' };
                 const inherited = !args.cursor && args.since === undefined && args.until === undefined && source.since && source.until
                     ? { ...args, since: source.since, until: source.until } : args;
                 const data = await readTelegramConversation(inherited, context.signal);

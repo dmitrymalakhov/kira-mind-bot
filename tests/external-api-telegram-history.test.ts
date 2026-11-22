@@ -75,8 +75,14 @@ test(`${channel}: ${scenario} reads private/group history and delivers one final
     t.mock.method(shared, 'shouldRunProactiveHint', () => false);
     const at = Math.floor(Date.now() / 1000) - 1;
     const init = t.mock.method(telegram, 'initTelegramClient', async () => ({
-        getDialogs: async () => [{ id: 81061, title: 'Мирон Учебный', isUser: true, entity: {}, message: { id: 5, date: at } },
-            { id: -10081062, title: 'Учебная группа', isGroup: true, entity: {}, message: { id: 4, date: at } }],
+        getDialogs: async ({ limit }: { limit: number }) => {
+            const regular = [{ id: 81061, title: 'Мирон Учебный', isUser: true, entity: {}, message: { id: 5, date: at } }];
+            const group = { id: -10081062, title: 'Учебная\u00a0группа', isGroup: true, entity: {}, message: { id: 4, date: at } };
+            const decoys = namedRequest ? Array.from({ length: 425 }, (_, index) => ({
+                id: 82000 + index, title: `Учебный диалог ${index}`, isUser: true, entity: {}, message: { id: 5, date: at },
+            })) : [];
+            return [...regular, ...decoys, group].slice(0, limit);
+        },
         getMessages: async (id: string, args: any) => {
             if (namedRequest) {
                 assert.equal(id, '-10081062');
@@ -115,7 +121,13 @@ test(`${channel}: ${scenario} reads private/group history and delivers one final
             if (++round === 1) return { calls: [{ id: 'catalog', tool: 'telegram.listConversations', args: {
                 query: 'Учебная группа', since: new Date((at - 7 * 86400) * 1000).toISOString(), until: new Date((at + 1) * 1000).toISOString(),
             } }] } as any;
-            if (round === 2) return { calls: [{ id: 'read', tool: 'telegram.getHistory', args: { chatId: input.observations[0].data.items[0].chatId } }] } as any;
+            if (round === 2) {
+                // Named discovery must pass all 425 decoys in one call. The kernel
+                // must use the verified chat even when the planner finishes early.
+                assert.equal(input.observations[0].data.items[0].chatId, '-10081062');
+                assert.equal(input.observations[0].data.complete, true);
+                return { finish: true } as any;
+            }
             if (executesWeb && !input.observations.some((item: any) => item.tool === 'web.search'))
                 return { calls: [{ id: 'public_web', tool: 'web.search', args: { query: 'Расписание городских выставок' } }] } as any;
             if (scenario === 'named-prices' && round === 3) return { question: 'Прислать остальные сообщения?' } as any;
