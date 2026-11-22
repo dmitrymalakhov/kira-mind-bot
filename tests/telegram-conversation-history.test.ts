@@ -93,6 +93,47 @@ test('addressed history discovery accepts usernames with or without @ and explic
     assert.deepEqual(channel.items.map(item => item.chatId), ['-100203']);
 });
 
+test('addressed catalogue honors its scan cap and does not invent a resolved chat', async t => {
+    t.mock.method(telegram, 'initTelegramClient', async () => ({ getDialogs: async ({ limit }: { limit: number }) => {
+        assert.equal(limit, 1001);
+        return Array.from({ length: limit }, (_, index) => dialog(5000 + index, {
+            ...(index === 800 ? { title: 'Учебная встреча' } : {}),
+        }));
+    } }) as any);
+    const result = await listTelegramConversations({ ...range, query: 'Учебная встреча' }, undefined, 'Учебная встреча');
+    assert.deepEqual(result.items.map(item => item.chatId), ['5800']);
+    assert.equal(result.resolvedChatId, undefined);
+    assert.equal(result.complete, false);
+    assert.equal(result.scanLimitReached, true);
+    assert.equal(result.nextCursor, undefined);
+});
+
+test('exact normalized titles take precedence and equal titles require clarification before reading', async t => {
+    const similar = dialog(-201, { isUser: false, isGroup: true, title: 'Учебная встреча — архив' });
+    const match1 = dialog(-202, { isUser: false, isGroup: true, title: 'Учебная\u00a0встреча' });
+    const match2 = dialog(-203, { isUser: false, isGroup: true, title: 'Учебная встреча' });
+    const read = t.mock.fn(async () => []);
+    const init = t.mock.method(telegram, 'initTelegramClient', async () => ({ getDialogs: async () => [similar, match1, match2], getMessages: read }) as any);
+    const value = context();
+    value.classification.details.groupChatQuery = 'Учебная встреча';
+    const registry = new ToolRegistry(telegramTools(), () => true);
+    const result = await registry.execute('telegram.listConversations', range, value);
+    assert.equal(result.status, 'ok');
+    const data = result.data as { items: Array<{ chatId: string }>; ambiguousTitle?: boolean; resolvedChatId?: string };
+    assert.deepEqual(data.items.map(item => item.chatId), ['-202', '-203']);
+    assert.equal(data.ambiguousTitle, true);
+    assert.equal(data.resolvedChatId, undefined);
+    value.observations = [{ id: 'find', tool: 'telegram.listConversations', status: 'ok', data, summary: '' }];
+    assert.equal((await registry.execute('telegram.getHistory', { chatId: '-202' }, value)).status, 'failed');
+    assert.equal(read.mock.callCount(), 0);
+    assert.equal((await registry.execute('telegram.getHistory', { chatId: '-203' }, { ...value, continuationAnswer: 'Второй' })).status, 'ok');
+    assert.equal(read.mock.callCount(), 1);
+    init.mock.mockImplementation(async () => ({ getDialogs: async () => [similar, match1] }) as any);
+    const unique = await registry.execute('telegram.listConversations', range, value);
+    assert.deepEqual((unique.data as typeof data).items.map(item => item.chatId), ['-202']);
+    assert.equal((unique.data as typeof data).resolvedChatId, '-202');
+});
+
 test('catalog scan limit is explicitly partial and an upper time boundary is exclusive', async t => {
     const init = t.mock.method(telegram, 'initTelegramClient', async () => ({ getDialogs: async ({ limit }: any) => Array.from({ length: limit }, (_, i) => dialog(2000 + i)) }) as any);
     const cursor = Buffer.from(JSON.stringify({ ...range, kind: 'dialogs', peer: '201', messageId: 50, date: second, offset: 980, query: '', chatType: 'conversations' })).toString('base64url');

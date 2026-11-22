@@ -366,7 +366,12 @@ async function runKiraRuntimeInternal(input: KiraRuntimeInput, dependencies: Run
                 const hasTelegramSource = observations.some(item => ['telegram.listConversations', 'telegram.getHistory'].includes(item.tool) || item.tool === 'telegram.readMessages' && item.status === 'ok');
                 const unreadCatalog = observations.some(item => item.tool === 'telegram.listConversations' && item.status === 'ok' && (item.data as { items?: unknown[] })?.items?.length) &&
                     !observations.some(item => item.tool === 'telegram.getHistory' || item.tool === 'telegram.readMessages' && item.status === 'ok');
-                if (requiresTelegramHistory && (!hasTelegramSource || unreadCatalog)) {
+                const resolvedChat = unreadCatalog ? observations.find(item => item.tool === 'telegram.listConversations' && item.status === 'ok' &&
+                    (item.data as { resolvedChatId?: string })?.resolvedChatId) : undefined;
+                if (requiresTelegramHistory && resolvedChat) {
+                    const { resolvedChatId, since, until } = resolvedChat.data as { resolvedChatId: string; since: string; until: string };
+                    selection.calls = [{ id: `resolved_telegram_${round}`, tool: 'telegram.getHistory', args: { chatId: resolvedChatId, since, until } }];
+                } else if (requiresTelegramHistory && (!hasTelegramSource || unreadCatalog)) {
                     if (++missingHistoryPlans <= 2) {
                         observations.push({ id: `required_telegram_${round}`, tool: 'kernel.requireSource', status: 'ok', summary: unreadCatalog
                             ? 'Каталог переписок найден, но сообщения ещё не прочитаны. Его items — адреса чатов, не содержание. Вызови telegram.getHistory по найденным chatId с тем же периодом.'
