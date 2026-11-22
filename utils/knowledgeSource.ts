@@ -1,4 +1,5 @@
 import type { ConversationReplyContext, KnowledgeSourceDecision } from '../types';
+import type { MessageClassification } from '../orchestrator';
 import { isFocusedPersonalRecall } from './personalRecallIntent';
 
 const SELF_RE = /(?:кто\s+ты|расскажи\s+(?:о|про)\s+себя|тво[яйёе]\s+(?:жизн|биограф|истори|цель|памят))/iu;
@@ -32,6 +33,24 @@ interface KnowledgeRoutableClassification {
     ambiguityReason?: string;
     clarificationQuestion?: string;
     details?: Record<string, unknown>;
+}
+
+export function hasTelegramHistoryRequest(classification: MessageClassification): boolean {
+    return [classification, ...(classification.subIntents ?? [])].some(item =>
+        item.intent === 'ПРОВЕРКА_СООБЩЕНИЙ' && item.details?.messagesCheckType === 'ANALYZE_CONVERSATION' && !item.details.saveFactsAboutUser);
+}
+
+/** Recency terms describe the contents of a chat. A separate public task can still require the web. */
+export function scopeTelegramHistoryKnowledge(classification: MessageClassification): MessageClassification {
+    if (!hasTelegramHistoryRequest(classification)) return classification;
+
+    const parts = [classification, ...(classification.subIntents ?? [])];
+    const externalVerification = parts.find(item =>
+        item.intent !== 'ПРОВЕРКА_СООБЩЕНИЙ' && item.details?.externalVerification === 'availability')?.details?.externalVerification;
+    const requiresWeb = Boolean(externalVerification) || parts.some(item => item.intent === 'ВЕБ_ПОИСК');
+    return { ...classification, details: { ...classification.details, externalVerification,
+        knowledgeSource: requiresWeb ? 'external_current' : 'personal',
+        requestedFacets: requiresWeb ? classification.details.requestedFacets : undefined } };
 }
 
 export function shouldInterruptPendingContactMemory(

@@ -5,6 +5,7 @@ import { NegotiationStore } from '../../stores/NegotiationStore';
 import { ContactsStore } from '../../stores/ContactsStore';
 import { studyChatAndSaveFacts } from '../../utils/studyChatPipeline';
 import { performWebSearch } from '../../agents/webSearchAgent';
+import { hasTelegramHistoryRequest } from '../../utils/knowledgeSource';
 import { createJsonChatCompletionForTask } from '../../ai/chatCompletion';
 import { persistAgentRuntime } from '../../services/SessionStorage';
 import { objectSchema, textSchema } from './registry';
@@ -27,7 +28,8 @@ async function research(task: string, context: ToolContext): Promise<ToolOutput>
         const results = await Promise.all(pending.map(async query => {
             searched.add(query);
             return { query, result: await performWebSearch(query, { verifyAvailability: context.classification.details.externalVerification === 'availability',
-                context: JSON.stringify({ request: context.message, task, behavior: context.classification.details.behaviorContext }) }) };
+                context: hasTelegramHistoryRequest(context.classification) ? undefined :
+                    JSON.stringify({ request: context.message, task, behavior: context.classification.details.behaviorContext }) }) };
         }));
         for (const { query, result } of results) {
             if (result.success && result.results) evidence.push(`Запрос: ${query}\n${result.results}`);

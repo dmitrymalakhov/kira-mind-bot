@@ -108,7 +108,7 @@ test('coverage follows consumed cursors and distinguishes unvisited chats and ab
     assert.match(telegramHistoryCoverage([catalog])!, /не прочитано найденных чатов: 1/);
     const pages: any[] = [catalog, { ...catalog, id: 'next', data: { items: [], cursor: 'catalog-next' } },
         { id: 'history', tool: 'telegram.getHistory', status: 'ok', data: { chatId: '202', items: [], nextCursor: 'history-next' } }];
-    assert.match(telegramHistoryCoverage(pages)!, /остались страницы: 1/);
+    assert.match(telegramHistoryCoverage(pages)!, /есть продолжение чтения \(источников: 1\)/);
     pages.push({ id: 'history-next', tool: 'telegram.getHistory', status: 'ok', data: { chatId: '202', cursor: 'history-next', items: [] } });
     assert.equal(telegramHistoryCoverage(pages), undefined);
     pages.at(-1).data.items.push({ textTruncated: true });
