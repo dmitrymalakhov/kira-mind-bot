@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as telegram from '../services/telegram';
-import { conversationRange, listTelegramConversations, readTelegramConversation } from '../services/telegramConversationHistory';
+import { conversationRange, estimateTelegramConversation, listTelegramConversations, readTelegramConversation } from '../services/telegramConversationHistory';
 import { createKiraToolRegistry, runKiraRuntime } from '../orchestration/runtime/kernel';
 import type { ToolContext } from '../orchestration/runtime/types';
 import { config } from '../config';
@@ -68,6 +68,33 @@ test('history bounds payloads with a resumable page and reports text/media gaps'
     assert.equal(result.items[0].textTruncated, true); assert.equal(result.items[0].mediaType, 'MessageMediaPhoto');
     const cursor = JSON.parse(Buffer.from(result.nextCursor!, 'base64url').toString());
     assert.equal(cursor.messageId, result.items.at(-1)!.messageId);
+});
+
+test('depth estimate is a Telegram counter only, using exact half-open time boundaries', async t => {
+    const invoke = t.mock.fn(async (_request: any) => ({ count: 530, inexact: true }));
+    t.mock.method(telegram, 'initTelegramClient', async () => ({ getInputEntity: async (id: string) => {
+        assert.equal(id, '202');
+        return {};
+    }, invoke }) as any);
+    assert.equal(await estimateTelegramConversation('202', { since: '2026-11-13T00:00:00.001Z', until: '2026-11-14T00:00:00.001Z' }), 530);
+    const request = invoke.mock.calls[0].arguments[0];
+    assert.equal(request.limit, 0);
+    assert.equal(request.minDate, second);
+    assert.equal(request.maxDate, Date.parse(range.until) / 1000 + 1);
+    await assert.rejects(estimateTelegramConversation('202', range, AbortSignal.abort()), /abort/iu);
+});
+
+test('full-depth reads keep the complete message and reject a non-advancing page', async t => {
+    const content = 'я'.repeat(2000) + ' Длинное решение';
+    const init = t.mock.method(telegram, 'initTelegramClient', async () => ({
+        getMessages: async () => [message(12, { message: content }), message(11)],
+    }) as any);
+    const first = await readTelegramConversation({ ...range, chatId: '202', limit: 1 }, undefined, { fullText: true });
+    assert.equal(first.items[0].text, content);
+    assert.equal(first.items[0].textTruncated, undefined);
+    assert.ok(first.nextCursor);
+    init.mock.mockImplementation(async () => ({ getMessages: async () => [message(12)] }) as any);
+    await assert.rejects(readTelegramConversation({ chatId: '202', cursor: first.nextCursor }, undefined, { fullText: true }), /ID/);
 });
 
 test('older pinned chats do not terminate discovery and active pinned conversations remain visible', async t => {

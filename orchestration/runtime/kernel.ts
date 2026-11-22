@@ -30,6 +30,7 @@ import { agentTools } from './agents';
 import { availableRuntimeTools, canExecuteRuntimeCall, needsRuntimeTools, isMcpRequest } from './authorization';
 import { mcpTools, confirmedMcpCallKey } from './mcpTools';
 import { pendingTelegramPages, telegramHistoryCoverage, telegramHistoryStatistics } from './telegramTools';
+import { buildTelegramSummary, telegramSummaryDepth, telegramSummaryOffer, telegramSummaryQuestion, telegramSummarySource } from './telegramSummary';
 import type { ProcessingResult } from '../../orchestrator';
 import { continueAnalyticsTask, observeClassification, recordDeferredOutcome } from '../../services/productAnalytics';
 import type { KiraRuntimeInput, RuntimeDecision, RuntimeToolCall, ToolContext, ToolDefinition, ToolObservation, ToolOutput, RuntimeSessionState } from './types';
@@ -331,6 +332,7 @@ async function runKiraRuntimeInternal(input: KiraRuntimeInput, dependencies: Run
                 observation.tool === 'agents.start' && ['research', 'browser'].includes(String((observation.data as { run?: { kind?: string } } | undefined)?.run?.kind))));
     let exhausted = true;
     let missingHistoryPlans = 0;
+    let checkedTelegramSummary = false;
     const attemptedPages = new Set<string>();
     const pageKey = (call: RuntimeToolCall) => JSON.stringify([call.tool, call.args.cursor]);
     try {
@@ -346,6 +348,24 @@ async function runKiraRuntimeInternal(input: KiraRuntimeInput, dependencies: Run
         if (requiresWeb && !['БРАУЗЕР_ЗАДАЧА', 'ВЕБ_ПОИСК'].includes(classification.intent) && !hasCurrentEvidence()) first = undefined;
         for (let round = 0; round < Math.min(dependencies.limits?.rounds ?? RUNTIME_LIMITS.rounds, RUNTIME_LIMITS.rounds) && !context.signal.aborted; round++) {
             const historyOnly = [classification, ...(classification.subIntents ?? [])].every(item => ['ПРОВЕРКА_СООБЩЕНИЙ', 'РАЗГОВОР'].includes(item.intent)) && !requiresWeb;
+            if (!checkedTelegramSummary && requiresTelegramHistory && historyOnly && !classification.subIntents?.length &&
+                !input.readOnly && !input.recurringTaskRun && !input.images?.length && !input.isForwarded &&
+                !('documentFormat' in classification.details && classification.details.documentFormat === 'pdf') &&
+                availableNames.has('telegram.getHistory') && ctx.chat?.type === 'private' && ctx.from?.id === config.allowedUserId) {
+                const source = telegramSummarySource(observations);
+                if (source) {
+                    checkedTelegramSummary = true;
+                    const offer = await telegramSummaryOffer(source, context.signal);
+                    if (offer) {
+                        state.telegramSummary = offer;
+                        state.question = telegramSummaryQuestion(offer);
+                        state.status = 'waiting';
+                        results.push({ responseText: state.question });
+                        exhausted = false;
+                        break;
+                    }
+                }
+            }
             const selection = first ? { calls: first, finish: false } : await (dependencies.decide ?? decide)({ context, tools: allowed, skills });
             const wasFast = Boolean(first); first = undefined;
             // A page cursor is executable work, not a request for user-supplied data.
@@ -619,7 +639,13 @@ export async function replaceRuntimeConfirmation(ctx: KiraRuntimeInput['ctx'], t
 
 export function hasRuntimeQuestionAnswer(ctx: KiraRuntimeInput['ctx'], message: string, state = ctx.session.agentRuntime): boolean {
     if (state?.status !== 'waiting' || !state.question || Date.now() - state.updatedAt > 30 * 60_000 || !message.trim() || message.length > 300) return false;
+    if (state.telegramSummary) return ctx.chat?.type === 'private' && ctx.from?.id === config.allowedUserId &&
+        (!!telegramSummaryDepth(message) || runtimeQuestionCancelled(message));
     return !looksLikeIndependentRequest(message);
+}
+
+function runtimeQuestionCancelled(message: string): boolean {
+    return /^(?:отмена|отмени|не надо|стоп|cancel)[.!\s]*$/iu.test(message.trim());
 }
 
 function pendingQuestion(ctx: KiraRuntimeInput['ctx'], replyText?: string) {
@@ -653,7 +679,7 @@ export async function continueClassifiedProfileQuestion(ctx: KiraRuntimeInput['c
 export async function continueQuestionRuntime(ctx: KiraRuntimeInput['ctx'], answer: string, dependencies: RuntimeDependencies = {}, replyText?: string, additionalTurn?: Pick<KiraRuntimeInput, 'message' | 'classification'>): Promise<ProcessingResult | undefined> {
     const state = pendingQuestion(ctx, replyText);
     if (!state?.goal || !hasRuntimeQuestionAnswer(ctx, answer, state)) return undefined;
-    const cancellation = /^(?:отмена|отмени|не надо|стоп|cancel)[.!\s]*$/iu.test(answer.trim());
+    const cancellation = runtimeQuestionCancelled(answer);
     if (!cancellation && state.parameterCall?.tool === 'contacts.getProfile') {
         const observation = state.observations?.find(item => item.id === state.parameterCall!.id && item.tool === 'contacts.getProfile' && item.status === 'needs_input');
         if (!continueTelegramProfileLookup(observation?.data, answer)) return undefined;
@@ -664,6 +690,39 @@ export async function continueQuestionRuntime(ctx: KiraRuntimeInput['ctx'], answ
         if (ctx.from) await recordDeferredOutcome(state.analyticsTaskId, ctx.from.id, 'cancelled');
         await persistTransition(ctx, state).catch(() => undefined);
         return { responseText: 'Задача отменена. Уже выполненные действия сохранены.', operationStatus: 'failed', skipOptionalFollowups: true };
+    }
+    if (state.telegramSummary) {
+        const depth = telegramSummaryDepth(answer);
+        if (!depth) return undefined;
+        const { source } = state.telegramSummary;
+        const question = state.question;
+        state.question = undefined;
+        state.status = 'running';
+        state.updatedAt = Date.now();
+        ctx.session.agentRuntime = state;
+        try {
+            await persistTransition(ctx, state);
+        } catch {
+            state.status = 'waiting';
+            state.question = question;
+            return { responseText: 'Не удалось сохранить выбор глубины. Повтори номер варианта.', operationStatus: 'failed', skipOptionalFollowups: true };
+        }
+        try {
+            await continueAnalyticsTask(ctx, state.analyticsTaskId);
+            const read = () => buildTelegramSummary(source, state.goal!, depth, dependencies.signal);
+            const summary = state.accountAiOperation ? await withAccountAiOperation(state.accountAiOperation, read) : await read();
+            state.status = summary.sourceFailed ? 'failed' : 'completed';
+            state.observations = [{ id: 'telegram_summary', tool: 'kernel.telegramSummary', status: summary.sourceFailed ? 'failed' : 'ok',
+                summary: 'Объём чтения истории Telegram.', data: { count: summary.count, complete: summary.complete, depth } }];
+            return { responseText: summary.text, operationStatus: summary.sourceFailed ? 'failed' : 'ok', skipOptionalFollowups: true };
+        } catch (error) {
+            state.status = 'failed';
+            const reason = accountPolicyReply(error) ?? (isAiContentSafetyError(error) ? AI_CONTENT_SAFETY_REPLY : undefined);
+            return { responseText: reason ?? 'Не удалось собрать итоговую сводку за выбранный период.', operationStatus: 'failed', skipOptionalFollowups: true };
+        } finally {
+            state.updatedAt = Date.now();
+            await persistTransition(ctx, state).catch(() => undefined);
+        }
     }
     state.question = undefined;
     const question = [...(state.observations ?? [])].reverse().find(observation => observation.tool === 'kernel.question' && observation.status === 'needs_input');

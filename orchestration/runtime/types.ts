@@ -136,6 +136,7 @@ export interface RuntimeSessionState {
     classification?: MessageClassification;
     question?: string;
     parameterCall?: RuntimeToolCall;
+    telegramSummary?: import('./telegramSummary').TelegramSummaryOffer;
     backgroundRun?: boolean;
     ledgerKey?: string;
     /** Dependency truth survives evidence/context compaction. */

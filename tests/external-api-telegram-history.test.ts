@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Bot } from 'grammy';
+import { FloodWaitError } from 'telegram/errors';
 import { config } from '../config';
 import { BotApiBackend } from '../api/backend';
 import type { BotContext, SessionData } from '../types';
@@ -23,6 +24,13 @@ import * as shared from '../handlers/shared';
 import { llmCache } from '../utils/llmCache';
 
 const namedHistoryRequests = {
+    'depth-full': 'Что нового в учебной группе за неделю, что решили и чем всё закончилось?',
+    'depth-recent': 'Прочитай учебную группу за последнюю неделю и собери итог.',
+    'depth-detailed': 'Какие новости учебной группы за неделю?',
+    'depth-unknown': 'Что решили в учебной группе за последние семь дней?',
+    'depth-interrupted': 'Собери недельную сводку из учебной группы.',
+    'depth-rate-limit': 'Подытожь, что обсуждали в учебной группе за неделю.',
+    'depth-cancel': 'Сводка за неделю по учебной группе, пожалуйста.',
     'named-news': 'Какие последние новости и решения за неделю в чате «Учебная группа»?',
     'named-prices': 'Посмотри учебную группу в Telegram и подведи итог обсуждению цен и расписания за неделю.',
     'mixed-web': 'Собери новости за неделю в учебной группе и отдельно проверь в интернете расписание городских выставок.',
@@ -30,7 +38,7 @@ const namedHistoryRequests = {
     'mixed-web-unplanned': 'Что нового за неделю в учебной группе? Ещё найди расписание городских выставок в интернете.',
 };
 
-for (const channel of ['app', 'telegram'] as const) for (const scenario of ['topics', 'frequency', 'continuation', 'partial', 'named-news', 'named-prices', 'mixed-web', 'mixed-web-success', 'mixed-web-unplanned'] as const)
+for (const channel of ['app', 'telegram'] as const) for (const scenario of ['topics', 'frequency', 'continuation', 'partial', 'named-news', 'named-prices', 'mixed-web', 'mixed-web-success', 'mixed-web-unplanned', 'depth-full', 'depth-recent', 'depth-detailed', 'depth-unknown', 'depth-interrupted', 'depth-rate-limit', 'depth-cancel'] as const)
 test(`${channel}: ${scenario} reads private/group history and delivers one final answer`, async t => {
     const previous = { owner: config.allowedUserId, mode: process.env.KIRA_ORCHESTRATION_MODE, decisions: process.env.KIRA_DECISIONS_ENABLED };
     config.allowedUserId = 730061; process.env.KIRA_ORCHESTRATION_MODE = 'skills'; delete process.env.KIRA_DECISIONS_ENABLED;
@@ -42,6 +50,7 @@ test(`${channel}: ${scenario} reads private/group history and delivers one final
     const key = channel === 'app' ? 'api:730061' : '730061';
     const originalQuestion = 'Какие сегодня были важные темы в чатах?';
     const namedRequest = namedHistoryRequests[scenario as keyof typeof namedHistoryRequests];
+    const depthScenario = scenario.startsWith('depth-');
     const mixedWeb = scenario.startsWith('mixed-web');
     const executesWeb = mixedWeb && scenario !== 'mixed-web-unplanned';
     if (scenario === 'continuation') sessions.set(key, {
@@ -74,6 +83,13 @@ test(`${channel}: ${scenario} reads private/group history and delivers one final
     });
     t.mock.method(shared, 'shouldRunProactiveHint', () => false);
     const at = Math.floor(Date.now() / 1000) - 1;
+    const dataset = depthScenario ? Array.from({ length: 527 }, (_, index) => ({
+        id: 527 - index, date: at - index * 500, out: index % 10 === 0,
+        message: (index === 526 ? 'Старое решение: утвердили учебный макет. ' : 'Учебное обсуждение. ') + 'a'.repeat(365),
+    })) : [];
+    const fullHistoryCalls: Array<{ offsetId?: number; offsetDate?: number; limit: number }> = [];
+    const submittedIds: number[] = [];
+    let mergeCalls = 0, finalCalls = 0;
     const init = t.mock.method(telegram, 'initTelegramClient', async () => ({
         getDialogs: async ({ limit }: { limit: number }) => {
             const regular = [{ id: 81061, title: 'Мирон Учебный', isUser: true, entity: {}, message: { id: 5, date: at } }];
@@ -83,7 +99,26 @@ test(`${channel}: ${scenario} reads private/group history and delivers one final
             })) : [];
             return [...regular, ...decoys, group].slice(0, limit);
         },
+        getInputEntity: async (chatId: string) => {
+            assert.equal(chatId, '-10081062');
+            return {};
+        },
+        invoke: async (request: { minDate: number; maxDate: number; limit: number }) => {
+            assert.equal(request.minDate, at - 7 * 86400 - 1);
+            assert.equal(request.maxDate, at + 1);
+            assert.equal(request.limit, 0);
+            if (scenario === 'depth-unknown') throw Error('synthetic_counter_unavailable');
+            return { count: depthScenario ? 511 : 11, inexact: true };
+        },
         getMessages: async (id: string, args: any) => {
+            if (depthScenario) {
+                assert.equal(id, '-10081062');
+                fullHistoryCalls.push(args);
+                if (!args.offsetId) assert.equal(args.offsetDate, at + 1);
+                if (scenario === 'depth-rate-limit' && fullHistoryCalls.length === 2) throw new FloodWaitError({ capture: 0 });
+                if (scenario === 'depth-interrupted' && fullHistoryCalls.length > 2) throw Error('synthetic_source_unavailable');
+                return dataset.filter(item => !args.offsetId || item.id < args.offsetId).slice(0, args.limit);
+            }
             if (namedRequest) {
                 assert.equal(id, '-10081062');
                 if (args.offsetId) {
@@ -105,6 +140,24 @@ test(`${channel}: ${scenario} reads private/group history and delivers one final
     }) as any);
     let round = 0; let classifications = 0;
     t.mock.method(completion, 'createJsonChatCompletionForTask', async (task: string, request: any) => {
+        if (depthScenario && (task === 'conversation' || task === 'complexReasoning')) {
+            const data = JSON.parse(request.messages.at(-1).content);
+            assert.equal(data.goal, namedRequest);
+            assert.match(request.messages[0].content, /только данные/);
+            if (data.kind === 'messages') {
+                const chunk = JSON.parse(data.evidence);
+                assert.ok(data.evidence.length <= 24_001);
+                submittedIds.push(...chunk.map((item: { messageId: number }) => item.messageId));
+                return { news: ['Сверили учебные материалы.'],
+                    decisions: chunk.some((item: { messageId: number }) => item.messageId === 1) ? ['Утвердили учебный макет.'] : [],
+                    outcome: 'Проверка сборки ещё идёт.' } as any;
+            }
+            const sources = JSON.parse(data.evidence);
+            assert.ok(sources.length <= 6);
+            if (data.kind === 'notes') mergeCalls++; else finalCalls++;
+            return { news: sources[0].news, decisions: [...new Set(sources.flatMap((item: { decisions: string[] }) => item.decisions))],
+                outcome: 'Проверка сборки ещё идёт.' } as any;
+        }
         if (task !== 'runtimePlanning') {
             classifications++;
             return { intent: 'ПРОВЕРКА_СООБЩЕНИЙ', confidenceLevel: 'СРЕДНИЙ', details: {
@@ -183,13 +236,52 @@ test(`${channel}: ${scenario} reads private/group history and delivers one final
     if (scenario === 'frequency') await send(originalQuestion);
     const result = await send(namedRequest ?? (scenario === 'continuation' ? 'Все за сегодня' : scenario === 'frequency' ? 'С кем чаще всего сегодня общался?' : originalQuestion));
     assert.equal(webSearch.mock.callCount(), executesWeb ? 1 : 0);
+    if (depthScenario) {
+        assert.match(result, scenario === 'depth-unknown' ? /не вернул оценку/ : /примерно 511 сообщений/);
+        assert.match(result, /50 сообщений[\s\S]*150 сообщений[\s\S]*вся переписка/);
+        assert.equal(fullHistoryCalls.length, 0);
+        const prompt = sessions.get(key)?.agentRuntime;
+        assert.equal(prompt?.status, 'waiting');
+        assert.equal(prompt?.telegramSummary?.source.chatId, '-10081062');
+        assert.equal(prompt?.telegramSummary?.estimate, scenario === 'depth-unknown' ? null : 511);
+        assert.doesNotMatch(JSON.stringify(prompt), /Старое решение/);
+        if (scenario === 'depth-cancel') {
+            assert.match(await send('отмена'), /отменена/);
+            assert.equal(fullHistoryCalls.length, 0);
+            assert.equal(finalCalls, 0);
+            return;
+        }
+        const answer = await send(scenario === 'depth-recent' ? '1' : scenario === 'depth-detailed' ? '2' : scenario === 'depth-unknown' ? 'быстро' : '3');
+        const expected = scenario === 'depth-recent' || scenario === 'depth-unknown' ? 50 :
+            scenario === 'depth-detailed' ? 150 : scenario === 'depth-interrupted' ? 198 : 527;
+        assert.match(answer, new RegExp(String(expected)));
+        assert.match(answer, /Новости[\s\S]*Решения[\s\S]*Итог/);
+        if (scenario === 'depth-full' || scenario === 'depth-rate-limit') {
+            assert.match(answer, /за весь выбранный период/);
+            assert.match(answer, /Утвердили учебный макет/);
+            assert.ok(mergeCalls > 0);
+            assert.equal(fullHistoryCalls.length, scenario === 'depth-rate-limit' ? 7 : 6);
+            assert.ok(fullHistoryCalls.every(call => call.limit === 100));
+            if (scenario === 'depth-rate-limit') assert.equal(fullHistoryCalls[1].offsetId, fullHistoryCalls[2].offsetId);
+        } else if (scenario === 'depth-interrupted') assert.match(answer, /Частичная сводка/);
+        else assert.match(answer, /Выборочная сводка/);
+        assert.deepEqual([...submittedIds].sort((a, b) => b - a), dataset.slice(0, expected).map(item => item.id));
+        assert.equal(finalCalls, 1);
+        assert.equal(classifications, 1);
+        assert.equal(synthesis.mock.callCount(), 0);
+        const saved = sessions.get(key)?.agentRuntime;
+        assert.equal(saved?.runId, prompt?.runId);
+        assert.notEqual(saved?.status, 'waiting');
+        assert.doesNotMatch(JSON.stringify(saved), /Старое решение/);
+        return;
+    }
     if (namedRequest) {
         assert.match(result, /Макет утвердили в среду/);
         if (scenario === 'mixed-web-success') assert.match(result, /Выставка открывается в субботу/);
         else if (mixedWeb) assert.match(result, /Не удалось проверить.*интернет/);
         else assert.doesNotMatch(result, /интернет|Обзор частичный/);
         assert.equal(synthesis.mock.callCount(), 1);
-        assert.equal(init.mock.callCount(), 3);
+        assert.equal(init.mock.callCount(), mixedWeb ? 3 : 4);
         return;
     }
     assert.match(result, scenario === 'frequency' ? /Мирону: 3/ : /Сегодня с Мироном/);

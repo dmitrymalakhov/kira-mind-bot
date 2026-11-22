@@ -1,3 +1,6 @@
+import { addAbortListener } from 'node:events';
+import { Api } from 'telegram';
+import bigInt from 'big-integer';
 import { initTelegramClient } from './telegram';
 import { USER_TIMEZONE } from '../constants';
 import { getZonedDateTimeParts, zonedDateTimeToDate } from '../utils/time';
@@ -16,6 +19,8 @@ interface ConversationCatalogue extends ConversationRange {
     ambiguousTitle?: boolean;
 }
 const CATALOG_LIMIT = 1000;
+// GramJS reads up to 100 per RPC. Reserve one result to look ahead.
+export const TELEGRAM_FULL_HISTORY_PAGE = 99;
 
 export function normalizeTelegramChatTitle(value: string): string {
     return value.normalize('NFKC').replace(/\p{Cf}/gu, '').trim().replace(/\s+/gu, ' ').toLocaleLowerCase();
@@ -123,38 +128,80 @@ export async function listTelegramConversations(args: Record<string, unknown>, s
     return { ...range, timeZone: USER_TIMEZONE, items, cursor: typeof args.cursor === 'string' ? args.cursor : null, complete: !more, ...(nextCursor ? { nextCursor } : {}), ...(scanLimitReached ? { scanLimitReached } : {}) };
 }
 
-export async function readTelegramConversation(args: Record<string, unknown>, signal?: AbortSignal) {
+/** Bound an interactive turn even if GramJS is waiting for a connection or a retry. */
+async function duringTelegramRead<T>(signal: AbortSignal | undefined, read: () => Promise<T>): Promise<T> {
+    if (!signal) return read();
+    signal.throwIfAborted();
+    let listener: ReturnType<typeof addAbortListener> | undefined;
+    try {
+        return await Promise.race([new Promise<never>((_, reject) => {
+            listener = addAbortListener(signal, () => reject(signal.reason));
+        }), read()]);
+    } finally {
+        listener?.[Symbol.dispose]();
+    }
+}
+
+/** An index estimate for offering reading depth. The pager is authoritative for coverage. */
+export async function estimateTelegramConversation(chatId: string, dates: ConversationRange, signal?: AbortSignal): Promise<number | undefined> {
+    const range = conversationRange(dates);
+    if (!/^-?\d{1,16}$/.test(chatId)) return undefined;
+    const bounded = signal ? AbortSignal.any([signal, AbortSignal.timeout(5_000)]) : AbortSignal.timeout(5_000);
+    try {
+        return await duringTelegramRead(bounded, async () => {
+            const client = await initTelegramClient();
+            if (!client) return undefined;
+            bounded.throwIfAborted();
+            const peer = await client.getInputEntity(chatId);
+            bounded.throwIfAborted();
+            const result = await client.invoke(new Api.messages.Search({
+                peer, q: '', filter: new Api.InputMessagesFilterEmpty(),
+                minDate: Math.max(0, Math.ceil(Date.parse(range.since) / 1000) - 1),
+                maxDate: Math.ceil(Date.parse(range.until) / 1000),
+                offsetId: 0, addOffset: 0, limit: 0, maxId: 0, minId: 0, hash: bigInt.zero,
+            }));
+            return 'count' in result && Number.isSafeInteger(result.count) && result.count >= 0 ? result.count : undefined;
+        });
+    } catch {
+        signal?.throwIfAborted();
+        return undefined;
+    }
+}
+
+export async function readTelegramConversation(args: Record<string, unknown>, signal?: AbortSignal, options?: { fullText: boolean }) {
     const cursor = decode(args.cursor, 'history');
     const range = rangeWithCursor(args, cursor);
     const chatId = String(args.chatId);
     if (!/^-?\d{1,16}$/.test(chatId) || cursor && cursor.peer !== chatId) throw Error('Курсор другого чата');
     const limit = Number(args.limit ?? 10);
-    if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw Error('Недопустимый размер страницы');
+    const pageLimit = options?.fullText ? TELEGRAM_FULL_HISTORY_PAGE : 20;
+    if (!Number.isInteger(limit) || limit < 1 || limit > pageLimit) throw Error('Недопустимый размер страницы');
     checkSignal(signal);
-    const client = await initTelegramClient();
+    const client = await duringTelegramRead(signal, initTelegramClient);
     if (!client) throw Error('Telegram недоступен');
     checkSignal(signal);
-    const messages = await client.getMessages(chatId, { limit: limit + 1,
-        ...(cursor ? { offsetId: cursor.messageId } : { offsetDate: Math.ceil(Date.parse(range.until) / 1000) }) });
+    const messages = await duringTelegramRead(signal, () => client.getMessages(chatId, { limit: limit + 1,
+        ...(cursor ? { offsetId: cursor.messageId } : { offsetDate: Math.ceil(Date.parse(range.until) / 1000) }) }));
     checkSignal(signal);
     const items: Array<Record<string, unknown>> = [];
     let last: any; let reachedStart = false; let chars = 0; let consumed = 0;
+    let previousId = cursor?.messageId ?? Infinity;
     for (const message of Array.from(messages).slice(0, limit)) {
         const m = message as any;
         const ms = (m.date || 0) * 1000;
         if (ms < Date.parse(range.since)) { reachedStart = true; break; }
-        if (!Number.isSafeInteger(m.id) || m.id <= 0) throw Error('Некорректный ID сообщения');
-        if (ms >= Date.parse(range.until)) { last = m; consumed++; continue; }
+        if (!Number.isSafeInteger(m.id) || m.id <= 0 || options?.fullText && m.id >= previousId) throw Error('Некорректный ID сообщения');
+        if (ms >= Date.parse(range.until)) { last = m; consumed++; previousId = m.id; continue; }
         const original = String(m.message ?? '');
         const item = { messageId: m.id, at: new Date(ms).toISOString(), isOwn: Boolean(m.out),
             senderId: m.fromId?.userId != null ? String(m.fromId.userId) : undefined,
             isForwarded: Boolean(m.fwdFrom), ...(m.fwdFrom ? { forwardSource: getGramJsForwardSource(m.fwdFrom) } : {}),
-            text: original.slice(0, 1000), ...(original.length > 1000 ? { textTruncated: true } : {}),
+            text: options?.fullText ? original : original.slice(0, 1000), ...(!options?.fullText && original.length > 1000 ? { textTruncated: true } : {}),
             ...(m.media ? { mediaType: String(m.media.className ?? 'media').slice(0, 80) } : {}),
             ...(m.replyTo?.replyToMsgId ? { replyToMessageId: m.replyTo.replyToMsgId } : {}) };
         const size = JSON.stringify(item).length;
-        if (items.length && chars + size > 7000) break;
-        items.push(item); chars += size; last = m; consumed++;
+        if (!options?.fullText && items.length && chars + size > 7000) break;
+        items.push(item); chars += size; last = m; consumed++; previousId = m.id;
     }
     const more = !reachedStart && (messages.length > consumed);
     const nextCursor = more && last ? encode({ ...range, kind: 'history', peer: chatId, messageId: last.id, date: last.date }) : undefined;
