@@ -77,7 +77,7 @@ export function telegramTools(): ToolDefinition[] {
             async execute(args, context) {
                 const details = context.classification.details;
                 const target = details.messagesCheckType === 'ANALYZE_CONVERSATION' && !details.saveFactsAboutUser && !details.groupChatQueries?.length
-                    ? details.groupChatQuery?.trim() : undefined;
+                    ? (details.groupChatQuery ?? (!details.relationshipRole ? details.contactQuery : undefined))?.trim() : undefined;
                 const query = typeof args.query === 'string' ? args.query : undefined;
                 const namedTarget = !args.cursor && target && (!query || normalizeTelegramChatTitle(query) === normalizeTelegramChatTitle(target)) ? target : undefined;
                 const data = await listTelegramConversations(namedTarget ? { ...args, query: namedTarget } : args, context.signal, namedTarget);
